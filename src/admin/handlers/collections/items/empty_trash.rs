@@ -39,28 +39,18 @@ pub async fn empty_trash_action(
             .into_response();
     }
 
-    // Check delete access (empty trash = permanent deletion)
-    match def.access.delete.as_deref() {
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "Permanent deletion not allowed"})),
+    // Check delete access (empty trash = permanent deletion).
+    // Uses check_access_or_forbid which respects default_deny config.
+    match check_access_or_forbid(&state, def.access.delete.as_deref(), &auth_user, None, None) {
+        Ok(AccessResult::Denied) => {
+            return forbidden(
+                &state,
+                "You don't have permission to permanently delete items",
             )
-                .into_response();
+            .into_response();
         }
-        Some(func_ref) => {
-            match check_access_or_forbid(&state, Some(func_ref), &auth_user, None, None) {
-                Ok(AccessResult::Denied) => {
-                    return forbidden(
-                        &state,
-                        "You don't have permission to permanently delete items",
-                    )
-                    .into_response();
-                }
-                Err(resp) => return *resp,
-                _ => {}
-            }
-        }
+        Err(resp) => return *resp,
+        _ => {}
     }
 
     let pool = state.pool.clone();

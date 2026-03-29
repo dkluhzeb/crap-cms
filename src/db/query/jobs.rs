@@ -171,9 +171,11 @@ pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>
 
 /// Compute exponential backoff delay in seconds for a given attempt number.
 ///
-/// Formula: `min(2^attempt * 5, 300)` — yields 5s, 10s, 20s, 40s, 80s, 160s, 300s cap.
+/// Formula: `min(2^(attempt-1) * 5, 300)` — yields 5s, 10s, 20s, 40s, 80s, 160s, 300s cap.
+/// `attempt` is 1-based (first failure = attempt 1).
 fn backoff_seconds(attempt: u32) -> i64 {
-    std::cmp::min(5 * (1i64 << attempt.min(6) as i64), 300)
+    let exp = attempt.saturating_sub(1).min(6) as i64;
+    std::cmp::min(5 * (1i64 << exp), 300)
 }
 
 /// Mark a job as failed. If should_retry is true, resets to pending with exponential backoff.
@@ -906,15 +908,17 @@ mod tests {
 
     #[test]
     fn test_backoff_seconds() {
-        assert_eq!(backoff_seconds(0), 5);
-        assert_eq!(backoff_seconds(1), 10);
-        assert_eq!(backoff_seconds(2), 20);
-        assert_eq!(backoff_seconds(3), 40);
-        assert_eq!(backoff_seconds(4), 80);
-        assert_eq!(backoff_seconds(5), 160);
-        assert_eq!(backoff_seconds(6), 300);
+        // attempt is 1-based (first failure = 1 after claim increments)
+        assert_eq!(backoff_seconds(0), 5); // edge case: 2^0 * 5 = 5
+        assert_eq!(backoff_seconds(1), 5); // first failure: 2^0 * 5 = 5
+        assert_eq!(backoff_seconds(2), 10); // second: 2^1 * 5 = 10
+        assert_eq!(backoff_seconds(3), 20); // third: 2^2 * 5 = 20
+        assert_eq!(backoff_seconds(4), 40);
+        assert_eq!(backoff_seconds(5), 80);
+        assert_eq!(backoff_seconds(6), 160);
+        assert_eq!(backoff_seconds(7), 300); // capped
         // Capped at 300
-        assert_eq!(backoff_seconds(7), 300);
+        assert_eq!(backoff_seconds(8), 300);
         assert_eq!(backoff_seconds(100), 300);
     }
 

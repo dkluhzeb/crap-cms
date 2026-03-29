@@ -55,6 +55,10 @@ An optional request timeout can be set via `grpc_timeout` in `[server]`. When se
 grpc_timeout = "30s"
 ```
 
+## Bulk Operation Limits
+
+`UpdateMany` and `DeleteMany` process at most **10,000** documents per call. This prevents unbounded memory usage when a broad filter matches a very large dataset. For larger operations, use paginated calls with a `where` clause to process documents in batches.
+
 ## Server Reflection
 
 When enabled (`grpc_reflection = true` in `[server]`, disabled by default), the server supports gRPC reflection, so tools like `grpcurl` work without importing the proto file:

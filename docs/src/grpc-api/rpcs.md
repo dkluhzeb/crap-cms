@@ -250,19 +250,23 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/UpdateMany
 ```
 
+> **Limit:** A single `UpdateMany` call processes at most **10,000** documents. Use paginated calls (with a `where` clause) for larger datasets.
+
 ## DeleteMany
 
-Bulk-delete all documents matching a filter. All deletions run in a single transaction (all-or-nothing). Fires per-document hooks by default.
+Bulk-delete all documents matching a filter. All deletions run in a single transaction (all-or-nothing). Fires per-document hooks by default. Respects the collection's `soft_delete` setting — documents are moved to trash unless `force_hard_delete` is set.
 
 ```protobuf
 message DeleteManyRequest {
   string collection = 1;
   optional string where = 2;            // JSON where clause (omit = all docs)
   optional bool hooks = 3;              // default: true. Set false to skip hooks.
+  bool force_hard_delete = 4;           // permanently delete even if soft_delete is enabled
 }
 
 message DeleteManyResponse {
-  int64 deleted = 1;
+  int64 deleted = 1;                    // permanently deleted count
+  int64 soft_deleted = 2;              // soft-deleted (trashed) count
 }
 ```
 
@@ -272,6 +276,8 @@ grpcurl -plaintext -d '{
     "where": "{\"status\": \"archived\"}"
 }' localhost:50051 crap.ContentAPI/DeleteMany
 ```
+
+> **Limit:** A single `DeleteMany` call processes at most **10,000** documents. Use paginated calls (with a `where` clause) for larger datasets.
 
 ## GetGlobal
 

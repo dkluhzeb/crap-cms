@@ -29,6 +29,8 @@ class CrapTags extends HTMLElement {
     this._connected = true;
 
     this._fieldType = this.dataset.fieldType || 'text';
+    /** @type {boolean} */
+    this._readonly = this.dataset.readonly !== undefined;
 
     // Read initial values from the hidden input
     const hidden = /** @type {HTMLInputElement|null} */ (
@@ -70,6 +72,11 @@ class CrapTags extends HTMLElement {
     this._hidden = hidden;
 
     this._renderChips();
+
+    if (this._readonly) {
+      this._input.style.display = 'none';
+      return;
+    }
 
     // Input: add tag on Enter, comma (text only)
     this._input.addEventListener('keydown', (e) => {
@@ -137,18 +144,19 @@ class CrapTags extends HTMLElement {
       chip.dataset.value = value;
       chip.textContent = value;
 
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip__remove';
-      btn.setAttribute('aria-label', 'Remove');
-      btn.innerHTML = '&times;';
-      btn.addEventListener('click', () => {
-        this._values = this._values.filter((v) => v !== value);
-        this._sync();
-        this._renderChips();
-      });
-
-      chip.appendChild(btn);
+      if (!this._readonly) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chip__remove';
+        btn.setAttribute('aria-label', 'Remove');
+        btn.innerHTML = '&times;';
+        btn.addEventListener('click', () => {
+          this._values = this._values.filter((v) => v !== value);
+          this._sync();
+          this._renderChips();
+        });
+        chip.appendChild(btn);
+      }
       this._container.insertBefore(chip, this._input);
     }
   }

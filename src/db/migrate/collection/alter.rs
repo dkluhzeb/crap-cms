@@ -117,7 +117,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                     }
 
                     let sql = format!(
-                        "ALTER TABLE {} ADD COLUMN {} {}",
+                        "ALTER TABLE \"{}\" ADD COLUMN {} {}",
                         ctx.slug, col_name, col_def
                     );
                     tracing::info!("Adding column to {}: {}", ctx.slug, col_name);
@@ -140,7 +140,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
             }
 
             let sql = format!(
-                "ALTER TABLE {} ADD COLUMN {} {}",
+                "ALTER TABLE \"{}\" ADD COLUMN {} {}",
                 ctx.slug, spec.col_name, col_def
             );
             tracing::info!("Adding column to {}: {}", ctx.slug, spec.col_name);
@@ -158,7 +158,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
     // Versioned collections with drafts: ensure _status column exists
     if ctx.def.has_drafts() && !ctx.existing.contains("_status") {
         let sql = format!(
-            "ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
+            "ALTER TABLE \"{}\" ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
             ctx.slug
         );
         tracing::info!("Adding _status column to {}", ctx.slug);
@@ -183,7 +183,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                 .expect("static column definition");
 
             if !ctx.existing.contains(col_name) {
-                let sql = format!("ALTER TABLE {} ADD COLUMN {}", ctx.slug, col);
+                let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
                 tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                 ctx.conn
                     .execute(&sql, &[])
@@ -202,7 +202,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                     .expect("static column definition");
 
                 if !ctx.existing.contains(col_name) {
-                    let sql = format!("ALTER TABLE {} ADD COLUMN {}", ctx.slug, col);
+                    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
                     tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                     ctx.conn
                         .execute(&sql, &[])
@@ -214,7 +214,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
 
     // Soft-delete collections: ensure _deleted_at column exists
     if ctx.def.soft_delete && !ctx.existing.contains("_deleted_at") {
-        let sql = format!("ALTER TABLE {} ADD COLUMN _deleted_at TEXT", ctx.slug);
+        let sql = format!("ALTER TABLE \"{}\" ADD COLUMN _deleted_at TEXT", ctx.slug);
         tracing::info!("Adding _deleted_at column to {}", ctx.slug);
         ctx.conn
             .execute(&sql, &[])
@@ -224,7 +224,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
     // All collections: ensure _ref_count column exists for delete protection
     if !ctx.existing.contains("_ref_count") {
         let sql = format!(
-            "ALTER TABLE {} ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE \"{}\" ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
             ctx.slug
         );
         tracing::info!("Adding _ref_count column to {}", ctx.slug);
@@ -241,7 +241,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
             if !ctx.existing.contains(col_name) {
                 let ts_type = ctx.conn.timestamp_column_type();
                 let sql = format!(
-                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    "ALTER TABLE \"{}\" ADD COLUMN {} {}",
                     ctx.slug, col_name, ts_type
                 );
                 tracing::info!("Adding {} column to {}", col_name, ctx.slug);
@@ -357,7 +357,7 @@ fn rebuild_without_inline_unique(
     let old_cols = get_table_columns(conn, slug)?;
     let temp = format!("_rebuild_{}", slug);
 
-    conn.execute_batch(&format!("ALTER TABLE {} RENAME TO {}", slug, temp))?;
+    conn.execute_batch(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
 
     super::create::create_collection_table(conn, slug, def, locale_config)?;
 
@@ -373,14 +373,14 @@ fn rebuild_without_inline_unique(
 
     conn.execute(
         &format!(
-            "INSERT INTO {} ({}) SELECT {} FROM {}",
+            "INSERT INTO \"{}\" ({}) SELECT {} FROM \"{}\"",
             slug, col_list, col_list, temp
         ),
         &[],
     )
     .with_context(|| format!("Failed to copy data during rebuild of '{}'", slug))?;
 
-    conn.execute_batch(&format!("DROP TABLE {}", temp))?;
+    conn.execute_batch(&format!("DROP TABLE \"{}\"", temp))?;
 
     tracing::info!("Table '{}' rebuilt successfully", slug);
     Ok(())

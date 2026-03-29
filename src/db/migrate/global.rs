@@ -76,7 +76,7 @@ pub(super) fn sync_global_table(
         columns.push(format!("created_at {}", conn.timestamp_column_default()));
         columns.push(format!("updated_at {}", conn.timestamp_column_default()));
 
-        let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
+        let sql = format!("CREATE TABLE \"{}\" ({})", table_name, columns.join(", "));
 
         tracing::info!("Creating global table: {}", table_name);
         conn.execute(&sql, &[])
@@ -114,7 +114,7 @@ pub(super) fn sync_global_table(
                         }
 
                         let sql = format!(
-                            "ALTER TABLE {} ADD COLUMN {} {}",
+                            "ALTER TABLE \"{}\" ADD COLUMN {} {}",
                             table_name, col_name, col_def
                         );
                         tracing::info!("Adding column to {}: {}", table_name, col_name);
@@ -135,7 +135,7 @@ pub(super) fn sync_global_table(
                 }
 
                 let sql = format!(
-                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    "ALTER TABLE \"{}\" ADD COLUMN {} {}",
                     table_name, spec.col_name, col_def
                 );
                 tracing::info!("Adding column to {}: {}", table_name, spec.col_name);
@@ -152,7 +152,7 @@ pub(super) fn sync_global_table(
 
         if !existing_columns.contains("_status") {
             let sql = format!(
-                "ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
+                "ALTER TABLE \"{}\" ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
                 table_name
             );
             tracing::info!("Adding _status column to {}", table_name);
@@ -167,7 +167,7 @@ pub(super) fn sync_global_table(
 
         if !existing_columns.contains("_ref_count") {
             let sql = format!(
-                "ALTER TABLE {} ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE \"{}\" ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
                 table_name
             );
             tracing::info!("Adding _ref_count column to {}", table_name);

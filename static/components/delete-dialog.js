@@ -172,8 +172,10 @@ class CrapDeleteDialog extends HTMLElement {
      * @param {'soft_delete' | 'hard_delete'} action
      * @returns {Promise<void>}
      */
+    let submitting = false;
     const submit = async (action) => {
-      if (!pending) return;
+      if (!pending || submitting) return;
+      submitting = true;
 
       const { id, slug } = pending;
       const isEmptyTrash = id === '__empty_trash__';
@@ -199,6 +201,7 @@ class CrapDeleteDialog extends HTMLElement {
 
         dialog.close();
         pending = null;
+        submitting = false;
         setButtonsDisabled(false);
 
         if (resp.ok) {
@@ -220,16 +223,18 @@ class CrapDeleteDialog extends HTMLElement {
         } else {
           let errMsg = '';
           try {
-            const json = await resp.json();
+            const text = await resp.text();
+            const json = JSON.parse(text);
             errMsg = json.error || '';
           } catch {
-            errMsg = await resp.text().catch(() => '');
+            // text() already consumed; parsing failed — use fallback
           }
           document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: errMsg || t('delete_error'), type: 'error' } }));
         }
       } catch {
         dialog.close();
         pending = null;
+        submitting = false;
         setButtonsDisabled(false);
         document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('delete_error'), type: 'error' } }));
       }

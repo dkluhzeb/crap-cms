@@ -16,6 +16,10 @@ import { t } from './i18n.js';
 
 class CrapBackRefs extends HTMLElement {
   connectedCallback() {
+    // Idempotency guard: skip re-init on DOM reconnection
+    if (this._initialized) return;
+    this._initialized = true;
+
     const slug = this.getAttribute('slug');
     const docId = this.getAttribute('doc-id');
 

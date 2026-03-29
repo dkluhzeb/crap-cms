@@ -324,7 +324,7 @@ class CrapValidateForm extends HTMLElement {
    */
   _getCsrf() {
     const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-    return m ? m[1] : null;
+    return m ? decodeURIComponent(m[1]) : null;
   }
 }
 

@@ -861,6 +861,7 @@ async fn delete_many_with_where() {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()

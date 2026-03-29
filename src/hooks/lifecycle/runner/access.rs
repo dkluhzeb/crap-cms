@@ -7,7 +7,7 @@ use mlua::Value;
 use serde_json::Value as JsonValue;
 
 use crate::{
-    core::{Document, FieldDefinition, document::DocumentBuilder},
+    core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
     db::AccessResult,
     hooks::{
         HookRunner, api,
@@ -161,13 +161,119 @@ impl HookRunner {
 
 /// Collect names of all fields that have an access control function configured.
 /// Used as fail-closed fallback when the Lua VM pool is unavailable.
+/// Recurses into Group (with `__` prefix), Row/Collapsible/Tabs (transparent).
 fn deny_all_access_controlled(
     fields: &[FieldDefinition],
-    extractor: impl Fn(&FieldDefinition) -> Option<&str>,
+    extractor: impl Fn(&FieldDefinition) -> Option<&str> + Copy,
 ) -> Vec<String> {
-    fields
-        .iter()
-        .filter(|f| extractor(f).is_some())
-        .map(|f| f.name.clone())
-        .collect()
+    deny_all_recursive(fields, &extractor, "")
+}
+
+fn deny_all_recursive(
+    fields: &[FieldDefinition],
+    extractor: &(impl Fn(&FieldDefinition) -> Option<&str> + Copy),
+    prefix: &str,
+) -> Vec<String> {
+    let mut denied = Vec::new();
+
+    for field in fields {
+        let full_name = if prefix.is_empty() {
+            field.name.clone()
+        } else {
+            format!("{}__{}", prefix, field.name)
+        };
+
+        if extractor(field).is_some() {
+            denied.push(full_name.clone());
+        }
+
+        match field.field_type {
+            FieldType::Group => {
+                denied.extend(deny_all_recursive(&field.fields, extractor, &full_name));
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                denied.extend(deny_all_recursive(&field.fields, extractor, prefix));
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    denied.extend(deny_all_recursive(&tab.fields, extractor, prefix));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    denied
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::{FieldAccess, FieldTab};
+
+    fn make_field(name: &str, access: FieldAccess) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .access(access)
+            .build()
+    }
+
+    #[test]
+    fn deny_all_finds_top_level() {
+        let fields = vec![make_field(
+            "secret",
+            FieldAccess {
+                read: Some("hooks.deny".to_string()),
+                ..Default::default()
+            },
+        )];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn deny_all_recurses_into_group_with_prefix() {
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![make_field(
+                    "title",
+                    FieldAccess {
+                        read: Some("hooks.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert_eq!(denied, vec!["seo__title"]);
+    }
+
+    #[test]
+    fn deny_all_recurses_into_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Main",
+                    vec![make_field(
+                        "hidden",
+                        FieldAccess {
+                            read: Some("hooks.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                )])
+                .build(),
+        ];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert_eq!(denied, vec!["hidden"]);
+    }
+
+    #[test]
+    fn deny_all_empty_when_no_access_configured() {
+        let fields = vec![
+            make_field("title", FieldAccess::default()),
+            make_field("body", FieldAccess::default()),
+        ];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert!(denied.is_empty());
+    }
 }

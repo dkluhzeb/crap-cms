@@ -45,15 +45,17 @@ class CrapFocalPoint extends HTMLElement {
       child.remove();
     }
 
-    // Build shadow UI
+    // Build shadow UI — use DOM API for src to prevent XSS via attribute injection
     this.shadowRoot.innerHTML = `
       <style>${CrapFocalPoint._styles()}</style>
       <div class="focal-point">
-        <img src="${src}" alt="" />
+        <img alt="" />
         <div class="marker"></div>
       </div>
-      <p class="hint">${t('focal_point_hint')}</p>
+      <p class="hint"></p>
     `;
+    this.shadowRoot.querySelector('img').src = src;
+    this.shadowRoot.querySelector('.hint').textContent = t('focal_point_hint');
 
     const img = this.shadowRoot.querySelector('img');
     const marker = /** @type {HTMLElement} */ (

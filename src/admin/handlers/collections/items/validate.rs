@@ -129,10 +129,16 @@ pub async fn validate_create(
                     .unwrap_or("en");
                 validation_error_response(ve, &state.translations, locale)
             } else {
-                validation_error_response_simple(&format!("Validation error: {}", e))
+                {
+                    tracing::error!("Validation error: {:#}", e);
+                    validation_error_response_simple("Validation failed")
+                }
             }
         }
-        Err(e) => validation_error_response_simple(&format!("Internal error: {}", e)),
+        Err(e) => {
+            tracing::error!("Validate task error: {}", e);
+            validation_error_response_simple("Internal error")
+        }
     }
 }
 
@@ -234,10 +240,16 @@ pub async fn validate_update(
                     .unwrap_or("en");
                 validation_error_response(ve, &state.translations, locale)
             } else {
-                validation_error_response_simple(&format!("Validation error: {}", e))
+                {
+                    tracing::error!("Validation error: {:#}", e);
+                    validation_error_response_simple("Validation failed")
+                }
             }
         }
-        Err(e) => validation_error_response_simple(&format!("Internal error: {}", e)),
+        Err(e) => {
+            tracing::error!("Validate task error: {}", e);
+            validation_error_response_simple("Internal error")
+        }
     }
 }
 

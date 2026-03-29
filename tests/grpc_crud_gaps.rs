@@ -630,6 +630,7 @@ async fn delete_many_basic() {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()
@@ -673,6 +674,7 @@ async fn delete_many_with_where_partial() {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
             hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()
@@ -691,12 +693,100 @@ async fn delete_many_no_matches() {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
             hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()
         .into_inner();
 
     assert_eq!(resp.deleted, 0);
+}
+
+fn make_soft_delete_posts_def() -> CollectionDefinition {
+    let mut def = make_posts_def();
+    def.soft_delete = true;
+    def
+}
+
+#[tokio::test]
+async fn delete_many_soft_deletes_when_collection_has_soft_delete() {
+    let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
+
+    // Create 3 documents
+    for title in &["A", "B", "C"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", "draft")])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Delete all — should soft-delete, not hard-delete
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            r#where: None,
+            hooks: None,
+            force_hard_delete: false,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 0, "no documents should be hard-deleted");
+    assert_eq!(resp.soft_deleted, 3, "all 3 should be soft-deleted");
+
+    // Documents should no longer appear in normal find
+    let count = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .count;
+    assert_eq!(count, 0, "soft-deleted docs should not appear in count");
+}
+
+#[tokio::test]
+async fn delete_many_force_hard_delete_on_soft_delete_collection() {
+    let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
+
+    // Create 2 documents
+    for title in &["X", "Y"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", "draft")])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Force hard-delete
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            r#where: None,
+            hooks: None,
+            force_hard_delete: true,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 2, "all 2 should be hard-deleted");
+    assert_eq!(resp.soft_deleted, 0, "none should be soft-deleted");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

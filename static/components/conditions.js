@@ -10,6 +10,10 @@
 
 class CrapConditions extends HTMLElement {
   connectedCallback() {
+    // Idempotency guard: skip re-init on DOM reconnection
+    if (this._initialized) return;
+    this._initialized = true;
+
     /** @type {number|null} */
     this._serverTimer = null;
     /** @type {Array<{el: Element, type: string, fn: Function}>} */
@@ -184,7 +188,7 @@ class CrapConditions extends HTMLElement {
    */
   _getCsrf() {
     const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-    return m ? m[1] : null;
+    return m ? decodeURIComponent(m[1]) : null;
   }
 
   /**

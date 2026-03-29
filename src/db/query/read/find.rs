@@ -138,21 +138,8 @@ pub fn find(
             _ => ">",
         };
         let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
-        // Keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
-        let ph1 = conn.placeholder(params.len() + 1);
-        let ph2 = conn.placeholder(params.len() + 2);
-        let keyset = format!(
-            " AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))",
-            col = resolved_col,
-            op = op,
-        );
+
         // Bind sort_val with the correct DbValue variant for proper comparison.
-        // Strings: pass through as-is (cursor values come from document fields which
-        // match the DB storage format). Do NOT denormalize — the DB stores ISO format
-        // with 'T' separator, and denormalizing to space-separated would create a
-        // string comparison mismatch.
-        // Numbers: bind as Integer/Real for correct numeric ordering.
-        // Null: bind as SQL NULL, not empty string.
         let sort_val = match &cursor.sort_val {
             Value::String(s) => DbValue::Text(s.clone()),
             Value::Number(n) => {
@@ -167,8 +154,40 @@ pub fn find(
             Value::Null => DbValue::Null,
             other => DbValue::Text(other.to_string()),
         };
-        params.push(sort_val);
-        params.push(DbValue::Text(cursor.id.clone()));
+
+        // NULL sort values need special SQL because col > NULL evaluates to NULL.
+        // SQLite sorts NULLs first in ASC, last in DESC.
+        let keyset = if matches!(sort_val, DbValue::Null) {
+            let ph_id = conn.placeholder(params.len() + 1);
+            params.push(DbValue::Text(cursor.id.clone()));
+
+            // For ASC (NULLs first): after a NULL cursor, we want:
+            //   remaining NULLs with higher id, or any non-NULL row
+            // For DESC (NULLs last): after a NULL cursor, we want:
+            //   remaining NULLs with lower id (nothing past NULLs in DESC)
+            if op == ">" {
+                // ASC forward or DESC backward
+                format!(
+                    " AND (({col} IS NULL AND id > {ph_id}) OR {col} IS NOT NULL)",
+                    col = resolved_col,
+                )
+            } else {
+                // DESC forward or ASC backward
+                format!(" AND ({col} IS NULL AND id < {ph_id})", col = resolved_col,)
+            }
+        } else {
+            // Standard keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
+            let ph1 = conn.placeholder(params.len() + 1);
+            let ph2 = conn.placeholder(params.len() + 2);
+            params.push(sort_val);
+            params.push(DbValue::Text(cursor.id.clone()));
+
+            format!(
+                " AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))",
+                col = resolved_col,
+                op = op,
+            )
+        };
         // Append to existing WHERE or start WHERE
         if has_where {
             sql.push_str(&keyset);
@@ -248,24 +267,32 @@ fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
     // User-defined fields that have a parent column (has-one scalar fields).
     // Layout wrappers (Row, Collapsible, Tabs) promote their children to
     // parent-level columns, so we recurse into them.
-    fn check_fields(col: &str, fields: &[FieldDefinition]) -> bool {
+    // Group sub-fields use `group__subfield` naming for DB columns.
+    fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
         fields.iter().any(|f| {
-            if f.name == col && f.has_parent_column() {
+            let full_name = if prefix.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{}__{}", prefix, f.name)
+            };
+
+            if full_name == col && f.has_parent_column() {
                 return true;
             }
 
-            if matches!(
-                f.field_type,
-                FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-            ) {
-                return check_fields(col, &f.fields);
+            match f.field_type {
+                FieldType::Group => check_fields(col, &f.fields, &full_name),
+                FieldType::Row | FieldType::Collapsible => check_fields(col, &f.fields, prefix),
+                FieldType::Tabs => f
+                    .tabs
+                    .iter()
+                    .any(|tab| check_fields(col, &tab.fields, prefix)),
+                _ => false,
             }
-
-            false
         })
     }
 
-    check_fields(col, &def.fields)
+    check_fields(col, &def.fields, "")
 }
 
 #[cfg(test)]
@@ -1287,17 +1314,17 @@ mod tests {
 
     #[test]
     fn sort_column_inside_tabs_is_valid() {
+        use crate::core::field::FieldTab;
+
         let mut def = CollectionDefinition::new("pages");
-        def.fields = vec![FieldDefinition {
-            name: "content_tabs".to_string(),
-            field_type: FieldType::Tabs,
-            fields: vec![FieldDefinition {
-                name: "title".to_string(),
-                field_type: FieldType::Text,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }];
+        def.fields = vec![
+            FieldDefinition::builder("content_tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Main",
+                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                )])
+                .build(),
+        ];
 
         assert!(
             is_valid_sort_column("title", &def),
@@ -1311,6 +1338,53 @@ mod tests {
         assert!(
             !is_valid_sort_column("nonexistent", &def),
             "Nonexistent field should be invalid sort column"
+        );
+    }
+
+    #[test]
+    fn sort_column_group_sub_field_is_valid() {
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        assert!(
+            is_valid_sort_column("seo__title", &def),
+            "Group sub-field should be valid sort column with __ prefix"
+        );
+        assert!(
+            !is_valid_sort_column("title", &def),
+            "Bare sub-field name should not be valid without group prefix"
+        );
+    }
+
+    #[test]
+    fn sort_column_group_in_tabs_is_valid() {
+        use crate::core::field::FieldTab;
+
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "SEO",
+                    vec![
+                        FieldDefinition::builder("seo", FieldType::Group)
+                            .fields(vec![
+                                FieldDefinition::builder("title", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+
+        assert!(
+            is_valid_sort_column("seo__title", &def),
+            "Group sub-field inside Tabs should be valid sort column"
         );
     }
 }

@@ -20,6 +20,10 @@ use crate::{
 
 use super::{filter_builder::FilterBuilder, helpers::map_db_error};
 
+/// Safety limit for bulk operations to prevent unbounded queries.
+/// Bulk ops load all matching documents into memory; this caps the maximum.
+const BULK_QUERY_LIMIT: i64 = 10_000;
+
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
 #[cfg(not(tarpaulin_include))]
@@ -98,6 +102,7 @@ impl ContentService {
 
             let mut find_query = FindQuery::new();
             find_query.filters = filters;
+            find_query.limit = Some(BULK_QUERY_LIMIT);
             let docs = query::find(
                 &tx,
                 &collection,
@@ -262,6 +267,10 @@ impl ContentService {
     }
 
     /// Bulk delete matching documents. Runs per-document lifecycle hooks by default.
+    ///
+    /// Respects `soft_delete` collection config: soft-deletes go to trash unless
+    /// `force_hard_delete` is set. Permission check uses `access.trash` for soft
+    /// deletes and `access.delete` for hard deletes, matching single-delete behavior.
     pub(in crate::api::service) async fn delete_many_impl(
         &self,
         request: Request<content::DeleteManyRequest>,
@@ -269,8 +278,26 @@ impl ContentService {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
         let req = request.into_inner();
-        let def = self.get_collection_def(&req.collection)?;
+        let mut def = self.get_collection_def(&req.collection)?;
         let run_hooks = req.hooks.unwrap_or(true);
+
+        // Determine soft vs hard delete (mirrors single delete_impl logic)
+        let will_soft_delete = def.soft_delete && !req.force_hard_delete;
+        let access_ref = if will_soft_delete {
+            def.access.resolve_trash()
+        } else {
+            def.access.delete.as_deref()
+        };
+        let deny_msg = if will_soft_delete {
+            "Trash access denied"
+        } else {
+            "Delete access denied"
+        };
+
+        // Override soft_delete on the def when force_hard_delete is requested
+        if req.force_hard_delete && def.soft_delete {
+            def.soft_delete = false;
+        }
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
@@ -281,151 +308,176 @@ impl ContentService {
         let req_where = req.r#where.clone();
         let config_dir = self.config_dir.clone();
         let locale_cfg = self.locale_config.clone();
+        let access_owned = access_ref.map(|s| s.to_string());
+        let deny_msg_owned = deny_msg.to_string();
+        let soft_delete = will_soft_delete;
         let def_owned = def;
-        let deleted = tokio::task::spawn_blocking(move || -> Result<i64, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
-            // Auth + read access (all on blocking thread)
-            let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
-            let read_access = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &hook_runner,
-                &mut conn,
-            )?;
+        let (hard_count, soft_count) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, i64), Status> {
+                let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
-            if matches!(read_access, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
+                // Auth + read access (all on blocking thread)
+                let auth_user =
+                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                let read_access = ContentService::check_access_blocking(
+                    def_owned.access.read.as_deref(),
+                    &auth_user,
+                    None,
+                    None,
+                    &hook_runner,
+                    &mut conn,
+                )?;
 
-            let filters = FilterBuilder::new(&def_owned.fields, &read_access)
-                .where_json(req_where.as_deref())
-                .build()?;
+                if matches!(read_access, AccessResult::Denied) {
+                    return Err(Status::permission_denied("Read access denied"));
+                }
 
-            let tx = conn
-                .transaction_immediate()
-                .context("Start transaction")
-                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                let filters = FilterBuilder::new(&def_owned.fields, &read_access)
+                    .where_json(req_where.as_deref())
+                    .build()?;
 
-            let mut find_query = FindQuery::new();
-            find_query.filters = filters;
-            let docs = query::find(&tx, &collection, &def_owned, &find_query, None)
-                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                let tx = conn
+                    .transaction_immediate()
+                    .context("Start transaction")
+                    .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
-            // All-or-nothing delete access check
-            if def_owned.access.delete.is_some() {
-                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-                for doc in &docs {
-                    let result = hook_runner
-                        .check_access(
-                            def_owned.access.delete.as_deref(),
-                            user_doc,
-                            Some(&doc.id),
-                            None,
-                            &tx,
-                        )
-                        .map_err(|e| {
-                            tracing::error!("Access check error: {}", e);
-                            Status::internal("Internal error")
-                        })?;
+                let mut find_query = FindQuery::new();
+                find_query.filters = filters;
+                find_query.limit = Some(BULK_QUERY_LIMIT);
+                let docs = query::find(&tx, &collection, &def_owned, &find_query, None)
+                    .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
-                    if matches!(result, AccessResult::Denied) {
-                        return Err(Status::permission_denied("Delete access denied"));
+                // All-or-nothing access check (using the resolved permission)
+                if access_owned.is_some() {
+                    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                    for doc in &docs {
+                        let result = hook_runner
+                            .check_access(
+                                access_owned.as_deref(),
+                                user_doc,
+                                Some(&doc.id),
+                                None,
+                                &tx,
+                            )
+                            .map_err(|e| {
+                                tracing::error!("Access check error: {}", e);
+                                Status::internal("Internal error")
+                            })?;
+
+                        if matches!(result, AccessResult::Denied) {
+                            return Err(Status::permission_denied(deny_msg_owned));
+                        }
                     }
                 }
-            }
 
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let mut count = 0i64;
-            let mut deleted_doc_indices = Vec::new();
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let mut hard_count = 0i64;
+                let mut soft_count = 0i64;
+                let mut hard_deleted_indices = Vec::new();
 
-            for (idx, doc) in docs.iter().enumerate() {
-                // Check incoming references BEFORE running hooks — skip protected
-                // documents without firing hooks for deletions that won't happen.
-                let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
-                    .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
-                if ref_count > 0 {
-                    continue;
-                }
+                for (idx, doc) in docs.iter().enumerate() {
+                    // Ref count protection only applies to hard deletes — soft-deleted
+                    // docs remain referenceable (ref counts are NOT decremented).
+                    if !soft_delete {
+                        let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
+                            .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
+                        if ref_count > 0 {
+                            continue;
+                        }
+                    }
 
-                if run_hooks {
-                    let hook_ctx = HookContext::builder(&collection, "delete")
-                        .data([("id".to_string(), Value::String(doc.id.to_string()))].into())
-                        .user(user_doc)
-                        .build();
-                    hook_runner
-                        .run_hooks_with_conn(
-                            &def_owned.hooks,
-                            HookEvent::BeforeDelete,
-                            hook_ctx,
+                    let mut hook_data: std::collections::HashMap<String, Value> =
+                        [("id".to_string(), Value::String(doc.id.to_string()))].into();
+                    if soft_delete {
+                        hook_data.insert("soft_delete".to_string(), Value::Bool(true));
+                    }
+
+                    if run_hooks {
+                        let hook_ctx = HookContext::builder(&collection, "delete")
+                            .data(hook_data.clone())
+                            .user(user_doc)
+                            .build();
+                        hook_runner
+                            .run_hooks_with_conn(
+                                &def_owned.hooks,
+                                HookEvent::BeforeDelete,
+                                hook_ctx,
+                                &tx,
+                            )
+                            .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
+                    }
+
+                    if soft_delete {
+                        query::soft_delete(&tx, &collection, &doc.id)
+                            .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                        soft_count += 1;
+                    } else {
+                        // Decrement ref counts on targets before hard deleting
+                        query::ref_count::before_hard_delete(
                             &tx,
+                            &collection,
+                            &doc.id,
+                            &def_owned.fields,
+                            &locale_cfg,
                         )
-                        .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
+                        .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
+
+                        query::delete(&tx, &collection, &doc.id)
+                            .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                        hard_deleted_indices.push(idx);
+                        hard_count += 1;
+                    }
+
+                    // Clean up FTS index in both hard-delete and soft-delete cases
+                    if tx.supports_fts() {
+                        query::fts::fts_delete(&tx, &collection, &doc.id)
+                            .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                    }
+
+                    if run_hooks {
+                        let after_ctx = HookContext::builder(&collection, "delete")
+                            .data(hook_data)
+                            .user(user_doc)
+                            .build();
+                        hook_runner
+                            .run_hooks_with_conn(
+                                &def_owned.hooks,
+                                HookEvent::AfterDelete,
+                                after_ctx,
+                                &tx,
+                            )
+                            .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
+                    }
                 }
 
-                // Decrement ref counts on targets before deleting
-                query::ref_count::before_hard_delete(
-                    &tx,
-                    &collection,
-                    &doc.id,
-                    &def_owned.fields,
-                    &locale_cfg,
-                )
-                .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
-
-                query::delete(&tx, &collection, &doc.id)
+                tx.commit()
+                    .context("Commit transaction")
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
-                if tx.supports_fts() {
-                    query::fts::fts_delete(&tx, &collection, &doc.id)
-                        .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+
+                // Clean up upload files AFTER commit — only for hard-deleted docs
+                // (soft-deleted docs keep their files for potential restore).
+                if def_owned.is_upload_collection() {
+                    for idx in &hard_deleted_indices {
+                        upload::delete_upload_files(&config_dir, &docs[*idx].fields);
+                    }
                 }
 
-                if run_hooks {
-                    let after_ctx = HookContext::builder(&collection, "delete")
-                        .data([("id".to_string(), Value::String(doc.id.to_string()))].into())
-                        .user(user_doc)
-                        .build();
-                    hook_runner
-                        .run_hooks_with_conn(
-                            &def_owned.hooks,
-                            HookEvent::AfterDelete,
-                            after_ctx,
-                            &tx,
-                        )
-                        .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
-                }
-
-                deleted_doc_indices.push(idx);
-                count += 1;
-            }
-
-            tx.commit()
-                .context("Commit transaction")
-                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
-
-            // Clean up upload files AFTER commit — only for docs that were
-            // actually deleted (not skipped due to reference protection).
-            if def_owned.is_upload_collection() {
-                for idx in &deleted_doc_indices {
-                    upload::delete_upload_files(&config_dir, &docs[*idx].fields);
-                }
-            }
-
-            Ok(count)
-        })
-        .await
-        .map_err(|e| {
-            tracing::error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+                Ok((hard_count, soft_count))
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("Task error: {}", e);
+                Status::internal("Internal error")
+            })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();
         }
 
-        Ok(Response::new(content::DeleteManyResponse { deleted }))
+        Ok(Response::new(content::DeleteManyResponse {
+            deleted: hard_count,
+            soft_deleted: soft_count,
+        }))
     }
 }

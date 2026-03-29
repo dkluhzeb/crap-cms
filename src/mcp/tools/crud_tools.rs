@@ -433,10 +433,15 @@ pub(super) fn exec_read_global(
     match query::get_global(&conn, slug, def, None) {
         Ok(d) => Ok(serde_json::to_string_pretty(&doc_to_json(&d))?),
         Err(e) => {
-            // "not found" is expected for globals that haven't been written yet
-            let err_msg = e.to_string();
+            // The global row may not exist yet (table missing or default row not inserted).
+            // get_global returns anyhow errors for both "no such table" (rusqlite) and
+            // "not found" (with_context on query_one None). Check the chain for both.
+            let is_missing = e.chain().any(|cause| {
+                let msg = cause.to_string();
+                msg.contains("no such table") || msg.starts_with("Failed to get global")
+            });
 
-            if err_msg.contains("not found") || err_msg.contains("no rows") {
+            if is_missing {
                 Ok(json!({}).to_string())
             } else {
                 Err(e).context(format!("Failed to read global '{}'", slug))

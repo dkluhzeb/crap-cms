@@ -183,15 +183,21 @@ pub(crate) fn has_any_field_access(
         if extractor(field).is_some() {
             return true;
         }
-        if !field.fields.is_empty() {
-            match field.field_type {
-                FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
-                    if has_any_field_access(&field.fields, extractor) {
+
+        match field.field_type {
+            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+                if has_any_field_access(&field.fields, extractor) {
+                    return true;
+                }
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    if has_any_field_access(&tab.fields, extractor) {
                         return true;
                     }
                 }
-                _ => continue, // Array/Blocks — separate join tables
             }
+            _ => continue, // Array/Blocks — separate join tables
         }
     }
     false
@@ -237,19 +243,37 @@ fn collect_field_access_denied(
         }
 
         // Recurse into containers with sub-fields
-        if !field.fields.is_empty() {
-            let sub_prefix = match field.field_type {
-                FieldType::Group => &full_name,
-                FieldType::Row | FieldType::Collapsible | FieldType::Tabs => prefix,
-                _ => continue, // Array/Blocks don't need column-level stripping
-            };
-            denied.extend(collect_field_access_denied(
-                lua,
-                &field.fields,
-                user,
-                extractor,
-                sub_prefix,
-            ));
+        match field.field_type {
+            FieldType::Group => {
+                denied.extend(collect_field_access_denied(
+                    lua,
+                    &field.fields,
+                    user,
+                    extractor,
+                    &full_name,
+                ));
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                denied.extend(collect_field_access_denied(
+                    lua,
+                    &field.fields,
+                    user,
+                    extractor,
+                    prefix,
+                ));
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    denied.extend(collect_field_access_denied(
+                        lua,
+                        &tab.fields,
+                        user,
+                        extractor,
+                        prefix,
+                    ));
+                }
+            }
+            _ => {} // Array/Blocks don't need column-level stripping
         }
     }
     denied
@@ -1120,6 +1144,70 @@ mod tests {
             .access
             .update
             .as_deref()));
+    }
+
+    #[test]
+    fn field_read_recurses_into_tabs_sub_fields() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab {
+                    label: "Main".to_string(),
+                    description: None,
+                    fields: vec![make_field(
+                        "secret",
+                        FieldAccess {
+                            read: Some("test_access.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                }])
+                .build(),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn field_write_recurses_into_tabs_sub_fields() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab {
+                    label: "Settings".to_string(),
+                    description: None,
+                    fields: vec![make_field(
+                        "locked",
+                        FieldAccess {
+                            create: Some("test_access.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                }])
+                .build(),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert_eq!(denied, vec!["locked"]);
+    }
+
+    #[test]
+    fn has_any_nested_in_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab {
+                    label: "SEO".to_string(),
+                    description: None,
+                    fields: vec![make_field(
+                        "meta_title",
+                        FieldAccess {
+                            read: Some("test_access.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                }])
+                .build(),
+        ];
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
     }
 
     #[test]

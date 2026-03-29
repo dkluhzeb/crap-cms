@@ -108,7 +108,7 @@ pub fn create_collection_table(
         columns.push(format!("updated_at {}", conn.timestamp_column_default()));
     }
 
-    let sql = format!("CREATE TABLE {} ({})", slug, columns.join(", "));
+    let sql = format!("CREATE TABLE \"{}\" ({})", slug, columns.join(", "));
 
     tracing::info!("Creating collection table: {}", slug);
     tracing::debug!("SQL: {}", sql);

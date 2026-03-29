@@ -113,7 +113,10 @@ class CrapCreatePanel extends HTMLElement {
     // Extract the edit form
     const form = doc.querySelector('#edit-form');
     if (!form) {
-      body.innerHTML = '<p class="create-panel__error">' + (t('error') || 'Error') + '</p>';
+      const errP = document.createElement('p');
+      errP.className = 'create-panel__error';
+      errP.textContent = t('error') || 'Error';
+      body.replaceChildren(errP);
       return;
     }
 

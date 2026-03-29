@@ -98,6 +98,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `DeleteMany`. Version snapshots are also created per-document. Opt out with
   `hooks = false` in the request.
 
+- **`DeleteMany` soft-delete support** — `DeleteManyRequest` gains a
+  `force_hard_delete` field (matching single `Delete`). When the collection
+  has `soft_delete` enabled, `DeleteMany` now moves documents to trash by
+  default. `DeleteManyResponse` reports both `deleted` (permanently removed)
+  and `soft_deleted` (trashed) counts. Permission checks use `access.trash`
+  for soft deletes and `access.delete` for hard deletes.
+
+- **Bulk operation safety limit** — `UpdateMany` and `DeleteMany` are now
+  capped at 10,000 documents per request to prevent unbounded memory usage.
+  Use paginated calls for larger datasets.
+
 - **Startup config validation** — validates port > 0, admin_port != grpc_port,
   `channel_capacity > 0`, `pagination.default_limit > 0`,
   `pagination.default_limit <= max_limit`, `depth >= 0`,
@@ -396,6 +407,147 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   be set to 0, causing tokio interval timers to fire continuously and
   starve the event loop. Added startup validation that all three must
   be > 0.
+
+- **DeleteMany ignored `soft_delete` configuration** (HIGH) — The gRPC
+  `DeleteMany` always performed hard deletes, bypassing the collection's
+  `soft_delete` setting entirely. Documents that should have been moved to
+  trash were permanently destroyed. Now respects `soft_delete`: matching
+  documents are soft-deleted unless `force_hard_delete` is set. Permission
+  checks also now use `access.trash` for soft deletes (matching single
+  `Delete` behavior) instead of always requiring `access.delete`.
+  `DeleteManyResponse` now reports both `deleted` and `soft_deleted` counts.
+
+- **Field access control skipped Tabs sub-fields** (HIGH) — Field-level
+  access control (`access.read`, `access.create`, `access.update`) did
+  not recurse into Tabs layout containers. Fields with access restrictions
+  inside Tabs were silently exposed to all users. Now correctly recurses
+  into `field.tabs[i].fields`. The `deny_all_access_controlled` fail-closed
+  fallback (used when the Lua VM pool is exhausted) had the same issue and
+  is also fixed to recurse into Group, Row, Collapsible, and Tabs.
+
+- **Richtext/Code editors lost state on array row reorder** (HIGH) —
+  `CrapRichtext` and `CrapCode` web components destroyed and re-initialized
+  their editor views on every DOM disconnect/reconnect cycle (triggered by
+  drag-and-drop reordering). Undo history, cursor position, and unsaved
+  content could be lost. Added idempotency guards to `connectedCallback`
+  and removed destructive cleanup from `disconnectedCallback`. Also fixed
+  `CrapConditions` and `CrapBackRefs` registering duplicate event listeners
+  on reconnection.
+
+- **Unquoted SQL table names in migrations** — `CREATE TABLE`, `ALTER TABLE`,
+  `DROP TABLE`, `INSERT INTO`, and `RENAME TO` statements in migration code
+  did not double-quote table names. Collections with slugs matching SQL
+  reserved words (e.g., `order`, `group`, `index`) would fail to create or
+  alter. All migration SQL now uses `"table_name"` quoting.
+
+- **Sort by group sub-fields rejected** — `is_valid_sort_column` did not
+  recognize group sub-fields (`seo__title`) or fields inside Tabs. Sorting
+  by these columns returned "Invalid sort column". Now handles `group__sub`
+  naming and recurses into Tabs.
+
+- **Cursor pagination broke with NULL sort values** — Keyset pagination
+  used `col > ?` / `col < ?` comparisons which evaluate to NULL in SQL
+  when the cursor's sort value is NULL. All remaining rows were silently
+  skipped. Now uses `IS NULL` / `IS NOT NULL` conditions for NULL cursors.
+
+- **`field_exists_recursive` skipped Tabs** — Registry startup warnings
+  for `use_as_title`, `default_sort`, and `list_searchable_fields` did not
+  recurse into Tabs containers, producing false-positive "field not found"
+  warnings for valid configurations. Now recurses into `field.tabs`.
+
+- **Empty trash ignored `default_deny` setting** — The empty trash handler
+  hard-coded a 403 when no `access.delete` function was configured,
+  regardless of the `default_deny` setting. Now uses the same
+  `check_access_or_forbid` pattern as other access checks.
+
+- **Validate endpoints leaked internal error details** — Non-validation
+  errors from the create/update validate endpoints included full
+  `anyhow::Error` strings (potentially containing DB paths, schema
+  details) in the HTTP response. Now returns a generic message and logs
+  the full error server-side.
+
+- **Evaluate conditions accepted arbitrary Lua function refs** — The
+  server-side display condition evaluation endpoint accepted any Lua
+  function reference string without validation. Now validates that
+  submitted function refs match `admin.condition` values defined in the
+  collection's field definitions.
+
+- **Bulk operations had no query limit** — `UpdateMany` and `DeleteMany`
+  loaded all matching documents into memory with no safety cap. A broad
+  filter on a large collection could cause OOM. Now capped at 10,000
+  documents per bulk operation.
+
+- **Draft mode skipped all validation on Array/Blocks sub-fields** —
+  Saving as draft skipped not just `required` checks but all validation
+  (email format, numeric bounds, option values, custom validators) for
+  Array and Blocks sub-fields. Now only skips `required` in draft mode;
+  all other constraints are enforced.
+
+- **MCP auth collection schema missing `password` in required** — When
+  an auth collection had no other required fields, the `password` field
+  was silently omitted from the `required` array in the MCP tool schema.
+  LLM clients could create users without passwords.
+
+- **MCP stdio panic lost request ID** — If `handle_message` panicked
+  inside `spawn_blocking`, the error response was sent with `id: None`.
+  MCP clients could not correlate the error with their request. Now
+  preserves the request ID before moving it into the blocking task.
+
+- **CrapTags ignored readonly attribute** — The tag input component
+  did not check `data-readonly`, allowing users to add and remove tags
+  on locale-locked or readonly fields. Now hides the input and remove
+  buttons when readonly.
+
+- **XSS in focal-point component** — `CrapFocalPoint` interpolated the
+  image `src` directly into an `innerHTML` template literal, allowing
+  attribute injection via crafted `data-src` values. Now sets `src` via
+  the DOM property.
+
+- **Delete dialog double-click race condition** — Rapid double-clicking
+  the delete button could send duplicate DELETE requests before the first
+  response arrived. Added a `submitting` guard.
+
+- **Dirty form guard used wrong HTMX event property** — `CrapDirtyForm`
+  and `CrapLiveEvents` accessed `e.detail.verb` on `htmx:beforeRequest`
+  events, but HTMX 1.9 provides `e.detail.requestConfig.verb`. The dirty
+  flag could be incorrectly cleared on GET navigations. Now checks both
+  properties for compatibility.
+
+- **Job retry backoff skipped the 5-second tier** — `backoff_seconds`
+  used `2^attempt` but `attempt` is 1-based after claim, so the first
+  retry waited 10s instead of 5s. Fixed formula: `2^(attempt-1) * 5`.
+
+- **MCP global read used fragile string matching** — `exec_read_global`
+  detected "not found" errors by checking if the error message contained
+  "not found" or "no rows". Unrelated errors containing those substrings
+  would be silently swallowed. Now inspects the error chain for specific
+  causes.
+
+- **Cron expression normalization preserved extra whitespace** —
+  `normalize_cron` prepended "0 " to the raw input string, so
+  `"0  3  *  *  *"` became `"0 0  3  *  *  *"`. Now normalizes to
+  single-spaced output.
+
+- **i18n translations not refreshed on HTMX body swap** — The `t()`
+  translation function cached the `#crap-i18n` data island on first
+  access and never invalidated. After a locale change via HTMX navigation,
+  stale translations persisted until a full page reload. Now invalidates
+  the cache on `htmx:afterSettle` body swaps.
+
+- **CSRF cookie decoding inconsistency** — `validate-form.js` and
+  `conditions.js` read the CSRF cookie without `decodeURIComponent`,
+  while `delete-dialog.js` decoded it. Now all components decode
+  consistently.
+
+- **Create panel error used innerHTML** — The error fallback in
+  `CrapCreatePanel` used `innerHTML` with the `t('error')` translation
+  string, which could render HTML if the translation contained markup.
+  Now uses `textContent`.
+
+- **Delete dialog error response double-consumed** — After a failed
+  `resp.json()` parse, the catch block called `resp.text()` on the
+  already-consumed body. Now reads the body once with `resp.text()` and
+  parses via `JSON.parse`.
 
 ### Changed
 

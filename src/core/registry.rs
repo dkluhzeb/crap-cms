@@ -98,14 +98,16 @@ impl Registry {
                 return true;
             }
 
-            if matches!(
-                f.field_type,
-                FieldType::Row | FieldType::Collapsible | FieldType::Tabs
-            ) {
-                return Self::field_exists_recursive(name, &f.fields);
+            match f.field_type {
+                FieldType::Row | FieldType::Collapsible => {
+                    Self::field_exists_recursive(name, &f.fields)
+                }
+                FieldType::Tabs => f
+                    .tabs
+                    .iter()
+                    .any(|tab| Self::field_exists_recursive(name, &tab.fields)),
+                _ => false,
             }
-
-            false
         })
     }
 
@@ -251,5 +253,41 @@ mod tests {
         assert!(snap.get_global("settings").is_some());
         assert_eq!(snap.collections.len(), 1);
         assert_eq!(snap.globals.len(), 1);
+    }
+
+    #[test]
+    fn field_exists_recursive_finds_field_in_tabs() {
+        use crate::core::field::FieldTab;
+
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Main",
+                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                )])
+                .build(),
+        ];
+
+        assert!(
+            Registry::field_exists_recursive("title", &fields),
+            "Should find field inside Tabs"
+        );
+        assert!(
+            !Registry::field_exists_recursive("nonexistent", &fields),
+            "Should not find nonexistent field"
+        );
+    }
+
+    #[test]
+    fn field_exists_recursive_finds_field_in_row() {
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("name", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        assert!(Registry::field_exists_recursive("name", &fields));
     }
 }

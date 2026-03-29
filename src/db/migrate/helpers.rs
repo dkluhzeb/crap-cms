@@ -37,7 +37,7 @@ pub(super) fn ensure_locale_column(
 
     if !existing.contains("_locale") {
         let sql = format!(
-            "ALTER TABLE {} ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE \"{}\" ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
             table_name,
             sanitize_locale(default_locale)?
         );
@@ -272,7 +272,7 @@ fn sync_join_tables_inner(
                             columns.push(format!("{}_tz TEXT", sub_field.name));
                         }
                     }
-                    let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
+                    let sql = format!("CREATE TABLE \"{}\" ({})", table_name, columns.join(", "));
                     tracing::info!("Creating array table: {}", table_name);
                     conn.execute(&sql, &[])
                         .with_context(|| format!("Failed to create array table {}", table_name))?;
@@ -285,7 +285,7 @@ fn sync_join_tables_inner(
                     for sub_field in &flat_subs {
                         if !existing.contains(&sub_field.name) {
                             let sql = format!(
-                                "ALTER TABLE {} ADD COLUMN {} {}",
+                                "ALTER TABLE \"{}\" ADD COLUMN {} {}",
                                 table_name,
                                 sub_field.name,
                                 conn.column_type_for(&sub_field.field_type)
@@ -300,7 +300,7 @@ fn sync_join_tables_inner(
                             let tz_col = format!("{}_tz", sub_field.name);
                             if !existing.contains(&tz_col) {
                                 let sql = format!(
-                                    "ALTER TABLE {} ADD COLUMN {} TEXT",
+                                    "ALTER TABLE \"{}\" ADD COLUMN {} TEXT",
                                     table_name, tz_col
                                 );
                                 tracing::info!("Adding column to {}: {}", table_name, tz_col);
@@ -392,12 +392,15 @@ fn rebuild_junction_table_for_polymorphic(
 ) -> Result<()> {
     let temp = format!("_{}_migrate", table_name);
 
-    conn.execute_batch(&format!("ALTER TABLE {} RENAME TO {}", table_name, temp))?;
+    conn.execute_batch(&format!(
+        "ALTER TABLE \"{}\" RENAME TO \"{}\"",
+        table_name, temp
+    ))?;
 
     let locale_col = if has_locale { ", _locale TEXT" } else { "" };
     let locale_pk = if has_locale { ", _locale" } else { "" };
     conn.execute_batch(&format!(
-        "CREATE TABLE {} (\
+        "CREATE TABLE \"{}\" (\
             parent_id TEXT NOT NULL, \
             related_id TEXT NOT NULL, \
             related_collection TEXT NOT NULL DEFAULT '', \
@@ -409,19 +412,19 @@ fn rebuild_junction_table_for_polymorphic(
 
     if has_locale {
         conn.execute_batch(&format!(
-            "INSERT INTO {} (parent_id, related_id, related_collection, _order, _locale) \
-             SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM {}",
+            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order, _locale) \
+             SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM \"{}\"",
             table_name, temp
         ))?;
     } else {
         conn.execute_batch(&format!(
-            "INSERT INTO {} (parent_id, related_id, related_collection, _order) \
-             SELECT parent_id, related_id, '' AS related_collection, _order FROM {}",
+            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order) \
+             SELECT parent_id, related_id, '' AS related_collection, _order FROM \"{}\"",
             table_name, temp
         ))?;
     }
 
-    conn.execute_batch(&format!("DROP TABLE {}", temp))?;
+    conn.execute_batch(&format!("DROP TABLE \"{}\"", temp))?;
 
     tracing::info!(
         "Rebuilt junction table {} for polymorphic upgrade (updated PRIMARY KEY)",

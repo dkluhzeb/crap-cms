@@ -821,12 +821,19 @@ message DeleteManyRequest {
   // Run per-document lifecycle hooks (before_delete, after_delete).
   // Default: true (hooks run). Set to false to skip for performance.
   optional bool hooks = 3;
+
+  // When true, permanently delete even if the collection has soft_delete enabled.
+  // Requires `access.delete` permission (not just `access.trash`).
+  bool force_hard_delete = 4;
 }
 
 // DeleteManyResponse reports the number of documents deleted.
 message DeleteManyResponse {
-  // Number of documents deleted in this operation.
+  // Number of documents permanently deleted in this operation.
   int64 deleted = 1;
+
+  // Number of documents soft-deleted (moved to trash) in this operation.
+  int64 soft_deleted = 2;
 }
 
 // Document represents a single CMS document as returned by the API.

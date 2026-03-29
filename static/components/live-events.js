@@ -85,7 +85,8 @@ class CrapLiveEvents extends HTMLElement {
     if (!document.querySelector('[data-admin-layout]')) return;
 
     this._onBeforeRequest = /** @param {CustomEvent} e */ (e) => {
-      if (e.detail.requestConfig.verb !== 'get') {
+      const verb = (e.detail.requestConfig && e.detail.requestConfig.verb) || e.detail.verb || '';
+      if (verb !== 'get') {
         this._lastSaveTime = Date.now();
       }
     };

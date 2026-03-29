@@ -320,9 +320,9 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();
 
     if fields.len() == 5 {
-        format!("0 {}", expr)
+        format!("0 {}", fields.join(" "))
     } else {
-        expr.to_string()
+        fields.join(" ")
     }
 }
 
@@ -426,9 +426,9 @@ mod tests {
 
     #[test]
     fn normalize_cron_extra_whitespace() {
-        // split_whitespace handles multiple spaces, so this still counts as 5 fields
+        // split_whitespace handles multiple spaces — normalizes to single spaces
         let result = normalize_cron("0  3  *  *  *");
-        assert_eq!(result, "0 0  3  *  *  *");
+        assert_eq!(result, "0 0 3 * * *");
     }
 
     #[test]

@@ -97,7 +97,12 @@ class CrapDirtyForm extends HTMLElement {
 
     // Clear dirty on form save (non-GET = POST/PUT submit)
     this._onBeforeRequest = (e) => {
-      if ((e.detail.verb || '').toUpperCase() !== 'GET') {
+      const verb = (
+        (e.detail.requestConfig && e.detail.requestConfig.verb) ||
+        e.detail.verb ||
+        ''
+      ).toUpperCase();
+      if (verb !== 'GET') {
         this._dirty = false;
       }
     };

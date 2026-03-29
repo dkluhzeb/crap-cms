@@ -1199,3 +1199,69 @@ fn test_validate_richtext_node_attrs_inside_array_draft_skips_required() {
         "draft mode should skip required checks for richtext node attrs in arrays"
     );
 }
+
+#[test]
+fn test_validate_array_sub_field_date_format_enforced_in_draft() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    // Array sub-field with date format — format should be enforced even in draft mode
+    let fields = vec![
+        FieldDefinition::builder("events", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("start_date", FieldType::Date).build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = HashMap::new();
+    data.insert("events".to_string(), json!([{"start_date": "not-a-date"}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").draft(true).build(),
+    );
+
+    assert!(
+        result.is_err(),
+        "Array sub-field date format should be enforced even in draft mode"
+    );
+}
+
+#[test]
+fn test_validate_array_sub_field_required_skipped_in_draft() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    // Array sub-field with required — required should be skipped in draft
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("name", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"name": ""}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").draft(true).build(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "Array sub-field required check should be skipped in draft mode"
+    );
+}

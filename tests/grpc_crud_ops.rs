@@ -1072,6 +1072,7 @@ async fn delete_many_cleans_up_upload_files() {
             collection: "media".to_string(),
             r#where: None,
             hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()

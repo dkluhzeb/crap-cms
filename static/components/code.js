@@ -23,6 +23,9 @@ class CrapCode extends HTMLElement {
   }
 
   connectedCallback() {
+    // Idempotency guard: skip re-init on DOM moves (e.g. array row drag-and-drop)
+    if (this._view) return;
+
     const CM = /** @type {any} */ (window).CodeMirror;
     /** @type {HTMLTextAreaElement | null} */
     const textarea = this.querySelector('textarea');
@@ -132,10 +135,8 @@ class CrapCode extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._view) {
-      this._view.destroy();
-      this._view = null;
-    }
+    // Do NOT destroy the view here — DOM moves (drag-and-drop reordering)
+    // trigger disconnect+reconnect, and we want to preserve editor state.
   }
 
   /**

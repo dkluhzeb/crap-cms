@@ -116,9 +116,10 @@ fn validate_scalar_field(
     );
     checks::check_row_bounds(field, &data_key, value, ctx.is_draft, errors);
 
-    // Validate sub-fields within Array/Blocks rows
-    if !ctx.is_draft
-        && matches!(field.field_type, FieldType::Array | FieldType::Blocks)
+    // Validate sub-fields within Array/Blocks rows.
+    // Draft mode still validates sub-fields (format, bounds, etc.) — only `required`
+    // checks are skipped inside sub-field validation via the is_draft flag.
+    if matches!(field.field_type, FieldType::Array | FieldType::Blocks)
         && let Some(Value::Array(rows)) = value
     {
         for (idx, row) in rows.iter().enumerate() {
