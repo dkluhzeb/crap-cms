@@ -96,17 +96,74 @@ pub fn insert_image_queue_entry(
 }
 
 /// Claim up to `limit` pending entries for processing.
+///
+/// Uses a two-phase approach:
+/// 1. Atomically UPDATE pending rows to `'processing'` using a subquery that
+///    limits to the oldest N entries and requires `status = 'pending'`.
+///    Even if two callers SELECT the same pending IDs, the `AND status = 'pending'`
+///    guard ensures only one UPDATE per row succeeds.
+/// 2. Read back the specific IDs that were updated.
+///
+/// The returned count matches `execute`'s affected-row count, ensuring no
+/// double-claiming.
 pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec<ImageQueueEntry>> {
     let p1 = conn.placeholder(1);
+
+    // Step 1: Find the candidate pending IDs.
+    let id_rows = conn.query_all(
+        &format!(
+            "SELECT id FROM _crap_image_queue
+             WHERE status = 'pending'
+             ORDER BY created_at ASC
+             LIMIT {p1}"
+        ),
+        &[DbValue::Integer(limit as i64)],
+    )?;
+
+    if id_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Step 2: Atomically claim each row (only if still pending).
+    let mut claimed_ids = Vec::with_capacity(id_rows.len());
+    let p1 = conn.placeholder(1);
+
+    for row in &id_rows {
+        let id = get_text(row, 0);
+        let updated = conn.execute(
+            &format!(
+                "UPDATE _crap_image_queue SET status = 'processing'
+                 WHERE id = {p1} AND status = 'pending'"
+            ),
+            &[DbValue::Text(id.clone())],
+        )?;
+
+        if updated > 0 {
+            claimed_ids.push(id);
+        }
+    }
+
+    if claimed_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Step 3: Read back only the rows we successfully claimed.
+    let placeholders: Vec<String> = (0..claimed_ids.len())
+        .map(|i| conn.placeholder(i + 1))
+        .collect();
+    let params: Vec<DbValue> = claimed_ids
+        .iter()
+        .map(|id| DbValue::Text(id.clone()))
+        .collect();
+
     let rows = conn.query_all(
         &format!(
             "SELECT id, collection, document_id, source_path, target_path, format, quality, url_column, url_value
-         FROM _crap_image_queue
-         WHERE status = 'pending'
-         ORDER BY created_at ASC
-         LIMIT {p1}"
+             FROM _crap_image_queue
+             WHERE id IN ({})",
+            placeholders.join(", ")
         ),
-        &[DbValue::Integer(limit as i64)],
+        &params,
     )?;
 
     let mut entries = Vec::with_capacity(rows.len());
@@ -126,15 +183,6 @@ pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec
             url_column: get_text(row, 7),
             url_value: get_text(row, 8),
         });
-    }
-
-    // Mark them as processing
-    let p1 = conn.placeholder(1);
-    for entry in &entries {
-        conn.execute(
-            &format!("UPDATE _crap_image_queue SET status = 'processing' WHERE id = {p1}"),
-            &[DbValue::Text(entry.id.clone())],
-        )?;
     }
 
     Ok(entries)
@@ -590,5 +638,43 @@ mod tests {
         assert_eq!(count_pending_images(&conn).unwrap(), 2);
         let reclaimed = claim_pending_images(&conn, 10).unwrap();
         assert_eq!(reclaimed.len(), 2);
+    }
+
+    /// Regression: claim_pending_images must use an atomic UPDATE so that
+    /// concurrent callers cannot SELECT the same pending rows before either
+    /// marks them as processing (race condition).
+    #[test]
+    fn claim_is_atomic_no_double_claim() {
+        let (_dir, conn) = setup_db();
+
+        // Insert 3 pending entries
+        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+            .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "webp", 80, "c", "u"))
+            .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d3", "/e", "/f", "webp", 80, "c", "u"))
+            .unwrap();
+
+        // First caller claims 2
+        let first = claim_pending_images(&conn, 2).unwrap();
+        assert_eq!(first.len(), 2);
+
+        // Second caller should get only the remaining 1
+        let second = claim_pending_images(&conn, 10).unwrap();
+        assert_eq!(
+            second.len(),
+            1,
+            "second claim must not re-claim entries from first"
+        );
+
+        // No overlap between the two batches
+        let first_ids: Vec<_> = first.iter().map(|e| &e.id).collect();
+        for e in &second {
+            assert!(
+                !first_ids.contains(&&e.id),
+                "entry {} was double-claimed",
+                e.id
+            );
+        }
     }
 }

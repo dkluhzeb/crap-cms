@@ -132,7 +132,8 @@ mod tests {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
             .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "test-secret").unwrap();
         let decoded = validate_token(&token, "test-secret").unwrap();
         assert_eq!(decoded.sub, "user123");
@@ -144,7 +145,8 @@ mod tests {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
             .exp(0) // expired
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "test-secret").unwrap();
         assert!(validate_token(&token, "test-secret").is_err());
     }
@@ -164,7 +166,8 @@ mod tests {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
             .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "correct-secret").unwrap();
         assert!(validate_token(&token, "wrong-secret").is_err());
     }
@@ -235,7 +238,8 @@ mod tests {
         let claims = Claims::builder("abc-123", "admins")
             .email("admin@example.com")
             .exp(exp)
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "roundtrip-secret").unwrap();
         let decoded = validate_token(&token, "roundtrip-secret").unwrap();
         assert_eq!(decoded.sub, claims.sub);
@@ -251,7 +255,8 @@ mod tests {
             .email("test@example.com")
             .exp(exp)
             .session_version(5)
-            .build();
+            .build()
+            .unwrap();
 
         let token = create_token(&claims, "sv-secret").unwrap();
         let decoded = validate_token(&token, "sv-secret").unwrap();

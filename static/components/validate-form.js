@@ -238,6 +238,7 @@ class CrapValidateForm extends HTMLElement {
       const errorEl = document.createElement('p');
       errorEl.className = 'form__error';
       errorEl.setAttribute('data-validate-error', '');
+      errorEl.setAttribute('role', 'alert');
       errorEl.textContent = message;
       wrapper.appendChild(errorEl);
       errorCount++;
@@ -324,7 +325,8 @@ class CrapValidateForm extends HTMLElement {
    */
   _getCsrf() {
     const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-    return m ? decodeURIComponent(m[1]) : null;
+    if (!m) return null;
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
   }
 }
 

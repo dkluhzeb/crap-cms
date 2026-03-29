@@ -63,6 +63,42 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             }
         };
 
+        // Validate that default_value type matches the field type.
+        if let Some(ref dv) = default_value {
+            let type_ok = match field_type {
+                FieldType::Checkbox => dv.is_boolean(),
+                FieldType::Number => dv.is_number(),
+                FieldType::Text
+                | FieldType::Textarea
+                | FieldType::Email
+                | FieldType::Code
+                | FieldType::Richtext
+                | FieldType::Select
+                | FieldType::Radio
+                | FieldType::Date => dv.is_string(),
+                // Other field types (Array, Group, Blocks, etc.) don't support scalar defaults.
+                _ => true,
+            };
+
+            if !type_ok {
+                bail!(
+                    "Field '{}': default_value type mismatch — expected {} but got {}",
+                    name,
+                    match field_type {
+                        FieldType::Checkbox => "boolean",
+                        FieldType::Number => "number",
+                        _ => "string",
+                    },
+                    match dv {
+                        JsonValue::Bool(_) => "boolean",
+                        JsonValue::Number(_) => "number",
+                        JsonValue::String(_) => "string",
+                        _ => "unknown",
+                    },
+                );
+            }
+        }
+
         let options = if let Ok(opts_tbl) = get_table(&field_tbl, "options") {
             parse_select_options(&opts_tbl)?
         } else {
@@ -781,5 +817,92 @@ mod tests {
             !fields[0].timezone,
             "timezone should be ignored for non-date fields"
         );
+    }
+
+    /// Regression: boolean default on a text field must be rejected.
+    #[test]
+    fn test_parse_fields_default_value_type_mismatch_text_boolean() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("default_value", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("default_value type mismatch"),
+            "Expected type mismatch error: {}",
+            err,
+        );
+    }
+
+    /// Regression: string default on a number field must be rejected.
+    #[test]
+    fn test_parse_fields_default_value_type_mismatch_number_string() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "count").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("default_value", "not-a-number").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("default_value type mismatch"),
+            "Expected type mismatch error: {}",
+            err,
+        );
+    }
+
+    /// Regression: number default on a checkbox must be rejected.
+    #[test]
+    fn test_parse_fields_default_value_type_mismatch_checkbox_number() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "active").unwrap();
+        field.set("type", "checkbox").unwrap();
+        field.set("default_value", 42i64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("default_value type mismatch"),
+            "Expected type mismatch error: {}",
+            err,
+        );
+    }
+
+    /// Correct type combinations should still pass.
+    #[test]
+    fn test_parse_fields_default_value_correct_types_pass() {
+        let lua = Lua::new();
+
+        // Boolean default on checkbox — OK
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "active").unwrap();
+        field.set("type", "checkbox").unwrap();
+        field.set("default_value", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        assert!(parse_fields(&fields_tbl).is_ok());
+
+        // String default on text — OK
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("default_value", "hello").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        assert!(parse_fields(&fields_tbl).is_ok());
+
+        // Number default on number — OK
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "count").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("default_value", 10i64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        assert!(parse_fields(&fields_tbl).is_ok());
     }
 }

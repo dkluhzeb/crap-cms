@@ -16,6 +16,8 @@ class CrapConditions extends HTMLElement {
 
     /** @type {number|null} */
     this._serverTimer = null;
+    /** @type {AbortController|null} */
+    this._serverAbort = null;
     /** @type {Array<{el: Element, type: string, fn: Function}>} */
     this._clientListeners = [];
     this._init();
@@ -23,6 +25,7 @@ class CrapConditions extends HTMLElement {
 
   disconnectedCallback() {
     if (this._serverTimer) clearTimeout(this._serverTimer);
+    if (this._serverAbort) this._serverAbort.abort();
     if (this._debouncedServer) {
       const form = this._getForm();
       if (form) {
@@ -104,10 +107,16 @@ class CrapConditions extends HTMLElement {
         const headers = { 'Content-Type': 'application/json' };
         if (csrf) headers['X-CSRF-Token'] = csrf;
 
+        // Cancel any in-flight request so stale responses don't overwrite
+        // the result of a newer evaluation.
+        if (this._serverAbort) this._serverAbort.abort();
+        this._serverAbort = new AbortController();
+
         fetch('/admin/collections/' + slug + '/evaluate-conditions', {
           method: 'POST',
           headers,
           body: JSON.stringify({ form_data: data, conditions: refs }),
+          signal: this._serverAbort.signal,
         })
         .then((r) => r.json())
         .then((result) => {
@@ -188,7 +197,8 @@ class CrapConditions extends HTMLElement {
    */
   _getCsrf() {
     const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-    return m ? decodeURIComponent(m[1]) : null;
+    if (!m) return null;
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
   }
 
   /**

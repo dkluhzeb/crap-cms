@@ -469,7 +469,8 @@ mod tests {
         let claims = ClaimsBuilder::new(DocumentId::new("user-123"), Slug::new("users"))
             .email("test@example.com")
             .exp(9999999999)
-            .build();
+            .build()
+            .unwrap();
         let doc = Document::builder(DocumentId::new("user-123")).build();
         let auth_user = Some(AuthUser::new(claims, doc));
         let event_user = ContentService::event_user_from(&auth_user).unwrap();

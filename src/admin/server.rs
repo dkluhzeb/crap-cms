@@ -722,10 +722,17 @@ fn try_strategy_auth(
                         .unwrap_or("")
                         .to_string();
                     let expiry = auth_config.token_expiry;
-                    let claims = ClaimsBuilder::new(user.id.clone(), slug.clone())
+                    let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
                         .email(user_email)
                         .exp((chrono::Utc::now().timestamp() as u64) + expiry)
-                        .build();
+                        .build()
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!("Claims build error: {}", e);
+                            continue;
+                        }
+                    };
                     result = Some(claims);
                     break;
                 }

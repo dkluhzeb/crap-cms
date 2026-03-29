@@ -140,7 +140,11 @@ impl ContentService {
             .email(user_email)
             .exp((chrono::Utc::now().timestamp() as u64) + expiry)
             .session_version(session_version)
-            .build();
+            .build()
+            .map_err(|e| {
+                tracing::error!("Claims build error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
         let token = auth::create_token(&claims, self.jwt_secret.as_ref()).map_err(|e| {
             tracing::error!("Token creation error: {}", e);

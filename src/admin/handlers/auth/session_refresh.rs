@@ -72,11 +72,18 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
         .unwrap_or(state.config.auth.token_expiry);
 
-    let new_claims = ClaimsBuilder::new(claims.sub, claims.collection)
+    let new_claims = match ClaimsBuilder::new(claims.sub, claims.collection)
         .email(claims.email)
         .exp((Utc::now().timestamp() as u64) + expiry)
         .session_version(session_version)
-        .build();
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Session refresh claims build: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let token = match create_token(&new_claims, state.jwt_secret.as_ref()) {
         Ok(t) => t,

@@ -1214,10 +1214,12 @@ fn validate_required_array_must_have_items() {
     assert!(result.is_ok(), "Non-empty required array should pass");
 }
 
-// ── 6AB. Blocks: missing block_type continues gracefully ─────────────────────
+// ── 6AB. Blocks: unknown block_type is rejected ─────────────────────────────
 
+/// Regression: blocks with an unrecognized `_block_type` must be rejected so
+/// that arbitrary data cannot bypass field validation.
 #[test]
-fn validate_blocks_unknown_block_type_skips() {
+fn validate_blocks_unknown_block_type_rejected() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
@@ -1233,7 +1235,6 @@ fn validate_blocks_unknown_block_type_skips() {
 
     let fields = vec![blocks_field];
     let mut data = HashMap::new();
-    // Use an unknown block type — validation should skip it gracefully
     data.insert(
         "content".to_string(),
         json!([
@@ -1244,9 +1245,12 @@ fn validate_blocks_unknown_block_type_skips() {
     let conn = pool.get().expect("DB connection");
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
+    assert!(result.is_err(), "Unknown block type must be rejected");
+    let err = result.unwrap_err();
     assert!(
-        result.is_ok(),
-        "Unknown block type should be skipped, not error"
+        err.errors[0].message.contains("unknown block type"),
+        "error should mention unknown block type: {}",
+        err.errors[0].message,
     );
 }
 
@@ -1311,8 +1315,10 @@ fn validate_checkbox_group_subfield_in_array_never_fails_required() {
 
 // ── 6AE. Validate: Blocks row that is not an object ──────────────────────────
 
+/// Regression: non-object rows in a blocks field must be rejected so that
+/// primitives cannot bypass sub-field validation.
 #[test]
-fn validate_blocks_non_object_row_skips() {
+fn validate_blocks_non_object_row_rejected() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
@@ -1328,13 +1334,18 @@ fn validate_blocks_non_object_row_skips() {
 
     let fields = vec![blocks_field];
     let mut data = HashMap::new();
-    // Non-object row (string) should be skipped gracefully
     data.insert("content".to_string(), json!(["not-an-object"]));
 
     let conn = pool.get().expect("DB connection");
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
-    assert!(result.is_ok(), "Non-object block rows should be skipped");
+    assert!(result.is_err(), "Non-object block rows must be rejected");
+    let err = result.unwrap_err();
+    assert!(
+        err.errors[0].message.contains("must be an object"),
+        "error should mention object requirement: {}",
+        err.errors[0].message,
+    );
 }
 
 // ── Deep nesting validation (Array → container → container → leaf) ──────────

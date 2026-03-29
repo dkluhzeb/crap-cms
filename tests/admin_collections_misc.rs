@@ -177,7 +177,8 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-        .build();
+        .build()
+        .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
     format!("crap_session={}", token)
 }
@@ -201,7 +202,8 @@ fn make_bearer_token(app: &TestApp, user_id: &str, email: &str) -> String {
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-        .build();
+        .build()
+        .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
     format!("Bearer {}", token)
 }

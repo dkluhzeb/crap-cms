@@ -346,8 +346,11 @@ fn test_validate_array_sub_field_skipped_for_draft() {
     );
 }
 
+/// Regression: unknown block types must produce a validation error, not be
+/// silently skipped — otherwise blocks with arbitrary types bypass all
+/// field validation.
 #[test]
-fn test_validate_blocks_unknown_block_type_skipped() {
+fn test_validate_blocks_unknown_block_type_rejected() {
     let lua = mlua::Lua::new();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
@@ -375,14 +378,19 @@ fn test_validate_blocks_unknown_block_type_skipped() {
         &data,
         &ValidationCtx::builder(&conn, "test").build(),
     );
+    assert!(result.is_err(), "Unknown block type must be rejected");
+    let err = result.unwrap_err();
     assert!(
-        result.is_ok(),
-        "Unknown block type rows should be silently skipped"
+        err.errors[0].message.contains("unknown block type"),
+        "error message should mention unknown block type: {}",
+        err.errors[0].message,
     );
 }
 
+/// Regression: non-object rows in an array field must produce a validation
+/// error — primitives should not silently bypass sub-field validation.
 #[test]
-fn test_validate_array_non_object_rows_skipped() {
+fn test_validate_array_non_object_rows_rejected() {
     let lua = mlua::Lua::new();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
@@ -404,9 +412,17 @@ fn test_validate_array_non_object_rows_skipped() {
         &data,
         &ValidationCtx::builder(&conn, "test").build(),
     );
+    assert!(result.is_err(), "Non-object array rows must be rejected");
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.errors.len(),
+        3,
+        "each non-object row should produce an error"
+    );
     assert!(
-        result.is_ok(),
-        "Non-object array rows should be silently skipped"
+        err.errors[0].message.contains("must be an object"),
+        "error message should mention object requirement: {}",
+        err.errors[0].message,
     );
 }
 

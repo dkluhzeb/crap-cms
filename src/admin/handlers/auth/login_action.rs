@@ -94,11 +94,18 @@ fn build_session_response(
         .map(|a| a.token_expiry)
         .unwrap_or(state.config.auth.token_expiry);
 
-    let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
+    let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
         .email(user_email)
         .exp((chrono::Utc::now().timestamp() as u64) + expiry)
         .session_version(session_version)
-        .build();
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Claims build error: {}", e);
+            return login_error(state, "error_internal", &form.email);
+        }
+    };
 
     let token = match create_token(&claims, state.jwt_secret.as_ref()) {
         Ok(t) => t,

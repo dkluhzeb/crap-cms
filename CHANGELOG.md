@@ -582,6 +582,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   already-consumed body. Now reads the body once with `resp.text()` and
   parses via `JSON.parse`.
 
+- **Image queue claim race condition** — `claim_pending_images()` used
+  a non-atomic SELECT-then-UPDATE pattern. Concurrent callers could
+  SELECT the same pending rows before either marked them as processing,
+  leading to duplicate image processing. Now uses optimistic locking:
+  each UPDATE includes `AND status = 'pending'` so only one caller
+  succeeds per row.
+
+- **Unknown block types silently bypassed validation** — Blocks fields
+  with an unrecognized `_block_type` (not matching any defined block
+  definition) were silently skipped during validation. Arbitrary data
+  could be stored without any field validation. Now produces a
+  `validation.unknown_block_type` error.
+
+- **Non-object array/blocks rows silently bypassed validation** —
+  Primitive values (strings, numbers, null) in array or blocks fields
+  were silently skipped instead of being validated. Now produces a
+  `validation.invalid_row_type` error when sub-fields or block
+  definitions are defined on the field.
+
+- **`has_many` select malformed JSON silently ignored** — A `has_many`
+  select field with invalid JSON (e.g., `"[invalid"`) silently passed
+  option validation. Now produces a
+  `validation.invalid_multi_select_json` error.
+
+- **Locale sanitization fell back to wrong column for unique check** —
+  When a locale string failed `sanitize_locale()`, the unique constraint
+  check fell back to the non-localized column name (e.g., `slug` instead
+  of `slug__en`), potentially allowing duplicates in the localized
+  column. Now skips the unique check entirely on invalid locale.
+
+- **Default value type not validated against field type** — A field
+  definition could have a type-mismatched `default_value` (e.g., boolean
+  default on a text field, string default on a number field) without any
+  error. Documents created without explicit values would get
+  type-incompatible defaults. Now validates at parse time: checkbox
+  requires boolean, number requires number, text/date/select/etc.
+  require string.
+
+- **`ClaimsBuilder.build()` panicked on missing fields** — The JWT
+  claims builder used `.expect()` for required `email` and `exp` fields,
+  which would panic and crash the server if a code path failed to set
+  them. Now returns `Result` with descriptive error messages. All
+  callers updated to handle the error gracefully.
+
+- **JSON-to-Lua number conversion silently lost data** — JSON numbers
+  outside the i64 and f64 representable range were silently converted
+  to Lua `nil`, losing the value without any error. Now returns a
+  `RuntimeError` describing the unrepresentable number.
+
+- **CSRF cookie `decodeURIComponent` could throw** — The
+  `_getCsrf()` helpers in `conditions.js`, `validate-form.js`, and
+  `delete-dialog.js` called `decodeURIComponent()` without a try-catch.
+  A malformed cookie value could throw an uncaught exception, breaking
+  form submissions and condition evaluation. Now falls back to the raw
+  cookie value on decode error.
+
+- **Validation error elements missing `role="alert"`** — Error messages
+  injected by `validate-form.js` did not have `role="alert"`, so screen
+  readers would not announce validation errors to assistive technology
+  users. Now sets `role="alert"` on all injected error elements.
+
+- **Server-side condition evaluation race condition** — The
+  `<crap-conditions>` component's debounced server-side evaluation had
+  no request cancellation. Rapid form changes could result in multiple
+  in-flight requests, with stale responses overwriting newer results.
+  Now uses `AbortController` to cancel previous requests before
+  issuing a new one.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

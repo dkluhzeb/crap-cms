@@ -154,7 +154,8 @@ class CrapDeleteDialog extends HTMLElement {
      */
     const getCsrf = () => {
       const match = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
-      return match ? decodeURIComponent(match[1]) : '';
+      if (!match) return '';
+      try { return decodeURIComponent(match[1]); } catch { return match[1]; }
     };
 
     /**
