@@ -32,6 +32,12 @@
   outline-offset: 2px;
 }
 
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .button > .material-symbols-outlined {
   font-size: var(--icon-md);
 }

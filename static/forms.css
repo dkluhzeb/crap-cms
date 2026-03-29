@@ -188,16 +188,16 @@ input[type="radio"] {
 }
 
 input:read-only,
-textarea:read-only {
+textarea:read-only,
+input:disabled,
+select:disabled,
+textarea:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   background-color: var(--bg-body);
-}
-
-select:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  background-color: var(--bg-body);
+  color: var(--text-tertiary);
+  user-select: none;
+  pointer-events: none;
 }
 
 input[type="checkbox"]:disabled {
