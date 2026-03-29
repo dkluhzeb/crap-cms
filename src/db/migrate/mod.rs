@@ -1,5 +1,6 @@
 //! Dynamic schema migration: syncs SQLite tables to match Lua collection definitions.
 
+mod backfill_ref_counts;
 mod collection;
 mod global;
 pub mod helpers;
@@ -19,14 +20,21 @@ use crate::{
 };
 
 /// Sync all collection tables with their Lua definitions.
+///
+/// Concurrency safety: `transaction_immediate()` acquires SQLite's write lock at
+/// transaction start (not first write), so concurrent `sync_all` calls are serialized
+/// by the database engine. Combined with `busy_timeout` (default 30s), the second caller
+/// waits rather than failing. No additional file lock is needed.
 pub fn sync_all(
     pool: &DbPool,
     registry: &SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
+    // IMMEDIATE acquires the write lock immediately — serializes concurrent DDL
+    // operations and prevents lock contention during schema changes.
     let tx = conn
-        .transaction()
+        .transaction_immediate()
         .context("Failed to start migration transaction")?;
 
     let ts_default = tx.timestamp_column_default();
@@ -67,13 +75,21 @@ pub fn sync_all(
             created_at {ts_default},
             started_at {ts_type},
             completed_at {ts_type},
-            heartbeat_at {ts_type}
+            heartbeat_at {ts_type},
+            retry_after {ts_type}
         );
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
     ))
     .context("Failed to create _crap_jobs table")?;
+
+    // Ensure retry_after column exists (added in 0.1.0-alpha.3)
+    let job_cols = tx.get_table_columns("_crap_jobs")?;
+    if !job_cols.contains("retry_after") {
+        tx.execute_batch("ALTER TABLE _crap_jobs ADD COLUMN retry_after TEXT")
+            .context("Failed to add retry_after column to _crap_jobs")?;
+    }
 
     // Create user settings table (decoupled from auth collections)
     tx.execute_batch(
@@ -116,6 +132,9 @@ pub fn sync_all(
     for (slug, def) in &reg.globals {
         global::sync_global_table(&tx, slug, def, locale_config)?;
     }
+
+    // Backfill _ref_count columns from existing relationship data (one-time migration)
+    backfill_ref_counts::backfill_if_needed(&tx, &reg, locale_config)?;
 
     drop(reg);
     tx.commit()

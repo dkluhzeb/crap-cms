@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::richtext::{
-    node_attr::NodeAttr, richtext_node_def_builder::RichtextNodeDefBuilder,
-};
+use crate::core::{FieldDefinition, richtext::richtext_node_def_builder::RichtextNodeDefBuilder};
 
 /// A registered custom ProseMirror node type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,7 +8,7 @@ pub struct RichtextNodeDef {
     pub name: String,
     pub label: String,
     pub inline: bool,
-    pub attrs: Vec<NodeAttr>,
+    pub attrs: Vec<FieldDefinition>,
     /// Which attrs contain searchable text (for FTS extraction).
     #[serde(default)]
     pub searchable_attrs: Vec<String>,

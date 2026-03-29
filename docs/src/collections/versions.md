@@ -48,10 +48,10 @@ _versions_articles (
     _parent TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
     _version INTEGER NOT NULL,
     _status TEXT NOT NULL,        -- "published" or "draft"
-    _latest INTEGER NOT NULL,     -- 1 for the most recent version
-    snapshot TEXT NOT NULL,        -- full JSON snapshot
-    created_at TEXT,
-    updated_at TEXT
+    _latest INTEGER NOT NULL DEFAULT 0,  -- 1 for the most recent version
+    snapshot TEXT NOT NULL,               -- full JSON snapshot
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
 )
 ```
 
@@ -240,10 +240,10 @@ crap.collections.define("articles", {
         default_sort = "-created_at",
     },
     fields = {
-        { name = "title", type = "text", required = true },
-        { name = "slug", type = "text", required = true, unique = true },
-        { name = "summary", type = "textarea" },
-        { name = "body", type = "richtext" },
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.text({ name = "slug", required = true, unique = true }),
+        crap.fields.textarea({ name = "summary" }),
+        crap.fields.richtext({ name = "body" }),
     },
     access = {
         read   = "hooks.access.public_read",

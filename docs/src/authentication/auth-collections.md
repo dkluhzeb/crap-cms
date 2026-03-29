@@ -35,6 +35,8 @@ crap.collections.define("users", {
 |----------|------|---------|-------------|
 | `token_expiry` | integer | `7200` | JWT token lifetime in seconds. Overrides the global `[auth] token_expiry`. |
 | `disable_local` | boolean | `false` | When `true`, the password login form is hidden. Only custom strategies can authenticate. |
+| `verify_email` | boolean | `false` | When `true`, new users must verify their email before logging in. Requires email configuration. |
+| `forgot_password` | boolean | `true` | When `true`, enables the "Forgot password?" flow. Requires email configuration. |
 | `strategies` | AuthStrategy[] | `{}` | Custom auth strategies. See [Custom Strategies](custom-strategies.md). |
 
 ## Email Auto-Injection
@@ -42,13 +44,12 @@ crap.collections.define("users", {
 When `auth = true` and no `email` field exists in the field definitions, one is automatically injected:
 
 ```lua
-{
+crap.fields.email({
     name = "email",
-    type = "email",
     required = true,
     unique = true,
     admin = { placeholder = "user@example.com" },
-}
+})
 ```
 
 If you define your own `email` field, it's used as-is.
@@ -63,6 +64,10 @@ Auth collections get a hidden `_password_hash` TEXT column during schema migrati
 - Is **never** shown in admin forms
 - Is only accessed by dedicated auth functions (`update_password`, `get_password_hash`)
 
+## Password Policy
+
+All password-setting paths (create, update, reset, CLI) enforce the password policy configured in `[auth.password_policy]` in `crap.toml`. Defaults: min 8 Unicode characters, max 128 bytes. `min_length` counts Unicode codepoints (so multi-byte characters count as 1). `max_length` counts bytes (to bound Argon2 hashing cost). See [crap.toml reference](../configuration/crap-toml.md#authpassword_policy) for all options.
+
 ## Password in Create/Update
 
 When creating or updating a user, the `password` field (if present in the data) is:
@@ -75,6 +80,21 @@ In the admin UI:
 - **Create form** — password is required
 - **Edit form** — password is optional ("leave blank to keep current")
 
+## Account Locking
+
+Auth collections support a `_locked` system field. When a user's `_locked` field is set to a truthy value (e.g., `1`), that user is immediately denied access:
+
+- **JWT validation** — every authenticated request checks `_locked` after resolving the user from the token. A locked user's token is effectively revoked, even if it hasn't expired.
+- **`Me` RPC** — returns an `unauthenticated` error for locked users.
+- **Admin UI** — the session is rejected and the user is redirected to the login page.
+
+Locking takes effect immediately — no token refresh or logout is needed. Use the CLI to lock/unlock users:
+
+```bash
+crap-cms -C ./my-project user lock -e admin@example.com
+crap-cms -C ./my-project user unlock -e admin@example.com
+```
+
 ## JWT Claims
 
 Tokens contain:
@@ -85,3 +105,4 @@ Tokens contain:
 | `collection` | Auth collection slug (e.g., "users") |
 | `email` | User email |
 | `exp` | Expiration timestamp (Unix) |
+| `iat` | Issued-at timestamp (Unix) |

@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    SmtpPassword,
+    McpApiKey, SmtpPassword,
     parsing::{serde_duration, serde_duration_option, serde_filesize},
 };
 
@@ -147,8 +147,10 @@ pub struct McpConfig {
     pub http: bool,
     /// Enable config generation tools that can write files to disk (default: false).
     pub config_tools: bool,
-    /// API key for HTTP transport auth (empty = no auth).
-    pub api_key: String,
+    /// API key for HTTP transport auth. **Required** when `http = true` — the server
+    /// will refuse to start without one. The HTTP handler also rejects all requests
+    /// when the API key is empty as a defense-in-depth measure.
+    pub api_key: McpApiKey,
     /// Whitelist of collection slugs to expose (empty = all).
     pub include_collections: Vec<String>,
     /// Blacklist of collection slugs to hide (takes precedence over include).
@@ -208,6 +210,14 @@ impl LocaleConfig {
         Self::validate_locale_code(&self.default_locale)?;
         for locale in &self.locales {
             Self::validate_locale_code(locale)?;
+        }
+        // When locales are enabled, the default locale must be in the list
+        if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
+            bail!(
+                "default_locale '{}' must be included in the locales list {:?}",
+                self.default_locale,
+                self.locales
+            );
         }
         Ok(())
     }
@@ -275,6 +285,10 @@ pub struct LiveConfig {
     pub enabled: bool,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
+    /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
+    pub max_sse_connections: usize,
+    /// Maximum concurrent gRPC Subscribe streams. 0 = unlimited. Default: 1000.
+    pub max_subscribe_connections: usize,
 }
 
 impl Default for LiveConfig {
@@ -282,6 +296,8 @@ impl Default for LiveConfig {
         Self {
             enabled: true,
             channel_capacity: 1024,
+            max_sse_connections: 1000,
+            max_subscribe_connections: 1000,
         }
     }
 }
@@ -339,6 +355,49 @@ pub struct AccessConfig {
     /// When true, operations on collections/globals without an explicit access function
     /// are denied by default. When false (default), missing access functions allow all.
     pub default_deny: bool,
+}
+
+/// Log rotation strategy for file-based logging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogRotation {
+    /// Rotate log files every hour.
+    Hourly,
+    /// Rotate log files every day (default).
+    #[default]
+    Daily,
+    /// Never rotate — single log file that grows indefinitely.
+    Never,
+}
+
+/// File-based logging configuration.
+///
+/// When `file` is true, logs are written to rotating files in `path` (relative to
+/// the config directory, or an absolute path). Disabled by default — stdout-only
+/// logging is the default for backward compatibility and Docker deployments.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LoggingConfig {
+    /// Enable file logging. Default: false.
+    pub file: bool,
+    /// Log directory path (relative to config dir, or absolute). Default: "data/logs".
+    pub path: String,
+    /// Log rotation strategy: "hourly", "daily", or "never". Default: "daily".
+    pub rotation: LogRotation,
+    /// Maximum number of rotated log files to keep. Default: 30.
+    /// Old files are pruned on startup.
+    pub max_files: usize,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            file: false,
+            path: "data/logs".to_string(),
+            rotation: LogRotation::default(),
+            max_files: 30,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -407,6 +466,8 @@ mod tests {
         let live = LiveConfig::default();
         assert!(live.enabled);
         assert_eq!(live.channel_capacity, 1024);
+        assert_eq!(live.max_sse_connections, 1000);
+        assert_eq!(live.max_subscribe_connections, 1000);
     }
 
     #[test]
@@ -483,6 +544,37 @@ mod tests {
     }
 
     #[test]
+    fn locale_validation_default_not_in_list_errors() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["de".to_string(), "fr".to_string()],
+            fallback: true,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_locale"));
+    }
+
+    #[test]
+    fn locale_validation_default_in_list_passes() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn locale_validation_empty_locales_skips_inclusion_check() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec![],
+            fallback: true,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn access_config_default_deny_false_by_default() {
         let config = crate::config::CrapConfig::default();
         assert!(!config.access.default_deny);
@@ -498,5 +590,52 @@ mod tests {
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert!(config.access.default_deny);
+    }
+
+    #[test]
+    fn logging_config_defaults() {
+        let logging = LoggingConfig::default();
+        assert!(!logging.file);
+        assert_eq!(logging.path, "data/logs");
+        assert_eq!(logging.rotation, LogRotation::Daily);
+        assert_eq!(logging.max_files, 30);
+    }
+
+    #[test]
+    fn logging_config_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[logging]\nfile = true\npath = \"logs\"\nrotation = \"hourly\"\nmax_files = 7\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert!(config.logging.file);
+        assert_eq!(config.logging.path, "logs");
+        assert_eq!(config.logging.rotation, LogRotation::Hourly);
+        assert_eq!(config.logging.max_files, 7);
+    }
+
+    #[test]
+    fn logging_config_partial_toml_uses_defaults() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "[logging]\nfile = true\n").unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert!(config.logging.file);
+        assert_eq!(config.logging.path, "data/logs");
+        assert_eq!(config.logging.rotation, LogRotation::Daily);
+        assert_eq!(config.logging.max_files, 30);
+    }
+
+    #[test]
+    fn logging_rotation_never_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[logging]\nfile = true\nrotation = \"never\"\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.logging.rotation, LogRotation::Never);
     }
 }

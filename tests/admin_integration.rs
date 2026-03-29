@@ -133,12 +133,21 @@ fn setup_app_with_config(
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             5, 300,
         )),
+        ip_login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )),
         forgot_password_limiter: std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+        ),
         has_auth,
         translations,
+        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     };
 
     let router = build_router(state);

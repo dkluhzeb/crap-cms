@@ -32,7 +32,7 @@ pub async fn run_stdio(server: McpServer) {
         debug!("MCP recv: {}", &line[..line.len().min(200)]);
 
         // Parse JSON-RPC request
-        let request = match serde_json::from_str(&line) {
+        let request: super::protocol::JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(req) => req,
             Err(e) => {
                 let err_resp = super::protocol::JsonRpcResponse::error(
@@ -48,6 +48,10 @@ pub async fn run_stdio(server: McpServer) {
             }
         };
 
+        // Preserve the request ID before moving request into the blocking task,
+        // so we can include it in error responses if the task panics.
+        let request_id = request.id.clone();
+
         // Run handle_message in spawn_blocking — it does DB queries, Lua hooks, and filesystem I/O
         let server_clone = Arc::clone(&server);
         let response =
@@ -56,7 +60,7 @@ pub async fn run_stdio(server: McpServer) {
                 Err(_) => {
                     error!("MCP spawn_blocking task panicked");
                     super::protocol::JsonRpcResponse::error(
-                        None,
+                        request_id,
                         super::protocol::INTERNAL_ERROR,
                         "Internal error",
                     )

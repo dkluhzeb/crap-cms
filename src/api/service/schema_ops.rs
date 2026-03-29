@@ -5,6 +5,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
@@ -26,11 +30,63 @@ use crate::{
 
 use super::{
     ContentService,
+    collection::helpers::strip_denied_proto_fields,
     convert::{
         document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
         prost_struct_to_json_map,
     },
 };
+
+/// Atomically try to acquire a Subscribe connection slot.
+///
+/// Returns `true` if a slot was acquired (counter incremented), `false` if the
+/// limit has been reached. When `max == 0`, no limit is enforced (always succeeds).
+/// Uses `compare_exchange_weak` in a loop to avoid the TOCTOU race inherent in
+/// `fetch_add` + check + `fetch_sub`.
+fn try_acquire_subscribe_slot(counter: &AtomicUsize, max: usize) -> bool {
+    loop {
+        let current = counter.load(Ordering::Relaxed);
+
+        if max > 0 && current >= max {
+            return false;
+        }
+
+        if counter
+            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+/// RAII guard that decrements the Subscribe connection counter on drop.
+struct SubscribeConnectionGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for SubscribeConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Stream wrapper that holds a connection guard, releasing it when the stream ends.
+struct GuardedStream<S> {
+    inner: Pin<Box<S>>,
+    _guard: SubscribeConnectionGuard,
+}
+
+impl<S: Stream + Unpin> Stream for GuardedStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
@@ -105,12 +161,10 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
-            let _ = tx.commit();
-            if let Some(ref mut s) = proto_doc.fields {
-                for name in &denied {
-                    s.fields.remove(name);
-                }
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
             }
+            strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok(proto_doc)
         })
@@ -187,7 +241,9 @@ impl ContentService {
                 })?;
                 let denied =
                     runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
-                let _ = tx.commit();
+                if let Err(e) = tx.commit() {
+                    tracing::warn!("tx commit failed: {e}");
+                }
                 for name in &denied {
                     data.remove(name);
                 }
@@ -219,12 +275,10 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
-            let _ = tx.commit();
-            if let Some(ref mut s) = proto_doc.fields {
-                for name in &denied {
-                    s.fields.remove(name);
-                }
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
             }
+            strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
         })
@@ -373,6 +427,20 @@ impl ContentService {
         Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>,
         Status,
     > {
+        // Enforce Subscribe connection limit (race-free via compare_exchange)
+        let max = self.max_subscribe_connections;
+        if !try_acquire_subscribe_slot(&self.subscribe_connections, max) {
+            tracing::warn!(
+                "Subscribe connection limit reached ({}/{}), rejecting",
+                max,
+                max
+            );
+            return Err(Status::resource_exhausted("Too many Subscribe streams"));
+        }
+        let subscribe_guard = SubscribeConnectionGuard {
+            counter: self.subscribe_connections.clone(),
+        };
+
         let metadata = request.metadata().clone();
         let req = request.into_inner();
 
@@ -461,7 +529,9 @@ impl ContentService {
                     }
                 }
             }
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
 
             Ok::<_, Status>((allowed_collections, allowed_globals))
         })
@@ -535,7 +605,16 @@ impl ContentService {
             }
         });
 
-        Ok(Response::new(Box::pin(stream)))
+        // Attach the connection guard to the stream so it decrements on drop
+        let guarded = GuardedStream {
+            inner: Box::pin(stream),
+            _guard: subscribe_guard,
+        };
+
+        Ok(Response::new(Box::pin(guarded)
+            as Pin<
+                Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>,
+            >))
     }
 
     /// List version history for a document.
@@ -659,14 +738,20 @@ impl ContentService {
                 return Err(Status::permission_denied("Update access denied"));
             }
 
-            let version = query::find_version_by_id(&conn, &collection, &version_id)
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("RestoreVersion tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            let version = query::find_version_by_id(&tx, &collection, &version_id)
                 .map_err(|e| {
                     tracing::error!("RestoreVersion error: {}", e);
                     Status::internal("Internal error")
                 })?
                 .ok_or_else(|| Status::not_found(format!("Version '{}' not found", version_id)))?;
-            query::restore_version(
-                &conn,
+
+            let doc = query::restore_version(
+                &tx,
                 &collection,
                 &def_owned,
                 &document_id,
@@ -677,7 +762,14 @@ impl ContentService {
             .map_err(|e| {
                 tracing::error!("RestoreVersion error: {}", e);
                 Status::internal("Internal error")
-            })
+            })?;
+
+            tx.commit().map_err(|e| {
+                tracing::error!("RestoreVersion commit error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            Ok(doc)
         })
         .await
         .map_err(|e| {
@@ -923,5 +1015,41 @@ fn job_run_to_proto(run: &JobRun) -> content::GetJobRunResponse {
         created_at: run.created_at.clone(),
         started_at: run.started_at.clone(),
         completed_at: run.completed_at.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscribe_slot_acquire_within_limit() {
+        let counter = AtomicUsize::new(0);
+        assert!(try_acquire_subscribe_slot(&counter, 10));
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn subscribe_slot_acquire_at_limit() {
+        let counter = AtomicUsize::new(5);
+        assert!(!try_acquire_subscribe_slot(&counter, 5));
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn subscribe_slot_acquire_no_limit() {
+        let counter = AtomicUsize::new(1000);
+        assert!(try_acquire_subscribe_slot(&counter, 0));
+        assert_eq!(counter.load(Ordering::Relaxed), 1001);
+    }
+
+    #[test]
+    fn subscribe_slot_fills_to_limit() {
+        let counter = AtomicUsize::new(0);
+        for _ in 0..3 {
+            assert!(try_acquire_subscribe_slot(&counter, 3));
+        }
+        assert!(!try_acquire_subscribe_slot(&counter, 3));
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
     }
 }

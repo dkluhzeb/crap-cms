@@ -26,9 +26,12 @@ pub fn persist_create(
     hook_data: &HashMap<String, Value>,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
+    let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
     let status = if opts.is_draft { "draft" } else { "published" };
     let doc = query::create(conn, slug, def, final_data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
+
+    query::ref_count::after_create(conn, slug, &doc.id, &def.fields, &locale_cfg)?;
 
     if let Some(pw) = opts.password
         && !pw.is_empty()
@@ -62,8 +65,14 @@ pub fn persist_update(
     hook_data: &HashMap<String, Value>,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
+    let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
+    let old_refs =
+        query::ref_count::snapshot_outgoing_refs(conn, slug, id, &def.fields, &locale_cfg)?;
+
     let doc = query::update(conn, slug, def, id, final_data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
+
+    query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, old_refs)?;
 
     if let Some(pw) = opts.password
         && !pw.is_empty()

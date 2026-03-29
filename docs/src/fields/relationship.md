@@ -72,6 +72,27 @@ crap.fields.relationship({
 | `has_many` | boolean | `false` | Use a junction table for many-to-many |
 | `max_depth` | integer | `nil` | Per-field cap on population depth |
 
+### Legacy Flat Syntax (Deprecated)
+
+A flat syntax is still supported but **deprecated** — a warning is logged at startup when it's used:
+
+```lua
+-- Deprecated: triggers a warning
+crap.fields.relationship({
+    name = "author",
+    relation_to = "users",
+    has_many = false,
+})
+
+-- Preferred: use the relationship table
+crap.fields.relationship({
+    name = "author",
+    relationship = { collection = "users" },
+})
+```
+
+The flat syntax does not support `max_depth` or polymorphic collections. Migrate to the `relationship = { ... }` table form.
+
 ## Junction Table Schema
 
 For a has-many field `tags` on collection `posts`, the junction table is:

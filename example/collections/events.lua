@@ -27,11 +27,13 @@ crap.collections.define("events", {
           name = "start_date",
           required = true,
           picker_appearance = "dayAndTime",
+          timezone = true,
           admin = { width = "half" },
         }),
         crap.fields.date({
           name = "end_date",
           picker_appearance = "dayAndTime",
+          timezone = true,
           admin = { width = "half" },
         }),
       },

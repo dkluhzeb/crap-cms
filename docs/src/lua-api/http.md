@@ -37,7 +37,7 @@ local resp = crap.http.request({
     method = "POST",
     headers = {
         ["Content-Type"] = "application/json",
-        ["Authorization"] = "Bearer " .. crap.env.get("API_TOKEN"),
+        ["Authorization"] = "Bearer " .. crap.env.get("CRAP_API_TOKEN"),
     },
     body = crap.util.json_encode({ event = "document.created", id = ctx.data.id }),
     timeout = 10,
@@ -46,6 +46,16 @@ local resp = crap.http.request({
 
 ## Notes
 
-- Uses [ureq](https://docs.rs/ureq) (blocking HTTP client). Since Lua hooks run inside `spawn_blocking`, blocking I/O is correct and won't stall the async runtime.
+- Uses [reqwest](https://docs.rs/reqwest) (blocking HTTP client). Since Lua hooks run inside `spawn_blocking`, blocking I/O is correct and won't stall the async runtime.
 - Non-2xx responses are **not** errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.
 - Available in both init.lua and hooks.
+
+## Security
+
+### Private network blocking
+
+When `hooks.allow_private_networks` is `false` (the default), `crap.http.request` resolves the URL hostname and rejects requests targeting loopback, private (RFC 1918), link-local, and unspecified IP addresses. This prevents SSRF attacks against internal services. Set `allow_private_networks = true` in `crap.toml` only if your hooks need to reach internal services.
+
+### DNS rebinding protection
+
+DNS is resolved once during validation, checked against the SSRF policy, and the validated IP is pinned via `reqwest::ClientBuilder::resolve()`. The HTTP client connects to the exact validated address — no second DNS lookup occurs. Redirects are individually resolved, validated, and pinned before following.

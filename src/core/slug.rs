@@ -14,6 +14,12 @@ pub struct Slug(String);
 
 impl Slug {
     /// Create a new `Slug` from any string-like value.
+    ///
+    /// # Safety invariant
+    /// Callers should ensure the slug is valid (lowercase ASCII alphanumeric + underscores,
+    /// not starting with `_`). Validation happens at config parsing time via `validate_slug()`.
+    /// This constructor is intentionally unchecked to keep it lightweight — the slug flows
+    /// directly into SQL identifiers, so the config-level validation is the security boundary.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }

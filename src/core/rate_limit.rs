@@ -29,10 +29,7 @@ impl LoginRateLimiter {
 
     /// Check if an email is currently blocked (too many recent failures).
     pub fn is_blocked(&self, email: &str) -> bool {
-        let mut map = match self.attempts.lock() {
-            Ok(m) => m,
-            Err(_) => return false,
-        };
+        let mut map = self.attempts.lock().expect("rate limiter mutex poisoned");
         let now = Instant::now();
 
         if let Some(times) = map.get_mut(email) {
@@ -45,10 +42,7 @@ impl LoginRateLimiter {
 
     /// Record a failed login attempt for the given email.
     pub fn record_failure(&self, email: &str) {
-        let mut map = match self.attempts.lock() {
-            Ok(m) => m,
-            Err(_) => return,
-        };
+        let mut map = self.attempts.lock().expect("rate limiter mutex poisoned");
         let now = Instant::now();
         // Evict expired entries when map grows too large
         if map.len() > MAX_MAP_SIZE {
@@ -64,10 +58,7 @@ impl LoginRateLimiter {
 
     /// Clear all failed attempts for the given email (e.g., on successful login).
     pub fn clear(&self, email: &str) {
-        let mut map = match self.attempts.lock() {
-            Ok(m) => m,
-            Err(_) => return,
-        };
+        let mut map = self.attempts.lock().expect("rate limiter mutex poisoned");
         map.remove(email);
     }
 }
@@ -96,10 +87,7 @@ impl GrpcRateLimiter {
         if self.max_requests == 0 {
             return true;
         }
-        let mut map = match self.requests.lock() {
-            Ok(m) => m,
-            Err(_) => return true, // fail open on poison
-        };
+        let mut map = self.requests.lock().expect("rate limiter mutex poisoned");
         let now = Instant::now();
         // Evict expired entries when map grows too large
         if map.len() > MAX_MAP_SIZE {

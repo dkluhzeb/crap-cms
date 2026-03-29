@@ -7,13 +7,12 @@ Display conditions let you show or hide fields in the admin UI based on the valu
 Add `admin.condition` to a field definition, referencing a Lua function:
 
 ```lua
-{
+crap.fields.text({
     name = "external_url",
-    type = "text",
     admin = {
         condition = "hooks.posts.show_external_url",
     },
-},
+}),
 ```
 
 The condition references a Lua function using the standard hook ref format (`hooks.<collection>.<name>`). The function receives the current form data and returns **either** a condition table (client-side) or a boolean (server-side).

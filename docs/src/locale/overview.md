@@ -28,18 +28,16 @@ Mark individual fields as localized in your Lua definitions:
 ```lua
 crap.collections.define("pages", {
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             localized = true,  -- this field has per-locale values
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             required = true,
             -- not localized — single value shared across all locales
-        },
+        }),
     },
 })
 ```
@@ -61,12 +59,11 @@ Localized fields use **suffixed columns** in SQLite:
 When a field has both `unique = true` and `localized = true`, uniqueness is enforced **per locale**. Two documents can have the same value in different locales, but not in the same locale:
 
 ```lua
-{
+crap.fields.text({
     name = "slug",
-    type = "text",
     unique = true,
     localized = true,
-}
+})
 ```
 
 | Scenario | Result |
@@ -181,9 +178,8 @@ crap.collections.define("pages", {
         plural = { en = "Pages", de = "Seiten" },
     },
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             localized = true,
             admin = {
@@ -191,15 +187,14 @@ crap.collections.define("pages", {
                 placeholder = { en = "Enter page title", de = "Seitentitel eingeben" },
                 description = { en = "The main heading", de = "Die Hauptüberschrift" },
             },
-        },
-        {
+        }),
+        crap.fields.select({
             name = "status",
-            type = "select",
             options = {
                 { label = { en = "Draft", de = "Entwurf" }, value = "draft" },
                 { label = { en = "Published", de = "Veröffentlicht" }, value = "published" },
             },
-        },
+        }),
     },
 })
 ```
@@ -250,7 +245,7 @@ Translation strings support `{{variable}}` placeholders:
 }
 ```
 
-Templates pass values as hash parameters: `{{t "page_of" page=page total=total_pages}}`.
+Templates pass values as hash parameters: `{{t "page_of" page=pagination.page total=pagination.total_pages}}`.
 
 ### Available Keys
 

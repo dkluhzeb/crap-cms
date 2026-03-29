@@ -21,14 +21,14 @@
     {{#if polymorphic}}
       {{#each collections}}
       <a class="relationship-field__action" href="/admin/collections/{{this}}/create"
-        hx-get="/admin/collections/{{this}}/create" hx-target="body" hx-push-url="true">
+        data-inline-create="{{this}}" data-inline-create-label="{{t "create"}} {{this}}">
         <span class="material-symbols-outlined icon--sm">add</span>
         {{t "create"}} {{this}}
       </a>
       {{/each}}
     {{else}}
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
-      hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
+      data-inline-create="{{relationship_collection}}" data-inline-create-label="{{t "create_new"}} {{collection_singular_name}}">
       <span class="material-symbols-outlined icon--sm">add</span>
       {{t "create_new"}}
     </a>

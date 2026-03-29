@@ -6,7 +6,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, FieldDefinition},
+    core::{Document, FieldDefinition, FieldType},
     db::{AccessResult, Filter, FilterClause, FilterOp},
     hooks::{
         api,
@@ -103,63 +103,177 @@ pub(crate) fn check_access_with_lua(
                             }));
                         }
                     }
-                    _ => {}
+                    Value::Boolean(b) => {
+                        let val = if b { "1" } else { "0" };
+                        clauses.push(FilterClause::Single(Filter {
+                            field,
+                            op: FilterOp::Equals(val.to_string()),
+                        }));
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "Access constraint for field '{}': unsupported value type, denying",
+                            field
+                        );
+                        return Ok(AccessResult::Denied);
+                    }
                 }
             }
             Ok(AccessResult::Constrained(clauses))
         }
-        _ => Ok(AccessResult::Denied),
+        other => {
+            tracing::warn!(
+                "Access function '{}' returned unexpected type '{}', denying access",
+                func_ref,
+                other.type_name()
+            );
+            Ok(AccessResult::Denied)
+        }
     }
 }
 
 /// Check field-level read access using an already-held `&Lua` reference.
 /// Returns a list of field names that should be stripped (denied fields).
+/// Recurses into Group (with `__` prefix) and transparent layout containers (Row/Collapsible/Tabs).
 pub(crate) fn check_field_read_access_with_lua(
     lua: &Lua,
     fields: &[FieldDefinition],
     user: Option<&Document>,
 ) -> Vec<String> {
-    let mut denied = Vec::new();
-    for field in fields {
-        if let Some(ref read_ref) = field.access.read {
-            match check_access_with_lua(lua, Some(read_ref), user, None, None) {
-                Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
-                Ok(AccessResult::Denied) => denied.push(field.name.clone()),
-                Err(e) => {
-                    tracing::warn!("field access check error for {}: {}", field.name, e);
-                    denied.push(field.name.clone());
-                }
-            }
-        }
-    }
-    denied
+    collect_field_access_denied(lua, fields, user, |f| f.access.read.as_deref(), "")
 }
 
 /// Check field-level write access using an already-held `&Lua` reference.
 /// Returns a list of field names that should be stripped from the input.
+/// Recurses into Group (with `__` prefix) and transparent layout containers (Row/Collapsible/Tabs).
 pub(crate) fn check_field_write_access_with_lua(
     lua: &Lua,
     fields: &[FieldDefinition],
     user: Option<&Document>,
     operation: &str,
 ) -> Vec<String> {
-    let mut denied = Vec::new();
-    for field in fields {
-        let access_ref = match operation {
-            "create" => field.access.create.as_deref(),
-            "update" => field.access.update.as_deref(),
-            _ => None,
-        };
+    let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
+        "create" => extract_create_access,
+        "update" => extract_update_access,
+        _ => return Vec::new(),
+    };
+    collect_field_access_denied(lua, fields, user, extractor, "")
+}
 
-        if let Some(ref_str) = access_ref {
-            match check_access_with_lua(lua, Some(ref_str), user, None, None) {
-                Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
-                Ok(AccessResult::Denied) => denied.push(field.name.clone()),
-                Err(e) => {
-                    tracing::warn!("field write access check error for {}: {}", field.name, e);
-                    denied.push(field.name.clone());
+fn extract_create_access(f: &FieldDefinition) -> Option<&str> {
+    f.access.create.as_deref()
+}
+
+fn extract_update_access(f: &FieldDefinition) -> Option<&str> {
+    f.access.update.as_deref()
+}
+
+/// Check whether any field (including nested sub-fields of Groups and transparent
+/// containers) has an access function for the given extractor.
+///
+/// Mirrors `collect_field_access_denied`'s traversal pattern:
+/// - Group: recurse into sub-fields.
+/// - Row/Collapsible/Tabs: recurse (transparent containers).
+/// - Array/Blocks: skip (separate join tables, no column-level stripping).
+pub(crate) fn has_any_field_access(
+    fields: &[FieldDefinition],
+    extractor: fn(&FieldDefinition) -> Option<&str>,
+) -> bool {
+    for field in fields {
+        if extractor(field).is_some() {
+            return true;
+        }
+
+        match field.field_type {
+            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+                if has_any_field_access(&field.fields, extractor) {
+                    return true;
                 }
             }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    if has_any_field_access(&tab.fields, extractor) {
+                        return true;
+                    }
+                }
+            }
+            _ => continue, // Array/Blocks — separate join tables
+        }
+    }
+    false
+}
+
+/// Recursively collect field names denied by an access check function.
+///
+/// - Group fields recurse with `parent__` prefix (matching DB column names).
+/// - Row/Collapsible/Tabs are transparent — recurse with the same prefix.
+/// - Array/Blocks have separate join tables and don't need column-level stripping.
+fn collect_field_access_denied(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    user: Option<&Document>,
+    extractor: fn(&FieldDefinition) -> Option<&str>,
+    prefix: &str,
+) -> Vec<String> {
+    let mut denied = Vec::new();
+    for field in fields {
+        let full_name = if prefix.is_empty() {
+            field.name.clone()
+        } else {
+            format!("{}__{}", prefix, field.name)
+        };
+
+        if let Some(ref_str) = extractor(field) {
+            match check_access_with_lua(lua, Some(ref_str), user, None, None) {
+                Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
+                Ok(AccessResult::Denied) => {
+                    denied.push(full_name.clone());
+                    continue; // Parent denied → skip sub-fields
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Field access function '{}' error (treating as denied): {}",
+                        ref_str,
+                        e
+                    );
+                    denied.push(full_name.clone());
+                    continue;
+                }
+            }
+        }
+
+        // Recurse into containers with sub-fields
+        match field.field_type {
+            FieldType::Group => {
+                denied.extend(collect_field_access_denied(
+                    lua,
+                    &field.fields,
+                    user,
+                    extractor,
+                    &full_name,
+                ));
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                denied.extend(collect_field_access_denied(
+                    lua,
+                    &field.fields,
+                    user,
+                    extractor,
+                    prefix,
+                ));
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    denied.extend(collect_field_access_denied(
+                        lua,
+                        &tab.fields,
+                        user,
+                        extractor,
+                        prefix,
+                    ));
+                }
+            }
+            _ => {} // Array/Blocks don't need column-level stripping
         }
     }
     denied
@@ -480,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn access_constrained_ignores_bool_values() {
+    fn access_constrained_boolean_value() {
         let lua = setup_lua();
         let result = check_access_with_lua(
             &lua,
@@ -490,12 +604,19 @@ mod tests {
             None,
         )
         .unwrap();
-        // Boolean values in the constraint table hit the _ => {} branch — no clauses added
+        // Boolean values are converted to "1"/"0" filter constraints
         match result {
             AccessResult::Constrained(clauses) => {
-                assert!(clauses.is_empty());
+                assert_eq!(clauses.len(), 1);
+                match &clauses[0] {
+                    FilterClause::Single(f) => {
+                        assert_eq!(f.field, "active");
+                        assert!(matches!(&f.op, FilterOp::Equals(v) if v == "1"));
+                    }
+                    _ => panic!("expected Single clause"),
+                }
             }
-            _ => panic!("expected Constrained (empty)"),
+            _ => panic!("expected Constrained"),
         }
     }
 
@@ -848,5 +969,264 @@ mod tests {
         let viewer = make_user_doc("viewer");
         let denied = check_field_write_access_with_lua(&lua, &fields, Some(&viewer), "update");
         assert_eq!(denied, vec!["admin_only"]);
+    }
+
+    // ── recursive field access ────────────────────────────────────────
+
+    #[test]
+    fn field_read_recurses_into_group_with_prefix() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![make_field(
+                    "title",
+                    FieldAccess {
+                        read: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["seo__title"]);
+    }
+
+    #[test]
+    fn field_read_recurses_through_row_without_prefix() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![make_field(
+                    "secret",
+                    FieldAccess {
+                        read: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn field_write_recurses_into_group() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("config", FieldType::Group)
+                .fields(vec![make_field(
+                    "debug",
+                    FieldAccess {
+                        create: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert_eq!(denied, vec!["config__debug"]);
+    }
+
+    #[test]
+    fn field_read_does_not_recurse_into_array() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![make_field(
+                    "name",
+                    FieldAccess {
+                        read: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        // Array sub-fields have separate join tables — no column-level stripping
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert!(denied.is_empty());
+    }
+
+    // ── has_any_field_access ─────────────────────────────────────────
+
+    #[test]
+    fn has_any_no_access_configured() {
+        let fields = vec![
+            make_field("title", FieldAccess::default()),
+            make_field("body", FieldAccess::default()),
+        ];
+        assert!(!has_any_field_access(&fields, |f| f.access.read.as_deref()));
+    }
+
+    #[test]
+    fn has_any_top_level_read() {
+        let fields = vec![make_field(
+            "secret",
+            FieldAccess {
+                read: Some("test_access.deny".to_string()),
+                ..Default::default()
+            },
+        )];
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
+    }
+
+    #[test]
+    fn has_any_nested_in_group() {
+        // Group "seo" has no access, but sub-field "canonical_url" does.
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![make_field(
+                    "canonical_url",
+                    FieldAccess {
+                        read: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
+    }
+
+    #[test]
+    fn has_any_nested_in_row() {
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![make_field(
+                    "secret",
+                    FieldAccess {
+                        create: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        assert!(has_any_field_access(&fields, |f| f
+            .access
+            .create
+            .as_deref()));
+    }
+
+    #[test]
+    fn has_any_skips_array_sub_fields() {
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![make_field(
+                    "name",
+                    FieldAccess {
+                        read: Some("test_access.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        // Array sub-fields have separate join tables — not included
+        assert!(!has_any_field_access(&fields, |f| f.access.read.as_deref()));
+    }
+
+    #[test]
+    fn has_any_deeply_nested_group_in_row() {
+        // Row > Group > sub-field with access
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("grp", FieldType::Group)
+                        .fields(vec![make_field(
+                            "deep",
+                            FieldAccess {
+                                update: Some("test_access.deny".to_string()),
+                                ..Default::default()
+                            },
+                        )])
+                        .build(),
+                ])
+                .build(),
+        ];
+        assert!(has_any_field_access(&fields, |f| f
+            .access
+            .update
+            .as_deref()));
+    }
+
+    #[test]
+    fn field_read_recurses_into_tabs_sub_fields() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab {
+                    label: "Main".to_string(),
+                    description: None,
+                    fields: vec![make_field(
+                        "secret",
+                        FieldAccess {
+                            read: Some("test_access.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                }])
+                .build(),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn field_write_recurses_into_tabs_sub_fields() {
+        let lua = setup_lua();
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab {
+                    label: "Settings".to_string(),
+                    description: None,
+                    fields: vec![make_field(
+                        "locked",
+                        FieldAccess {
+                            create: Some("test_access.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                }])
+                .build(),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert_eq!(denied, vec!["locked"]);
+    }
+
+    #[test]
+    fn has_any_nested_in_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab {
+                    label: "SEO".to_string(),
+                    description: None,
+                    fields: vec![make_field(
+                        "meta_title",
+                        FieldAccess {
+                            read: Some("test_access.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                }])
+                .build(),
+        ];
+        assert!(has_any_field_access(&fields, |f| f.access.read.as_deref()));
+    }
+
+    #[test]
+    fn has_any_write_checks_correct_extractor() {
+        let fields = vec![make_field(
+            "title",
+            FieldAccess {
+                create: Some("test_access.deny".to_string()),
+                ..Default::default()
+            },
+        )];
+        // Has create access, but checking update should return false
+        assert!(!has_any_field_access(&fields, |f| f
+            .access
+            .update
+            .as_deref()));
+        assert!(has_any_field_access(&fields, |f| f
+            .access
+            .create
+            .as_deref()));
     }
 }

@@ -11,12 +11,25 @@ service ContentAPI {
   rpc Create (CreateRequest) returns (CreateResponse);
   rpc Update (UpdateRequest) returns (UpdateResponse);
   rpc Delete (DeleteRequest) returns (DeleteResponse);
+  rpc Count (CountRequest) returns (CountResponse);
+  rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
+  rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
   rpc GetGlobal (GetGlobalRequest) returns (GetGlobalResponse);
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
+  rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
+  rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
+  rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
+  rpc ListVersions (ListVersionsRequest) returns (ListVersionsResponse);
+  rpc RestoreVersion (RestoreVersionRequest) returns (RestoreVersionResponse);
+  rpc ListJobs (ListJobsRequest) returns (ListJobsResponse);
+  rpc TriggerJob (TriggerJobRequest) returns (TriggerJobResponse);
+  rpc GetJobRun (GetJobRunRequest) returns (GetJobRunResponse);
+  rpc ListJobRuns (ListJobRunsRequest) returns (ListJobRunsResponse);
 }
 ```
 
@@ -24,9 +37,31 @@ service ContentAPI {
 
 Default: `50051` (configurable via `[server] grpc_port` in `crap.toml`).
 
+## Message Size Limits
+
+The maximum gRPC message size (both request and response) defaults to **16MB** — configurable via `grpc_max_message_size` in `[server]`. This is higher than Tonic's built-in 4MB default to accommodate large `Find` responses with deep relationship population.
+
+```toml
+[server]
+grpc_max_message_size = "32MB"  # increase for very large responses
+```
+
+## Timeouts
+
+An optional request timeout can be set via `grpc_timeout` in `[server]`. When set, RPCs exceeding the timeout return `DEADLINE_EXCEEDED`.
+
+```toml
+[server]
+grpc_timeout = "30s"
+```
+
+## Bulk Operation Limits
+
+`UpdateMany` and `DeleteMany` process at most **10,000** documents per call. This prevents unbounded memory usage when a broad filter matches a very large dataset. For larger operations, use paginated calls with a `where` clause to process documents in batches.
+
 ## Server Reflection
 
-The server supports gRPC reflection, so tools like `grpcurl` work without importing the proto file:
+When enabled (`grpc_reflection = true` in `[server]`, disabled by default), the server supports gRPC reflection, so tools like `grpcurl` work without importing the proto file:
 
 ```bash
 # List services

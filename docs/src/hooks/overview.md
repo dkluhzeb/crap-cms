@@ -102,6 +102,14 @@ end
 return M
 ```
 
-To avoid cross-request state leaks, keep hook functions stateless — use the `ctx` table for input/output, and `crap.collections.*` for persistent storage. If you need request-scoped state, store it in `ctx.data` fields, not module-level locals.
+To avoid cross-request state leaks, keep hook functions stateless — use the `ctx` table for input/output, and `crap.collections.*` for persistent storage. If you need request-scoped state, store it in `ctx.context` (the request-scoped shared table — see [Hook Context](hook-context.md#context-request-scoped-shared-table)), not module-level locals.
 
 Module-level constants and utility functions are fine — only mutable state is the concern.
+
+> **Important: VM pool behavior.** Since HookRunner uses a pool of Lua VMs, global state in Lua modules persists across requests **within the same VM** but is **not shared across VMs**. Each VM in the pool has its own independent copy of module-level variables. This means:
+>
+> - Module-level variables can act as in-memory caches, but different requests may hit different VMs and see different cached values.
+> - Cached state is **not** consistent across the pool — one VM's counter may be at 5 while another is at 12.
+> - All cached state is **lost on server restart** (VMs are re-initialized from scratch).
+>
+> If you need shared, consistent state, use `crap.collections.*` or `crap.globals.*` to persist to the database.

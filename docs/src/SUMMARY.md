@@ -19,6 +19,7 @@
 - [Overview](collections/overview.md)
 - [Definition Schema](collections/definition-schema.md)
 - [Versions & Drafts](collections/versions.md)
+- [Soft Deletes](collections/soft-deletes.md)
 
 # Fields
 
@@ -51,6 +52,7 @@
 # Relationships
 
 - [Overview](relationships/overview.md)
+- [Delete Protection](relationships/delete-protection.md)
 - [Population Depth](relationships/population-depth.md)
 
 # Query & Filters
@@ -97,6 +99,7 @@
 - [crap.globals](lua-api/globals.md)
 - [crap.hooks](lua-api/hooks.md)
 - [crap.log](lua-api/log.md)
+- [crap.json](lua-api/json.md)
 - [crap.util](lua-api/util.md)
 - [crap.auth](lua-api/auth.md)
 - [crap.env](lua-api/env.md)

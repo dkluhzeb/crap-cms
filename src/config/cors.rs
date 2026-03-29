@@ -1,6 +1,10 @@
 //! CORS (Cross-Origin Resource Sharing) configuration.
 
+use std::{str::FromStr, time::Duration};
+
+use axum::http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
 use super::parsing::serde_duration;
 
@@ -18,10 +22,10 @@ pub struct CorsConfig {
     pub allowed_headers: Vec<String>,
     /// Response headers exposed to the browser.
     pub exposed_headers: Vec<String>,
-    /// How long browsers can cache preflight results, in seconds.
-    /// Accepts integer seconds or human-readable string ("1h", "3600").
+    /// How long browsers can cache preflight results.
+    /// Accepts integer seconds or human-readable string ("1h", "3600s").
     #[serde(with = "serde_duration")]
-    pub max_age_seconds: u64,
+    pub max_age: u64,
     /// Whether to allow credentials (cookies, Authorization header).
     /// Cannot be used with `allowed_origins = ["*"]`.
     pub allow_credentials: bool,
@@ -41,7 +45,7 @@ impl Default for CorsConfig {
             ],
             allowed_headers: vec!["Content-Type".into(), "Authorization".into()],
             exposed_headers: Vec::new(),
-            max_age_seconds: 3600,
+            max_age: 3600,
             allow_credentials: false,
         }
     }
@@ -49,13 +53,10 @@ impl Default for CorsConfig {
 
 impl CorsConfig {
     /// Build a tower-http CorsLayer from this config. Returns None if no origins configured.
-    pub fn build_layer(&self) -> Option<tower_http::cors::CorsLayer> {
+    pub fn build_layer(&self) -> Option<CorsLayer> {
         if self.allowed_origins.is_empty() {
             return None;
         }
-        use axum::http::{HeaderName, Method};
-        use std::str::FromStr;
-        use tower_http::cors::CorsLayer;
 
         let is_wildcard = self.allowed_origins.len() == 1 && self.allowed_origins[0] == "*";
 
@@ -68,20 +69,18 @@ impl CorsConfig {
         }
 
         let origin = if is_wildcard {
-            tower_http::cors::AllowOrigin::any()
+            AllowOrigin::any()
         } else {
-            tower_http::cors::AllowOrigin::list(
-                self.allowed_origins.iter().filter_map(|o| o.parse().ok()),
-            )
+            AllowOrigin::list(self.allowed_origins.iter().filter_map(|o| o.parse().ok()))
         };
 
-        let methods = tower_http::cors::AllowMethods::list(
+        let methods = AllowMethods::list(
             self.allowed_methods
                 .iter()
                 .filter_map(|m| Method::from_str(m).ok()),
         );
 
-        let headers = tower_http::cors::AllowHeaders::list(
+        let headers = AllowHeaders::list(
             self.allowed_headers
                 .iter()
                 .filter_map(|h| HeaderName::from_str(h).ok()),
@@ -91,7 +90,7 @@ impl CorsConfig {
             .allow_origin(origin)
             .allow_methods(methods)
             .allow_headers(headers)
-            .max_age(std::time::Duration::from_secs(self.max_age_seconds));
+            .max_age(Duration::from_secs(self.max_age));
 
         if !self.exposed_headers.is_empty() {
             layer = layer.expose_headers(
@@ -125,7 +124,7 @@ mod tests {
         );
         assert_eq!(cors.allowed_headers, vec!["Content-Type", "Authorization"]);
         assert!(cors.exposed_headers.is_empty());
-        assert_eq!(cors.max_age_seconds, 3600);
+        assert_eq!(cors.max_age, 3600);
         assert!(!cors.allow_credentials);
     }
 
@@ -197,7 +196,7 @@ allowed_origins = ["https://example.com", "https://app.example.com"]
 allowed_methods = ["GET", "POST"]
 allowed_headers = ["Content-Type", "Authorization", "X-Custom"]
 exposed_headers = ["X-Request-Id"]
-max_age_seconds = 7200
+max_age = 7200
 allow_credentials = true
 "#,
         )
@@ -213,7 +212,7 @@ allow_credentials = true
             vec!["Content-Type", "Authorization", "X-Custom"]
         );
         assert_eq!(config.cors.exposed_headers, vec!["X-Request-Id"]);
-        assert_eq!(config.cors.max_age_seconds, 7200);
+        assert_eq!(config.cors.max_age, 7200);
         assert!(config.cors.allow_credentials);
     }
 }

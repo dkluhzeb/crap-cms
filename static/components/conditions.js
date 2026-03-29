@@ -10,13 +10,22 @@
 
 class CrapConditions extends HTMLElement {
   connectedCallback() {
+    // Idempotency guard: skip re-init on DOM reconnection
+    if (this._initialized) return;
+    this._initialized = true;
+
     /** @type {number|null} */
     this._serverTimer = null;
+    /** @type {AbortController|null} */
+    this._serverAbort = null;
+    /** @type {Array<{el: Element, type: string, fn: Function}>} */
+    this._clientListeners = [];
     this._init();
   }
 
   disconnectedCallback() {
     if (this._serverTimer) clearTimeout(this._serverTimer);
+    if (this._serverAbort) this._serverAbort.abort();
     if (this._debouncedServer) {
       const form = this._getForm();
       if (form) {
@@ -24,6 +33,10 @@ class CrapConditions extends HTMLElement {
         form.removeEventListener('change', this._debouncedServer);
       }
     }
+    for (const { el, type, fn } of this._clientListeners) {
+      el.removeEventListener(type, fn);
+    }
+    this._clientListeners = [];
   }
 
   /**
@@ -65,10 +78,12 @@ class CrapConditions extends HTMLElement {
     };
 
     watchedFields.forEach((fieldName) => {
-      const input = form.querySelector('[name="' + fieldName + '"]');
+      const input = form.querySelector('[name="' + CSS.escape(fieldName) + '"]');
       if (input) {
         input.addEventListener('input', runClient);
         input.addEventListener('change', runClient);
+        this._clientListeners.push({ el: input, type: 'input', fn: runClient });
+        this._clientListeners.push({ el: input, type: 'change', fn: runClient });
       }
     });
 
@@ -87,16 +102,27 @@ class CrapConditions extends HTMLElement {
           if (name && ref) refs[name] = ref;
         });
 
+        const csrf = this._getCsrf();
+        /** @type {Record<string, string>} */
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrf) headers['X-CSRF-Token'] = csrf;
+
+        // Cancel any in-flight request so stale responses don't overwrite
+        // the result of a newer evaluation.
+        if (this._serverAbort) this._serverAbort.abort();
+        this._serverAbort = new AbortController();
+
         fetch('/admin/collections/' + slug + '/evaluate-conditions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ form_data: data, conditions: refs }),
+          signal: this._serverAbort.signal,
         })
         .then((r) => r.json())
         .then((result) => {
           for (const fieldName in result) {
             const el = this.querySelector(
-              '[data-field-name="' + fieldName + '"][data-condition-ref]'
+              '[data-field-name="' + CSS.escape(fieldName) + '"][data-condition-ref]'
             );
             if (el) el.classList.toggle('form__field--hidden', !result[fieldName]);
           }
@@ -119,7 +145,7 @@ class CrapConditions extends HTMLElement {
    * @returns {boolean}
    */
   _conditionIsTruthy(val) {
-    if (val == null || val === '' || val === false) return false;
+    if (val == null || val === '' || val === false || val === 0) return false;
     if (Array.isArray(val)) return val.length > 0;
     return true;
   }
@@ -163,6 +189,16 @@ class CrapConditions extends HTMLElement {
       }
     );
     return data;
+  }
+
+  /**
+   * Read the CSRF cookie value.
+   * @returns {string|null}
+   */
+  _getCsrf() {
+    const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
+    if (!m) return null;
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
   }
 
   /**

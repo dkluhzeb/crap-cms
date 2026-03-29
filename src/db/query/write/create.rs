@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use crate::core::{CollectionDefinition, Document, FieldDefinition, FieldType};
 use crate::db::{
     DbConnection, DbValue, LocaleContext,
-    query::{coerce_value, locale_write_column, read::find_by_id_raw},
+    query::{
+        coerce_value, helpers::normalize_date_with_timezone, locale_write_column,
+        read::find_by_id_raw,
+    },
 };
 
 /// Accumulator for INSERT column/placeholder/param collection during recursive field traversal.
@@ -37,7 +40,7 @@ pub fn create(
         idx: 2,
     };
 
-    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn, "");
+    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn, "")?;
 
     if def.timestamps {
         collector.columns.push("created_at".to_string());
@@ -51,7 +54,7 @@ pub fn create(
     }
 
     let sql = format!(
-        "INSERT INTO {} ({}) VALUES ({})",
+        "INSERT INTO \"{}\" ({}) VALUES ({})",
         slug,
         collector.columns.join(", "),
         collector.placeholders.join(", ")
@@ -74,7 +77,7 @@ pub(super) fn collect_insert_params(
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
     prefix: &str,
-) {
+) -> Result<()> {
     for field in fields {
         match field.field_type {
             FieldType::Group => {
@@ -90,14 +93,14 @@ pub(super) fn collect_insert_params(
                     collector,
                     conn,
                     &new_prefix,
-                );
+                )?;
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_insert_params(&field.fields, data, locale_ctx, collector, conn, prefix);
+                collect_insert_params(&field.fields, data, locale_ctx, collector, conn, prefix)?;
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_insert_params(&tab.fields, data, locale_ctx, collector, conn, prefix);
+                    collect_insert_params(&tab.fields, data, locale_ctx, collector, conn, prefix)?;
                 }
             }
             _ => {
@@ -109,15 +112,49 @@ pub(super) fn collect_insert_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                let col_name = locale_write_column(&data_key, field, locale_ctx);
+                let col_name = locale_write_column(&data_key, field, locale_ctx)?;
 
                 if let Some(value) = data.get(&data_key) {
                     collector.columns.push(col_name);
                     collector.placeholders.push(conn.placeholder(collector.idx));
-                    collector
-                        .params
-                        .push(coerce_value(&field.field_type, value));
+
+                    // For Date fields with timezone, use timezone-aware normalization
+                    let db_val = if field.field_type == FieldType::Date && field.timezone {
+                        let tz_key = format!("{}_tz", data_key);
+                        if let Some(tz) = data.get(&tz_key).filter(|s| !s.is_empty()) {
+                            if value.is_empty() {
+                                DbValue::Null
+                            } else {
+                                match normalize_date_with_timezone(value, tz) {
+                                    Ok(normalized) => DbValue::Text(normalized),
+                                    Err(_) => coerce_value(&field.field_type, value),
+                                }
+                            }
+                        } else {
+                            coerce_value(&field.field_type, value)
+                        }
+                    } else {
+                        coerce_value(&field.field_type, value)
+                    };
+
+                    collector.params.push(db_val);
                     collector.idx += 1;
+
+                    // Timezone companion column for date fields
+                    if field.field_type == FieldType::Date && field.timezone {
+                        let tz_key = format!("{}_tz", data_key);
+                        let tz_col = locale_write_column(&tz_key, field, locale_ctx)?;
+                        collector.columns.push(tz_col);
+                        collector.placeholders.push(conn.placeholder(collector.idx));
+
+                        let tz_val = data.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+                        collector.params.push(if tz_val.is_empty() {
+                            DbValue::Null
+                        } else {
+                            DbValue::Text(tz_val.to_string())
+                        });
+                        collector.idx += 1;
+                    }
                 } else if field.field_type == FieldType::Checkbox {
                     collector.columns.push(col_name);
                     collector.placeholders.push(conn.placeholder(collector.idx));
@@ -127,6 +164,8 @@ pub(super) fn collect_insert_params(
             }
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -594,5 +633,216 @@ mod tests {
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         assert_eq!(doc.get_str("outer__inner__deep"), Some("bottom"));
+    }
+
+    // ── Timezone companion tests ─────────────────────────────────────
+
+    #[test]
+    fn create_date_with_timezone_normalizes_and_stores_tz() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), "2024-01-15T09:00".to_string());
+        data.insert("start_date_tz".to_string(), "America/New_York".to_string());
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+
+        // 9am EST = 2pm UTC
+        assert_eq!(doc.get_str("start_date"), Some("2024-01-15T14:00:00.000Z"));
+        assert_eq!(doc.get_str("start_date_tz"), Some("America/New_York"));
+    }
+
+    #[test]
+    fn create_date_with_timezone_flag_but_no_tz_value_falls_back() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), "2024-01-15T09:00".to_string());
+        // No timezone value provided
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+
+        // Falls back to normal normalization (treat as UTC)
+        assert_eq!(doc.get_str("start_date"), Some("2024-01-15T09:00:00.000Z"));
+    }
+
+    #[test]
+    fn create_date_without_timezone_flag_no_tz_column() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                event_date TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![FieldDefinition::builder("event_date", FieldType::Date).build()];
+
+        let mut data = HashMap::new();
+        data.insert("event_date".to_string(), "2024-01-15".to_string());
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+        assert_eq!(doc.get_str("event_date"), Some("2024-01-15T12:00:00.000Z"));
+    }
+
+    #[test]
+    fn create_read_roundtrip_with_timezone() {
+        // Full create/read roundtrip: create a document with a timezone-aware
+        // date field, then read it back and verify both the date and _tz
+        // companion column are present.
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Conference".to_string());
+        data.insert("start_date".to_string(), "2024-06-15T09:00".to_string());
+        data.insert("start_date_tz".to_string(), "America/New_York".to_string());
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+
+        // Verify the document has both the normalized date and timezone
+        assert_eq!(doc.get_str("title"), Some("Conference"));
+        assert_eq!(
+            doc.get_str("start_date"),
+            Some("2024-06-15T13:00:00.000Z"),
+            "9am EDT (summer) should be normalized to 1pm UTC"
+        );
+        assert_eq!(
+            doc.get_str("start_date_tz"),
+            Some("America/New_York"),
+            "Timezone companion column should be stored"
+        );
+    }
+
+    #[test]
+    fn create_read_roundtrip_timezone_in_group() {
+        // Timezone-aware date field inside a Group: both the prefixed date
+        // and prefixed _tz companion column should survive a create/read roundtrip.
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                schedule__start TEXT,
+                schedule__start_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("schedule", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("start", FieldType::Date)
+                        .timezone(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert(
+            "schedule__start".to_string(),
+            "2024-06-15T09:00".to_string(),
+        );
+        data.insert(
+            "schedule__start_tz".to_string(),
+            "Europe/Berlin".to_string(),
+        );
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+
+        // Berlin in June is CEST (UTC+2), so 09:00 local = 07:00 UTC
+        assert_eq!(
+            doc.get_str("schedule__start"),
+            Some("2024-06-15T07:00:00.000Z"),
+            "Group date should be normalized with timezone"
+        );
+        assert_eq!(
+            doc.get_str("schedule__start_tz"),
+            Some("Europe/Berlin"),
+            "Group _tz companion should be stored"
+        );
+    }
+
+    #[test]
+    fn create_date_empty_value_with_timezone_stores_null() {
+        // When the date value is empty but a timezone is provided,
+        // the date should be stored as NULL, not normalized.
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), String::new());
+        data.insert("start_date_tz".to_string(), "America/New_York".to_string());
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+
+        // Empty date with timezone should result in null
+        assert!(
+            doc.get("start_date").is_none_or(|v| v.is_null()),
+            "Empty date value should be stored as null"
+        );
     }
 }

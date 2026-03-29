@@ -18,9 +18,10 @@ use crate::{
                 resolve_columns,
             },
             shared::{
-                PaginationParams, build_list_url, check_access_or_forbid,
-                compute_denied_read_fields, extract_editor_locale, extract_where_params, forbidden,
-                not_found, parse_where_params, render_or_error, server_error, validate_sort,
+                PaginationParams, build_list_url, build_list_url_with_cursor,
+                check_access_or_forbid, compute_denied_read_fields, extract_editor_locale,
+                extract_where_params, forbidden, not_found, parse_where_params, render_or_error,
+                server_error, validate_sort,
             },
         },
     },
@@ -29,7 +30,7 @@ use crate::{
         auth::{AuthUser, Claims},
         upload,
     },
-    db::query::{self, AccessResult, FilterClause, FindQuery, LocaleContext},
+    db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::lifecycle::AfterReadCtx,
 };
 
@@ -61,13 +62,27 @@ pub async fn list_items(
     }
 
     let raw_query = uri.query().unwrap_or("");
-    let page = params.page.unwrap_or(1).max(1);
-    let per_page = params
-        .per_page
-        .unwrap_or(state.config.pagination.default_limit)
-        .min(state.config.pagination.max_limit);
-    let offset = (page - 1) * per_page;
+    let cursor_enabled = state.config.pagination.is_cursor();
     let search = params.search.filter(|s| !s.trim().is_empty());
+    let is_trash = def.soft_delete && params.trash.as_deref() == Some("1");
+
+    let pg_ctx = query::PaginationCtx::new(
+        state.config.pagination.default_limit,
+        state.config.pagination.max_limit,
+        cursor_enabled,
+    );
+    let pagination = match pg_ctx.validate(
+        params.per_page,
+        params.page,
+        params.after_cursor.as_deref(),
+        params.before_cursor.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Invalid pagination params: {}", e);
+            return server_error(&state, "Invalid pagination parameters");
+        }
+    };
 
     // Parse sort and where params
     let sort = params.sort.as_deref().and_then(|s| validate_sort(s, &def));
@@ -84,14 +99,41 @@ pub async fn list_items(
     // Merge URL filters
     filters.extend(url_filters.clone());
 
-    // Determine sort order: URL param > default_sort
-    let order_by = sort.clone().or_else(|| def.admin.default_sort.clone());
+    // Trash view: show only soft-deleted documents, sorted by _deleted_at DESC
+    if is_trash {
+        filters.push(FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        }));
+    }
+
+    // Determine sort order: trash uses _deleted_at DESC, otherwise URL param > default_sort
+    let order_by = if is_trash {
+        Some("-_deleted_at".to_string())
+    } else {
+        sort.clone().or_else(|| def.admin.default_sort.clone())
+    };
+
+    let has_cursor = pagination.has_cursor();
 
     let mut find_query = FindQuery::new();
     find_query.filters = filters.clone();
-    find_query.order_by = order_by;
-    find_query.limit = Some(per_page);
-    find_query.offset = Some(offset);
+    find_query.order_by = order_by.clone();
+    find_query.include_deleted = is_trash;
+    // Overfetch by 1 when cursor pagination is active to reliably detect
+    // whether more pages exist in the current direction.
+    find_query.limit = Some(if has_cursor {
+        pagination.limit + 1
+    } else {
+        pagination.limit
+    });
+    find_query.offset = if has_cursor {
+        None
+    } else {
+        Some(pagination.offset)
+    };
+    find_query.after_cursor = pagination.after_cursor.clone();
+    find_query.before_cursor = pagination.before_cursor.clone();
     find_query.search = search.clone();
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
@@ -104,6 +146,8 @@ pub async fn list_items(
     let fields = def.fields.clone();
     let slug_owned = slug.clone();
     let def_owned = def.clone();
+    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
     let read_result = tokio::task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "find", HashMap::new())?;
         let conn = pool.get().context("Failed to get DB connection")?;
@@ -115,6 +159,7 @@ pub async fn list_items(
             &filters,
             locale_ctx.as_ref(),
             find_query.search.as_deref(),
+            find_query.include_deleted,
         )?;
 
         let mut docs = query::find(
@@ -139,16 +184,16 @@ pub async fn list_items(
             fields: &fields,
             collection: &slug_owned,
             operation: "find",
-            user: None,
-            ui_locale: None,
+            user: user_doc.as_ref(),
+            ui_locale: user_ui_locale.as_deref(),
         };
         let docs = runner.apply_after_read_many(&ar_ctx, docs);
 
-        Ok::<_, anyhow::Error>((docs, total))
+        Ok::<_, anyhow::Error>((docs, total, has_cursor))
     })
     .await;
 
-    let (documents, total) = match read_result {
+    let (mut documents, total, had_cursor) = match read_result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             tracing::error!("Collection list query error: {}", e);
@@ -158,6 +203,20 @@ pub async fn list_items(
             tracing::error!("Collection list task error: {}", e);
             return server_error(&state, "An internal error occurred.");
         }
+    };
+
+    // Trim the overfetch row and detect whether more pages exist.
+    // For before_cursor (reversed by find()), the extra row is at the front.
+    // For after_cursor, the extra row is at the end.
+    let cursor_has_more = if had_cursor && documents.len() as i64 > pagination.limit {
+        if pagination.before_cursor.is_some() {
+            documents.remove(0);
+        } else {
+            documents.pop();
+        }
+        true
+    } else {
+        false
     };
 
     // Strip field-level read-denied fields from documents
@@ -255,34 +314,98 @@ pub async fn list_items(
         .map(|doc| build_item_row(doc, &table_columns, &def))
         .collect();
 
-    // Build pagination URLs preserving sort + where params
-    let prev_url = build_list_url(
-        &base_url,
-        page - 1,
-        None,
-        search.as_deref(),
-        sort.as_deref(),
-        &where_params,
-    );
-    let next_url = build_list_url(
-        &base_url,
-        page + 1,
-        None,
-        search.as_deref(),
-        sort.as_deref(),
-        &where_params,
-    );
-
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let data = ContextBuilder::new(&state, claims_ref)
+    // Build pagination URLs and context based on mode
+    let ctx = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionItems, def.display_name())
         .collection_def(&def)
-        .items(items)
-        .pagination(page, per_page, total, prev_url, next_url)
+        .docs(items);
+
+    let pr = if cursor_enabled {
+        query::PaginationResult::builder(&documents, total, pagination.limit).cursor(
+            order_by.as_deref(),
+            def.timestamps,
+            pagination.before_cursor.is_some(),
+            pagination.has_cursor(),
+            if had_cursor {
+                Some(cursor_has_more)
+            } else {
+                None
+            },
+        )
+    } else {
+        query::PaginationResult::builder(&documents, total, pagination.limit)
+            .page(pagination.page, pagination.offset)
+    };
+
+    let (prev_url, next_url) = if cursor_enabled {
+        let prev = if pr.has_prev_page {
+            pr.start_cursor
+                .as_deref()
+                .map(|sc| {
+                    build_list_url_with_cursor(
+                        &base_url,
+                        1,
+                        None,
+                        search.as_deref(),
+                        sort.as_deref(),
+                        &where_params,
+                        Some(("before_cursor", sc)),
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let next = if pr.has_next_page {
+            pr.end_cursor
+                .as_deref()
+                .map(|ec| {
+                    build_list_url_with_cursor(
+                        &base_url,
+                        1,
+                        None,
+                        search.as_deref(),
+                        sort.as_deref(),
+                        &where_params,
+                        Some(("after_cursor", ec)),
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        (prev, next)
+    } else {
+        let prev = build_list_url(
+            &base_url,
+            pagination.page - 1,
+            None,
+            search.as_deref(),
+            sort.as_deref(),
+            &where_params,
+        );
+        let next = build_list_url(
+            &base_url,
+            pagination.page + 1,
+            None,
+            search.as_deref(),
+            sort.as_deref(),
+            &where_params,
+        );
+        (prev, next)
+    };
+
+    let ctx = ctx.with_pagination(&pr, prev_url, next_url);
+
+    let data = ctx
         .set("has_drafts", json!(def.has_drafts()))
+        .set("has_soft_delete", json!(def.soft_delete))
+        .set("is_trash", json!(is_trash))
         .set("search", json!(search))
         .set("sort", json!(sort))
         .set("table_columns", json!(table_columns))

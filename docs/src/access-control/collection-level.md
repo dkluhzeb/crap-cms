@@ -10,6 +10,7 @@ crap.collections.define("posts", {
         read   = "hooks.access.public_read",
         create = "hooks.access.authenticated",
         update = "hooks.access.authenticated",
+        trash  = "hooks.access.authenticated",
         delete = "hooks.access.admin_only",
     },
     -- ...
@@ -18,12 +19,19 @@ crap.collections.define("posts", {
 
 Each property is a Lua function ref (string) or `nil` (no restriction).
 
-| Property | Controls |
-|----------|----------|
-| `read` | `Find` and `FindByID` operations |
-| `create` | `Create` operation |
-| `update` | `Update` operation |
-| `delete` | `Delete` operation |
+| Property | Controls | Fallback |
+|----------|----------|----------|
+| `read` | `Find` and `FindByID` operations | — |
+| `create` | `Create` operation | — |
+| `update` | `Update` operation | — |
+| `trash` | Soft-delete (move to trash) and restore. Only relevant when `soft_delete = true`. | `update` |
+| `delete` | Permanent deletion, empty trash. For collections without `soft_delete`, this is the only delete permission. | — |
+
+> **Note:** When `soft_delete = true`, `trash` and `delete` are separate permissions.
+> `trash` controls the reversible action (low privilege), `delete` controls the
+> destructive action (high privilege). If `trash` is not set, it falls back to
+> `update`. If `delete` is not set, permanent deletion is restricted to the
+> auto-purge scheduler. See [Soft Deletes](../collections/soft-deletes.md).
 
 ## Writing Access Functions
 

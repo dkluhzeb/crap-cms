@@ -5,6 +5,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::db::{migrate, ops, pool, query};
+use serde_json::json;
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -21,7 +22,7 @@ fn make_posts_def() -> CollectionDefinition {
     let status = FieldDefinition {
         name: "status".to_string(),
         field_type: FieldType::Select,
-        default_value: Some(serde_json::json!("draft")),
+        default_value: Some(json!("draft")),
         ..Default::default()
     };
     def.fields = vec![title, status];
@@ -561,7 +562,7 @@ fn is_verified_default_false() {
 fn count_where_field_eq_basic() {
     let (_tmp, pool, _def) = seed_posts();
     let conn = pool.get().expect("DB connection");
-    let count = query::count_where_field_eq(&conn, "posts", "status", "published", None)
+    let count = query::count_where_field_eq(&conn, "posts", "status", "published", None, false)
         .expect("Count failed");
     assert_eq!(count, 2);
 }
@@ -581,9 +582,15 @@ fn count_where_field_eq_with_exclude() {
     assert!(!docs.is_empty());
     let exclude_id = &docs[0].id;
 
-    let count =
-        query::count_where_field_eq(&conn, "posts", "status", "published", Some(exclude_id))
-            .expect("Count failed");
+    let count = query::count_where_field_eq(
+        &conn,
+        "posts",
+        "status",
+        "published",
+        Some(exclude_id),
+        false,
+    )
+    .expect("Count failed");
     assert_eq!(count, 1);
 }
 

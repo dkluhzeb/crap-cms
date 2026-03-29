@@ -47,11 +47,10 @@ local M = {}
 function M.install()
     for slug, def in pairs(crap.collections.config.list()) do
         if def.upload then
-            def.fields[#def.fields + 1] = {
+            def.fields[#def.fields + 1] = crap.fields.text({
                 name = "alt_text",
-                type = "text",
                 admin = { description = "Describe this image for accessibility" },
-            }
+            })
             crap.collections.define(slug, def)
         end
     end
@@ -70,11 +69,10 @@ function M.install()
     local def = crap.collections.config.get("posts")
     if not def then return end
 
-    def.fields[#def.fields + 1] = {
+    def.fields[#def.fields + 1] = crap.fields.number({
         name = "reading_time",
-        type = "number",
         admin = { readonly = true, description = "Estimated reading time (minutes)" },
-    }
+    })
 
     -- Add a hook to calculate it
     def.hooks.before_change = def.hooks.before_change or {}
@@ -104,11 +102,10 @@ local M = {}
 
 function M.install()
     for slug, def in pairs(crap.globals.config.list()) do
-        def.fields[#def.fields + 1] = {
+        def.fields[#def.fields + 1] = crap.fields.text({
             name = "last_updated_by",
-            type = "text",
             admin = { readonly = true },
-        }
+        })
         crap.globals.define(slug, def)
     end
 end
@@ -121,7 +118,7 @@ return M
 ```lua
 local def = crap.globals.config.get("site_settings")
 if def then
-    def.fields[#def.fields + 1] = { name = "footer_html", type = "richtext" }
+    def.fields[#def.fields + 1] = crap.fields.richtext({ name = "footer_html" })
     crap.globals.define("site_settings", def)
 end
 ```

@@ -21,6 +21,7 @@ use crap_cms::core::field::*;
 use crap_cms::core::job::JobDefinitionBuilder;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -111,9 +112,15 @@ fn setup_service_inner(
         .login_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
         ))
+        .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )))
         .forgot_password_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
-        ));
+        ))
+        .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 900,
+        )));
 
     if let Some(eb) = event_bus {
         deps = deps.event_bus(Some(eb));
@@ -183,9 +190,15 @@ fn setup_service_inner_with_jobs(
         .login_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
         ))
+        .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )))
         .forgot_password_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
-        ));
+        ))
+        .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 900,
+        )));
 
     let service = ContentService::new(deps.build());
 
@@ -210,7 +223,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -423,6 +436,7 @@ async fn subscribe_receives_delete_event() {
         .delete(Request::new(content::DeleteRequest {
             collection: "posts".to_string(),
             id: doc.id.clone(),
+            force_hard_delete: false,
         }))
         .await
         .unwrap();

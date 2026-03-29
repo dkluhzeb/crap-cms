@@ -1,13 +1,13 @@
 //! Lua table serializer for field admin configuration.
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Result as LuaResult, Table};
 
 use crate::core::FieldAdmin;
 
 use super::helpers::localized_string_to_lua;
 
 /// Convert a `FieldAdmin` to a Lua table. Returns `None` if no properties are set.
-pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> mlua::Result<Option<Table>> {
+pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
 

@@ -1,7 +1,7 @@
 //! `crap.jobs` namespace — job definition.
 
 use anyhow::Result;
-use mlua::{Lua, Table};
+use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{core::SharedRegistry, hooks::api::parse};
 
@@ -10,16 +10,21 @@ pub(super) fn register_jobs(lua: &Lua, crap: &Table, registry: SharedRegistry) -
     let jobs_table = lua.create_table()?;
     let reg_clone = registry.clone();
     let define_job = lua.create_function(move |_lua, (slug, config): (String, Table)| {
-        let def = parse::parse_job_definition(&slug, &config).map_err(|e| {
-            mlua::Error::RuntimeError(format!("Failed to parse job '{}': {}", slug, e))
-        })?;
+        let def = parse::parse_job_definition(&slug, &config)
+            .map_err(|e| RuntimeError(format!("Failed to parse job '{}': {}", slug, e)))?;
+
         let mut reg = reg_clone
             .write()
-            .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+
         reg.register_job(def);
+
         Ok(())
     })?;
+
     jobs_table.set("define", define_job)?;
+
     crap.set("jobs", jobs_table)?;
+
     Ok(())
 }

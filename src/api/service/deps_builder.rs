@@ -23,7 +23,9 @@ pub struct ContentServiceDepsBuilder {
     email_renderer: Option<Arc<EmailRenderer>>,
     event_bus: Option<EventBus>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
 }
 
 impl ContentServiceDepsBuilder {
@@ -38,7 +40,9 @@ impl ContentServiceDepsBuilder {
             email_renderer: None,
             event_bus: None,
             login_limiter: None,
+            ip_login_limiter: None,
             forgot_password_limiter: None,
+            ip_forgot_password_limiter: None,
         }
     }
 
@@ -87,11 +91,24 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    pub fn ip_login_limiter(mut self, ip_login_limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_login_limiter = Some(ip_login_limiter);
+        self
+    }
+
     pub fn forgot_password_limiter(
         mut self,
         forgot_password_limiter: Arc<LoginRateLimiter>,
     ) -> Self {
         self.forgot_password_limiter = Some(forgot_password_limiter);
+        self
+    }
+
+    pub fn ip_forgot_password_limiter(
+        mut self,
+        ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    ) -> Self {
+        self.ip_forgot_password_limiter = Some(ip_forgot_password_limiter);
         self
     }
 
@@ -106,9 +123,13 @@ impl ContentServiceDepsBuilder {
             email_renderer: self.email_renderer.expect("email_renderer is required"),
             event_bus: self.event_bus,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
+            ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
                 .forgot_password_limiter
                 .expect("forgot_password_limiter is required"),
+            ip_forgot_password_limiter: self
+                .ip_forgot_password_limiter
+                .expect("ip_forgot_password_limiter is required"),
         }
     }
 }

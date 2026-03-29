@@ -20,7 +20,6 @@
  *   data-error     — boolean attribute for error styling
  */
 
-import { getDrawer } from './drawer.js';
 import { t } from './i18n.js';
 
 const DEBOUNCE_MS = 250;
@@ -38,9 +37,23 @@ class CrapRelationshipSearch extends HTMLElement {
     this._initialized = false;
   }
 
+  static _injectStyles() {
+    if (CrapRelationshipSearch._stylesInjected) return;
+    CrapRelationshipSearch._stylesInjected = true;
+    const s = document.createElement('style');
+    s.textContent = CrapRelationshipSearch._styles();
+    document.head.appendChild(s);
+  }
+
+  /** @type {boolean} */
+  static _stylesInjected = false;
+
   connectedCallback() {
     if (this._initialized) return;
     this._initialized = true;
+    CrapRelationshipSearch._injectStyles();
+    /** @type {MutationObserver|null} */
+    this._observer = null;
 
     const collection = this.getAttribute('collection') || '';
     const fieldName = this.getAttribute('field-name') || '';
@@ -65,7 +78,7 @@ class CrapRelationshipSearch extends HTMLElement {
     /** @type {Array<{id: string, label: string, collection?: string, thumbnail_url?: string, filename?: string, is_image?: boolean}>} */
     let selected = [];
     try {
-      selected = JSON.parse(this.getAttribute('selected') || '[]');
+      selected = JSON.parse(this.getAttribute('selected') || '[]') || [];
     } catch { /* empty */ }
 
     // Build the DOM
@@ -76,34 +89,58 @@ class CrapRelationshipSearch extends HTMLElement {
     hiddenContainer.className = 'relationship-search__hidden';
     this.appendChild(hiddenContainer);
 
-    // Selected items display (chips for has-many)
-    if (hasMany) {
-      const chipsContainer = document.createElement('div');
-      chipsContainer.className = 'relationship-search__chips';
-      this.appendChild(chipsContainer);
-    }
-
     // Search input
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'relationship-search__input-wrapper';
     const input = document.createElement('input');
     input.type = 'text';
-    input.className = 'relationship-search__input' + errorClass;
-    input.placeholder = hasMany ? 'Search to add...' : 'Search...';
+    input.id = 'field-' + fieldName;
     input.autocomplete = 'off';
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', 'dropdown-' + fieldName);
     if (readonly) input.disabled = true;
-    inputWrapper.appendChild(input);
+
+    // Has-many: tag-style container with chips + inline input
+    if (hasMany) {
+      const tagsContainer = document.createElement('div');
+      tagsContainer.className = 'relationship-search__tags' + (this.hasAttribute('data-error') ? ' relationship-search__tags--error' : '');
+
+      const chipsContainer = document.createElement('div');
+      chipsContainer.className = 'relationship-search__chips';
+      tagsContainer.appendChild(chipsContainer);
+
+      input.className = 'relationship-search__tags-input';
+      input.placeholder = t('search_to_add');
+      tagsContainer.appendChild(input);
+
+      // Click on container focuses input
+      tagsContainer.addEventListener('click', (e) => {
+        if (/** @type {HTMLElement} */ (e.target) === tagsContainer) input.focus();
+      });
+
+      inputWrapper.appendChild(tagsContainer);
+    } else {
+      input.className = 'relationship-search__input' + errorClass;
+      input.placeholder = t('search');
+      inputWrapper.appendChild(input);
+    }
+
     this.appendChild(inputWrapper);
 
     // Dropdown
     const dropdown = document.createElement('div');
     dropdown.className = 'relationship-search__dropdown';
+    dropdown.id = 'dropdown-' + fieldName;
+    dropdown.setAttribute('role', 'listbox');
     dropdown.style.display = 'none';
     this.appendChild(dropdown);
 
     let debounceTimer = null;
     let activeIndex = -1;
     let suppressFocus = false;
+    let searchGen = 0;
     /** @type {Array<{id: string, label: string, collection?: string}>} */
     let results = [];
 
@@ -184,6 +221,12 @@ class CrapRelationshipSearch extends HTMLElement {
         }
         chipsContainer.appendChild(chip);
       });
+
+      // Toggle error class on tags container
+      const tagsContainer = self.querySelector('.relationship-search__tags');
+      if (tagsContainer) {
+        tagsContainer.classList.toggle('relationship-search__tags--has-items', selected.length > 0);
+      }
     }
 
     function renderHasOneDisplay() {
@@ -220,6 +263,7 @@ class CrapRelationshipSearch extends HTMLElement {
 
           const option = document.createElement('div');
           option.className = 'relationship-search__option';
+          option.setAttribute('role', 'option');
           if (idx === activeIndex) option.classList.add('relationship-search__option--active');
 
           const isSelected = selected.some((s) => s.id === item.id);
@@ -234,6 +278,7 @@ class CrapRelationshipSearch extends HTMLElement {
         });
       }
       dropdown.style.display = '';
+      input.setAttribute('aria-expanded', 'true');
     }
 
     /** @param {{id: string, label: string, collection?: string}} item */
@@ -253,10 +298,12 @@ class CrapRelationshipSearch extends HTMLElement {
     }
 
     function closeDropdown() {
+      searchGen++;
       dropdown.style.display = 'none';
       dropdown.innerHTML = '';
       results = [];
       activeIndex = -1;
+      input.setAttribute('aria-expanded', 'false');
     }
 
     /**
@@ -264,6 +311,7 @@ class CrapRelationshipSearch extends HTMLElement {
      * @param {string} query
      */
     async function doSearch(query) {
+      const gen = ++searchGen;
       if (polymorphic) {
         // Fan out to all target collections
         const promises = collections.map(async (col) => {
@@ -281,6 +329,7 @@ class CrapRelationshipSearch extends HTMLElement {
           } catch { return []; }
         });
         const allResults = await Promise.all(promises);
+        if (gen !== searchGen) return;
         results = allResults.flat();
         // Sort: group by collection
         results.sort((a, b) => {
@@ -293,6 +342,7 @@ class CrapRelationshipSearch extends HTMLElement {
         try {
           const resp = await fetch(url);
           if (!resp.ok) return;
+          if (gen !== searchGen) return;
           results = await resp.json();
         } catch { return; }
       }
@@ -349,6 +399,8 @@ class CrapRelationshipSearch extends HTMLElement {
         e.preventDefault();
         if (activeIndex >= 0 && activeIndex < optionCount) {
           selectItem(results[activeIndex]);
+        } else if (optionCount > 0) {
+          selectItem(results[0]);
         }
       } else if (e.key === 'Escape') {
         closeDropdown();
@@ -380,6 +432,7 @@ class CrapRelationshipSearch extends HTMLElement {
         clearBtn.style.display = selected.length > 0 ? '' : 'none';
       });
       observer.observe(hiddenContainer, { childList: true, subtree: true });
+      this._observer = observer;
     }
 
     // Listen for picks from external sources (e.g. drawer picker)
@@ -398,6 +451,38 @@ class CrapRelationshipSearch extends HTMLElement {
     if (pickerMode === 'drawer' && !readonly) {
       this._setupDrawerPicker(collection, isUpload, hasMany);
     }
+
+    // ── Inline create (open create form in panel) ──────────────
+    if (!readonly) {
+      const field = this.closest('.relationship-field') || this.closest('.upload-field');
+      if (field) {
+        field.addEventListener('click', (e) => {
+          const link = /** @type {HTMLElement} */ (e.target).closest('[data-inline-create]');
+          if (!link) return;
+
+          e.preventDefault();
+          const col = /** @type {HTMLElement} */ (link).dataset.inlineCreate;
+          const label = /** @type {HTMLElement} */ (link).dataset.inlineCreateLabel || '';
+
+          const panelEvt = new CustomEvent('crap:create-panel-request', { detail: {} });
+          document.dispatchEvent(panelEvt);
+          panelEvt.detail.instance?.open({
+            collection: col,
+            title: label,
+            onCreated: (item) => selectItem(item),
+          });
+        });
+      }
+    }
+  }
+
+  disconnectedCallback() {
+    if (this._observer) {
+      this._observer.disconnect();
+      this._observer = null;
+    }
+    // Do NOT reset _initialized — DOM, listeners, and selection state survive
+    // DOM moves. Resetting would cause full DOM rebuild and state loss.
   }
 
   /**
@@ -420,7 +505,7 @@ class CrapRelationshipSearch extends HTMLElement {
     browseBtn.type = 'button';
     browseBtn.className = 'relationship-search__browse';
     browseBtn.title = t('browse');
-    browseBtn.innerHTML = '<span style="' + ICON_STYLE + ' font-size: 18px;">folder_open</span>';
+    browseBtn.innerHTML = '<span style="' + ICON_STYLE + ' font-size: var(--icon-md, 1.125rem);">folder_open</span>';
     row.appendChild(browseBtn);
 
     browseBtn.addEventListener('click', () => {
@@ -436,7 +521,9 @@ class CrapRelationshipSearch extends HTMLElement {
    * @param {boolean} hasMany
    */
   _openDrawerPicker(collection, isUpload, hasMany) {
-    const drawer = getDrawer();
+    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    document.dispatchEvent(drawerEvt);
+    const drawer = drawerEvt.detail.instance;
     const label = isUpload ? t('browse_media') : t('browse');
     drawer.open({ title: label });
 
@@ -455,8 +542,9 @@ class CrapRelationshipSearch extends HTMLElement {
     // Search input
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
-    searchInput.placeholder = 'Search...';
+    searchInput.placeholder = t('search');
     searchInput.autocomplete = 'off';
+    searchInput.setAttribute('aria-label', 'Search');
     Object.assign(searchInput.style, {
       width: '100%',
       boxSizing: 'border-box',
@@ -507,6 +595,8 @@ class CrapRelationshipSearch extends HTMLElement {
 
     let debounceTimer = null;
     let currentOffset = 0;
+    /** @type {AbortController|null} */
+    let fetchController = null;
 
     /**
      * Fetch results from the search API.
@@ -514,15 +604,18 @@ class CrapRelationshipSearch extends HTMLElement {
      * @param {boolean} append
      */
     async function fetchResults(query, append) {
+      if (fetchController) fetchController.abort();
+      fetchController = new AbortController();
+
       if (!append) {
         results.innerHTML = '';
         currentOffset = 0;
       }
 
       const limit = DRAWER_PAGE_SIZE;
-      const url = `/admin/api/search/${encodeURIComponent(collection)}?q=${encodeURIComponent(query)}&limit=${limit}`;
+      const url = `/admin/api/search/${encodeURIComponent(collection)}?q=${encodeURIComponent(query)}&limit=${limit}&offset=${currentOffset}`;
       try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { signal: fetchController.signal });
         if (!resp.ok) return;
         const items = await resp.json();
 
@@ -546,12 +639,214 @@ class CrapRelationshipSearch extends HTMLElement {
     });
 
     loadMore.addEventListener('click', () => {
-      loadMore.style.display = 'none';
+      fetchResults(searchInput.value.trim(), true);
     });
 
     // Initial load
     fetchResults('', false);
     searchInput.focus();
+  }
+
+  static _styles() {
+    return `
+      crap-relationship-search {
+        position: relative;
+        display: block;
+      }
+      .relationship-search__input-wrapper {
+        position: relative;
+      }
+      .relationship-search__input-row {
+        display: flex;
+        gap: var(--space-xs2);
+        align-items: stretch;
+      }
+      .relationship-search__input-row .relationship-search__input-wrapper {
+        flex: 1;
+        min-width: 0;
+      }
+      .relationship-search__browse {
+        all: unset;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--control-sm);
+        flex-shrink: 0;
+        border: 1px solid var(--border-primary, #d9d9d9);
+        border-radius: var(--radius-sm, 4px);
+        background: var(--surface-primary, #fff);
+        color: var(--text-secondary, rgba(0, 0, 0, 0.65));
+        cursor: pointer;
+        transition: border-color var(--transition-fast, 0.15s), color var(--transition-fast, 0.15s);
+      }
+      .relationship-search__browse:hover {
+        border-color: var(--color-primary, #6366f1);
+        color: var(--color-primary, #6366f1);
+      }
+      .relationship-search__input {
+        width: 100%;
+        padding: var(--space-sm) var(--space-md);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        background: var(--surface-primary);
+        color: var(--text-primary);
+        transition: border-color var(--transition-fast);
+        box-sizing: border-box;
+      }
+      .relationship-search__input:focus {
+        outline: none;
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 15%, transparent);
+      }
+      .relationship-search__clear {
+        position: absolute;
+        right: var(--space-sm);
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--text-tertiary);
+        font-size: var(--icon-sm);
+        padding: var(--space-2xs) var(--space-xs);
+        line-height: 1;
+      }
+      .relationship-search__clear:hover {
+        color: var(--text-primary);
+      }
+      .relationship-search__dropdown {
+        position: absolute;
+        z-index: 100;
+        top: 100%;
+        left: 0;
+        right: 0;
+        max-height: var(--dropdown-max-height);
+        overflow-y: auto;
+        background: var(--surface-primary);
+        border: 1px solid var(--border-primary);
+        border-top: none;
+        border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+        box-shadow: var(--shadow-md);
+      }
+      .relationship-search__option {
+        padding: var(--space-sm) var(--space-md);
+        cursor: pointer;
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+      }
+      .relationship-search__option:hover,
+      .relationship-search__option--active {
+        background: var(--surface-hover);
+      }
+      .relationship-search__option--selected {
+        color: var(--text-tertiary);
+        font-style: italic;
+      }
+      .relationship-search__empty {
+        padding: var(--space-sm) var(--space-md);
+        color: var(--text-tertiary);
+        font-size: var(--text-sm);
+        font-style: italic;
+      }
+      .relationship-search__tags {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+        background: var(--surface-primary);
+        min-height: var(--input-height);
+        cursor: text;
+      }
+      .relationship-search__tags:focus-within {
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 2px var(--accent-primary-bg, rgba(59, 130, 246, 0.1));
+      }
+      .relationship-search__tags--error {
+        border-color: var(--color-danger);
+      }
+      .relationship-search__tags--has-items .relationship-search__tags-input {
+        margin-left: var(--space-xs);
+      }
+      .relationship-search__tags-input {
+        flex: 1 1 calc(var(--base) * 20);
+        min-width: calc(var(--base) * 20);
+        height: auto;
+        border: none;
+        outline: none;
+        background: transparent;
+        box-shadow: none;
+        font-size: var(--text-sm);
+        font-family: inherit;
+        padding: var(--space-xs) 0;
+        color: var(--text-primary);
+      }
+      .relationship-search__tags-input:focus {
+        border: none;
+        box-shadow: none;
+      }
+      .relationship-search__tags-input::placeholder {
+        color: var(--text-tertiary);
+      }
+      .relationship-search__chips {
+        display: contents;
+      }
+      .relationship-search__chip {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        background: var(--color-primary-bg);
+        border: 1px solid color-mix(in srgb, var(--color-primary) 20%, transparent);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--text-primary);
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+      .relationship-search__chip-remove {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--text-tertiary);
+        font-size: var(--icon-sm);
+        padding: 0;
+        line-height: 1;
+        margin-left: var(--space-2xs);
+        border-radius: var(--radius-sm);
+        transition: color var(--transition-fast), background var(--transition-fast);
+      }
+      .relationship-search__chip-remove:hover {
+        color: var(--color-danger);
+        background: var(--color-danger-bg);
+      }
+      .relationship-search__chip-collection {
+        font-size: 0.7em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-secondary);
+        background: var(--surface-secondary);
+        padding: 1px 5px;
+        border-radius: var(--radius-sm);
+        margin-right: var(--space-xs);
+      }
+      .relationship-search__group-header {
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-secondary);
+        padding: var(--space-xs2) var(--space-sm2) var(--space-xs);
+        border-bottom: 1px solid var(--border-color);
+      }
+    `;
   }
 }
 
@@ -603,7 +898,7 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
     icon.textContent = 'description';
     Object.assign(icon.style, {
       fontFamily: "'Material Symbols Outlined'",
-      fontSize: '36px',
+      fontSize: 'var(--control-lg, 2.25rem)',
       color: 'var(--text-tertiary, rgba(0, 0, 0, 0.45))',
     });
     card.appendChild(icon);
@@ -631,7 +926,7 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
       position: 'absolute',
       top: 'var(--space-xs, 4px)',
       right: 'var(--space-xs, 4px)',
-      fontSize: '18px',
+      fontSize: 'var(--icon-md, 1.125rem)',
       color: 'var(--color-primary, #6366f1)',
     });
     card.appendChild(check);
@@ -688,7 +983,7 @@ function createListItem(item, currentIds, hasMany, container, drawer) {
     check.textContent = 'check';
     Object.assign(check.style, {
       fontFamily: "'Material Symbols Outlined'",
-      fontSize: '18px',
+      fontSize: 'var(--icon-md, 1.125rem)',
       color: 'var(--color-primary, #6366f1)',
     });
     row.appendChild(check);

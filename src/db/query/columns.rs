@@ -16,6 +16,9 @@ pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     if def.has_drafts() {
         names.push("_status".to_string());
     }
+    if def.soft_delete {
+        names.push("_deleted_at".to_string());
+    }
     if def.timestamps {
         names.push("created_at".to_string());
         names.push("updated_at".to_string());
@@ -54,7 +57,11 @@ fn collect_column_names_inner(fields: &[FieldDefinition], names: &mut Vec<String
                     } else {
                         format!("{}__{}", prefix, field.name)
                     };
-                    names.push(col);
+                    names.push(col.clone());
+
+                    if field.field_type == FieldType::Date && field.timezone {
+                        names.push(format!("{}_tz", col));
+                    }
                 }
             }
         }
@@ -77,6 +84,9 @@ pub fn get_expected_column_names(
 
     if def.has_drafts() {
         expected.insert("_status".to_string());
+    }
+    if def.soft_delete {
+        expected.insert("_deleted_at".to_string());
     }
     if def.timestamps {
         expected.insert("created_at".to_string());
@@ -151,7 +161,11 @@ fn collect_expected_locale_inner(
                             names.insert(format!("{}__{}", base, locale));
                         }
                     } else {
-                        names.insert(base);
+                        names.insert(base.clone());
+                    }
+
+                    if field.field_type == FieldType::Date && field.timezone {
+                        names.insert(format!("{}_tz", base));
                     }
                 }
             }
@@ -174,6 +188,9 @@ pub(crate) fn get_valid_filter_columns(
     if def.timestamps {
         valid.insert("created_at".to_string());
         valid.insert("updated_at".to_string());
+    }
+    if def.soft_delete {
+        valid.insert("_deleted_at".to_string());
     }
     let _ = locale_ctx; // filter validation uses undecorated field names
     valid
@@ -702,5 +719,73 @@ mod tests {
         let expected = get_expected_column_names(&def, &no_locale());
         assert!(expected.contains("meta__title"));
         assert!(expected.contains("body"));
+    }
+
+    // ── Timezone companion column tests ──────────────────────────────
+
+    fn make_date_tz_field(name: &str) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Date)
+            .timezone(true)
+            .build()
+    }
+
+    #[test]
+    fn get_column_names_date_with_timezone_adds_tz_column() {
+        let def = make_collection_def(
+            "events",
+            vec![
+                make_field("title", FieldType::Text),
+                make_date_tz_field("start_date"),
+            ],
+            false,
+        );
+        let names = get_column_names(&def);
+        assert_eq!(names, vec!["id", "title", "start_date", "start_date_tz"]);
+    }
+
+    #[test]
+    fn get_column_names_date_without_timezone_no_tz_column() {
+        let def = make_collection_def(
+            "events",
+            vec![make_field("created", FieldType::Date)],
+            false,
+        );
+        let names = get_column_names(&def);
+        assert_eq!(names, vec!["id", "created"]);
+    }
+
+    #[test]
+    fn get_column_names_group_with_date_tz() {
+        let def = make_collection_def(
+            "events",
+            vec![make_group_field(
+                "schedule",
+                vec![make_date_tz_field("start")],
+            )],
+            false,
+        );
+        let names = get_column_names(&def);
+        assert_eq!(names, vec!["id", "schedule__start", "schedule__start_tz"]);
+    }
+
+    #[test]
+    fn expected_columns_date_tz_with_locale() {
+        let mut date_field = make_date_tz_field("event_date");
+        date_field.localized = true;
+        let def = make_collection_def("events", vec![date_field], false);
+        let expected = get_expected_column_names(&def, &locale_en_de());
+
+        assert!(expected.contains("event_date__en"));
+        assert!(expected.contains("event_date__de"));
+        // _tz column is NOT localized — one per field
+        assert!(expected.contains("event_date_tz"));
+    }
+
+    #[test]
+    fn expected_columns_date_tz_no_locale() {
+        let def = make_collection_def("events", vec![make_date_tz_field("start")], false);
+        let expected = get_expected_column_names(&def, &no_locale());
+        assert!(expected.contains("start"));
+        assert!(expected.contains("start_tz"));
     }
 }

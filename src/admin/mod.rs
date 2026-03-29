@@ -11,7 +11,10 @@ pub mod translations;
 pub use context_builder::ContextBuilder;
 pub use translations::Translations;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicUsize},
+};
 
 use handlebars::Handlebars;
 use tokio_util::sync::CancellationToken;
@@ -49,16 +52,26 @@ pub struct AdminState {
     pub email_renderer: Arc<EmailRenderer>,
     /// The event bus for asynchronous event handling, if enabled.
     pub event_bus: Option<EventBus>,
-    /// The rate limiter for login attempts.
+    /// The rate limiter for login attempts (per-email).
     pub login_limiter: Arc<LoginRateLimiter>,
-    /// The rate limiter for password reset requests.
+    /// The rate limiter for login attempts (per-IP).
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
+    /// The rate limiter for password reset requests (per-email).
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    /// The rate limiter for password reset requests (per-IP).
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     /// Whether authentication is enabled for the admin UI.
     pub has_auth: bool,
     /// The translations for the admin UI.
     pub translations: Arc<Translations>,
     /// Token used to signal shutdown to the admin server.
     pub shutdown: CancellationToken,
+    /// Current number of active SSE connections (for connection limiting).
+    pub sse_connections: Arc<AtomicUsize>,
+    /// Maximum allowed concurrent SSE connections. 0 = unlimited.
+    pub max_sse_connections: usize,
+    /// Pre-computed Content-Security-Policy header value. None = CSP disabled.
+    pub csp_header: Option<String>,
 }
 
 impl AdminState {

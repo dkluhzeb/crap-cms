@@ -84,6 +84,27 @@ impl FieldType {
         }
     }
 
+    /// Whether this field type is allowed as a richtext node attribute.
+    ///
+    /// Only scalar types that can be rendered as a simple form input in the
+    /// node edit modal are allowed. Complex/structural types are rejected at
+    /// registration time.
+    pub fn is_node_attr_type(&self) -> bool {
+        matches!(
+            self,
+            FieldType::Text
+                | FieldType::Number
+                | FieldType::Textarea
+                | FieldType::Select
+                | FieldType::Radio
+                | FieldType::Checkbox
+                | FieldType::Date
+                | FieldType::Email
+                | FieldType::Json
+                | FieldType::Code
+        )
+    }
+
     /// Returns the string identifier for this field type.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -177,6 +198,52 @@ mod tests {
         ];
         for ft in &types {
             assert_eq!(FieldType::parse_lossy(ft.as_str()), *ft);
+        }
+    }
+
+    #[test]
+    fn is_node_attr_type_allowed() {
+        let allowed = [
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Textarea,
+            FieldType::Select,
+            FieldType::Radio,
+            FieldType::Checkbox,
+            FieldType::Date,
+            FieldType::Email,
+            FieldType::Json,
+            FieldType::Code,
+        ];
+        for ft in &allowed {
+            assert!(
+                ft.is_node_attr_type(),
+                "{:?} should be a valid node attr type",
+                ft
+            );
+        }
+    }
+
+    #[test]
+    fn is_node_attr_type_rejected() {
+        let rejected = [
+            FieldType::Relationship,
+            FieldType::Upload,
+            FieldType::Array,
+            FieldType::Group,
+            FieldType::Row,
+            FieldType::Collapsible,
+            FieldType::Tabs,
+            FieldType::Blocks,
+            FieldType::Join,
+            FieldType::Richtext,
+        ];
+        for ft in &rejected {
+            assert!(
+                !ft.is_node_attr_type(),
+                "{:?} should NOT be a valid node attr type",
+                ft
+            );
         }
     }
 

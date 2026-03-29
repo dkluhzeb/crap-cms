@@ -55,6 +55,10 @@ pub(super) fn build_op_condition(
             format!("{} <= {}", expr, ph)
         }
         FilterOp::In(vals) => {
+            if vals.is_empty() {
+                return "0 = 1".to_string();
+            }
+
             let placeholders: Vec<_> = vals
                 .iter()
                 .map(|v| {
@@ -66,6 +70,10 @@ pub(super) fn build_op_condition(
             format!("{} IN ({})", expr, placeholders.join(", "))
         }
         FilterOp::NotIn(vals) => {
+            if vals.is_empty() {
+                return "1 = 1".to_string();
+            }
+
             let placeholders: Vec<_> = vals
                 .iter()
                 .map(|v| {
@@ -271,6 +279,24 @@ mod tests {
         let mut params: Vec<DbValue> = Vec::new();
         let sql = build_filter_condition(&c, &f, &mut params).unwrap();
         assert_eq!(sql, "deleted_at IS NULL");
+        assert_eq!(params.len(), 0);
+    }
+
+    #[test]
+    fn filter_condition_in_empty_is_false() {
+        let c = conn();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_op_condition(&c, "status", &FilterOp::In(vec![]), &mut params);
+        assert_eq!(sql, "0 = 1");
+        assert_eq!(params.len(), 0);
+    }
+
+    #[test]
+    fn filter_condition_not_in_empty_is_true() {
+        let c = conn();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_op_condition(&c, "status", &FilterOp::NotIn(vec![]), &mut params);
+        assert_eq!(sql, "1 = 1");
         assert_eq!(params.len(), 0);
     }
 

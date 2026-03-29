@@ -25,7 +25,7 @@ class CrapConfirmDialog extends HTMLElement {
           border: none;
           border-radius: var(--radius-xl, 12px);
           padding: 0;
-          max-width: 400px;
+          max-width: 25rem;
           width: 90vw;
           box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.2));
           font-family: inherit;
@@ -54,7 +54,8 @@ class CrapConfirmDialog extends HTMLElement {
           font-family: inherit;
           font-size: var(--text-sm, 0.8125rem);
           font-weight: 500;
-          padding: var(--space-sm, 0.5rem) var(--space-lg, 1rem);
+          height: var(--button-height, 2.25rem);
+          padding: 0 var(--space-lg, 1rem);
           border-radius: var(--radius-md, 6px);
           border: none;
           cursor: pointer;
@@ -110,6 +111,7 @@ class CrapConfirmDialog extends HTMLElement {
       const cleanup = () => {
         cancelBtn.removeEventListener('click', onCancel);
         confirmBtn.removeEventListener('click', onConfirm);
+        dialog.removeEventListener('cancel', onDialogCancel);
       };
 
       const onCancel = () => {
@@ -124,8 +126,14 @@ class CrapConfirmDialog extends HTMLElement {
         resolve(true);
       };
 
+      const onDialogCancel = () => {
+        cleanup();
+        resolve(false);
+      };
+
       cancelBtn.addEventListener('click', onCancel);
       confirmBtn.addEventListener('click', onConfirm);
+      dialog.addEventListener('cancel', onDialogCancel);
 
       dialog.showModal();
     });
@@ -164,15 +172,3 @@ class CrapConfirmDialog extends HTMLElement {
 
 customElements.define('crap-confirm-dialog', CrapConfirmDialog);
 
-/* ── Public API ──────────────────────────────────────────────── */
-
-/**
- * Get a connected <crap-confirm-dialog> instance.
- * Uses a synchronous CustomEvent so each instance self-registers.
- * @returns {CrapConfirmDialog | null}
- */
-export function getConfirmDialog() {
-  const evt = new CustomEvent('crap:confirm-dialog-request', { detail: {} });
-  document.dispatchEvent(evt);
-  return /** @type {CrapConfirmDialog | null} */ (evt.detail.instance || null);
-}

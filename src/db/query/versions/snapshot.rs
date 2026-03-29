@@ -70,7 +70,20 @@ pub(super) fn extract_snapshot_data(
                     .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
 
                 if let Some(s) = snapshot_val_to_string(val) {
-                    data.insert(key, s);
+                    data.insert(key.clone(), s);
+                }
+
+                // Timezone companion column for date fields
+                if sub.field_type == FieldType::Date && sub.timezone {
+                    let tz_key = format!("{}_tz", key);
+                    let tz_val = obj.get(&tz_key).or_else(|| {
+                        let tz_sub = format!("{}_tz", sub.name);
+                        nested_obj.and_then(|n| n.get(&tz_sub))
+                    });
+
+                    if let Some(s) = snapshot_val_to_string(tz_val) {
+                        data.insert(tz_key, s);
+                    }
                 }
             }
             continue;
@@ -97,6 +110,15 @@ pub(super) fn extract_snapshot_data(
         }
         if let Some(s) = snapshot_val_to_string(obj.get(&field.name)) {
             data.insert(field.name.clone(), s);
+        }
+
+        // Timezone companion column for date fields
+        if field.field_type == FieldType::Date && field.timezone {
+            let tz_key = format!("{}_tz", field.name);
+
+            if let Some(s) = snapshot_val_to_string(obj.get(&tz_key)) {
+                data.insert(tz_key, s);
+            }
         }
     }
     data
@@ -361,6 +383,93 @@ mod tests {
         assert!(
             join_data.contains_key("related"),
             "has-many inside Collapsible must be in join data"
+        );
+    }
+
+    // ── Timezone companion column tests ──────────────────────────────
+
+    #[test]
+    fn extract_snapshot_data_includes_tz_companion() {
+        // Regression: extract_snapshot_data must extract _tz companion columns
+        // for Date fields with timezone: true, so version restore works.
+        let fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date_tz": "America/New_York"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("start_date"),
+            Some(&"2024-06-15T14:00:00.000Z".to_string()),
+            "Date value should be extracted"
+        );
+        assert_eq!(
+            data.get("start_date_tz"),
+            Some(&"America/New_York".to_string()),
+            "Timezone companion should be extracted"
+        );
+    }
+
+    #[test]
+    fn extract_snapshot_data_date_without_tz_no_companion() {
+        // Date field without timezone: true should NOT extract a _tz column.
+        let fields = vec![FieldDefinition::builder("event_date", FieldType::Date).build()];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "event_date": "2024-06-15T14:00:00.000Z"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("event_date"),
+            Some(&"2024-06-15T14:00:00.000Z".to_string())
+        );
+        assert!(
+            !data.contains_key("event_date_tz"),
+            "No _tz column should be extracted for non-timezone date"
+        );
+    }
+
+    #[test]
+    fn extract_snapshot_data_group_date_tz_companion() {
+        // Date field with timezone inside a Group: the _tz companion should
+        // be extracted with the group prefix.
+        let fields = vec![
+            FieldDefinition::builder("schedule", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("start", FieldType::Date)
+                        .timezone(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "schedule__start": "2024-06-15T07:00:00.000Z",
+            "schedule__start_tz": "Europe/Berlin"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("schedule__start"),
+            Some(&"2024-06-15T07:00:00.000Z".to_string())
+        );
+        assert_eq!(
+            data.get("schedule__start_tz"),
+            Some(&"Europe/Berlin".to_string()),
+            "Group _tz companion should be extracted with prefix"
         );
     }
 }

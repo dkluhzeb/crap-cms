@@ -1,10 +1,6 @@
-//! Job execution, cron scheduling, stale recovery, and cron normalization.
+//! Job execution, cron scheduling, stale recovery, cron normalization, and soft-delete purge.
 
-use std::{
-    cmp::max,
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::{cmp::max, str::FromStr, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 
@@ -12,8 +8,9 @@ use crate::{
     core::{
         SharedRegistry,
         job::{JobDefinition, JobRun},
+        upload,
     },
-    db::{DbConnection, DbPool, query::jobs as job_query},
+    db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::HookRunner,
 };
 
@@ -24,7 +21,6 @@ pub fn execute_job(
     job_def: &JobDefinition,
     job_run: &JobRun,
 ) -> Result<()> {
-    let timeout = Duration::from_secs(job_def.timeout);
     let start = Instant::now();
 
     tracing::info!(
@@ -66,18 +62,14 @@ pub fn execute_job(
             );
         }
         Err(e) => {
-            // Transaction rolls back on drop
+            // Explicit drop triggers rollback (BoxedTransaction rolls back on drop)
             drop(tx);
-            let error_msg = if start.elapsed() >= timeout {
-                format!("timeout after {}s", job_def.timeout)
-            } else {
-                format!("{}", e)
-            };
+            let error_msg = e.to_string();
             let should_retry = job_run.attempt < job_run.max_attempts;
             let c = pool
                 .get()
                 .context("Failed to get DB connection for failure")?;
-            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry)?;
+            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
 
             if should_retry {
                 tracing::warn!(
@@ -113,7 +105,10 @@ pub fn check_cron_schedules(
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
-    let conn = pool.get().context("Failed to get DB connection for cron")?;
+    let mut conn = pool.get().context("Failed to get DB connection for cron")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start cron check transaction")?;
 
     for (slug, def) in &reg.jobs {
         let schedule_str = match &def.schedule {
@@ -148,9 +143,9 @@ pub fn check_cron_schedules(
             continue;
         }
 
-        // Check skip_if_running
+        // Check skip_if_running (atomic with insert inside the same IMMEDIATE transaction)
         if def.skip_if_running {
-            let running = job_query::count_running(&conn, Some(slug))?;
+            let running = job_query::count_running(&tx, Some(slug))?;
 
             if running > 0 {
                 tracing::debug!("Skipping cron job '{}' — still running", slug);
@@ -159,9 +154,12 @@ pub fn check_cron_schedules(
         }
 
         // Insert a pending job
-        let job = job_query::insert_job(&conn, slug, "{}", "cron", def.retries + 1, &def.queue)?;
+        let job = job_query::insert_job(&tx, slug, "{}", "cron", def.retries + 1, &def.queue)?;
         tracing::info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
+
+    tx.commit()
+        .context("Failed to commit cron check transaction")?;
 
     Ok(())
 }
@@ -199,6 +197,122 @@ pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &SharedRegistry) ->
     Ok(())
 }
 
+/// Parse a retention duration string like "30d", "7d", "24h" into seconds.
+/// Returns `None` if the string is not a valid duration.
+pub(crate) fn parse_retention_seconds(s: &str) -> Option<i64> {
+    let s = s.trim();
+
+    if let Some(days) = s.strip_suffix('d') {
+        days.parse::<i64>().ok().map(|d| d * 86400)
+    } else if let Some(hours) = s.strip_suffix('h') {
+        hours.parse::<i64>().ok().map(|h| h * 3600)
+    } else {
+        s.parse::<i64>().ok() // raw seconds
+    }
+}
+
+/// Purge soft-deleted documents past their retention period.
+///
+/// For each collection with `soft_delete` + `soft_delete_retention`, find docs
+/// where `_deleted_at` is older than the retention threshold and hard-delete them.
+/// Upload files are cleaned up before deletion.
+pub fn purge_soft_deleted(
+    conn: &dyn DbConnection,
+    registry: &SharedRegistry,
+    config_dir: &std::path::Path,
+) -> Result<u64> {
+    let reg = registry
+        .read()
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+
+    let mut total = 0u64;
+
+    for (slug, def) in &reg.collections {
+        if !def.soft_delete {
+            continue;
+        }
+
+        let Some(ref retention) = def.soft_delete_retention else {
+            continue;
+        };
+
+        let Some(seconds) = parse_retention_seconds(retention) else {
+            tracing::warn!(
+                "Invalid soft_delete_retention '{}' for collection '{}'",
+                retention,
+                slug
+            );
+            continue;
+        };
+
+        let purged = purge_collection(conn, slug, def, seconds, config_dir)?;
+        total += purged;
+    }
+
+    Ok(total)
+}
+
+/// Purge expired soft-deleted documents from a single collection.
+///
+/// Collects upload file data before deleting from DB, then removes files
+/// from disk after the DB deletes succeed. A crash between DB delete and
+/// file delete leaves orphaned files (safe), rather than orphaned DB records
+/// pointing to deleted files (unsafe).
+fn purge_collection(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &crate::core::CollectionDefinition,
+    retention_seconds: i64,
+    config_dir: &std::path::Path,
+) -> Result<u64> {
+    // Find docs past the retention threshold
+    let (offset_sql, offset_param) = conn.date_offset_expr(retention_seconds, 1);
+    let threshold_sql = format!(
+        "SELECT id FROM {} WHERE _deleted_at IS NOT NULL \
+         AND _deleted_at < {}",
+        slug, offset_sql
+    );
+    let rows = conn.query_all(&threshold_sql, &[offset_param])?;
+
+    let mut purged = 0u64;
+    let mut upload_docs = Vec::new();
+
+    for row in &rows {
+        let id = match row.get_value(0) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => continue,
+        };
+
+        // Collect upload file paths BEFORE deleting from DB
+        if def.is_upload_collection()
+            && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, slug, def, &id, None)
+        {
+            upload_docs.push(doc);
+        }
+
+        // Hard delete the document from DB first
+        query::delete(conn, slug, &id)?;
+        purged += 1;
+    }
+
+    // Delete files AFTER all DB deletes have succeeded.
+    // If the process crashes here, we get orphaned files (harmless)
+    // rather than DB records pointing to missing files (harmful).
+    for doc in &upload_docs {
+        upload::delete_upload_files(config_dir, &doc.fields);
+    }
+
+    if purged > 0 {
+        tracing::info!(
+            "Purged {} expired soft-deleted doc(s) from '{}'",
+            purged,
+            slug
+        );
+    }
+
+    Ok(purged)
+}
+
 /// Normalize a cron expression: the `cron` crate expects 6 or 7 fields (with a
 /// leading seconds field), but users write standard 5-field cron (`0 3 * * *`).
 /// If the expression has exactly 5 fields, prepend "0" for seconds.
@@ -206,16 +320,53 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();
 
     if fields.len() == 5 {
-        format!("0 {}", expr)
+        format!("0 {}", fields.join(" "))
     } else {
-        expr.to_string()
+        fields.join(" ")
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use r2d2::Pool;
+    use r2d2_sqlite::SqliteConnectionManager;
+
     use super::*;
     use crate::core::{Registry, job::JobStatus};
+
+    // ── parse_retention_seconds ───────────────────────────────────────────
+
+    #[test]
+    fn parse_retention_days() {
+        assert_eq!(parse_retention_seconds("30d"), Some(30 * 86400));
+        assert_eq!(parse_retention_seconds("7d"), Some(7 * 86400));
+        assert_eq!(parse_retention_seconds("1d"), Some(86400));
+    }
+
+    #[test]
+    fn parse_retention_hours() {
+        assert_eq!(parse_retention_seconds("24h"), Some(24 * 3600));
+        assert_eq!(parse_retention_seconds("1h"), Some(3600));
+    }
+
+    #[test]
+    fn parse_retention_raw_seconds() {
+        assert_eq!(parse_retention_seconds("3600"), Some(3600));
+        assert_eq!(parse_retention_seconds("86400"), Some(86400));
+    }
+
+    #[test]
+    fn parse_retention_invalid() {
+        assert_eq!(parse_retention_seconds("abc"), None);
+        assert_eq!(parse_retention_seconds(""), None);
+        assert_eq!(parse_retention_seconds("d"), None);
+    }
+
+    #[test]
+    fn parse_retention_with_whitespace() {
+        assert_eq!(parse_retention_seconds(" 30d "), Some(30 * 86400));
+        assert_eq!(parse_retention_seconds(" 3600 "), Some(3600));
+    }
 
     // ── normalize_cron ──────────────────────────────────────────────────
 
@@ -275,9 +426,9 @@ mod tests {
 
     #[test]
     fn normalize_cron_extra_whitespace() {
-        // split_whitespace handles multiple spaces, so this still counts as 5 fields
+        // split_whitespace handles multiple spaces — normalizes to single spaces
         let result = normalize_cron("0  3  *  *  *");
-        assert_eq!(result, "0 0  3  *  *  *");
+        assert_eq!(result, "0 0 3 * * *");
     }
 
     #[test]
@@ -428,9 +579,6 @@ mod tests {
     // ── check_cron_schedules (unit-level with in-memory DB + pool) ──────
 
     fn make_test_pool() -> DbPool {
-        use r2d2::Pool;
-        use r2d2_sqlite::SqliteConnectionManager;
-
         let manager = SqliteConnectionManager::memory().with_flags(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
@@ -462,7 +610,8 @@ mod tests {
                 created_at TEXT DEFAULT (datetime('now')),
                 started_at TEXT,
                 completed_at TEXT,
-                heartbeat_at TEXT
+                heartbeat_at TEXT,
+                retry_after TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);

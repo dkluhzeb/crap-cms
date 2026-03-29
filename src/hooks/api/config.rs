@@ -1,7 +1,7 @@
 //! `crap.config` and `crap.locale` namespaces — read-only config access.
 
 use anyhow::{Result, anyhow};
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, Result as LuaResult, Table, Value};
 
 use crate::{config::CrapConfig, hooks::api::json_to_lua};
 
@@ -13,7 +13,7 @@ pub(super) fn register_config(lua: &Lua, crap: &Table, config: &CrapConfig) -> R
     let config_lua = json_to_lua(lua, &config_json)?;
     lua.set_named_registry_value("_crap_config", config_lua)?;
 
-    let config_get_fn = lua.create_function(|lua, key: String| -> mlua::Result<Value> {
+    let config_get_fn = lua.create_function(|lua, key: String| -> LuaResult<Value> {
         let config_val: Value = lua.named_registry_value("_crap_config")?;
         let mut current = config_val;
         for part in key.split('.') {
@@ -26,8 +26,11 @@ pub(super) fn register_config(lua: &Lua, crap: &Table, config: &CrapConfig) -> R
         }
         Ok(current)
     })?;
+
     config_table.set("get", config_get_fn)?;
+
     crap.set("config", config_table)?;
+
     Ok(())
 }
 
@@ -37,11 +40,11 @@ pub(super) fn register_locale(lua: &Lua, crap: &Table, config: &CrapConfig) -> R
 
     let default_locale = config.locale.default_locale.clone();
     let get_default_fn =
-        lua.create_function(move |_, ()| -> mlua::Result<String> { Ok(default_locale.clone()) })?;
+        lua.create_function(move |_, ()| -> LuaResult<String> { Ok(default_locale.clone()) })?;
     locale_table.set("get_default", get_default_fn)?;
 
     let locales = config.locale.locales.clone();
-    let get_all_fn = lua.create_function(move |lua, ()| -> mlua::Result<Table> {
+    let get_all_fn = lua.create_function(move |lua, ()| -> LuaResult<Table> {
         let tbl = lua.create_table()?;
         for (i, l) in locales.iter().enumerate() {
             tbl.set(i + 1, l.as_str())?;
@@ -51,10 +54,11 @@ pub(super) fn register_locale(lua: &Lua, crap: &Table, config: &CrapConfig) -> R
     locale_table.set("get_all", get_all_fn)?;
 
     let enabled = config.locale.is_enabled();
-    let is_enabled_fn = lua.create_function(move |_, ()| -> mlua::Result<bool> { Ok(enabled) })?;
+    let is_enabled_fn = lua.create_function(move |_, ()| -> LuaResult<bool> { Ok(enabled) })?;
     locale_table.set("is_enabled", is_enabled_fn)?;
 
     crap.set("locale", locale_table)?;
+
     Ok(())
 }
 

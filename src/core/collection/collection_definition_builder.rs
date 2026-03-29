@@ -100,6 +100,18 @@ impl CollectionDefinitionBuilder {
         self
     }
 
+    /// Enable soft deletes for the collection.
+    pub fn soft_delete(mut self, v: bool) -> Self {
+        self.inner.soft_delete = v;
+        self
+    }
+
+    /// Set the retention period for soft-deleted documents.
+    pub fn soft_delete_retention(mut self, v: impl Into<String>) -> Self {
+        self.inner.soft_delete_retention = Some(v.into());
+        self
+    }
+
     /// Build the final `CollectionDefinition` instance.
     pub fn build(self) -> CollectionDefinition {
         self.inner

@@ -14,15 +14,6 @@ Single file (has-one):
 ```lua
 crap.fields.upload({
     name = "featured_image",
-    relation_to = "media",
-})
-```
-
-Or using the expanded relationship syntax:
-
-```lua
-crap.fields.upload({
-    name = "featured_image",
     relationship = {
         collection = "media",
         max_depth = 1,
@@ -42,15 +33,7 @@ crap.fields.upload({
 })
 ```
 
-Or with flat syntax:
-
-```lua
-crap.fields.upload({
-    name = "gallery",
-    relation_to = "media",
-    has_many = true,
-})
-```
+> **Note:** The flat `relation_to` syntax is deprecated for upload fields too. Use `relationship = { collection = "..." }` instead.
 
 The target collection should be an upload collection (defined with `upload = true`).
 

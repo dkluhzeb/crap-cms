@@ -25,14 +25,14 @@ pub(super) fn sync_indexes(
     let mut desired: HashSet<String> = HashSet::new();
     let mut create_stmts: Vec<String> = Vec::new();
 
-    // 1. Field-level indexes: index=true (skip if unique=true — SQLite already indexes those)
+    // 1a. Field-level indexes: index=true (skip if unique=true — already indexed)
     for spec in &collect_column_specs(&def.fields, locale_config) {
         if !spec.field.index || spec.field.unique {
             continue;
         }
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
                 let idx_name = format!("idx_{}_{}", slug, col);
                 create_stmts.push(format!(
                     "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
@@ -47,6 +47,36 @@ pub(super) fn sync_indexes(
                 idx_name, slug, spec.col_name
             ));
             desired.insert(idx_name);
+        }
+    }
+
+    // 1b. Partial unique indexes for soft-delete collections.
+    // Inline UNIQUE is omitted from the DDL so that soft-deleted rows don't
+    // block new inserts. Instead we create a partial unique index that only
+    // covers active (non-deleted) rows.
+    if def.soft_delete {
+        for spec in &collect_column_specs(&def.fields, locale_config) {
+            if !spec.field.unique || spec.companion_text {
+                continue;
+            }
+            if spec.is_localized {
+                for locale in &locale_config.locales {
+                    let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                    let idx_name = format!("idx_{}_{}_active_unique", slug, col);
+                    create_stmts.push(format!(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
+                        idx_name, slug, col
+                    ));
+                    desired.insert(idx_name);
+                }
+            } else {
+                let idx_name = format!("idx_{}_{}_active_unique", slug, spec.col_name);
+                create_stmts.push(format!(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
+                    idx_name, slug, spec.col_name
+                ));
+                desired.insert(idx_name);
+            }
         }
     }
 
@@ -75,7 +105,7 @@ pub(super) fn sync_indexes(
                     expanded_cols.push(format!(
                         "{}__{}",
                         field_name,
-                        sanitize_locale(&locale_config.default_locale)
+                        sanitize_locale(&locale_config.default_locale)?
                     ));
                 }
                 _ => {
@@ -315,6 +345,136 @@ mod tests {
         assert!(
             result.is_err(),
             "Should reject invalid identifier in compound index"
+        );
+    }
+
+    #[test]
+    fn sync_indexes_creates_partial_unique_for_soft_delete() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let indexes = get_indexes(&conn, "posts");
+        assert!(
+            indexes.contains("idx_posts_slug_active_unique"),
+            "Should create partial unique index for soft-delete collection: {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn sync_indexes_no_partial_unique_without_soft_delete() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let indexes = get_indexes(&conn, "posts");
+        assert!(
+            !indexes.contains("idx_posts_slug_active_unique"),
+            "Should NOT create partial unique index for non-soft-delete collection"
+        );
+    }
+
+    #[test]
+    fn partial_unique_index_allows_duplicate_in_deleted_rows() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
+
+        // Insert a soft-deleted row
+        conn.execute(
+            "INSERT INTO posts (id, slug, _deleted_at) VALUES ('a', 'hello', '2025-01-01')",
+            &[],
+        )
+        .unwrap();
+
+        // Insert an active row with the same slug — should succeed
+        let result = conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[]);
+        assert!(
+            result.is_ok(),
+            "Partial unique index should allow same value in deleted + active rows"
+        );
+    }
+
+    #[test]
+    fn partial_unique_index_blocks_duplicate_active_rows() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
+
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('a', 'hello')", &[])
+            .unwrap();
+
+        let result = conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[]);
+        assert!(
+            result.is_err(),
+            "Partial unique index should still block duplicate active rows"
+        );
+    }
+
+    #[test]
+    fn sync_indexes_creates_partial_unique_for_localized_field() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .localized(true)
+                    .build(),
+            ],
+        );
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        sync_indexes(&conn, "posts", &def, &locale_en_de()).unwrap();
+
+        let indexes = get_indexes(&conn, "posts");
+        assert!(
+            indexes.contains("idx_posts_slug__en_active_unique"),
+            "Should create partial unique index per locale: {indexes:?}"
+        );
+        assert!(
+            indexes.contains("idx_posts_slug__de_active_unique"),
+            "Should create partial unique index per locale: {indexes:?}"
         );
     }
 }

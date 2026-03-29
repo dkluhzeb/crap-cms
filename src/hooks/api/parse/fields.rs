@@ -35,6 +35,13 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             );
         }
 
+        if name.contains("__") {
+            bail!(
+                "Field name '{}' must not contain double underscores — reserved for group field separation",
+                name
+            );
+        }
+
         let type_str: String =
             get_string_val(&field_tbl, "type").unwrap_or_else(|_| "text".to_string());
         let field_type = FieldType::parse_lossy(&type_str);
@@ -55,6 +62,42 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
                 _ => None,
             }
         };
+
+        // Validate that default_value type matches the field type.
+        if let Some(ref dv) = default_value {
+            let type_ok = match field_type {
+                FieldType::Checkbox => dv.is_boolean(),
+                FieldType::Number => dv.is_number(),
+                FieldType::Text
+                | FieldType::Textarea
+                | FieldType::Email
+                | FieldType::Code
+                | FieldType::Richtext
+                | FieldType::Select
+                | FieldType::Radio
+                | FieldType::Date => dv.is_string(),
+                // Other field types (Array, Group, Blocks, etc.) don't support scalar defaults.
+                _ => true,
+            };
+
+            if !type_ok {
+                bail!(
+                    "Field '{}': default_value type mismatch — expected {} but got {}",
+                    name,
+                    match field_type {
+                        FieldType::Checkbox => "boolean",
+                        FieldType::Number => "number",
+                        _ => "string",
+                    },
+                    match dv {
+                        JsonValue::Bool(_) => "boolean",
+                        JsonValue::Number(_) => "number",
+                        JsonValue::String(_) => "string",
+                        _ => "unknown",
+                    },
+                );
+            }
+        }
 
         let options = if let Ok(opts_tbl) = get_table(&field_tbl, "options") {
             parse_select_options(&opts_tbl)?
@@ -107,6 +150,30 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             None
         };
 
+        // Parse timezone config for date fields
+        let timezone = if field_type == FieldType::Date {
+            let tz = get_bool(&field_tbl, "timezone", false);
+            let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
+            if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
+                tracing::warn!(
+                    "Field '{}': timezone is not supported for '{}' picker; ignoring",
+                    name,
+                    appearance
+                );
+                false
+            } else {
+                tz
+            }
+        } else {
+            false
+        };
+
+        let default_timezone = if timezone {
+            get_string(&field_tbl, "default_timezone")
+        } else {
+            None
+        };
+
         // Parse block definitions for Blocks type
         let block_defs = if field_type == FieldType::Blocks {
             if let Ok(blocks_tbl) = get_table(&field_tbl, "blocks") {
@@ -143,6 +210,38 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             Ok(Value::Integer(i)) => Some(i as f64),
             _ => None,
         };
+
+        // Validate min <= max constraints
+        if let (Some(mn), Some(mx)) = (min_rows, max_rows)
+            && mn > mx
+        {
+            bail!(
+                "Field '{}': min_rows ({}) must not exceed max_rows ({})",
+                name,
+                mn,
+                mx
+            );
+        }
+        if let (Some(mn), Some(mx)) = (min_length, max_length)
+            && mn > mx
+        {
+            bail!(
+                "Field '{}': min_length ({}) must not exceed max_length ({})",
+                name,
+                mn,
+                mx
+            );
+        }
+        if let (Some(mn), Some(mx)) = (min, max)
+            && mn > mx
+        {
+            bail!(
+                "Field '{}': min ({}) must not exceed max ({})",
+                name,
+                mn,
+                mx
+            );
+        }
 
         let has_many = get_bool(&field_tbl, "has_many", false);
         let min_date = get_string(&field_tbl, "min_date");
@@ -216,6 +315,12 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         }
         if let Some(v) = max_date {
             fd_builder = fd_builder.max_date(v);
+        }
+        if timezone {
+            fd_builder = fd_builder.timezone(true);
+        }
+        if let Some(v) = default_timezone {
+            fd_builder = fd_builder.default_timezone(v);
         }
         if let Some(v) = join {
             fd_builder = fd_builder.join(v);
@@ -571,5 +676,233 @@ mod tests {
         assert_eq!(hooks.before_change, vec!["hooks.transform_title"]);
         assert_eq!(hooks.after_change, vec!["hooks.after_title_change"]);
         assert_eq!(hooks.after_read, vec!["hooks.format_title"]);
+    }
+
+    #[test]
+    fn test_parse_fields_min_exceeds_max_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "score").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("min", 100.0f64).unwrap();
+        field.set("max", 10.0f64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(err.to_string().contains("min"), "{}", err);
+    }
+
+    #[test]
+    fn test_parse_fields_min_length_exceeds_max_length_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "slug").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("min_length", 100usize).unwrap();
+        field.set("max_length", 10usize).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(err.to_string().contains("min_length"), "{}", err);
+    }
+
+    #[test]
+    fn test_parse_fields_min_rows_exceeds_max_rows_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "items").unwrap();
+        field.set("type", "array").unwrap();
+        field.set("min_rows", 10usize).unwrap();
+        field.set("max_rows", 3usize).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(err.to_string().contains("min_rows"), "{}", err);
+    }
+
+    #[test]
+    fn test_parse_fields_date_timezone_enabled() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "event_at").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "dayAndTime").unwrap();
+        field.set("timezone", true).unwrap();
+        field.set("default_timezone", "America/New_York").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(fields[0].timezone, "timezone should be true");
+        assert_eq!(
+            fields[0].default_timezone.as_deref(),
+            Some("America/New_York")
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_date_timezone_default_false() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "published_at").unwrap();
+        field.set("type", "date").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(!fields[0].timezone, "timezone should default to false");
+        assert!(fields[0].default_timezone.is_none());
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_day_only() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "birthday").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "dayOnly").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for dayOnly"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_default_appearance() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "birthday").unwrap();
+        field.set("type", "date").unwrap();
+        // No picker_appearance set — defaults to dayOnly
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored when picker_appearance defaults to dayOnly"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_time_only() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "alarm").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "timeOnly").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for timeOnly"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_non_date() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for non-date fields"
+        );
+    }
+
+    /// Regression: boolean default on a text field must be rejected.
+    #[test]
+    fn test_parse_fields_default_value_type_mismatch_text_boolean() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("default_value", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("default_value type mismatch"),
+            "Expected type mismatch error: {}",
+            err,
+        );
+    }
+
+    /// Regression: string default on a number field must be rejected.
+    #[test]
+    fn test_parse_fields_default_value_type_mismatch_number_string() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "count").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("default_value", "not-a-number").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("default_value type mismatch"),
+            "Expected type mismatch error: {}",
+            err,
+        );
+    }
+
+    /// Regression: number default on a checkbox must be rejected.
+    #[test]
+    fn test_parse_fields_default_value_type_mismatch_checkbox_number() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "active").unwrap();
+        field.set("type", "checkbox").unwrap();
+        field.set("default_value", 42i64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("default_value type mismatch"),
+            "Expected type mismatch error: {}",
+            err,
+        );
+    }
+
+    /// Correct type combinations should still pass.
+    #[test]
+    fn test_parse_fields_default_value_correct_types_pass() {
+        let lua = Lua::new();
+
+        // Boolean default on checkbox — OK
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "active").unwrap();
+        field.set("type", "checkbox").unwrap();
+        field.set("default_value", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        assert!(parse_fields(&fields_tbl).is_ok());
+
+        // String default on text — OK
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("default_value", "hello").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        assert!(parse_fields(&fields_tbl).is_ok());
+
+        // Number default on number — OK
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "count").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("default_value", 10i64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        assert!(parse_fields(&fields_tbl).is_ok());
     }
 }

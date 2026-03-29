@@ -16,16 +16,14 @@ Given this setup:
 -- collections/posts.lua
 crap.collections.define("posts", {
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             hooks = { before_change = { "hooks.fields.uppercase" } },
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             hooks = { before_change = { "hooks.fields.normalize_slug" } },
-        },
+        }),
     },
     hooks = {
         before_change = { "hooks.posts.set_defaults", "hooks.posts.validate_business_rules" },

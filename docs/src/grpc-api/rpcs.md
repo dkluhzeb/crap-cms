@@ -142,16 +142,48 @@ grpcurl -plaintext -d '{
 
 ## Delete
 
-Delete a document by ID.
+Delete a document by ID. For collections with `soft_delete = true`, moves to trash by default. Set `force_hard_delete = true` to permanently delete.
 
 ```protobuf
 message DeleteRequest {
   string collection = 1;
   string id = 2;
+  bool force_hard_delete = 3;  // permanently delete even with soft_delete
 }
 
 message DeleteResponse {
   bool success = 1;
+  bool soft_deleted = 2;       // true if moved to trash (not permanently deleted)
+}
+```
+
+```bash
+# Soft delete (moves to trash)
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "id": "abc123"
+}' localhost:50051 crap.ContentAPI/Delete
+
+# Force permanent delete
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "id": "abc123",
+    "force_hard_delete": true
+}' localhost:50051 crap.ContentAPI/Delete
+```
+
+## Restore
+
+Restore a soft-deleted document from trash. Only works on collections with `soft_delete = true`.
+
+```protobuf
+message RestoreRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message RestoreResponse {
+  Document document = 1;
 }
 ```
 
@@ -159,8 +191,93 @@ message DeleteResponse {
 grpcurl -plaintext -d '{
     "collection": "posts",
     "id": "abc123"
-}' localhost:50051 crap.ContentAPI/Delete
+}' localhost:50051 crap.ContentAPI/Restore
 ```
+
+## Count
+
+Count documents matching an optional filter. Respects collection-level read access.
+
+```protobuf
+message CountRequest {
+  string collection = 1;
+  optional string where = 2;            // JSON where clause
+  optional string locale = 3;           // locale code for localized field filtering
+  optional bool draft = 4;              // true = include drafts
+  optional string search = 5;           // FTS5 full-text search query
+}
+
+message CountResponse {
+  int64 count = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\": \"published\"}"
+}' localhost:50051 crap.ContentAPI/Count
+```
+
+## UpdateMany
+
+Bulk-update all documents matching a filter. All updates run in a single transaction (all-or-nothing). Runs the full per-document lifecycle by default: `before_validate` → field validation → `before_change` → DB update → `after_change` — the same pipeline as single-document `Update`.
+
+Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are **not** reset to `0` as they would be in a full single-document update.
+
+Password updates are rejected in bulk operations. Use single-document `Update` instead.
+
+```protobuf
+message UpdateManyRequest {
+  string collection = 1;
+  optional string where = 2;            // JSON where clause (omit = all docs)
+  google.protobuf.Struct data = 3;      // field values to apply
+  optional string locale = 4;           // locale code for localized fields
+  optional bool draft = 5;              // true = save as drafts
+  optional bool hooks = 6;              // default: true. Set false to skip hooks & validation.
+}
+
+message UpdateManyResponse {
+  int64 modified = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\": \"draft\"}",
+    "data": { "status": "published" }
+}' localhost:50051 crap.ContentAPI/UpdateMany
+```
+
+> **Limit:** A single `UpdateMany` call processes at most **10,000** documents. Use paginated calls (with a `where` clause) for larger datasets.
+
+## DeleteMany
+
+Bulk-delete all documents matching a filter. All deletions run in a single transaction (all-or-nothing). Fires per-document hooks by default. Respects the collection's `soft_delete` setting — documents are moved to trash unless `force_hard_delete` is set.
+
+```protobuf
+message DeleteManyRequest {
+  string collection = 1;
+  optional string where = 2;            // JSON where clause (omit = all docs)
+  optional bool hooks = 3;              // default: true. Set false to skip hooks.
+  bool force_hard_delete = 4;           // permanently delete even if soft_delete is enabled
+}
+
+message DeleteManyResponse {
+  int64 deleted = 1;                    // permanently deleted count
+  int64 soft_deleted = 2;              // soft-deleted (trashed) count
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\": \"archived\"}"
+}' localhost:50051 crap.ContentAPI/DeleteMany
+```
+
+> **Limit:** A single `DeleteMany` call processes at most **10,000** documents. Use paginated calls (with a `where` clause) for larger datasets.
 
 ## GetGlobal
 
@@ -232,7 +349,7 @@ grpcurl -plaintext -d '{
 
 ## Me
 
-Get the current authenticated user from a token.
+Get the current authenticated user from a token. The token is read from the `authorization` metadata header first; if absent, falls back to the `token` field in the request body.
 
 ```protobuf
 message MeRequest {
@@ -272,7 +389,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ForgotPassword
 ```
 
-Requires email configuration (`[email]` in `crap.toml`). If email is not configured, the token is still generated but no email is sent.
+Requires email configuration (`[email]` in `crap.toml`). Without email configured, the reset token is generated and stored but never delivered — the forgot-password flow is non-functional without SMTP.
 
 ## ResetPassword
 
@@ -298,7 +415,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ResetPassword
 ```
 
-Tokens are single-use and expire after 1 hour.
+Tokens are single-use and expire after `reset_token_expiry` seconds (default: 3600 = 1 hour, configurable in `[auth]`).
 
 ## VerifyEmail
 

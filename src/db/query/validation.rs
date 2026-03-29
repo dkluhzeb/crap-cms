@@ -15,12 +15,23 @@ pub fn is_valid_identifier(s: &str) -> bool {
 }
 
 /// Sanitize a locale string for safe use in SQL identifiers (column names, defaults).
-/// Only allows alphanumeric characters, underscores, and dashes.
-pub fn sanitize_locale(locale: &str) -> String {
-    locale
+/// Converts dashes to underscores (e.g. "de-DE" → "de_DE") and strips anything
+/// except alphanumeric + underscore.
+pub fn sanitize_locale(locale: &str) -> Result<String> {
+    let result: String = locale
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-        .collect()
+        .map(|c| if c == '-' { '_' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+
+    if result.is_empty() {
+        bail!(
+            "sanitize_locale produced empty string from input: {:?}",
+            locale
+        );
+    }
+
+    Ok(result)
 }
 
 /// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
@@ -196,10 +207,24 @@ mod tests {
 
     #[test]
     fn sanitize_locale_strips_dangerous_chars() {
-        assert_eq!(sanitize_locale("en"), "en");
-        assert_eq!(sanitize_locale("de-DE"), "de-DE");
-        assert_eq!(sanitize_locale("en_US"), "en_US");
-        assert_eq!(sanitize_locale("'; DROP TABLE --"), "DROPTABLE--");
+        assert_eq!(sanitize_locale("en").unwrap(), "en");
+        assert_eq!(sanitize_locale("de-DE").unwrap(), "de_DE");
+        assert_eq!(sanitize_locale("en_US").unwrap(), "en_US");
+        // Dashes map to underscores, everything else non-alphanumeric is stripped
+        assert_eq!(sanitize_locale("'; DROP TABLE --").unwrap(), "DROPTABLE__");
+    }
+
+    #[test]
+    fn sanitize_locale_pathological_input_returns_error() {
+        let result = sanitize_locale("!@#$%^&*()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn field_name_double_underscore_is_valid_identifier_but_reserved() {
+        // Double underscores pass is_valid_identifier but are reserved for group naming
+        assert!(is_valid_identifier("seo__title"));
+        // The rejection happens at a higher level (field name validation in schema parsing)
     }
 
     #[test]

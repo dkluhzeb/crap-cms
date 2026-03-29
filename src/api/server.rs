@@ -3,6 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use tokio::select;
 use tonic::transport::Server;
 
 use crate::{
@@ -28,6 +29,10 @@ pub struct GrpcStartParams {
     pub config: CrapConfig,
     pub config_dir: PathBuf,
     pub event_bus: Option<EventBus>,
+    pub login_limiter: Arc<LoginRateLimiter>,
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
+    pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
 }
 
 impl GrpcStartParams {
@@ -48,19 +53,13 @@ pub async fn start(
     let addr = addr.parse()?;
 
     let email_renderer = Arc::new(EmailRenderer::new(&params.config_dir)?);
-    let login_limiter = Arc::new(LoginRateLimiter::new(
-        params.config.auth.max_login_attempts,
-        params.config.auth.login_lockout_seconds,
-    ));
-    let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
-        params.config.auth.max_forgot_password_attempts,
-        params.config.auth.forgot_password_window_seconds,
-    ));
 
     let populate_cache_max_age = params.config.depth.populate_cache_max_age_secs;
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
     let grpc_reflection = params.config.server.grpc_reflection;
+    let grpc_timeout = params.config.server.grpc_timeout;
+    let grpc_max_msg = params.config.server.grpc_max_message_size as usize;
     let cors_layer = params.config.cors.build_layer();
 
     let content_service = service::ContentService::new(
@@ -73,8 +72,10 @@ pub async fn start(
             .config_dir(params.config_dir)
             .email_renderer(email_renderer)
             .event_bus(params.event_bus)
-            .login_limiter(login_limiter)
-            .forgot_password_limiter(forgot_password_limiter)
+            .login_limiter(params.login_limiter)
+            .ip_login_limiter(params.ip_login_limiter)
+            .forgot_password_limiter(params.forgot_password_limiter)
+            .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
             .build(),
     );
 
@@ -88,7 +89,7 @@ pub async fn start(
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             interval.tick().await; // skip first immediate tick
             loop {
-                tokio::select! {
+                select! {
                     _ = interval.tick() => cache.clear(),
                     _ = cache_shutdown.cancelled() => break,
                 }
@@ -99,7 +100,9 @@ pub async fn start(
     let grpc_limiter = Arc::new(GrpcRateLimiter::new(grpc_rate_requests, grpc_rate_window));
     let rate_limit_layer = rate_limit::GrpcRateLimitLayer::new(grpc_limiter);
 
-    let content_svc = content::content_api_server::ContentApiServer::new(content_service);
+    let content_svc = content::content_api_server::ContentApiServer::new(content_service)
+        .max_decoding_message_size(grpc_max_msg)
+        .max_encoding_message_size(grpc_max_msg);
 
     // gRPC health service (grpc.health.v1.Health)
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -119,9 +122,16 @@ pub async fn start(
         None
     };
 
-    Server::builder()
+    let mut builder = Server::builder()
         .layer(tower::util::option_layer(cors_layer))
-        .layer(rate_limit_layer)
+        .layer(rate_limit_layer);
+
+    // Apply gRPC timeout if configured (applies to all RPCs including Subscribe)
+    if let Some(timeout_secs) = grpc_timeout {
+        builder = builder.timeout(std::time::Duration::from_secs(timeout_secs));
+    }
+
+    builder
         .add_service(health_service)
         .add_optional_service(reflection_service)
         .add_service(content_svc)

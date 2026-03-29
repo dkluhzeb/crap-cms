@@ -1,5 +1,8 @@
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Form, State},
+    extract::{ConnectInfo, Form, State},
+    http::HeaderMap,
     response::Html,
 };
 use chrono::Utc;
@@ -7,22 +10,32 @@ use nanoid::nanoid;
 use serde_json::json;
 use tokio::task;
 
-use super::{ForgotPasswordForm, get_auth_collections, render_forgot_success};
+use super::{ForgotPasswordForm, client_ip, get_auth_collections, render_forgot_success};
 use crate::{admin::AdminState, core::email, db::query};
 
 /// POST /admin/forgot-password — look up user, generate token, send email.
 /// Always shows success (don't leak whether email exists).
 pub async fn forgot_password_action(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Form(form): Form<ForgotPasswordForm>,
 ) -> Html<String> {
     let auth_collections = get_auth_collections(&state);
+    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
 
-    // Rate limit: prevent email flooding (always count, always return success)
-    if state.forgot_password_limiter.is_blocked(&form.email) {
+    // Rate limit: prevent email/IP flooding
+    if state.forgot_password_limiter.is_blocked(&form.email)
+        || state.ip_forgot_password_limiter.is_blocked(&ip)
+    {
         return render_forgot_success(&state, &auth_collections);
     }
+
+    // Record rate limit immediately to prevent concurrent request bypass.
+    // Safe to record unconditionally — the response is always "success"
+    // regardless of whether the email exists, so no information is leaked.
     state.forgot_password_limiter.record_failure(&form.email);
+    state.ip_forgot_password_limiter.record_failure(&ip);
 
     // Try to find user and send reset email in background
     let def = state.registry.get_collection(&form.collection).cloned();
@@ -30,12 +43,14 @@ pub async fn forgot_password_action(
     if let Some(def) = def
         && def.is_auth_collection()
         && def.auth.as_ref().is_some_and(|a| a.forgot_password)
+        && !def.auth.as_ref().is_some_and(|a| a.disable_local)
     {
         let pool = state.pool.clone();
         let slug = form.collection.clone();
         let user_email = form.email.clone();
         let def_owned = def;
         let email_config = state.config.email.clone();
+        let public_url = state.config.server.public_url.clone();
         let admin_port = state.config.server.admin_port;
         let host = state.config.server.host.clone();
         let reset_expiry = state.config.auth.reset_token_expiry;
@@ -71,11 +86,13 @@ pub async fn forgot_password_action(
             }
 
             // Send reset email
-            let base_url = if host == "0.0.0.0" {
-                format!("http://localhost:{}", admin_port)
-            } else {
-                format!("http://{}:{}", host, admin_port)
-            };
+            let base_url = public_url.unwrap_or_else(|| {
+                if host == "0.0.0.0" {
+                    format!("http://localhost:{}", admin_port)
+                } else {
+                    format!("http://{}:{}", host, admin_port)
+                }
+            });
             let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
 
             let html = match email_renderer.render(

@@ -18,19 +18,35 @@ Register a custom rich text node type.
 |-------|------|---------|-------------|
 | `label` | string | `name` | Display label in the editor toolbar |
 | `inline` | boolean | `false` | Whether this is an inline node (vs block) |
-| `attrs` | table[] | `{}` | Node attributes (name, type, options) |
+| `attrs` | FieldDefinition[] | `{}` | Node attributes via `crap.fields.*` (scalar types only) |
 | `searchable_attrs` | string[] | `{}` | Attribute names included in full-text search |
 | `render` | function | `nil` | Custom HTML render function `(attrs) -> string` |
+
+Node attributes use `crap.fields.*` factory functions (same as collection fields).
+Only scalar types are allowed: `text`, `number`, `textarea`, `select`, `radio`,
+`checkbox`, `date`, `email`, `json`, `code`.
+
+Supported attribute features:
+
+- **Admin display hints:** `admin.hidden`, `admin.readonly`, `admin.width`, `admin.step`,
+  `admin.rows`, `admin.language`, `admin.placeholder`, `admin.description`
+- **Validation bounds:** `required`, `validate`, `min`/`max`, `min_length`/`max_length`,
+  `min_date`/`max_date`, `picker_appearance`
+- **Lifecycle hooks:** `hooks.before_validate` (normalize values before validation)
+
+Features that have no effect on node attrs (`unique`, `index`, `localized`, `has_many`,
+`access`, `hooks.before_change/after_change/after_read`, `mcp`, `admin.condition`) produce
+a warning at registration time but do not error.
 
 ```lua
 crap.richtext.register_node("callout", {
     label = "Callout",
     attrs = {
-        { name = "type", type = "select", options = {
+        crap.fields.select({ name = "type", options = {
             { label = "Info", value = "info" },
             { label = "Warning", value = "warning" },
-        }},
-        { name = "body", type = "text" },
+        }}),
+        crap.fields.text({ name = "body", admin = { rows = 4 } }),
     },
     searchable_attrs = { "body" },
     render = function(attrs)

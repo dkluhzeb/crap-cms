@@ -7,6 +7,7 @@ use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
 use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
+use serde_json::json;
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -20,7 +21,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -230,8 +231,8 @@ fn global_blocks_field_save_and_read() {
     let tx = conn.transaction().expect("Start transaction");
 
     let blocks = vec![
-        serde_json::json!({"_block_type": "paragraph", "text": "Welcome to the homepage"}),
-        serde_json::json!({"_block_type": "image", "url": "/hero.jpg"}),
+        json!({"_block_type": "paragraph", "text": "Welcome to the homepage"}),
+        json!({"_block_type": "image", "url": "/hero.jpg"}),
     ];
     query::set_block_rows(&tx, "_global_homepage", "content", "default", &blocks, None)
         .expect("Set block rows failed");
@@ -299,20 +300,17 @@ fn global_save_join_table_data() {
     let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
     join_data.insert(
         "links".to_string(),
-        serde_json::json!([
+        json!([
             {"url": "https://a.com", "label": "A"},
         ]),
     );
     join_data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "Hello"},
         ]),
     );
-    join_data.insert(
-        "featured_posts".to_string(),
-        serde_json::json!(["p1", "p2"]),
-    );
+    join_data.insert("featured_posts".to_string(), json!(["p1", "p2"]));
 
     query::save_join_table_data(
         &tx,
@@ -356,7 +354,7 @@ fn global_join_table_data_replaces_on_update() {
         let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
         join_data.insert(
             "links".to_string(),
-            serde_json::json!([
+            json!([
                 {"url": "https://old.com", "label": "Old"},
             ]),
         );
@@ -378,7 +376,7 @@ fn global_join_table_data_replaces_on_update() {
         let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
         join_data.insert(
             "links".to_string(),
-            serde_json::json!([
+            json!([
                 {"url": "https://new1.com", "label": "New 1"},
                 {"url": "https://new2.com", "label": "New 2"},
             ]),
@@ -454,17 +452,17 @@ fn global_mixed_fields_coexist() {
     let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
     join_data.insert(
         "links".to_string(),
-        serde_json::json!([
+        json!([
             {"url": "https://example.com", "label": "Link"},
         ]),
     );
     join_data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "Hello world"},
         ]),
     );
-    join_data.insert("featured_posts".to_string(), serde_json::json!(["p1"]));
+    join_data.insert("featured_posts".to_string(), json!(["p1"]));
     query::save_join_table_data(
         &tx,
         "_global_homepage",

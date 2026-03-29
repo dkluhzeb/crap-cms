@@ -1,6 +1,6 @@
-//! Builders for `crate::core::richtext::RichtextNodeDef` and `NodeAttr`.
+//! Builder for `crate::core::richtext::RichtextNodeDef`.
 
-use crate::core::richtext::{NodeAttr, RichtextNodeDef};
+use crate::core::{FieldDefinition, richtext::RichtextNodeDef};
 
 /// Builder for [`RichtextNodeDef`].
 ///
@@ -9,7 +9,7 @@ pub struct RichtextNodeDefBuilder {
     name: String,
     label: String,
     inline: bool,
-    attrs: Vec<NodeAttr>,
+    attrs: Vec<FieldDefinition>,
     searchable_attrs: Vec<String>,
     has_render: bool,
 }
@@ -31,7 +31,7 @@ impl RichtextNodeDefBuilder {
         self
     }
 
-    pub fn attrs(mut self, a: Vec<NodeAttr>) -> Self {
+    pub fn attrs(mut self, a: Vec<FieldDefinition>) -> Self {
         self.attrs = a;
         self
     }
@@ -61,7 +61,7 @@ impl RichtextNodeDefBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::richtext::NodeAttrBuilder;
+    use crate::core::FieldType;
 
     #[test]
     fn builds_richtext_node_def_with_defaults() {
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn builds_richtext_node_def_with_overrides() {
-        let attr = NodeAttrBuilder::new("url", "URL").build();
+        let attr = FieldDefinition::builder("url", FieldType::Text).build();
         let def = RichtextNodeDefBuilder::new("embed", "Embed")
             .inline(true)
             .attrs(vec![attr])

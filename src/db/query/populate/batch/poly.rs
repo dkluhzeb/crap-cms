@@ -8,8 +8,8 @@ use crate::{
     core::{Document, upload},
     db::query::{
         populate::{
-            PopulateContext, PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref,
-            populate_relationships_batch_cached,
+            MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+            locale_cache_key, parse_poly_ref, populate_relationships_batch_cached,
         },
         read::find_by_ids,
     },
@@ -132,7 +132,7 @@ pub(super) fn batch_fetch_with_cache(
             let mut doc_map: HashMap<String, Document> = HashMap::new();
             let mut uncached_ids: Vec<String> = Vec::new();
             for id in col_ids {
-                let key = (col.clone(), id.clone());
+                let key = (col.clone(), id.clone(), locale_cache_key(ctx.locale_ctx));
 
                 if let Some(cached) = ctx.cache.get(&key) {
                     doc_map.insert(id.clone(), cached.value().clone());
@@ -169,7 +169,16 @@ pub(super) fn batch_fetch_with_cache(
                     )?;
                 }
                 for d in fetched {
-                    ctx.cache.insert((col.clone(), d.id.to_string()), d.clone());
+                    if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                        ctx.cache.insert(
+                            (
+                                col.clone(),
+                                d.id.to_string(),
+                                locale_cache_key(ctx.locale_ctx),
+                            ),
+                            d.clone(),
+                        );
+                    }
                     doc_map.insert(d.id.to_string(), d);
                 }
             }
@@ -505,7 +514,10 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedFromBatchCache"));
-        cache.insert(("articles".to_string(), "a1".to_string()), cached_article);
+        cache.insert(
+            ("articles".to_string(), "a1".to_string(), None),
+            cached_article,
+        );
 
         populate_relationships_batch_cached(
             &PopulateContext {
@@ -551,7 +563,10 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedTitle"));
-        cache.insert(("articles".to_string(), "a1".to_string()), cached_article);
+        cache.insert(
+            ("articles".to_string(), "a1".to_string(), None),
+            cached_article,
+        );
 
         let mut doc = Document::new("e1".to_string());
         doc.fields

@@ -27,7 +27,14 @@ pub(crate) fn check_unique(
         Some(other) => other.to_string(),
         None => String::new(),
     };
-    match query::count_where_field_eq(ctx.conn, ctx.table, col_name, &value_str, ctx.exclude_id) {
+    match query::count_where_field_eq(
+        ctx.conn,
+        ctx.table,
+        col_name,
+        &value_str,
+        ctx.exclude_id,
+        ctx.soft_delete,
+    ) {
         Ok(count) if count > 0 => {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
@@ -297,6 +304,54 @@ mod tests {
                 .build(),
         );
         assert_eq!(result.unwrap_err().errors[0].field, "seo__slug");
+    }
+
+    #[test]
+    fn test_validate_unique_soft_delete_excludes_deleted_rows() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT, _deleted_at TEXT);
+             INSERT INTO test (id, slug, _deleted_at) VALUES ('deleted1', 'taken', '2024-01-01');",
+        )
+        .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+
+        // With soft_delete=true, the soft-deleted row should be excluded from the unique check
+        let mut data = HashMap::new();
+        data.insert("slug".to_string(), json!("taken"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .soft_delete(true)
+                .build(),
+        );
+        assert!(
+            result.is_ok(),
+            "Unique check with soft_delete=true should ignore soft-deleted rows"
+        );
+
+        // With soft_delete=false (the old default), the same value would fail
+        let mut data = HashMap::new();
+        data.insert("slug".to_string(), json!("taken"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .soft_delete(false)
+                .build(),
+        );
+        assert!(
+            result.is_err(),
+            "Unique check with soft_delete=false should include soft-deleted rows"
+        );
     }
 
     #[test]

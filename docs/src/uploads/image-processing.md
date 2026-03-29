@@ -124,8 +124,8 @@ crap.collections.define("media", {
         },
     },
     fields = {
-        { name = "alt", type = "text", admin = { description = "Alt text for accessibility" } },
-        { name = "caption", type = "textarea" },
+        crap.fields.text({ name = "alt", admin = { description = "Alt text for accessibility" } }),
+        crap.fields.textarea({ name = "caption" }),
     },
 })
 ```

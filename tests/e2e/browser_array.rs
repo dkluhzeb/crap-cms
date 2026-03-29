@@ -1,8 +1,11 @@
+use std::time::Duration;
+
 use crate::browser;
 use crate::helpers::*;
 
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
+use crap_cms::db::DbConnection;
 
 fn make_array_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("teams");
@@ -182,6 +185,74 @@ async fn reorder_rows_updates_indices() {
         .await
         .unwrap();
     assert_eq!(inputs.len(), 2, "should still have 2 inputs after reorder");
+
+    server_handle.abort();
+}
+
+// ── Regression: array rows persist after form submission ─────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn array_rows_persist_after_save() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_array_def(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "barrsave@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "barrsave@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "barrsave@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/teams/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Fill name
+    page.find_element("input[name=\"name\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap()
+        .type_str("Test Team")
+        .await
+        .unwrap();
+
+    // Add 2 rows and fill them
+    for i in 0..2 {
+        page.find_element("button[data-action=\"add-array-row\"]")
+            .await
+            .unwrap()
+            .click()
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let selector = format!("input[name=\"members[{}][member_name]\"]", i);
+        page.evaluate(format!(
+            "() => {{ const el = document.querySelector('{}'); if (el) {{ el.focus(); el.value = 'Member {}'; }} }}",
+            selector, i + 1
+        ))
+        .await
+        .unwrap();
+    }
+
+    // Submit
+    page.evaluate("() => document.querySelector('#edit-form')?.requestSubmit()")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    // Verify in database
+    let conn = app.pool.get().unwrap();
+    let rows = conn
+        .query_all("SELECT member_name FROM teams_members ORDER BY _order", &[])
+        .unwrap();
+    assert_eq!(rows.len(), 2, "should have 2 array rows saved");
 
     server_handle.abort();
 }

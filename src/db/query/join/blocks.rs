@@ -62,7 +62,9 @@ pub fn set_block_rows(
             let block_type = row
                 .get("_block_type")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
+                })?
                 .to_string();
             let mut data_map = match row.as_object() {
                 Some(m) => m.clone(),
@@ -100,7 +102,9 @@ pub fn set_block_rows(
             let block_type = row
                 .get("_block_type")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
+                })?
                 .to_string();
             let mut data_map = match row.as_object() {
                 Some(m) => m.clone(),
@@ -288,6 +292,41 @@ mod tests {
         let de = find_block_rows(&conn, "posts", "content", "p1", Some("de")).unwrap();
         assert_eq!(de.len(), 1);
         assert_eq!(de[0]["body"], "Hallo");
+    }
+
+    #[test]
+    fn set_block_rows_missing_block_type_errors() {
+        let (_dir, conn) = setup_blocks_db();
+        let blocks = vec![json!({"text": "no block type here"})];
+        let result = set_block_rows(&conn, "posts", "content", "p1", &blocks, None);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("missing '_block_type'"),
+            "Error should mention missing _block_type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn set_block_rows_missing_block_type_errors_with_locale() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts_content (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                _block_type TEXT,
+                data TEXT,
+                _locale TEXT
+            );",
+        );
+        let blocks = vec![json!({"text": "no block type"})];
+        let result = set_block_rows(&conn, "posts", "content", "p1", &blocks, Some("en"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("missing '_block_type'"),
+            "Error should mention missing _block_type, got: {msg}"
+        );
     }
 
     #[test]

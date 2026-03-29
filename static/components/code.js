@@ -23,6 +23,9 @@ class CrapCode extends HTMLElement {
   }
 
   connectedCallback() {
+    // Idempotency guard: skip re-init on DOM moves (e.g. array row drag-and-drop)
+    if (this._view) return;
+
     const CM = /** @type {any} */ (window).CodeMirror;
     /** @type {HTMLTextAreaElement | null} */
     const textarea = this.querySelector('textarea');
@@ -88,12 +91,12 @@ class CrapCode extends HTMLElement {
     // Theme: match admin CSS variables
     extensions.push(CM.EditorView.theme({
       '&': {
-        fontSize: 'var(--text-sm, 13px)',
+        fontSize: 'var(--text-sm, 0.8125rem)',
         fontFamily: 'monospace',
       },
       '.cm-content': {
         fontFamily: 'monospace',
-        padding: 'var(--space-sm, 8px) 0',
+        padding: 'var(--space-sm, 0.5rem) 0',
       },
       '.cm-gutters': {
         backgroundColor: 'var(--bg-secondary, #fafafa)',
@@ -132,10 +135,8 @@ class CrapCode extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._view) {
-      this._view.destroy();
-      this._view = null;
-    }
+    // Do NOT destroy the view here — DOM moves (drag-and-drop reordering)
+    // trigger disconnect+reconnect, and we want to preserve editor state.
   }
 
   /**
@@ -187,8 +188,8 @@ class CrapCode extends HTMLElement {
       }
 
       .code-editor .cm-editor {
-        min-height: 200px;
-        max-height: 600px;
+        min-height: 12.5rem;
+        max-height: 37.5rem;
         overflow: auto;
       }
 

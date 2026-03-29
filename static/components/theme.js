@@ -16,7 +16,11 @@ window.CrapTheme = {
    * @returns {string} Theme name or '' for default light.
    */
   get() {
-    return localStorage.getItem(this._key) || '';
+    try {
+      return localStorage.getItem(this._key) || '';
+    } catch {
+      return '';
+    }
   },
 
   /**
@@ -34,11 +38,13 @@ window.CrapTheme = {
    * @param {string} theme
    */
   set(theme) {
-    if (theme) {
-      localStorage.setItem(this._key, theme);
-    } else {
-      localStorage.removeItem(this._key);
-    }
+    try {
+      if (theme) {
+        localStorage.setItem(this._key, theme);
+      } else {
+        localStorage.removeItem(this._key);
+      }
+    } catch { /* storage unavailable */ }
     this.apply(theme);
   },
 };
@@ -48,6 +54,9 @@ window.CrapTheme.apply(window.CrapTheme.get());
 
 class CrapThemePicker extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     const toggle = this.querySelector('[data-theme-toggle]');
     const dropdown = this.querySelector('[data-theme-dropdown]');
     if (!toggle || !dropdown) return;
@@ -86,6 +95,14 @@ class CrapThemePicker extends HTMLElement {
   }
 
   disconnectedCallback() {
+    const toggle = this.querySelector('[data-theme-toggle]');
+    const dropdown = this.querySelector('[data-theme-dropdown]');
+    if (toggle && this._onToggle) {
+      toggle.removeEventListener('click', this._onToggle);
+    }
+    if (dropdown && this._onSelect) {
+      dropdown.removeEventListener('click', this._onSelect);
+    }
     if (this._onOutsideClick) {
       document.removeEventListener('click', this._onOutsideClick);
     }

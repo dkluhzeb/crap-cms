@@ -3,11 +3,13 @@
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
 
+use crate::core::{FieldDefinition, field::FieldType};
+
 use crate::db::{
     DbConnection, DbValue, FindQuery, LocaleContext, LocaleMode,
     query::{
         filter::{build_where_clause, resolve_filter_column, resolve_filters},
-        fts, get_column_names, get_locale_select_columns, group_locale_fields,
+        fts, get_column_names, get_locale_select_columns_with_opts, group_locale_fields,
         validate_query_fields,
     },
 };
@@ -15,17 +17,6 @@ use crate::{
     core::{CollectionDefinition, Document},
     db::document::row_to_document,
 };
-
-/// Convert ISO 8601 timestamp back to SQLite storage format for cursor comparison.
-/// "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
-pub(super) fn denormalize_timestamp(s: &str) -> String {
-    // Match the ISO format produced by normalize_timestamp in document.rs
-    if s.len() == 24 && s.as_bytes().get(10) == Some(&b'T') && s.ends_with(".000Z") {
-        format!("{} {}", &s[..10], &s[11..19])
-    } else {
-        s.to_string()
-    }
-}
 
 /// Find documents matching a query.
 pub fn find(
@@ -39,7 +30,7 @@ pub fn find(
 
     let (select_exprs, result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -50,14 +41,15 @@ pub fn find(
     let (select_exprs, _result_names) =
         super::select::apply_select_filter(select_exprs, result_names, query.select.as_ref(), def);
 
-    let mut sql = format!("SELECT {} FROM {slug}", select_exprs.join(", "));
+    let mut sql = format!("SELECT {} FROM \"{slug}\"", select_exprs.join(", "));
     let mut params: Vec<DbValue> = Vec::new();
 
     // Build WHERE with locale-resolved column names
-    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx);
+    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
     let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
+    let mut has_where = !where_clause.is_empty();
 
-    if !where_clause.is_empty() {
+    if has_where {
         sql.push_str(&where_clause);
     }
 
@@ -72,13 +64,24 @@ pub fn find(
                 let ph = conn.placeholder(params.len() + 1);
                 let fts_clause =
                     format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})");
-                if where_clause.is_empty() {
-                    sql.push_str(&format!(" WHERE {fts_clause}"));
-                } else {
+                if has_where {
                     sql.push_str(&format!(" AND {fts_clause}"));
+                } else {
+                    sql.push_str(&format!(" WHERE {fts_clause}"));
+                    has_where = true;
                 }
                 params.push(DbValue::Text(sanitized));
             }
+        }
+    }
+
+    // Exclude soft-deleted documents unless explicitly requested
+    if def.soft_delete && !query.include_deleted {
+        if has_where {
+            sql.push_str(" AND _deleted_at IS NULL");
+        } else {
+            sql.push_str(" WHERE _deleted_at IS NULL");
+            has_where = true;
         }
     }
 
@@ -106,6 +109,15 @@ pub fn find(
         ("id".to_string(), "ASC")
     };
 
+    // Validate sort column exists on the table
+    if !is_valid_sort_column(&sort_col, def) {
+        bail!(
+            "Invalid sort column '{}' — not a column on '{}'",
+            sort_col,
+            def.slug
+        );
+    }
+
     // Determine active cursor (after or before) and compute keyset direction
     let active_cursor = query.after_cursor.as_ref().or(query.before_cursor.as_ref());
     let using_before = query.before_cursor.is_some();
@@ -125,32 +137,63 @@ pub fn find(
             ("DESC", false) | ("ASC", true) => "<",
             _ => ">",
         };
-        let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
-        // Keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
-        let ph1 = conn.placeholder(params.len() + 1);
-        let ph2 = conn.placeholder(params.len() + 2);
-        let keyset = format!(
-            " AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))",
-            col = resolved_col,
-            op = op,
-        );
-        // Convert sort_val to string for the parameter.
-        // Denormalize ISO timestamps back to SQLite format for comparison:
-        // "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
-        let sort_val_str = match &cursor.sort_val {
-            Value::String(s) => denormalize_timestamp(s),
-            Value::Number(n) => n.to_string(),
-            Value::Null => String::new(),
-            other => other.to_string(),
+        let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
+
+        // Bind sort_val with the correct DbValue variant for proper comparison.
+        let sort_val = match &cursor.sort_val {
+            Value::String(s) => DbValue::Text(s.clone()),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    DbValue::Integer(i)
+                } else if let Some(f) = n.as_f64() {
+                    DbValue::Real(f)
+                } else {
+                    DbValue::Text(n.to_string())
+                }
+            }
+            Value::Null => DbValue::Null,
+            other => DbValue::Text(other.to_string()),
         };
-        params.push(DbValue::Text(sort_val_str));
-        params.push(DbValue::Text(cursor.id.clone()));
+
+        // NULL sort values need special SQL because col > NULL evaluates to NULL.
+        // SQLite sorts NULLs first in ASC, last in DESC.
+        let keyset = if matches!(sort_val, DbValue::Null) {
+            let ph_id = conn.placeholder(params.len() + 1);
+            params.push(DbValue::Text(cursor.id.clone()));
+
+            // For ASC (NULLs first): after a NULL cursor, we want:
+            //   remaining NULLs with higher id, or any non-NULL row
+            // For DESC (NULLs last): after a NULL cursor, we want:
+            //   remaining NULLs with lower id (nothing past NULLs in DESC)
+            if op == ">" {
+                // ASC forward or DESC backward
+                format!(
+                    " AND (({col} IS NULL AND id > {ph_id}) OR {col} IS NOT NULL)",
+                    col = resolved_col,
+                )
+            } else {
+                // DESC forward or ASC backward
+                format!(" AND ({col} IS NULL AND id < {ph_id})", col = resolved_col,)
+            }
+        } else {
+            // Standard keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
+            let ph1 = conn.placeholder(params.len() + 1);
+            let ph2 = conn.placeholder(params.len() + 2);
+            params.push(sort_val);
+            params.push(DbValue::Text(cursor.id.clone()));
+
+            format!(
+                " AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))",
+                col = resolved_col,
+                op = op,
+            )
+        };
         // Append to existing WHERE or start WHERE
-        if where_clause.is_empty() {
+        if has_where {
+            sql.push_str(&keyset);
+        } else {
             // Replace leading " AND " with " WHERE "
             sql.push_str(&keyset.replacen(" AND ", " WHERE ", 1));
-        } else {
-            sql.push_str(&keyset);
         }
     }
 
@@ -164,7 +207,7 @@ pub fn find(
         "ASC"
     };
 
-    let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
+    let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
 
     if sort_col != "id" {
         // Stable ordering: primary sort + id tiebreaker
@@ -177,12 +220,12 @@ pub fn find(
 
     if let Some(limit) = query.limit {
         let ph = conn.placeholder(params.len() + 1);
-        params.push(DbValue::Integer(limit));
+        params.push(DbValue::Integer(limit.max(0)));
         sql.push_str(&format!(" LIMIT {ph}"));
     }
     if let Some(offset) = query.offset {
         let ph = conn.placeholder(params.len() + 1);
-        params.push(DbValue::Integer(offset));
+        params.push(DbValue::Integer(offset.max(0)));
         sql.push_str(&format!(" OFFSET {ph}"));
     }
 
@@ -198,7 +241,7 @@ pub fn find(
             && ctx.config.is_enabled()
             && let LocaleMode::All = ctx.mode
         {
-            group_locale_fields(&mut doc, &def.fields, &ctx.config);
+            group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
         documents.push(doc);
     }
@@ -209,6 +252,47 @@ pub fn find(
     }
 
     Ok(documents)
+}
+
+/// Check whether a sort column name corresponds to a real column on the collection table.
+fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
+    // System columns that always exist
+    if matches!(
+        col,
+        "id" | "created_at" | "updated_at" | "_status" | "_deleted_at" | "_ref_count"
+    ) {
+        return true;
+    }
+
+    // User-defined fields that have a parent column (has-one scalar fields).
+    // Layout wrappers (Row, Collapsible, Tabs) promote their children to
+    // parent-level columns, so we recurse into them.
+    // Group sub-fields use `group__subfield` naming for DB columns.
+    fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
+        fields.iter().any(|f| {
+            let full_name = if prefix.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{}__{}", prefix, f.name)
+            };
+
+            if full_name == col && f.has_parent_column() {
+                return true;
+            }
+
+            match f.field_type {
+                FieldType::Group => check_fields(col, &f.fields, &full_name),
+                FieldType::Row | FieldType::Collapsible => check_fields(col, &f.fields, prefix),
+                FieldType::Tabs => f
+                    .tabs
+                    .iter()
+                    .any(|tab| check_fields(col, &tab.fields, prefix)),
+                _ => false,
+            }
+        })
+    }
+
+    check_fields(col, &def.fields, "")
 }
 
 #[cfg(test)]
@@ -626,39 +710,182 @@ mod tests {
 
     #[test]
     fn cursor_sort_val_number_in_params() {
-        // Inserting docs and using a numeric sort_val cursor
+        // Numeric cursor pagination must use numeric comparison, not string.
+        // With string comparison "9" > "10", so pagination would be wrong.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let conn = db_pool.get().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE scores (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                points INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("scores");
+        def.fields = vec![
+            FieldDefinition::builder("name", FieldType::Text).build(),
+            FieldDefinition::builder("points", FieldType::Number).build(),
+        ];
+
+        // Insert rows with numeric values that would sort wrong as strings
+        // String order: "10" < "5" < "9" (lexicographic)
+        // Numeric order: 5 < 9 < 10 < 20 < 100
+        let values = [
+            (5, "five"),
+            (9, "nine"),
+            (10, "ten"),
+            (20, "twenty"),
+            (100, "hundred"),
+        ];
+
+        for (pts, name) in &values {
+            conn.execute(
+                "INSERT INTO scores (id, name, points, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                &[
+                    DbValue::Text(format!("id-{name}")),
+                    DbValue::Text(name.to_string()),
+                    DbValue::Integer(*pts),
+                    DbValue::Text("2026-01-01 00:00:00".into()),
+                ],
+            )
+            .unwrap();
+        }
+
+        // Page 1: limit 2, order by points ASC → should get 5, 9
+        let mut q1 = FindQuery::new();
+        q1.order_by = Some("points".to_string());
+        q1.limit = Some(2);
+        let page1 = find(&conn, "scores", &def, &q1, None).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].get_str("name"), Some("five"));
+        assert_eq!(page1[1].get_str("name"), Some("nine"));
+
+        // Page 2: cursor after points=9 → should get 10, 20 (NOT skip 10 as string "9" > "10")
+        let cursor = super::super::super::cursor::CursorData {
+            sort_col: "points".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: json!(9),
+            id: "id-nine".to_string(),
+        };
+        let mut q2 = FindQuery::new();
+        q2.order_by = Some("points".to_string());
+        q2.limit = Some(2);
+        q2.after_cursor = Some(cursor);
+        let page2 = find(&conn, "scores", &def, &q2, None).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].get_str("name"), Some("ten"));
+        assert_eq!(page2[1].get_str("name"), Some("twenty"));
+
+        // Page 3: cursor after points=20 → should get 100
+        let cursor2 = super::super::super::cursor::CursorData {
+            sort_col: "points".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: json!(20),
+            id: "id-twenty".to_string(),
+        };
+        let mut q3 = FindQuery::new();
+        q3.order_by = Some("points".to_string());
+        q3.limit = Some(2);
+        q3.after_cursor = Some(cursor2);
+        let page3 = find(&conn, "scores", &def, &q3, None).unwrap();
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].get_str("name"), Some("hundred"));
+    }
+
+    #[test]
+    fn cursor_sort_val_null_binds_as_null() {
         let (_tmp, pool) = setup_db();
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        for i in 1..=3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
-            create(&conn, "posts", &def, &data, None).unwrap();
-        }
-
-        // Build a cursor with a Number sort_val (e.g. for a numeric field)
-        // We use "id" as sort_col and supply a numeric sort_val to exercise the Number arm
-        let mut q = FindQuery::new();
-        q.order_by = Some("title".to_string());
-        q.limit = Some(1);
-        let page1 = find(&conn, "posts", &def, &q, None).unwrap();
-        assert_eq!(page1.len(), 1);
-
-        // Build cursor with Number sort_val
+        // Null sort_val should execute without error (binds DbValue::Null, not empty string)
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: json!(99i64), // Number variant
-            id: page1[0].id.to_string(),
+            sort_val: Value::Null,
+            id: "anyid".to_string(),
         };
-        let mut q2 = FindQuery::new();
-        q2.order_by = Some("title".to_string());
-        q2.limit = Some(10);
-        q2.after_cursor = Some(cursor);
-        // Should execute without error (all docs have title > 99 as string comparison goes)
-        let result = find(&conn, "posts", &def, &q2, None);
+        let mut q = FindQuery::new();
+        q.order_by = Some("title".to_string());
+        q.after_cursor = Some(cursor);
+        let result = find(&conn, "posts", &def, &q, None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cursor_sort_val_real_in_params() {
+        // Verify f64 cursor values bind as DbValue::Real
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let conn = db_pool.get().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE ratings (
+                id TEXT PRIMARY KEY,
+                label TEXT,
+                score REAL,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("ratings");
+        def.fields = vec![
+            FieldDefinition::builder("label", FieldType::Text).build(),
+            FieldDefinition::builder("score", FieldType::Number).build(),
+        ];
+
+        let values = [(1.5, "low"), (2.7, "mid"), (3.9, "high")];
+
+        for (score, label) in &values {
+            conn.execute(
+                "INSERT INTO ratings (id, label, score, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                &[
+                    DbValue::Text(format!("id-{label}")),
+                    DbValue::Text(label.to_string()),
+                    DbValue::Real(*score),
+                    DbValue::Text("2026-01-01 00:00:00".into()),
+                ],
+            )
+            .unwrap();
+        }
+
+        // Cursor after score=1.5 → should get mid, high
+        let cursor = super::super::super::cursor::CursorData {
+            sort_col: "score".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: json!(1.5),
+            id: "id-low".to_string(),
+        };
+        let mut q = FindQuery::new();
+        q.order_by = Some("score".to_string());
+        q.limit = Some(10);
+        q.after_cursor = Some(cursor);
+        let results = find(&conn, "ratings", &def, &q, None).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].get_str("label"), Some("mid"));
+        assert_eq!(results[1].get_str("label"), Some("high"));
     }
 
     #[test]
@@ -783,40 +1010,409 @@ mod tests {
         // Just verify it executes successfully — order is nanoid-determined
     }
 
-    // ── denormalize_timestamp tests ──────────────────────────────────────
+    // ── Soft-delete filtering tests ───────────────────────────────────────
+
+    fn setup_soft_delete_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE articles (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    _deleted_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
+    }
+
+    fn soft_delete_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("articles");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.soft_delete = true;
+        def
+    }
 
     #[test]
-    fn denormalize_timestamp_iso_to_sqlite() {
-        assert_eq!(
-            denormalize_timestamp("2026-03-01T19:13:04.000Z"),
-            "2026-03-01 19:13:04"
+    fn find_excludes_soft_deleted_by_default() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        // Insert a normal doc and a soft-deleted doc
+        conn.execute(
+            "INSERT INTO articles (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live Post".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted Post".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let query = FindQuery::default();
+        let docs = find(&conn, "articles", &def, &query, None).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].get_str("title"), Some("Live Post"));
+    }
+
+    #[test]
+    fn find_includes_soft_deleted_when_requested() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live Post".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted Post".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let query = FindQuery {
+            include_deleted: true,
+            ..Default::default()
+        };
+        let docs = find(&conn, "articles", &def, &query, None).unwrap();
+        assert_eq!(docs.len(), 2);
+    }
+
+    // ── Invalid sort column ──────────────────────────────────────────────
+
+    #[test]
+    fn invalid_sort_column_returns_error_not_500() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let query = FindQuery {
+            order_by: Some("nonexistent_column".to_string()),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_err(), "Should reject invalid sort column");
+        // Caught by validate_query_fields before reaching SQL
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Invalid field"),
+            "Should be a validation error, got: {err_msg}"
         );
     }
 
     #[test]
-    fn denormalize_timestamp_passthrough() {
-        // Already in SQLite format — unchanged
+    fn valid_cursor_sort_col_succeeds() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let query = FindQuery {
+            order_by: Some("title".to_string()),
+            after_cursor: Some(crate::db::query::cursor::CursorData {
+                sort_col: "title".to_string(),
+                sort_dir: "ASC".to_string(),
+                sort_val: Value::String("test".to_string()),
+                id: "abc".to_string(),
+            }),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_ok());
+    }
+
+    // ── Cursor pagination round-trip consistency ─────────────────────────
+
+    #[test]
+    fn cursor_forward_back_forward_consistent() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        // Insert 14 docs with unique sequential created_at (ISO format, matching DB storage)
+        for i in 1..=14 {
+            conn.execute(
+                &format!(
+                    "INSERT INTO posts (id, title, created_at, updated_at) VALUES ('d{:02}', 'Post {}', '2024-01-{:02}T12:00:00.000Z', '2024-01-{:02}T12:00:00.000Z')",
+                    i, i, i, i
+                ),
+                &[],
+            ).unwrap();
+        }
+
+        let limit = 10i64;
+
+        // Page 1: initial load (no cursor, limit=10, default sort: -created_at)
+        let q1 = FindQuery {
+            limit: Some(limit),
+            ..Default::default()
+        };
+        let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
+        assert_eq!(page1.len(), 10, "Page 1 should have 10 items");
+        // DESC: newest first, so d14, d13, ..., d05
+        assert_eq!(page1[0].id.as_ref(), "d14");
+        assert_eq!(page1[9].id.as_ref(), "d05");
+
+        // Page 2: forward with after_cursor (overfetch limit=11)
+        let (_, end_cursor_p1) =
+            crate::db::query::cursor::build_cursors(&page1, "created_at", "DESC");
+        let end_cursor_data =
+            crate::db::query::cursor::CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
+        let q2 = FindQuery {
+            limit: Some(limit + 1),
+            after_cursor: Some(end_cursor_data),
+            ..Default::default()
+        };
+        let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
+        let page2_count = page2.len().min(limit as usize);
+        assert_eq!(page2_count, 4, "Page 2 should have 4 items");
+        assert_eq!(page2[0].id.as_ref(), "d04");
+
+        // Grab the start_cursor of page 2 for going back
+        let page2_trimmed = &page2[..page2_count];
+        let (start_cursor_p2, _) =
+            crate::db::query::cursor::build_cursors(page2_trimmed, "created_at", "DESC");
+        let start_cursor_data =
+            crate::db::query::cursor::CursorData::decode(start_cursor_p2.as_ref().unwrap())
+                .unwrap();
+
+        // Go back: before_cursor (overfetch limit=11)
+        let q_back = FindQuery {
+            limit: Some(limit + 1),
+            before_cursor: Some(start_cursor_data),
+            ..Default::default()
+        };
+        let page1_again = find(&conn, "posts", &def, &q_back, None).unwrap();
+        // Trim overfetch from front (before_cursor extra is at index 0 after reversal)
+        let page1_trimmed: Vec<_> = if page1_again.len() > limit as usize {
+            page1_again[1..].to_vec()
+        } else {
+            page1_again
+        };
         assert_eq!(
-            denormalize_timestamp("2026-03-01 19:13:04"),
-            "2026-03-01 19:13:04"
+            page1_trimmed.len(),
+            10,
+            "Back to page 1 should have 10 items"
         );
-        // Non-timestamp string — unchanged
-        assert_eq!(denormalize_timestamp("hello"), "hello");
+        assert_eq!(
+            page1_trimmed[0].id.as_ref(),
+            "d14",
+            "First item should be d14"
+        );
+        assert_eq!(
+            page1_trimmed[9].id.as_ref(),
+            "d05",
+            "Last item should be d05"
+        );
+
+        // Forward again: end_cursor of the back-result
+        let (_, end_cursor_p1_again) =
+            crate::db::query::cursor::build_cursors(&page1_trimmed, "created_at", "DESC");
+        let end_cursor_data_again =
+            crate::db::query::cursor::CursorData::decode(end_cursor_p1_again.as_ref().unwrap())
+                .unwrap();
+        let q2_again = FindQuery {
+            limit: Some(limit + 1),
+            after_cursor: Some(end_cursor_data_again),
+            ..Default::default()
+        };
+        let page2_again = find(&conn, "posts", &def, &q2_again, None).unwrap();
+        let page2_again_count = page2_again.len().min(limit as usize);
+        assert_eq!(
+            page2_again_count, page2_count,
+            "Page 2 after back+forward should have same item count"
+        );
+
+        // Verify same IDs
+        let ids_first: Vec<&str> = page2_trimmed.iter().map(|d| d.id.as_ref()).collect();
+        let ids_second: Vec<&str> = page2_again[..page2_again_count]
+            .iter()
+            .map(|d| d.id.as_ref())
+            .collect();
+        assert_eq!(
+            ids_first, ids_second,
+            "Same documents should appear on page 2"
+        );
+    }
+
+    // ── Regression: is_valid_sort_column with layout wrappers ─────────
+
+    #[test]
+    fn sort_column_inside_row_is_valid() {
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![FieldDefinition {
+            name: "date_row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![FieldDefinition {
+                name: "start_date".to_string(),
+                field_type: FieldType::Date,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        assert!(
+            is_valid_sort_column("start_date", &def),
+            "Field inside Row should be valid sort column"
+        );
     }
 
     #[test]
-    fn denormalize_timestamp_wrong_length_passthrough() {
-        // String has T at index 10 but wrong length — passthrough unchanged
-        assert_eq!(
-            denormalize_timestamp("2026-03-01T12:00:00"), // len 19, not 24
-            "2026-03-01T12:00:00"
+    fn sort_column_inside_collapsible_is_valid() {
+        let mut def = CollectionDefinition::new("items");
+        def.fields = vec![FieldDefinition {
+            name: "meta".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![FieldDefinition {
+                name: "priority".to_string(),
+                field_type: FieldType::Number,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        assert!(
+            is_valid_sort_column("priority", &def),
+            "Field inside Collapsible should be valid sort column"
         );
     }
 
     #[test]
-    fn denormalize_timestamp_no_000z_suffix_passthrough() {
-        // Correct length but does not end in ".000Z"
-        let s = "2026-03-01T12:00:00.999Z"; // ends in .999Z not .000Z
-        assert_eq!(denormalize_timestamp(s), s);
+    fn sort_column_inside_tabs_is_valid() {
+        use crate::core::field::FieldTab;
+
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![
+            FieldDefinition::builder("content_tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Main",
+                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                )])
+                .build(),
+        ];
+
+        assert!(
+            is_valid_sort_column("title", &def),
+            "Field inside Tabs should be valid sort column"
+        );
+    }
+
+    #[test]
+    fn sort_column_nonexistent_is_invalid() {
+        let def = test_def();
+        assert!(
+            !is_valid_sort_column("nonexistent", &def),
+            "Nonexistent field should be invalid sort column"
+        );
+    }
+
+    #[test]
+    fn sort_column_group_sub_field_is_valid() {
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        assert!(
+            is_valid_sort_column("seo__title", &def),
+            "Group sub-field should be valid sort column with __ prefix"
+        );
+        assert!(
+            !is_valid_sort_column("title", &def),
+            "Bare sub-field name should not be valid without group prefix"
+        );
+    }
+
+    #[test]
+    fn sort_column_group_in_tabs_is_valid() {
+        use crate::core::field::FieldTab;
+
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "SEO",
+                    vec![
+                        FieldDefinition::builder("seo", FieldType::Group)
+                            .fields(vec![
+                                FieldDefinition::builder("title", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+
+        assert!(
+            is_valid_sort_column("seo__title", &def),
+            "Group sub-field inside Tabs should be valid sort column"
+        );
+    }
+
+    /// Regression: negative limit/offset must be clamped to 0 instead of
+    /// passing undefined values to SQLite.
+    #[test]
+    fn negative_limit_and_offset_clamped_to_zero() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "A".to_string());
+        create(&conn, "posts", &def, &data, None).unwrap();
+
+        let mut data2 = HashMap::new();
+        data2.insert("title".to_string(), "B".to_string());
+        create(&conn, "posts", &def, &data2, None).unwrap();
+
+        let mut query = FindQuery::new();
+        query.limit = Some(-5);
+        query.offset = Some(-10);
+
+        let docs = find(&conn, "posts", &def, &query, None).unwrap();
+        // Negative limit clamped to 0 → returns zero rows
+        assert!(
+            docs.is_empty(),
+            "Negative limit should be clamped to 0, returning no rows"
+        );
     }
 }

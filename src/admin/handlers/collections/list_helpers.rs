@@ -157,10 +157,9 @@ pub(super) fn compute_cells(
                             }
                             FieldType::Textarea => {
                                 let text = raw.as_str().unwrap_or("");
-                                let truncated = if text.len() > 80 {
-                                    format!("{}…", &text[..80])
-                                } else {
-                                    text.to_string()
+                                let truncated = match text.char_indices().nth(80) {
+                                    Some((i, _)) => format!("{}…", &text[..i]),
+                                    None => text.to_string(),
                                 };
 
                                 json!({ "value": truncated })
@@ -350,7 +349,7 @@ pub(super) fn build_filter_pills(
                 format!("?{}", remove_query.join("&"))
             };
 
-            Some(serde_json::json!({
+            Some(json!({
                 "field_label": field_label_str,
                 "op": op_label,
                 "value": value,
@@ -504,10 +503,9 @@ mod tests {
     fn compute_cells_status_badge() {
         let def = test_collection();
         let mut doc = DocumentBuilder::new("1").build();
-        doc.fields
-            .insert("_status".into(), serde_json::json!("draft"));
+        doc.fields.insert("_status".into(), json!("draft"));
 
-        let columns = vec![serde_json::json!({"key": "_status"})];
+        let columns = vec![json!({"key": "_status"})];
         let cells = compute_cells(&doc, &columns, &def);
         assert_eq!(cells[0]["is_badge"], true);
         assert_eq!(cells[0]["value"], "draft");
@@ -517,10 +515,9 @@ mod tests {
     fn compute_cells_select_shows_label() {
         let def = test_collection();
         let mut doc = DocumentBuilder::new("1").build();
-        doc.fields
-            .insert("status".into(), serde_json::json!("published"));
+        doc.fields.insert("status".into(), json!("published"));
 
-        let columns = vec![serde_json::json!({"key": "status"})];
+        let columns = vec![json!({"key": "status"})];
         let cells = compute_cells(&doc, &columns, &def);
         assert_eq!(cells[0]["value"], "Published");
     }
@@ -529,9 +526,9 @@ mod tests {
     fn compute_cells_checkbox() {
         let def = test_collection();
         let mut doc = DocumentBuilder::new("1").build();
-        doc.fields.insert("active".into(), serde_json::json!(1));
+        doc.fields.insert("active".into(), json!(1));
 
-        let columns = vec![serde_json::json!({"key": "active"})];
+        let columns = vec![json!({"key": "active"})];
         let cells = compute_cells(&doc, &columns, &def);
         assert_eq!(cells[0]["is_bool"], true);
         assert_eq!(cells[0]["value"], true);
@@ -544,7 +541,7 @@ mod tests {
             .created_at(Some("2024-01-15"))
             .build();
 
-        let columns = vec![serde_json::json!({"key": "created_at"})];
+        let columns = vec![json!({"key": "created_at"})];
         let cells = compute_cells(&doc, &columns, &def);
         assert_eq!(cells[0]["is_date"], true);
     }

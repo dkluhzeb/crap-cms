@@ -193,15 +193,19 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
     match op {
         CrudOp::Create => {
             let mut schema = fields_to_object_schema(&def.fields);
-            // Auth collections get a password field
+            // Auth collections get a required password field
             if def.is_auth_collection()
                 && let Some(obj) = schema.as_object_mut()
             {
                 if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
                     props.insert("password".to_string(), json!({ "type": "string" }));
                 }
-                if let Some(req) = obj.get_mut("required").and_then(|r| r.as_array_mut()) {
-                    req.push(Value::String("password".to_string()));
+                // Ensure required array exists, then add password
+                let req = obj
+                    .entry("required")
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Some(arr) = req.as_array_mut() {
+                    arr.push(Value::String("password".to_string()));
                 }
             }
             schema
@@ -258,8 +262,10 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                         "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
                     },
                     "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
-                    "limit": { "type": "integer" },
-                    "offset": { "type": "integer" },
+                    "limit": { "type": "integer", "description": "Max results per page" },
+                    "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
+                    "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
+                    "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
                     "depth": { "type": "integer", "description": "Relationship population depth" },
                     "search": { "type": "string", "description": "Full-text search query" }
                 }
@@ -414,6 +420,9 @@ mod tests {
         let s = collection_input_schema(&def, CrudOp::Find);
         assert!(s["properties"]["where"].is_object());
         assert!(s["properties"]["limit"].is_object());
+        assert!(s["properties"]["page"].is_object());
+        assert!(s["properties"]["after_cursor"].is_object());
+        assert!(s["properties"]["before_cursor"].is_object());
     }
 
     #[test]
@@ -809,5 +818,24 @@ mod tests {
         let req = s["items"]["required"].as_array().unwrap();
         assert!(req.contains(&Value::String("key".to_string())));
         assert!(!req.contains(&Value::String("value".to_string())));
+    }
+
+    #[test]
+    fn auth_collection_password_required_even_without_other_required_fields() {
+        use crate::core::collection::{Auth, CollectionDefinition};
+
+        let mut def = CollectionDefinition::new("users");
+        def.auth = Some(Auth::new(true));
+        // Only optional fields — no required fields
+        def.fields = vec![FieldDefinition::builder("bio", FieldType::Text).build()];
+
+        let schema = collection_input_schema(&def, CrudOp::Create);
+        let required = schema["required"]
+            .as_array()
+            .expect("required array should exist");
+        assert!(
+            required.contains(&Value::String("password".to_string())),
+            "password should be in required even when no other fields are required"
+        );
     }
 }

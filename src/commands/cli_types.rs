@@ -5,10 +5,10 @@ use std::path::PathBuf;
 
 /// Parse a key=value pair for --field arguments.
 pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
-    let pos = s
-        .find('=')
+    let (key, value) = s
+        .split_once('=')
         .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
-    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// Actions for the `make` subcommand.
@@ -399,6 +399,44 @@ pub enum JobsAction {
     Healthcheck,
 }
 
+/// Actions for the `trash` subcommand.
+#[derive(Subcommand)]
+pub enum TrashAction {
+    /// List trashed documents
+    List {
+        /// Filter by collection slug
+        #[arg(short, long)]
+        collection: Option<String>,
+    },
+    /// Permanently delete trashed documents
+    Purge {
+        /// Filter by collection slug
+        #[arg(short, long)]
+        collection: Option<String>,
+        /// Delete documents older than this (e.g., "30d", "24h", "30m"), or "all"
+        #[arg(long, default_value = "all")]
+        older_than: String,
+        /// Print what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Restore a trashed document
+    Restore {
+        /// Collection slug
+        collection: String,
+        /// Document ID
+        id: String,
+    },
+    /// Permanently delete all trash in a collection
+    Empty {
+        /// Collection slug
+        collection: String,
+        /// Confirm destructive operation (required)
+        #[arg(short = 'y', long)]
+        confirm: bool,
+    },
+}
+
 /// Actions for the `images` subcommand.
 #[derive(Subcommand)]
 pub enum ImagesAction {
@@ -434,6 +472,13 @@ pub enum ImagesAction {
         #[arg(long, default_value = "7d")]
         older_than: String,
     },
+}
+
+/// Actions for the `logs` subcommand.
+#[derive(Subcommand)]
+pub enum LogsAction {
+    /// Remove old rotated log files (keeps the current log file)
+    Clear,
 }
 
 #[cfg(test)]
@@ -479,6 +524,23 @@ mod tests {
         assert_eq!(
             parse_key_val("=value"),
             Ok((String::new(), "value".to_string()))
+        );
+    }
+
+    /// Regression: multi-byte UTF-8 in key or value must not panic from string slicing.
+    #[test]
+    fn multibyte_utf8_does_not_panic() {
+        assert_eq!(
+            parse_key_val("clé=valeur"),
+            Ok(("clé".to_string(), "valeur".to_string()))
+        );
+        assert_eq!(
+            parse_key_val("key=日本語"),
+            Ok(("key".to_string(), "日本語".to_string()))
+        );
+        assert_eq!(
+            parse_key_val("キー=値"),
+            Ok(("キー".to_string(), "値".to_string()))
         );
     }
 }

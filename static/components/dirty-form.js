@@ -8,7 +8,6 @@
  * @module dirty-form
  */
 
-import { getConfirmDialog } from './confirm-dialog.js';
 import { t } from './i18n.js';
 
 class CrapDirtyForm extends HTMLElement {
@@ -23,6 +22,9 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     this._formUrl = location.href;
     this._dirty = false;
     /** @type {boolean} */
@@ -35,15 +37,17 @@ class CrapDirtyForm extends HTMLElement {
     // setup from marking the form dirty.
     requestAnimationFrame(() => { this._armed = true; });
 
-    // Track form input/change
-    const form = this.querySelector('#edit-form');
+    // Track form input/change — store reference for cleanup
+    /** @type {HTMLElement|null} */
+    this._form = this.querySelector('#edit-form');
+    const form = this._form;
     if (form) {
       form.addEventListener('input', this._markDirty);
       form.addEventListener('change', this._markDirty);
     }
 
     // Custom component changes (relationship search, uploads)
-    document.addEventListener('crap:change', this._markDirty);
+    this.addEventListener('crap:change', this._markDirty);
 
     // Array/block row mutations
     this._onRowAction = (e) => {
@@ -93,7 +97,12 @@ class CrapDirtyForm extends HTMLElement {
 
     // Clear dirty on form save (non-GET = POST/PUT submit)
     this._onBeforeRequest = (e) => {
-      if ((e.detail.verb || '').toUpperCase() !== 'GET') {
+      const verb = (
+        (e.detail.requestConfig && e.detail.requestConfig.verb) ||
+        e.detail.verb ||
+        ''
+      ).toUpperCase();
+      if (verb !== 'GET') {
         this._dirty = false;
       }
     };
@@ -107,7 +116,13 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   disconnectedCallback() {
-    document.removeEventListener('crap:change', this._markDirty);
+    this._connected = false;
+    if (this._form) {
+      this._form.removeEventListener('input', this._markDirty);
+      this._form.removeEventListener('change', this._markDirty);
+      this._form = null;
+    }
+    this.removeEventListener('crap:change', this._markDirty);
     document.removeEventListener('click', this._onRowAction);
     document.removeEventListener('htmx:configRequest', this._onConfigRequest);
     window.removeEventListener('popstate', this._onPopState);
@@ -119,7 +134,11 @@ class CrapDirtyForm extends HTMLElement {
    * @returns {Promise<boolean>}
    */
   _askLeave() {
-    return getConfirmDialog().prompt(
+    const confirmEvt = new CustomEvent('crap:confirm-dialog-request', { detail: {} });
+    document.dispatchEvent(confirmEvt);
+    const dialog = confirmEvt.detail.instance;
+    if (!dialog) return Promise.resolve(true);
+    return dialog.prompt(
       t('unsaved_changes'),
       { confirmLabel: t('leave'), cancelLabel: t('stay') },
     );

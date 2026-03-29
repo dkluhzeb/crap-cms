@@ -13,8 +13,8 @@ crap.globals.define("site_settings", {
         singular = "Site Settings",
     },
     fields = {
-        { name = "site_name", type = "text", required = true, default_value = "My Site" },
-        { name = "tagline", type = "text" },
+        crap.fields.text({ name = "site_name", required = true, default_value = "My Site" }),
+        crap.fields.text({ name = "tagline" }),
     },
 })
 ```
@@ -29,6 +29,9 @@ crap.globals.define("site_settings", {
 | `fields` | FieldDefinition[] | `{}` | Field definitions |
 | `hooks` | table | `{}` | Same lifecycle hooks as collections |
 | `access` | table | `{}` | Same access control as collections |
+| `versions` | boolean or table | `nil` | Versioning config (same as collections) |
+| `live` | boolean or string | `nil` | Live update broadcasting (same as collections) |
+| `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` |
 
 ## Database Table
 
@@ -45,6 +48,9 @@ Globals always have `created_at` and `updated_at` timestamp columns.
 | CRUD operations | find, find_by_id, create, update, delete | get, update |
 | Timestamps | Optional (`timestamps = true`) | Always enabled |
 | Auth / Upload | Supported | Not supported |
+| Versions | Supported | Supported |
+| Live updates | Supported | Supported |
+| MCP | Supported | Supported |
 
 ## Lua API
 

@@ -7,6 +7,7 @@ use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
 use crap_cms::db::{migrate, ops, pool, query};
+use serde_json::json;
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -20,7 +21,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -661,8 +662,8 @@ fn seed_filterable_products(
 
     // Block rows for product 1
     let blocks1 = vec![
-        serde_json::json!({"_block_type": "text", "body": "Widget description here"}),
-        serde_json::json!({"_block_type": "image", "url": "/widget.png", "alt": "Widget photo"}),
+        json!({"_block_type": "text", "body": "Widget description here"}),
+        json!({"_block_type": "image", "url": "/widget.png", "alt": "Widget photo"}),
     ];
     query::set_block_rows(&tx, "products", "content", &id1, &blocks1, None).unwrap();
 
@@ -713,7 +714,7 @@ fn seed_filterable_products(
     .unwrap();
 
     let blocks2 = vec![
-        serde_json::json!({"_block_type": "section", "heading": "About Gadget", "meta": {"author": "Alice"}}),
+        json!({"_block_type": "section", "heading": "About Gadget", "meta": {"author": "Alice"}}),
     ];
     query::set_block_rows(&tx2, "products", "content", &id2, &blocks2, None).unwrap();
 

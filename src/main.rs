@@ -1,19 +1,24 @@
 //! CLI entrypoint for Crap CMS. Parses flags, loads config, and starts the admin + gRPC servers.
 //!
 //! Subcommands: `serve`, `status`, `user`, `make`, `blueprint`, `db`, `typegen`, `proto`,
-//! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`.
+//! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`, `trash`,
+//! `logs`, `mcp`.
 //! Running bare `crap-cms` prints help.
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use dialoguer::Select;
+use std::path::{Path, PathBuf};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crap_cms::{
     cli::{self, crap_theme},
     commands::{
-        self, BlueprintAction, DbAction, ImagesAction, JobsAction, MakeAction, MigrateAction,
-        TemplatesAction, UserAction, serve::ServeMode,
+        self, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
+        MigrateAction, TemplatesAction, TrashAction, UserAction, serve::ServeMode,
     },
+    config::{CrapConfig, LogRotation},
 };
 
 #[derive(Parser)]
@@ -36,8 +41,20 @@ enum Command {
     /// Start the admin UI and gRPC servers
     Serve {
         /// Run in the background (detached)
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with_all = ["stop", "restart", "status"])]
         detach: bool,
+
+        /// Stop a running detached instance
+        #[arg(long, conflicts_with_all = ["detach", "restart", "status"])]
+        stop: bool,
+
+        /// Restart a running detached instance (stop + start)
+        #[arg(long, conflicts_with_all = ["detach", "stop", "status"])]
+        restart: bool,
+
+        /// Show status of a detached instance
+        #[arg(long, conflicts_with_all = ["detach", "stop", "restart"])]
+        status: bool,
 
         /// Output logs as structured JSON (for log aggregation)
         #[arg(long)]
@@ -179,8 +196,28 @@ enum Command {
         action: ImagesAction,
     },
 
+    /// Manage soft-deleted documents (trash)
+    Trash {
+        #[command(subcommand)]
+        action: TrashAction,
+    },
+
     /// Start the MCP (Model Context Protocol) server (stdio transport)
     Mcp,
+
+    /// View and manage log files
+    Logs {
+        /// Follow log output in real time
+        #[arg(short, long)]
+        follow: bool,
+
+        /// Number of lines to show (default: 100)
+        #[arg(short = 'n', long, default_value = "100")]
+        lines: usize,
+
+        #[command(subcommand)]
+        action: Option<LogsAction>,
+    },
 }
 
 #[cfg(not(tarpaulin_include))] // binary entrypoint — not unit-testable
@@ -196,39 +233,61 @@ async fn main() {
 
 #[cfg(not(tarpaulin_include))]
 async fn run(cli: Cli) -> Result<()> {
-    // Initialize tracing subscriber early so all commands get logging.
-    // RUST_LOG env overrides. Default: crap_cms=debug for serve, info for others.
     let use_json = matches!(&cli.command, Command::Serve { json: true, .. })
         || std::env::var("CRAP_LOG_FORMAT")
             .map(|v| v == "json")
             .unwrap_or(false);
 
+    let is_serve = matches!(&cli.command, Command::Serve { .. });
+
+    // _CRAP_DETACHED is set by detach() on the child process.
+    let is_detached_child = std::env::var("_CRAP_DETACHED").is_ok();
+
     let default_filter = match &cli.command {
         Command::Serve { .. } => "crap_cms=debug,info",
         _ => "crap_cms=error",
     };
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
-
-    if use_json {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(env_filter)
-            .init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    }
 
     let config_flag = cli.config;
+
+    // For serve: load config before tracing init so we can set up file logging.
+    // Config will be loaded again inside serve::run() — this is intentional and cheap.
+    let serve_logging = if is_serve {
+        let config_dir = commands::resolve_config_dir(config_flag.clone())?;
+        let mut config = CrapConfig::load(&config_dir)?;
+
+        // Auto-enable file logging for detached mode — stdout/stderr go to /dev/null.
+        if is_detached_child && !config.logging.file {
+            config.logging.file = true;
+        }
+
+        Some((config_dir, config.logging))
+    } else {
+        None
+    };
+
+    let _guard = init_logging(use_json, default_filter, serve_logging.as_ref());
 
     match cli.command {
         Command::Serve {
             detach,
+            stop,
+            restart,
+            status,
             only,
             no_scheduler,
             ..
         } => {
             let config = commands::resolve_config_dir(config_flag)?;
+            if stop {
+                return commands::serve::stop(&config);
+            }
+            if status {
+                return commands::serve::status(&config);
+            }
+            if restart {
+                return commands::serve::restart(&config, only, no_scheduler);
+            }
             if detach {
                 return commands::serve::detach(&config, only, no_scheduler);
             }
@@ -256,7 +315,6 @@ async fn run(cli: Cli) -> Result<()> {
                 let name = match name {
                     Some(n) => n,
                     None => {
-                        use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
 
                         if names.is_empty() {
@@ -279,7 +337,6 @@ async fn run(cli: Cli) -> Result<()> {
                 let name = match name {
                     Some(n) => n,
                     None => {
-                        use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
 
                         if names.is_empty() {
@@ -355,9 +412,124 @@ async fn run(cli: Cli) -> Result<()> {
             let config = commands::resolve_config_dir(config_flag)?;
             commands::images::run(&config, action)
         }
+        Command::Trash { action } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::trash::run(action, &config)
+        }
         Command::Mcp => {
             let config = commands::resolve_config_dir(config_flag)?;
             commands::mcp::run(&config).await
         }
+        Command::Logs {
+            follow,
+            lines,
+            action,
+        } => {
+            let config_dir = commands::resolve_config_dir(config_flag)?;
+            commands::logs::run(&config_dir, action, follow, lines)
+        }
+    }
+}
+
+/// Initialize the tracing subscriber with stdout and optional file logging.
+///
+/// Returns an optional `WorkerGuard` that must be kept alive for the process
+/// lifetime to ensure all buffered log entries are flushed to the file.
+#[cfg(not(tarpaulin_include))]
+fn init_logging(
+    use_json: bool,
+    default_filter: &str,
+    serve_logging: Option<&(PathBuf, crap_cms::config::LoggingConfig)>,
+) -> Option<WorkerGuard> {
+    use tracing_subscriber::Registry;
+
+    type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>;
+
+    let mut guard = None;
+    let mut layers: Vec<BoxedLayer> = Vec::new();
+
+    // Stdout layer.
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
+
+    if use_json {
+        layers.push(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_filter(env_filter)
+                .boxed(),
+        );
+    } else {
+        layers.push(
+            tracing_subscriber::fmt::layer()
+                .with_filter(env_filter)
+                .boxed(),
+        );
+    }
+
+    // File layer (only when file logging is enabled for serve).
+    if let Some((config_dir, logging)) = serve_logging
+        && logging.file
+        && let Some(file_layer) = build_file_layer(config_dir, logging, use_json, &mut guard)
+    {
+        layers.push(file_layer);
+    }
+
+    tracing_subscriber::registry().with(layers).init();
+    guard
+}
+
+/// Build the file logging layer with rotation and non-blocking writes.
+#[cfg(not(tarpaulin_include))]
+fn build_file_layer(
+    config_dir: &Path,
+    logging: &crap_cms::config::LoggingConfig,
+    use_json: bool,
+    guard: &mut Option<WorkerGuard>,
+) -> Option<Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>> {
+    let p = Path::new(&logging.path);
+    let log_dir = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        config_dir.join(p)
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "Failed to create log directory {}: {}",
+            log_dir.display(),
+            e
+        );
+        return None;
+    }
+
+    let appender = match logging.rotation {
+        LogRotation::Hourly => tracing_appender::rolling::hourly(&log_dir, "crap-cms.log"),
+        LogRotation::Daily => tracing_appender::rolling::daily(&log_dir, "crap-cms.log"),
+        LogRotation::Never => tracing_appender::rolling::never(&log_dir, "crap-cms.log"),
+    };
+
+    let (non_blocking, file_guard) = tracing_appender::non_blocking(appender);
+    *guard = Some(file_guard);
+
+    let file_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("crap_cms=debug,info"));
+
+    if use_json {
+        Some(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(non_blocking)
+                .with_filter(file_filter)
+                .boxed(),
+        )
+    } else {
+        Some(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(non_blocking)
+                .with_filter(file_filter)
+                .boxed(),
+        )
     }
 }

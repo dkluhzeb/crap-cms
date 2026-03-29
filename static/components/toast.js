@@ -9,7 +9,7 @@
  * listeners via connectedCallback/disconnectedCallback.
  *
  * @example HTML:  <crap-toast></crap-toast>
- * @example JS:    window.CrapToast.show('Item created', 'success');
+ * @example JS:    document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: 'Item created', type: 'success' } }));
  * @example Header: X-Crap-Toast: {"message": "Saved", "type": "success"}
  */
 class CrapToast extends HTMLElement {
@@ -37,13 +37,13 @@ class CrapToast extends HTMLElement {
           font-family: inherit;
           font-size: var(--text-base, 0.875rem);
           font-weight: 500;
-          color: #fff;
-          background: #1f2937;
+          color: var(--text-on-primary, #fff);
+          background: var(--bg-elevated, #1f2937);
           box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.15));
           pointer-events: auto;
           cursor: pointer;
           animation: toast-in 0.3s ease forwards;
-          max-width: 380px;
+          max-width: 23.75rem;
         }
         .toast.removing {
           animation: toast-out 0.25s ease forwards;
@@ -133,22 +133,3 @@ class CrapToast extends HTMLElement {
 }
 
 customElements.define('crap-toast', CrapToast);
-
-/**
- * Global toast API.
- * Dispatches a CustomEvent that the connected <crap-toast> instance handles.
- * @namespace
- */
-window.CrapToast = {
-  /**
-   * @param {string} message
-   * @param {'success' | 'error' | 'info'} [type='info']
-   * @param {number} [duration=3000]
-   * @returns {void}
-   */
-  show(message, type = 'info', duration = 3000) {
-    document.dispatchEvent(new CustomEvent('crap:toast', {
-      detail: { message, type, duration },
-    }));
-  },
-};

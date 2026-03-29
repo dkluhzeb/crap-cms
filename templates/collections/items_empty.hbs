@@ -1,3 +1,14 @@
+{{#if is_trash}}
+<div class="empty-state">
+  <span class="material-symbols-outlined empty-state__icon">delete</span>
+  <p>{{t "trash_empty"}}</p>
+  <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
+    hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
+    <span class="material-symbols-outlined">arrow_back</span>
+    {{t "back_to_list"}}
+  </a>
+</div>
+{{else}}
 <div class="empty-state">
   <span class="material-symbols-outlined empty-state__icon">folder_open</span>
   <p>{{t "no_items_yet" name=collection.display_name}}</p>
@@ -8,3 +19,4 @@
     {{t "create"}} {{collection.singular_name}}
   </a>
 </div>
+{{/if}}

@@ -6,14 +6,10 @@
   {{#if upload.preview}}
   <crap-focal-point class="upload-section__preview"
     data-focal-x="{{upload.focal_x}}"
-    data-focal-y="{{upload.focal_y}}">
-    <div class="focal-point">
-      <img src="{{upload.preview}}" alt="Current file" />
-      <div class="focal-point__marker"></div>
-    </div>
+    data-focal-y="{{upload.focal_y}}"
+    data-src="{{upload.preview}}">
     <input type="hidden" name="focal_x" value="{{upload.focal_x}}" />
     <input type="hidden" name="focal_y" value="{{upload.focal_y}}" />
-    <p class="focal-point__hint">{{t "focal_point_hint"}}</p>
   </crap-focal-point>
   {{/if}}
   {{#if upload.info}}

@@ -1,18 +1,18 @@
 //! Migration tracking: list, record, remove, and manage migration files.
 
 use anyhow::{Context as _, Result};
-use std::collections::HashSet;
+use std::{collections::HashSet, fs, path::Path};
 
 use crate::db::migrate::helpers::table_exists;
 use crate::db::{DbConnection, DbPool, DbValue};
 
 /// List all `*.lua` files in the migrations directory, sorted by filename (chronological).
-pub fn list_migration_files(migrations_dir: &std::path::Path) -> Result<Vec<String>> {
+pub fn list_migration_files(migrations_dir: &Path) -> Result<Vec<String>> {
     if !migrations_dir.exists() {
         return Ok(Vec::new());
     }
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(migrations_dir)
+    for entry in fs::read_dir(migrations_dir)
         .with_context(|| format!("Failed to read {}", migrations_dir.display()))?
     {
         let entry = entry?;
@@ -65,10 +65,7 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
 }
 
 /// Get pending migration filenames (files on disk minus already applied), sorted ascending.
-pub fn get_pending_migrations(
-    pool: &DbPool,
-    migrations_dir: &std::path::Path,
-) -> Result<Vec<String>> {
+pub fn get_pending_migrations(pool: &DbPool, migrations_dir: &Path) -> Result<Vec<String>> {
     let all = list_migration_files(migrations_dir)?;
     let applied = get_applied_migrations(pool)?;
     Ok(all.into_iter().filter(|f| !applied.contains(f)).collect())

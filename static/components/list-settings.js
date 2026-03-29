@@ -7,7 +7,6 @@
  * @module list-settings
  */
 
-import { getDrawer } from './drawer.js';
 import { t } from './i18n.js';
 
 /**
@@ -29,11 +28,11 @@ const OPS_BY_TYPE = {
 
 class CrapListSettings extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     /** @type {boolean} */
     this._searchWasActive = false;
-
-    // Measure the sticky header wrapper so thead can use the same top offset
-    this._measureStickyHeader();
 
     // Click delegation for toolbar actions
     this.addEventListener('click', (e) => {
@@ -65,33 +64,11 @@ class CrapListSettings extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._connected = false;
     document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     document.removeEventListener('htmx:afterSettle', this._onAfterSettle);
-    if (this._resizeObserver) this._resizeObserver.disconnect();
   }
 
-  /**
-   * Measure `.list-sticky-header` and set `--list-header-height` on this element
-   * so sticky `<thead>` rows know their correct `top` offset.
-   *
-   * The wrapper has `top: var(--header-height)`, negative margin-top pulling it
-   * into the main padding, and padding-top restoring spacing. The thead should
-   * stick right at the wrapper's bottom edge when stuck. We compute:
-   *   top(thead) = top(wrapper) + height(wrapper) - margin-top(wrapper)
-   * which equals `header-height + content-height + padding-top`.
-   */
-  _measureStickyHeader() {
-    const wrapper = this.querySelector('crap-sticky-header');
-    if (!wrapper) return;
-    const update = () => {
-      const top = parseFloat(getComputedStyle(wrapper).getPropertyValue('top')) || 0;
-      const h = wrapper.getBoundingClientRect().height;
-      this.style.setProperty('--list-header-height', `${top + h}px`);
-    };
-    update();
-    this._resizeObserver = new ResizeObserver(update);
-    this._resizeObserver.observe(wrapper);
-  }
 
   /** @returns {string|null} */
   get _slug() {
@@ -109,7 +86,9 @@ class CrapListSettings extends HTMLElement {
     /** @type {Array<{key: string, label: string, selected: boolean}>} */
     const options = JSON.parse(island.textContent || '[]');
 
-    const drawer = getDrawer();
+    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    document.dispatchEvent(drawerEvt);
+    const drawer = drawerEvt.detail.instance;
     drawer.open({ title: t('columns') });
 
     const body = drawer.body;
@@ -159,10 +138,8 @@ class CrapListSettings extends HTMLElement {
       );
       const columns = Array.from(checked).map((cb) => cb.value).join(',');
 
-      const csrfCookie = document.cookie.split(';')
-        .map((c) => c.trim())
-        .find((c) => c.startsWith('crap_csrf='));
-      const csrf = csrfCookie ? csrfCookie.split('=')[1] : '';
+      const csrfMatch = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
+      const csrf = csrfMatch ? csrfMatch[1] : '';
 
       try {
         const resp = await fetch(`/admin/api/user-settings/${slug}`, {
@@ -196,7 +173,9 @@ class CrapListSettings extends HTMLElement {
 
     const existing = this._parseCurrentFilters();
 
-    const drawer = getDrawer();
+    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    document.dispatchEvent(drawerEvt);
+    const drawer = drawerEvt.detail.instance;
     drawer.open({ title: t('filters') });
 
     const body = drawer.body;
@@ -324,8 +303,11 @@ class CrapListSettings extends HTMLElement {
       // Add new filters
       const filterRows = rows.querySelectorAll('.filter-builder__row');
       for (const row of filterRows) {
-        const field = /** @type {HTMLSelectElement} */ (row.querySelector('.filter-builder__field')).value;
-        const op = /** @type {HTMLSelectElement} */ (row.querySelector('.filter-builder__op')).value;
+        const fieldEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__field'));
+        const opEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__op'));
+        if (!fieldEl || !opEl) continue;
+        const field = fieldEl.value;
+        const op = opEl.value;
         const valueEl = row.querySelector('[name="filter-value"]');
         const value = valueEl ? /** @type {HTMLInputElement} */ (valueEl).value : '';
         url.searchParams.append(`where[${field}][${op}]`, value);

@@ -6,6 +6,7 @@ use crap_cms::core::Document;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/override_access")
@@ -36,11 +37,9 @@ fn setup() -> (
 
 fn make_user(id: &str, role: &str) -> Document {
     let mut doc = Document::new(id.to_string());
-    doc.fields.insert("role".into(), serde_json::json!(role));
-    doc.fields.insert(
-        "email".into(),
-        serde_json::json!(format!("{}@test.com", id)),
-    );
+    doc.fields.insert("role".into(), json!(role));
+    doc.fields
+        .insert("email".into(), json!(format!("{}@test.com", id)));
     doc
 }
 
@@ -79,7 +78,7 @@ fn seed_items(
 // ── find ────────────────────────────────────────────────────────────────────
 
 #[test]
-fn find_override_access_true_returns_all() {
+fn find_explicit_override_access_true_returns_all() {
     let (_tmp, pool, registry, runner) = setup();
     seed_items(&pool, &registry);
 
@@ -87,11 +86,11 @@ fn find_override_access_true_returns_all() {
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local r = crap.collections.find("items")
+        local r = crap.collections.find("items", { overrideAccess = true })
         return tostring(r.pagination.totalDocs)
         "#,
             &conn,
-            None, // no user — doesn't matter when overrideAccess=true (default)
+            None, // no user — doesn't matter when overrideAccess=true
         )
         .unwrap();
 
@@ -334,14 +333,14 @@ fn find_by_id_override_access_false_anonymous_denied() {
 // ── create ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn create_override_access_true_works_without_user() {
+fn create_explicit_override_access_true_works_without_user() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let conn = pool.get().unwrap();
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local doc = crap.collections.create("items", { title = "Test" })
+        local doc = crap.collections.create("items", { title = "Test" }, { overrideAccess = true })
         return doc.id
         "#,
             &conn,
@@ -351,7 +350,7 @@ fn create_override_access_true_works_without_user() {
 
     assert!(
         !result.is_empty(),
-        "create with default overrideAccess should work"
+        "create with explicit overrideAccess=true should work"
     );
 }
 
@@ -550,14 +549,14 @@ fn update_override_access_false_admin_updates_all_fields() {
 // ── delete ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn delete_override_access_true_works_without_user() {
+fn delete_explicit_override_access_true_works_without_user() {
     let (_tmp, pool, registry, runner) = setup();
     let ids = seed_items(&pool, &registry);
 
     let conn = pool.get().unwrap();
     let code = format!(
         r#"
-        crap.collections.delete("items", "{}")
+        crap.collections.delete("items", "{}", {{ overrideAccess = true }})
         return "OK"
         "#,
         ids[0]
@@ -656,11 +655,11 @@ fn user_context_none_when_no_user_provided() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let conn = pool.get().unwrap();
-    // Create with overrideAccess=true works without user
+    // Create with explicit overrideAccess=true works without user
     let result = runner
         .eval_lua_with_conn(
             r#"
-        local doc = crap.collections.create("items", { title = "No User" })
+        local doc = crap.collections.create("items", { title = "No User" }, { overrideAccess = true })
         return doc.id
         "#,
             &conn,
@@ -669,10 +668,10 @@ fn user_context_none_when_no_user_provided() {
         .unwrap();
     assert!(!result.is_empty());
 
-    // But overrideAccess=false without user is denied (authenticated required)
+    // Default overrideAccess=false without user is denied (authenticated required)
     let result = runner.eval_lua_with_conn(
         r#"
-        local doc = crap.collections.create("items", { title = "No User" }, { overrideAccess = false })
+        local doc = crap.collections.create("items", { title = "No User" })
         return doc.id
         "#,
         &conn,
@@ -710,26 +709,25 @@ fn user_context_propagated_correctly() {
 // ── default behavior: backward compatible ───────────────────────────────────
 
 #[test]
-fn default_override_access_is_true() {
+fn default_override_access_is_false() {
     let (_tmp, pool, registry, runner) = setup();
     seed_items(&pool, &registry);
 
     let conn = pool.get().unwrap();
-    // Without specifying overrideAccess at all, should behave as true
-    let result = runner
-        .eval_lua_with_conn(
-            r#"
+    // Without specifying overrideAccess at all, should enforce access control.
+    // With no user provided, anonymous access is denied.
+    let result = runner.eval_lua_with_conn(
+        r#"
         local r = crap.collections.find("items", {})
         return tostring(r.pagination.totalDocs)
         "#,
-            &conn,
-            None, // no user, but default overrideAccess=true means no check
-        )
-        .unwrap();
+        &conn,
+        None, // no user — default overrideAccess=false means access check runs
+    );
 
-    assert_eq!(
-        result, "3",
-        "default (no overrideAccess specified) should bypass access control"
+    assert!(
+        result.is_err(),
+        "default (no overrideAccess specified) should enforce access control"
     );
 }
 

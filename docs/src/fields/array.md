@@ -33,7 +33,7 @@ crap.fields.array({
 
 ## Sub-Fields
 
-Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.) but do not support nested arrays or relationships.
+Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.). Has-one relationships are supported (stored as a TEXT column in the join table). Nested arrays (array inside array) are **not** supported.
 
 ### Layout Wrappers in Sub-Fields
 

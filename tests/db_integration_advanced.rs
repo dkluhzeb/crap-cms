@@ -7,6 +7,7 @@ use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
 use crap_cms::db::{migrate, ops, pool, query};
+use serde_json::json;
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -20,7 +21,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -250,10 +251,8 @@ fn checkbox_default_when_field_missing() {
 #[test]
 fn apply_select_keeps_id() {
     let mut doc = crap_cms::core::Document::new("test-id".to_string());
-    doc.fields
-        .insert("title".to_string(), serde_json::json!("Test"));
-    doc.fields
-        .insert("body".to_string(), serde_json::json!("Content"));
+    doc.fields.insert("title".to_string(), json!("Test"));
+    doc.fields.insert("body".to_string(), json!("Content"));
     doc.created_at = Some("2024-01-01".to_string());
 
     query::apply_select_to_document(&mut doc, &["title".to_string()]);
@@ -266,13 +265,10 @@ fn apply_select_keeps_id() {
 fn apply_select_group_prefix() {
     let mut doc = crap_cms::core::Document::new("test-id".to_string());
     doc.fields
-        .insert("seo__title".to_string(), serde_json::json!("SEO Title"));
-    doc.fields.insert(
-        "seo__description".to_string(),
-        serde_json::json!("SEO Desc"),
-    );
+        .insert("seo__title".to_string(), json!("SEO Title"));
     doc.fields
-        .insert("other".to_string(), serde_json::json!("Other"));
+        .insert("seo__description".to_string(), json!("SEO Desc"));
+    doc.fields.insert("other".to_string(), json!("Other"));
 
     query::apply_select_to_document(&mut doc, &["seo".to_string()]);
     assert!(doc.fields.contains_key("seo__title"));
@@ -853,7 +849,7 @@ fn migrate_default_value_with_quotes() {
     def.fields = vec![
         make_field("title", FieldType::Text),
         FieldDefinition::builder("publisher", FieldType::Text)
-            .default_value(serde_json::json!("O'Reilly"))
+            .default_value(json!("O'Reilly"))
             .build(),
     ];
     {

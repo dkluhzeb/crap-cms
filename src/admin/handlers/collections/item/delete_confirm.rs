@@ -9,15 +9,15 @@ use crate::{
     core::auth::{AuthUser, Claims},
     db::{
         ops::find_document_by_id,
-        query::{AccessResult, find_back_references},
+        query::{self, AccessResult},
     },
 };
 
 use axum::{
-    Extension,
+    Extension, Json,
     extract::{Path, State},
     http::HeaderMap,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde_json::json;
 use tracing::warn;
@@ -72,25 +72,26 @@ pub async fn delete_confirm(
         }
     };
 
-    // Scan for back-references
-    let back_refs = state
+    // Fast O(1) ref count check instead of full back-reference scan
+    let ref_count = state
         .pool
         .get()
         .ok()
-        .map(|conn| find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale))
-        .unwrap_or_default();
+        .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
+        .unwrap_or(0);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionDelete, "delete_name")
         .page_title_name(def.singular_name())
         .collection_def(&def)
         .set("document_id", json!(id))
         .set("title_value", json!(title_value))
-        .set("back_references", json!(back_refs))
+        .set("ref_count", json!(ref_count))
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
@@ -101,4 +102,20 @@ pub async fn delete_confirm(
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/delete", &data)
+}
+
+/// GET /admin/collections/{slug}/{id}/back-references — lazy-load detailed back-references
+pub async fn back_references(
+    State(state): State<AdminState>,
+    Path((slug, id)): Path<(String, String)>,
+) -> Response {
+    let conn = match state.pool.get() {
+        Ok(c) => c,
+        Err(_) => return Json(json!({ "error": "DB connection error" })).into_response(),
+    };
+
+    let back_refs =
+        query::find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale);
+
+    Json(json!(back_refs)).into_response()
 }

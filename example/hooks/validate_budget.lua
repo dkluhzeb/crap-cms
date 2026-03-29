@@ -7,12 +7,17 @@ return function(value, context)
     return value
   end
 
-  local max_budget = crap.config.get("crap.max_budget") or 500000
-  if value > max_budget then
+  local num = tonumber(value)
+  if not num then
+    return value
+  end
+
+  local max_budget = tonumber(crap.env.get("CRAP_MAX_BUDGET")) or 500000
+  if num > max_budget then
     error(string.format("Budget cannot exceed %d", max_budget))
   end
 
-  if value < 0 then
+  if num < 0 then
     error("Budget cannot be negative")
   end
 

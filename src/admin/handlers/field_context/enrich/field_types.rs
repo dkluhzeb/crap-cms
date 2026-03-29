@@ -66,22 +66,31 @@ pub(super) fn sub_select_radio(sub_ctx: &mut Value, sf: &FieldDefinition, val: &
 }
 
 /// Enrich a Date sub-field context.
-pub(super) fn sub_date(sub_ctx: &mut Value, sf: &FieldDefinition, val: &str) {
+pub(super) fn sub_date(sub_ctx: &mut Value, sf: &FieldDefinition, val: &str, tz_value: &str) {
     let appearance = sf.picker_appearance.as_deref().unwrap_or("dayOnly");
 
     sub_ctx["picker_appearance"] = json!(appearance);
 
+    // Convert UTC back to local time for display if timezone is stored
+    let display_value = if !tz_value.is_empty() && !val.is_empty() {
+        crate::db::query::helpers::utc_to_local(val, tz_value).unwrap_or_else(|| val.to_string())
+    } else {
+        val.to_string()
+    };
+
     match appearance {
         "dayOnly" => {
-            let date_val = if val.len() >= 10 { &val[..10] } else { val };
+            let date_val = display_value.get(..10).unwrap_or(&display_value);
             sub_ctx["date_only_value"] = json!(date_val);
         }
         "dayAndTime" => {
-            let dt_val = if val.len() >= 16 { &val[..16] } else { val };
+            let dt_val = display_value.get(..16).unwrap_or(&display_value);
             sub_ctx["datetime_local_value"] = json!(dt_val);
         }
         _ => {}
     }
+
+    crate::admin::handlers::field_context::add_timezone_context(sub_ctx, sf, tz_value, "");
 }
 
 /// Enrich a Relationship sub-field context.
@@ -138,7 +147,7 @@ pub(super) fn sub_array(
             .enumerate()
             .map(|(nested_idx, nested_row)| {
                 let nested_row_obj = nested_row.as_object();
-                let nested_sub_values: Vec<_> = sf
+                let mut nested_sub_values: Vec<_> = sf
                     .fields
                     .iter()
                     .map(|nested_sf| {
@@ -160,6 +169,12 @@ pub(super) fn sub_array(
                         )
                     })
                     .collect();
+
+                crate::admin::handlers::field_context::inject_timezone_values_from_row(
+                    &mut nested_sub_values,
+                    &sf.fields,
+                    nested_row_obj,
+                );
 
                 let row_has_errors = nested_sub_values
                     .iter()
@@ -251,7 +266,7 @@ pub(super) fn sub_blocks(
 
                 let block_def = sf.blocks.iter().find(|bd| bd.block_type == block_type);
 
-                let nested_sub_values: Vec<_> = block_def
+                let mut nested_sub_values: Vec<_> = block_def
                     .map(|bd| {
                         bd.fields
                             .iter()
@@ -276,6 +291,14 @@ pub(super) fn sub_blocks(
                             .collect()
                     })
                     .unwrap_or_default();
+
+                if let Some(bd) = block_def {
+                    crate::admin::handlers::field_context::inject_timezone_values_from_row(
+                        &mut nested_sub_values,
+                        &bd.fields,
+                        nested_row_obj,
+                    );
+                }
 
                 let row_has_errors = nested_sub_values
                     .iter()
@@ -478,6 +501,20 @@ pub(super) fn sub_group(
                         .depth(depth + 1)
                         .build();
                     apply_field_type_extras(nested_sf, &nested_val, &mut nested_ctx, &extras_ctx);
+
+                    // Inject stored timezone value from parent group data for Date fields
+                    if nested_sf.field_type == FieldType::Date && nested_sf.timezone {
+                        let tz_key = format!("{}_tz", nested_sf.name);
+                        let tz_val = group_obj
+                            .and_then(|v| v.as_object())
+                            .and_then(|m| m.get(&tz_key))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        if !tz_val.is_empty() {
+                            nested_ctx["timezone_value"] = json!(tz_val);
+                        }
+                    }
                 }
             }
 

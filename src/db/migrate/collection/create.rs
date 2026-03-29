@@ -23,39 +23,53 @@ pub fn create_collection_table(
     for spec in &collect_column_specs(&def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
-                let mut col = format!(
-                    "{} {}",
-                    col_name,
+                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col_type = if spec.companion_text {
+                    "TEXT"
+                } else {
                     conn.column_type_for(&spec.field.field_type)
-                );
+                };
+                let mut col = format!("{} {}", col_name, col_type);
 
-                if spec.field.required
-                    && *locale == locale_config.default_locale
-                    && !def.has_drafts()
-                {
-                    col.push_str(" NOT NULL");
+                if !spec.companion_text {
+                    if spec.field.required
+                        && *locale == locale_config.default_locale
+                        && !def.has_drafts()
+                    {
+                        col.push_str(" NOT NULL");
+                    }
+                    // Skip inline UNIQUE for soft-delete collections — a partial
+                    // unique index (WHERE _deleted_at IS NULL) is created instead
+                    // by sync_indexes so that deleted rows don't block new inserts.
+                    if spec.field.unique && !def.soft_delete {
+                        col.push_str(" UNIQUE");
+                    }
+                    append_default_value(
+                        &mut col,
+                        &spec.field.default_value,
+                        &spec.field.field_type,
+                    );
                 }
-                if spec.field.unique {
-                    col.push_str(" UNIQUE");
-                }
-                append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
                 columns.push(col);
             }
         } else {
-            let mut col = format!(
-                "{} {}",
-                spec.col_name,
+            let col_type = if spec.companion_text {
+                "TEXT"
+            } else {
                 conn.column_type_for(&spec.field.field_type)
-            );
+            };
+            let mut col = format!("{} {}", spec.col_name, col_type);
 
-            if spec.field.required && !def.has_drafts() {
-                col.push_str(" NOT NULL");
+            if !spec.companion_text {
+                if spec.field.required && !def.has_drafts() {
+                    col.push_str(" NOT NULL");
+                }
+                // Skip inline UNIQUE for soft-delete collections (see above).
+                if spec.field.unique && !def.soft_delete {
+                    col.push_str(" UNIQUE");
+                }
+                append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
             }
-            if spec.field.unique {
-                col.push_str(" UNIQUE");
-            }
-            append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
             columns.push(col);
         }
     }
@@ -65,6 +79,14 @@ pub fn create_collection_table(
         columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
     }
 
+    // Soft-delete collections get a _deleted_at column
+    if def.soft_delete {
+        columns.push("_deleted_at TEXT".to_string());
+    }
+
+    // All collections get a reference count for delete protection
+    columns.push("_ref_count INTEGER NOT NULL DEFAULT 0".to_string());
+
     // Auth collections get hidden system columns (not regular fields)
     if def.is_auth_collection() {
         columns.push("_password_hash TEXT".to_string());
@@ -72,6 +94,7 @@ pub fn create_collection_table(
         columns.push("_reset_token_exp INTEGER".to_string());
         columns.push("_locked INTEGER DEFAULT 0".to_string());
         columns.push("_settings TEXT".to_string());
+        columns.push("_session_version INTEGER DEFAULT 0".to_string());
 
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
             columns.push("_verified INTEGER DEFAULT 0".to_string());
@@ -85,7 +108,7 @@ pub fn create_collection_table(
         columns.push(format!("updated_at {}", conn.timestamp_column_default()));
     }
 
-    let sql = format!("CREATE TABLE {} ({})", slug, columns.join(", "));
+    let sql = format!("CREATE TABLE \"{}\" ({})", slug, columns.join(", "));
 
     tracing::info!("Creating collection table: {}", slug);
     tracing::debug!("SQL: {}", sql);
@@ -103,6 +126,8 @@ pub fn append_default_value(
     field_type: &FieldType,
 ) {
     if let Some(default) = &default_value {
+        warn_default_type_mismatch(default, field_type);
+
         match default {
             Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
             Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
@@ -111,6 +136,28 @@ pub fn append_default_value(
         }
     } else if *field_type == FieldType::Checkbox {
         col.push_str(" DEFAULT 0");
+    }
+}
+
+/// Log a warning when a default value type obviously mismatches the field type.
+fn warn_default_type_mismatch(default: &Value, field_type: &FieldType) {
+    match (default, field_type) {
+        (Value::String(_), FieldType::Number | FieldType::Checkbox) => {
+            tracing::warn!(
+                "String default value on {:?} field — possible type mismatch",
+                field_type
+            );
+        }
+        (Value::Bool(_), FieldType::Text | FieldType::Textarea | FieldType::Email) => {
+            tracing::warn!(
+                "Bool default value on {:?} field — possible type mismatch",
+                field_type
+            );
+        }
+        (Value::Number(_), FieldType::Checkbox) => {
+            tracing::warn!("Number default value on Checkbox field — use a bool default instead");
+        }
+        _ => {}
     }
 }
 
@@ -170,6 +217,7 @@ mod tests {
         assert!(cols.contains("_reset_token_exp"));
         assert!(cols.contains("_locked"));
         assert!(cols.contains("_settings"));
+        assert!(cols.contains("_session_version"));
         assert!(cols.contains("_verified"));
         assert!(cols.contains("_verification_token"));
     }
@@ -747,5 +795,145 @@ mod tests {
         let mut col = "name TEXT".to_string();
         append_default_value(&mut col, &None, &FieldType::Text);
         assert!(!col.contains("DEFAULT"));
+    }
+
+    #[test]
+    fn soft_delete_collection_has_deleted_at_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("posts", vec![text_field("title")]);
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("_deleted_at"));
+    }
+
+    #[test]
+    fn non_soft_delete_collection_has_no_deleted_at_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(!cols.contains("_deleted_at"));
+    }
+
+    #[test]
+    fn create_date_field_with_timezone_creates_tz_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "events",
+            vec![
+                FieldDefinition::builder("starts_at", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "events", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at"), "should have main date column");
+        assert!(
+            cols.contains("starts_at_tz"),
+            "should have companion timezone column"
+        );
+    }
+
+    #[test]
+    fn create_date_field_without_timezone_has_no_tz_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "events",
+            vec![FieldDefinition::builder("starts_at", FieldType::Date).build()],
+        );
+        create_collection_table(&conn, "events", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at"));
+        assert!(
+            !cols.contains("starts_at_tz"),
+            "should NOT have timezone column when timezone is false"
+        );
+    }
+
+    #[test]
+    fn create_localized_date_with_timezone() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "events",
+            vec![
+                FieldDefinition::builder("starts_at", FieldType::Date)
+                    .timezone(true)
+                    .localized(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "events", &def, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at__en"));
+        assert!(cols.contains("starts_at__de"));
+        assert!(cols.contains("starts_at_tz__en"));
+        assert!(cols.contains("starts_at_tz__de"));
+    }
+
+    #[test]
+    fn soft_delete_unique_field_skips_inline_unique() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        // Insert two rows with the same slug — inline UNIQUE would block this,
+        // but we skipped it for soft-delete collections.
+        conn.execute(
+            "INSERT INTO posts (id, slug, _deleted_at) VALUES ('a', 'hello', '2025-01-01')",
+            &[],
+        )
+        .unwrap();
+        let result = conn.execute(
+            "INSERT INTO posts (id, slug, _deleted_at) VALUES ('b', 'hello', NULL)",
+            &[],
+        );
+        assert!(
+            result.is_ok(),
+            "Should allow duplicate slug when one row is soft-deleted"
+        );
+    }
+
+    #[test]
+    fn non_soft_delete_unique_field_keeps_inline_unique() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('a', 'hello')", &[])
+            .unwrap();
+        let result = conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[]);
+        assert!(
+            result.is_err(),
+            "Inline UNIQUE should block duplicate slug on non-soft-delete collection"
+        );
     }
 }

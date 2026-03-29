@@ -8,8 +8,8 @@ mod types;
 pub use batch::populate_relationships_batch_cached;
 pub(crate) use helpers::{document_to_json, parse_poly_ref};
 pub use single::populate_relationships_cached;
-pub(crate) use types::PopulateCtx;
-pub use types::{PopulateCache, PopulateContext, PopulateOpts};
+pub use types::{MAX_POPULATE_CACHE_SIZE, PopulateCache, PopulateContext, PopulateOpts};
+pub(crate) use types::{PopulateCtx, locale_cache_key};
 
 use anyhow::Result;
 use std::collections::HashSet;

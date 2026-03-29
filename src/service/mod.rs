@@ -12,7 +12,7 @@ mod persist;
 mod persist_options_builder;
 mod types;
 mod version_snapshot_ctx_builder;
-mod versions;
+pub(crate) mod versions;
 mod write_input_builder;
 
 pub(crate) use after_change_input_builder::AfterChangeInputBuilder;
@@ -21,7 +21,9 @@ pub(crate) use types::AfterChangeInput;
 pub use types::{PersistOptions, WriteInput, WriteResult};
 pub use write_input_builder::WriteInputBuilder;
 
-pub use collections::{create_document, delete_document, unpublish_document, update_document};
+pub use collections::{
+    create_document, delete_document, restore_document, unpublish_document, update_document,
+};
 pub use email::send_verification_email;
 pub use globals::update_global_document;
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};

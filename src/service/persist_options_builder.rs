@@ -1,4 +1,4 @@
-use crate::db::LocaleContext;
+use crate::{config::LocaleConfig, db::LocaleContext};
 
 use super::PersistOptions;
 
@@ -7,6 +7,7 @@ use super::PersistOptions;
 pub struct PersistOptionsBuilder<'a> {
     pub(super) password: Option<&'a str>,
     pub(super) locale_ctx: Option<&'a LocaleContext>,
+    pub(super) locale_config: Option<&'a LocaleConfig>,
     pub(super) is_draft: bool,
 }
 
@@ -25,6 +26,11 @@ impl<'a> PersistOptionsBuilder<'a> {
         self
     }
 
+    pub fn locale_config(mut self, locale_config: &'a LocaleConfig) -> Self {
+        self.locale_config = Some(locale_config);
+        self
+    }
+
     pub fn draft(mut self, is_draft: bool) -> Self {
         self.is_draft = is_draft;
         self
@@ -34,6 +40,7 @@ impl<'a> PersistOptionsBuilder<'a> {
         PersistOptions {
             password: self.password,
             locale_ctx: self.locale_ctx,
+            locale_config: self.locale_config,
             is_draft: self.is_draft,
         }
     }

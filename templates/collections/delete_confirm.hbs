@@ -1,15 +1,15 @@
-{{#if back_references}}
+{{#if ref_count}}
 <div class="card card--warning">
   <div class="card__body">
     <p><strong>{{t "delete_has_references"}}</strong></p>
-    <ul>
-      {{#each back_references}}
-      <li>
-        <strong>{{this.owner_label}}</strong> — {{this.count}} {{t "documents"}}
-        <span class="text--muted">({{this.field_label}})</span>
-      </li>
-      {{/each}}
-    </ul>
+    <p>{{t "referenced_by_count" count=ref_count}}</p>
+
+    <crap-back-refs slug="{{collection.slug}}" doc-id="{{document_id}}">
+      <button type="button" class="button button--ghost button--small">
+        {{t "show_details"}}
+      </button>
+    </crap-back-refs>
+
     <p class="text--muted">{{t "delete_references_warning"}}</p>
   </div>
 </div>
@@ -25,6 +25,12 @@
     {{/if}}
 
     <div class="form__actions">
+      {{#if ref_count}}
+      <button type="button" class="button button--danger" disabled
+        title="{{t "cannot_delete_referenced"}}">
+        {{t "delete"}}
+      </button>
+      {{else}}
       <crap-confirm message="{{t "confirm_delete_permanent" name=collection.singular_name}}">
         <form hx-delete="/admin/collections/{{collection.slug}}/{{document_id}}"
               action="/admin/collections/{{collection.slug}}/{{document_id}}"
@@ -34,6 +40,7 @@
           <button type="submit" class="button button--danger">{{t "delete"}}</button>
         </form>
       </crap-confirm>
+      {{/if}}
       <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
         hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
         {{t "cancel"}}

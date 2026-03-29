@@ -4,9 +4,11 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
+    fs,
     path::{Path, PathBuf},
 };
 
+use super::load_config_and_sync;
 use crate::{
     cli,
     config::CrapConfig,
@@ -23,7 +25,7 @@ pub fn export(
     collection_filter: Option<String>,
     output: Option<PathBuf>,
 ) -> Result<()> {
-    let (pool, registry) = super::load_config_and_sync(config_dir)?;
+    let (pool, registry) = load_config_and_sync(config_dir)?;
 
     let reg = registry
         .read()
@@ -72,7 +74,7 @@ pub fn export(
     match output {
         Some(path) => {
             let content = serde_json::to_string_pretty(&output_json)?;
-            std::fs::write(&path, content)
+            fs::write(&path, content)
                 .with_context(|| format!("Failed to write {}", path.display()))?;
             cli::success(&format!(
                 "Exported {} collection(s) to {}",
@@ -236,10 +238,10 @@ fn collect_import_columns(
 // Tested via CLI integration tests in tests/cli_integration.rs.
 #[cfg(not(tarpaulin_include))]
 pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>) -> Result<()> {
-    let (pool, registry) = super::load_config_and_sync(config_dir)?;
+    let (pool, registry) = load_config_and_sync(config_dir)?;
 
-    let content = std::fs::read_to_string(file)
-        .with_context(|| format!("Failed to read {}", file.display()))?;
+    let content =
+        fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
     let data: Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
     // Check version compatibility

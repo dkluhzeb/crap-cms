@@ -17,7 +17,7 @@
 /* Sticky table header on list pages — top offset set by JS (<crap-list-settings>) */
 crap-list-settings .table th {
   position: sticky;
-  top: var(--list-header-height, 0px);
+  top: var(--sticky-header-bottom, var(--header-height));
   z-index: 4;
   box-shadow: 0 -2px 0 var(--bg-body);
 }
@@ -32,7 +32,7 @@ crap-list-settings .table th {
 }
 
 .table td {
-  padding: 6px var(--space-md);
+  padding: var(--space-xs2) var(--space-md);
   border-bottom: 1px solid var(--border-color);
   font-size: var(--text-sm);
   vertical-align: middle;
@@ -74,7 +74,7 @@ crap-list-settings .table th {
 }
 
 .table__sort-icon {
-  font-size: 16px;
+  font-size: var(--icon-sm);
   color: var(--text-quaternary);
 }
 
@@ -82,7 +82,17 @@ crap-list-settings .table th {
   color: var(--color-primary);
 }
 
-@media (max-width: 768px) {
+/* Trash row action buttons */
+.items-row__actions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.items-row__actions form {
+  display: inline;
+}
+
+@media (max-width: 1024px) {
   .card {
     min-width: 0;
     overflow-x: auto;

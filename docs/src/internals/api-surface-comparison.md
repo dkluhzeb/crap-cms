@@ -46,7 +46,7 @@ This document compares the three API surfaces — **Admin UI**, **gRPC API**, an
 | before_delete (collection + registered) | Yes | Yes | Yes |
 | DB delete | Yes | Yes | Yes |
 | after_delete (collection + registered) | Yes | Yes | Yes |
-| Upload file cleanup | Yes | Yes | No |
+| Upload file cleanup | Yes | Yes | Yes |
 | Publish event | Yes | Yes | No (in-transaction) |
 
 ## FIND Lifecycle
@@ -84,7 +84,7 @@ This document compares the three API surfaces — **Admin UI**, **gRPC API**, an
 | Feature | Admin | gRPC | Lua CRUD | Reason |
 |---------|-------|------|----------|--------|
 | Event publishing | Yes | Yes | No | Lua runs inside the caller's transaction; event publishing is fire-and-forget after commit. The caller (admin/gRPC) publishes the event. |
-| Upload file cleanup on delete | Yes | Yes | No | File I/O after commit is caller responsibility. |
+| Upload file cleanup on delete | Yes | Yes | Yes | Lua CRUD reads ConfigDir from Lua app_data; admin/gRPC clean up after commit. |
 | Verification email on create | Yes | Yes | No | Email sending is async, post-commit. |
 | Locale from request | Yes | Yes | Explicit opt | Admin/gRPC infer from request; Lua passes explicitly via opts.locale. |
 | Default depth | Varies | Config | 0 | Lua defaults to 0 to avoid N+1 in hooks. Callers pass depth explicitly. |

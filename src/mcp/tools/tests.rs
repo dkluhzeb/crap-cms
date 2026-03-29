@@ -3,11 +3,14 @@ use std::{fs, path::Path};
 use super::*;
 use crate::{
     config::{CrapConfig, McpConfig},
-    core::{CollectionDefinition, DocumentId, collection::GlobalDefinition, document::Document},
+    core::{
+        CollectionDefinition, DocumentId, Registry, collection::GlobalDefinition,
+        document::Document,
+    },
     db::{migrate, pool, query},
     hooks::lifecycle::HookRunner,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 fn make_registry() -> Registry {
     let mut reg = Registry::new();
@@ -802,6 +805,104 @@ fn execute_tool_unknown_tool_errors() {
     assert!(err.to_string().contains("Unknown tool"));
 }
 
+// ── execute_tool: exclude_collections enforcement ─────────────────────
+
+#[test]
+fn execute_tool_excluded_collection_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    config.mcp.exclude_collections = vec!["posts".to_string()];
+
+    let shared = Registry::shared();
+    {
+        let mut reg = shared.write().unwrap();
+        reg.register_collection(CollectionDefinition::new("posts"));
+    }
+
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+    let registry = Registry::snapshot(&shared);
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(shared)
+        .config(&config)
+        .build()
+        .unwrap();
+
+    // An attacker who knows the slug "posts" tries to call find_posts directly
+    let err = execute_tool(
+        "find_posts",
+        &json!({ "limit": 10 }),
+        &db_pool,
+        &registry,
+        &runner,
+        tmp.path(),
+        &config,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("Tool not available"),
+        "Expected 'Tool not available' error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn execute_tool_included_collection_succeeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    // Only include "posts", exclude everything else implicitly
+    config.mcp.include_collections = vec!["posts".to_string()];
+
+    let shared = Registry::shared();
+    {
+        let mut reg = shared.write().unwrap();
+        reg.register_collection(CollectionDefinition::new("posts"));
+        reg.register_collection(CollectionDefinition::new("users"));
+    }
+
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+    let registry = Registry::snapshot(&shared);
+    let runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(shared)
+        .config(&config)
+        .build()
+        .unwrap();
+
+    // find_posts should work (included)
+    let result = execute_tool(
+        "find_posts",
+        &json!({}),
+        &db_pool,
+        &registry,
+        &runner,
+        tmp.path(),
+        &config,
+    );
+    assert!(result.is_ok(), "find_posts should succeed: {:?}", result);
+
+    // find_users should be blocked (not in include list)
+    let err = execute_tool(
+        "find_users",
+        &json!({}),
+        &db_pool,
+        &registry,
+        &runner,
+        tmp.path(),
+        &config,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("Tool not available"),
+        "Expected 'Tool not available' error for users, got: {}",
+        err
+    );
+}
+
 // ── parse_tool_name: update and delete ops ────────────────────────────
 
 #[test]
@@ -862,3 +963,6 @@ fn should_include_with_exclude_list() {
     assert!(should_include("posts", &config));
     assert!(!should_include("users", &config));
 }
+
+// NOTE: resolve_sort and build_find_result tests have been moved to
+// db::query::pagination_result::tests (unified PaginationResult builder).

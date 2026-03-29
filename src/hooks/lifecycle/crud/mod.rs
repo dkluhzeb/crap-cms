@@ -2,23 +2,25 @@
 
 mod delete;
 mod find;
-mod find_pagination_input_builder;
 mod globals;
 mod unpublish_ctx_builder;
 mod write;
 
 use anyhow::Result;
-use mlua::Lua;
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
-    config::LocaleConfig, core::SharedRegistry, db::DbConnection, hooks::lifecycle::TxContext,
+    config::{LocaleConfig, PaginationConfig},
+    core::SharedRegistry,
+    db::DbConnection,
+    hooks::lifecycle::TxContext,
 };
 
 /// Get the active transaction connection from Lua app_data.
 /// Returns an error if called outside of `run_hooks_with_conn`.
-pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const dyn DbConnection> {
+pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<*const dyn DbConnection> {
     let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
-        mlua::Error::RuntimeError(
+        RuntimeError(
             "crap.collections CRUD functions are only available inside hooks \
              with transaction context (before_change, before_delete, etc.)"
                 .into(),
@@ -36,10 +38,10 @@ pub(crate) fn register_crud_functions(
     lua: &Lua,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
-    pagination_config: &crate::config::PaginationConfig,
+    pagination_config: &PaginationConfig,
 ) -> Result<()> {
-    let crap: mlua::Table = lua.globals().get("crap")?;
-    let collections: mlua::Table = crap.get("collections")?;
+    let crap: Table = lua.globals().get("crap")?;
+    let collections: Table = crap.get("collections")?;
 
     find::register_find(
         lua,
@@ -51,16 +53,17 @@ pub(crate) fn register_crud_functions(
     find::register_find_by_id(lua, &collections, registry.clone(), locale_config)?;
     write::register_create(lua, &collections, registry.clone(), locale_config)?;
     write::register_update(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_delete(lua, &collections, registry.clone())?;
+    delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
+    delete::register_restore(lua, &collections, registry.clone())?;
     find::register_count(lua, &collections, registry.clone(), locale_config)?;
     delete::register_update_many(lua, &collections, registry.clone(), locale_config)?;
     delete::register_delete_many(lua, &collections, registry.clone(), locale_config)?;
 
-    let globals_table: mlua::Table = crap.get("globals")?;
+    let globals_table: Table = crap.get("globals")?;
     globals::register_globals_get(lua, &globals_table, registry.clone(), locale_config)?;
     globals::register_globals_update(lua, &globals_table, registry.clone(), locale_config)?;
 
-    let jobs: mlua::Table = crap.get("jobs")?;
+    let jobs: Table = crap.get("jobs")?;
     globals::register_jobs_queue(lua, &jobs, registry)?;
 
     Ok(())

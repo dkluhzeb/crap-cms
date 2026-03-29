@@ -15,7 +15,7 @@ Add an `[mcp]` section to `crap.toml`:
 enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
-api_key = ""                # API key for HTTP transport auth (empty = no auth)
+api_key = ""                # API key for HTTP auth (required when http = true)
 include_collections = []    # Whitelist (empty = all)
 exclude_collections = []    # Blacklist (takes precedence over include)
 ```
@@ -54,7 +54,9 @@ For Claude Desktop, add to your `claude_desktop_config.json`:
 When `mcp.http = true`, the admin server exposes a `POST /mcp` endpoint.
 Send JSON-RPC 2.0 requests as the request body.
 
-If `mcp.api_key` is set, requests must include an `Authorization: Bearer <key>` header.
+An `api_key` is **required** when HTTP transport is enabled. Requests must include
+an `Authorization: Bearer <key>` header. The server will refuse to start if
+`mcp.http = true` and `api_key` is empty.
 
 ## Auto-Generated Tools
 
@@ -124,14 +126,13 @@ return {
 ### Field level
 
 ```lua
-{
+crap.fields.select({
   name = "status",
-  type = "select",
   mcp = {
     description = "Publication status - controls visibility on the frontend",
   },
   options = { ... },
-}
+})
 ```
 
 If no `mcp.description` is set, the tool falls back to `admin.description`
@@ -157,10 +158,14 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 (equivalent to Lua's `overrideAccess = true`), gated by transport-level authentication:
 
 - **stdio:** Access is controlled by who can run the process.
-- **HTTP:** Access is controlled by the `api_key` setting. **Always set an API key
-  in production.** Without one, the `/mcp` endpoint is unauthenticated.
+- **HTTP:** Access is controlled by the `api_key` setting. An API key is **required**
+  when `http = true` — the server will refuse to start without one. As a defense-in-depth
+  measure, the HTTP endpoint also rejects all requests if the API key is somehow empty
+  at runtime.
 
-To restrict which collections are visible, use `include_collections` / `exclude_collections`.
+To restrict which collections are accessible, use `include_collections` /
+`exclude_collections`. These filters are enforced both in tool listing (`tools/list`)
+and at execution time, so knowing a collection slug is not enough to bypass the filter.
 
 All MCP write operations (create, update, delete) are logged at `info` level for
 audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC).
@@ -173,7 +178,7 @@ The MCP server also exposes read-only resources:
 |-----|-------------|
 | `crap://schema/collections` | Full schema of all collections as JSON |
 | `crap://schema/globals` | Full schema of all globals as JSON |
-| `crap://config` | Current configuration (secrets sanitized) |
+| `crap://config` | Current configuration (secrets sanitized: `auth.secret`, `email.smtp_pass`, `mcp.api_key`) |
 
 ## Query Parameters
 
@@ -183,9 +188,36 @@ The `find_*` tools accept these parameters:
 |-----------|------|-------------|
 | `where` | object | Filter conditions (same syntax as gRPC/Lua API) |
 | `order_by` | string | Sort field (prefix with `-` for descending, e.g., `"-created_at"`) |
-| `limit` | integer | Max results to return |
-| `offset` | integer | Skip N results (pagination) |
+| `limit` | integer | Max results per page |
+| `page` | integer | Page number, 1-indexed (page mode only) |
+| `after_cursor` | string | Forward cursor (cursor mode only, mutually exclusive with `page` and `before_cursor`) |
+| `before_cursor` | string | Backward cursor (cursor mode only, mutually exclusive with `page` and `after_cursor`) |
+| `depth` | integer | Relationship population depth |
 | `search` | string | Full-text search query |
+
+### Response Format
+
+`find_*` tools return a JSON object with `docs` and `pagination`:
+
+```json
+{
+  "docs": [
+    { "id": "abc123", "title": "Hello World", "created_at": "2026-01-15T09:00:00Z" }
+  ],
+  "pagination": {
+    "totalDocs": 25,
+    "limit": 10,
+    "hasNextPage": true,
+    "hasPrevPage": false,
+    "totalPages": 3,
+    "page": 1,
+    "pageStart": 1,
+    "nextPage": 2
+  }
+}
+```
+
+In cursor mode, `page`/`totalPages`/`pageStart`/`nextPage`/`prevPage` are replaced by `startCursor`/`endCursor`.
 
 ### Where clause example
 

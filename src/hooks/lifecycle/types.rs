@@ -3,7 +3,7 @@
 use mlua::Lua;
 use serde_json::Value;
 
-use crate::core::Document;
+use crate::{core::Document, db::DbConnection};
 
 /// Result of evaluating a display condition function.
 #[derive(Debug, Clone)]
@@ -77,11 +77,11 @@ impl TxContext {
     /// connection referenced by `conn` is dropped. The pointer is only
     /// dereferenced inside `get_tx_conn`, which runs while the Lua VM is
     /// locked and the connection is still alive.
-    pub(crate) fn new(conn: &dyn crate::db::DbConnection) -> Self {
+    pub(crate) fn new(conn: &dyn DbConnection) -> Self {
         // Decompose the fat pointer into its two raw words.
         // `*const dyn Trait` is a (data_ptr, vtable_ptr) pair.
         // We store them as `usize` so the struct is `'static`.
-        let fat_ptr: *const dyn crate::db::DbConnection = conn;
+        let fat_ptr: *const dyn DbConnection = conn;
         // SAFETY: *const dyn Trait is repr(data_ptr, vtable_ptr) on all
         // supported platforms. We transmute to [usize; 2] to erase lifetimes.
         let [data, vtable]: [usize; 2] = unsafe { std::mem::transmute(fat_ptr) };
@@ -92,7 +92,7 @@ impl TxContext {
     ///
     /// # Safety
     /// Must only be called while the original connection is still alive.
-    pub(crate) fn as_ptr(&self) -> *const dyn crate::db::DbConnection {
+    pub(crate) fn as_ptr(&self) -> *const dyn DbConnection {
         let words: [usize; 2] = [self.data, self.vtable];
         unsafe { std::mem::transmute(words) }
     }
@@ -116,6 +116,10 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 
 /// Maximum Lua instructions per hook invocation. Stored in app_data.
 pub(crate) struct MaxInstructions(pub(crate) u64);
+
+/// Config directory path, stored in Lua `app_data` so CRUD functions
+/// can find upload files for cleanup on delete.
+pub(crate) struct ConfigDir(pub(crate) std::path::PathBuf);
 
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
@@ -149,6 +153,35 @@ impl<'a> HookDepthGuard<'a> {
 impl Drop for HookDepthGuard<'_> {
     fn drop(&mut self) {
         self.lua.set_app_data(HookDepth(self.original));
+    }
+}
+
+/// RAII guard that removes TxContext, UserContext, and UiLocaleContext from Lua app_data on drop.
+/// Prevents leaks when hooks return errors via `?`.
+pub(crate) struct TxContextGuard<'a> {
+    lua: &'a Lua,
+}
+
+impl<'a> TxContextGuard<'a> {
+    /// Set TxContext, UserContext, and UiLocaleContext, returning a guard that cleans up on drop.
+    pub(crate) fn set(
+        lua: &'a Lua,
+        conn: &dyn DbConnection,
+        user: Option<Document>,
+        ui_locale: Option<String>,
+    ) -> Self {
+        lua.set_app_data(TxContext::new(conn));
+        lua.set_app_data(UserContext(user));
+        lua.set_app_data(UiLocaleContext(ui_locale));
+        Self { lua }
+    }
+}
+
+impl Drop for TxContextGuard<'_> {
+    fn drop(&mut self) {
+        self.lua.remove_app_data::<TxContext>();
+        self.lua.remove_app_data::<UserContext>();
+        self.lua.remove_app_data::<UiLocaleContext>();
     }
 }
 
@@ -198,5 +231,17 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);
+    }
+
+    /// Regression: ConfigDir must be retrievable from Lua app_data so that
+    /// delete/delete_many CRUD functions can clean up upload files.
+    #[test]
+    fn config_dir_stored_and_retrieved() {
+        let lua = Lua::new();
+        let path = std::path::PathBuf::from("/tmp/test-config");
+        lua.set_app_data(ConfigDir(path.clone()));
+
+        let retrieved = lua.app_data_ref::<ConfigDir>().unwrap();
+        assert_eq!(retrieved.0, path);
     }
 }

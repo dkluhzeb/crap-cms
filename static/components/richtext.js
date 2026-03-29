@@ -29,6 +29,20 @@ import { t } from './i18n.js';
  * </crap-richtext>
  */
 class CrapRichtext extends HTMLElement {
+  /**
+   * Escape a value for safe interpolation into HTML template strings.
+   * @param {*} val
+   * @returns {string}
+   */
+  static _esc(val) {
+    return String(val ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   constructor() {
     super();
 
@@ -39,6 +53,9 @@ class CrapRichtext extends HTMLElement {
   }
 
   connectedCallback() {
+    // Idempotency guard: skip re-init on DOM moves (e.g. array row drag-and-drop)
+    if (this._view) return;
+
     const PM = /** @type {any} */ (window).ProseMirror;
     /** @type {HTMLTextAreaElement | null} */
     const textarea = this.querySelector('textarea');
@@ -192,6 +209,9 @@ class CrapRichtext extends HTMLElement {
         doc = schema.topNodeType.createAndFill();
       }
     } else {
+      // Safety: innerHTML on a detached element is acceptable here — standard
+      // ProseMirror pattern. Detached elements don't fire event handlers or
+      // execute scripts, so no XSS risk from parsing stored HTML content.
       const container = document.createElement('div');
       container.innerHTML = textarea.value || '';
       doc = PM.DOMParser.fromSchema(schema).parse(container);
@@ -329,10 +349,89 @@ class CrapRichtext extends HTMLElement {
   }
 
   disconnectedCallback() {
-    if (this._view) {
-      this._view.destroy();
-      this._view = null;
+    // Do NOT destroy the view here — DOM moves (drag-and-drop reordering)
+    // trigger disconnect+reconnect, and we want to preserve editor state
+    // (undo history, cursor position, content). The idempotency guard in
+    // connectedCallback prevents re-initialization on reconnect.
+  }
+
+  /**
+   * Highlight custom nodes that have validation errors.
+   * @param {Record<string, string[]>} errorMap - keyed by "type#index", values are error messages
+   */
+  markNodeErrors(errorMap) {
+    this.clearNodeErrors();
+    if (!this._view) return;
+
+    // Only match registered custom node types — not built-in atoms like
+    // text, hard_break, horizontal_rule which would break the zip alignment.
+    const customNames = new Set((this._customNodes || []).map(nd => nd.name));
+
+    // Build ordered list of type#index keys from the PM doc
+    /** @type {string[]} */
+    const nodeKeys = [];
+    /** @type {Record<string, number>} */
+    const typeCounts = {};
+    this._view.state.doc.descendants((node) => {
+      if (customNames.has(node.type.name)) {
+        const name = node.type.name;
+        const idx = typeCounts[name] ?? 0;
+        typeCounts[name] = idx + 1;
+        nodeKeys.push(`${name}#${idx}`);
+      }
+    });
+
+    // Query custom node DOM elements in document order
+    const nodeEls = this.shadowRoot.querySelectorAll('.crap-custom-node');
+
+    // Zip — both follow document order
+    for (let i = 0; i < nodeKeys.length && i < nodeEls.length; i++) {
+      const msgs = errorMap[nodeKeys[i]];
+      if (msgs && msgs.length > 0) {
+        nodeEls[i].classList.add('crap-custom-node--error');
+        nodeEls[i].title = msgs.join('\n');
+      }
     }
+  }
+
+  /**
+   * Remove error highlighting from all custom nodes.
+   */
+  clearNodeErrors() {
+    if (!this.shadowRoot) return;
+    const errorNodes = this.shadowRoot.querySelectorAll('.crap-custom-node--error');
+    for (const el of errorNodes) {
+      el.classList.remove('crap-custom-node--error');
+      el.removeAttribute('title');
+    }
+  }
+
+  /**
+   * Get the document-order index of a node of `nodeType` at or near `pos`.
+   * If `pos` doesn't exactly match, falls back to the closest node.
+   * @param {string} nodeType - node type name
+   * @param {number} pos - expected position of the node
+   * @returns {number}
+   */
+  _getNodeIndex(nodeType, pos) {
+    /** @type {number[]} */
+    const positions = [];
+    this._view.state.doc.descendants((node, nodePos) => {
+      if (node.type.name === nodeType) positions.push(nodePos);
+    });
+    const exact = positions.indexOf(pos);
+    if (exact >= 0) return exact;
+    // Fallback: find the closest node of the same type
+    let closestIdx = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < positions.length; i++) {
+      const dist = Math.abs(positions[i] - pos);
+      if (dist < minDist) {
+        minDist = dist;
+        closestIdx = i;
+      }
+    }
+    return closestIdx;
   }
 
   /**
@@ -404,9 +503,22 @@ class CrapRichtext extends HTMLElement {
         const node = nodeType.create(defaultAttrs);
         const tr = state.tr.replaceSelectionWith(node);
         dispatch(tr);
-        // Open edit modal for the inserted node
-        const pos = tr.mapping.map(state.selection.from);
-        this._openNodeEditModal(nd, defaultAttrs, pos - 1);
+        // Find the exact position of the inserted node in the updated state.
+        // For block atoms, replaceSelectionWith may split paragraphs, so
+        // mapping the old selection gives an unreliable position.
+        // The cursor is always placed after the inserted node, so find the
+        // last node of the matching type at or before the new selection.
+        const newState = this._view.state;
+        const anchor = newState.selection.from;
+        let nodePos = -1;
+        newState.doc.descendants((n, p) => {
+          if (n.type.name === nd.name && p <= anchor) {
+            nodePos = p;
+          }
+        });
+        if (nodePos >= 0) {
+          this._openNodeEditModal(nd, defaultAttrs, nodePos);
+        }
       };
     }
 
@@ -458,21 +570,21 @@ class CrapRichtext extends HTMLElement {
     const isEdit = !!attrs.href;
     const savedSelection = this._view.state.selection;
 
-    const modal = document.createElement('div');
+    const modal = document.createElement('dialog');
     modal.className = 'crap-node-modal';
+    modal.setAttribute('aria-labelledby', 'crap-link-modal-heading');
 
     modal.innerHTML = `
-      <div class="crap-node-modal__backdrop"></div>
       <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header">${isEdit ? t('edit_link') : t('insert_link')}</div>
+        <div class="crap-node-modal__header" id="crap-link-modal-heading">${isEdit ? t('edit_link') : t('insert_link')}</div>
         <div class="crap-node-modal__body">
           <div class="crap-node-modal__field">
-            <label class="crap-node-modal__label">${t('link_url')} *</label>
-            <input type="url" class="crap-node-modal__input" data-field="href" value="${attrs.href || ''}" required>
+            <label class="crap-node-modal__label" for="crap-link-href">${t('link_url')} *</label>
+            <input type="url" class="crap-node-modal__input" id="crap-link-href" data-field="href" value="${CrapRichtext._esc(attrs.href || '')}" required>
           </div>
           <div class="crap-node-modal__field">
-            <label class="crap-node-modal__label">${t('link_title')}</label>
-            <input type="text" class="crap-node-modal__input" data-field="title" value="${attrs.title || ''}">
+            <label class="crap-node-modal__label" for="crap-link-title">${t('link_title')}</label>
+            <input type="text" class="crap-node-modal__input" id="crap-link-title" data-field="title" value="${CrapRichtext._esc(attrs.title || '')}">
           </div>
           <div class="crap-node-modal__field">
             <label class="crap-node-modal__checkbox">
@@ -496,19 +608,29 @@ class CrapRichtext extends HTMLElement {
     `;
 
     this.shadowRoot.appendChild(modal);
+    modal.showModal();
 
     const hrefInput = modal.querySelector('[data-field="href"]');
     if (hrefInput) hrefInput.focus();
 
-    const close = () => modal.remove();
+    const close = () => { modal.close(); modal.remove(); };
 
     const applyLink = () => {
-      const href = modal.querySelector('[data-field="href"]').value.trim();
+      const hrefEl = modal.querySelector('[data-field="href"]');
+      const href = hrefEl ? hrefEl.value.trim() : '';
       if (!href) return;
 
-      const title = modal.querySelector('[data-field="title"]').value.trim() || null;
-      const target = modal.querySelector('[data-field="target"]').checked ? '_blank' : null;
-      const rel = modal.querySelector('[data-field="rel"]').checked ? 'nofollow' : null;
+      // Block dangerous protocols (javascript:, data:, vbscript:)
+      const proto = href.split(':')[0].toLowerCase().trim();
+      const allowed = ['http', 'https', 'mailto', 'tel', ''];
+      if (href.includes(':') && !allowed.includes(proto)) return;
+
+      const titleEl = modal.querySelector('[data-field="title"]');
+      const title = titleEl ? titleEl.value.trim() || null : null;
+      const targetEl = modal.querySelector('[data-field="target"]');
+      const target = targetEl && targetEl.checked ? '_blank' : null;
+      const relEl = modal.querySelector('[data-field="rel"]');
+      const rel = relEl && relEl.checked ? 'nofollow' : null;
 
       const markType = schema.marks.link;
       let { tr } = this._view.state;
@@ -536,7 +658,7 @@ class CrapRichtext extends HTMLElement {
       this._view.focus();
     };
 
-    modal.querySelector('.crap-node-modal__backdrop').addEventListener('click', close);
+    modal.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
     modal.querySelector('.crap-node-modal__btn--cancel').addEventListener('click', close);
     modal.querySelector('.crap-node-modal__btn--ok').addEventListener('click', applyLink);
 
@@ -610,79 +732,254 @@ class CrapRichtext extends HTMLElement {
     const existing = this.shadowRoot.querySelector('.crap-node-modal');
     if (existing) existing.remove();
 
-    const modal = document.createElement('div');
+    const modal = document.createElement('dialog');
     modal.className = 'crap-node-modal';
+    modal.setAttribute('aria-labelledby', 'crap-node-modal-heading');
 
-    const formFields = (nodeDef.attrs || []).map(a => {
+    const esc = CrapRichtext._esc;
+    const formFields = (nodeDef.attrs || []).filter(a => !a.hidden).map(a => {
       const val = attrs[a.name] ?? a.default ?? '';
+      const eVal = esc(val);
+      const ph = a.placeholder ? ` placeholder="${esc(a.placeholder)}"` : '';
+      const req = a.required ? ' required' : '';
+      const ro = a.readonly ? ' readonly disabled' : '';
+      const widthStyle = a.width ? ` style="width:${esc(a.width)}"` : '';
+      const inputId = `crap-node-${esc(nodeDef.name)}-${esc(a.name)}`;
+
+      // Numeric bounds
+      const minAttr = a.min != null ? ` min="${esc(a.min)}"` : '';
+      const maxAttr = a.max != null ? ` max="${esc(a.max)}"` : '';
+      const stepAttr = a.step ? ` step="${esc(a.step)}"` : '';
+
+      // Text length bounds
+      const minLen = a.min_length != null ? ` minlength="${esc(a.min_length)}"` : '';
+      const maxLen = a.max_length != null ? ` maxlength="${esc(a.max_length)}"` : '';
+
+      // Date bounds
+      const minDate = a.min_date ? ` min="${esc(a.min_date)}"` : '';
+      const maxDate = a.max_date ? ` max="${esc(a.max_date)}"` : '';
+
+      // Language label suffix for code fields
+      const langSuffix = a.language ? ` (${esc(a.language)})` : '';
+
+      // Textarea rows (configurable, default 3 for textarea, 4 for code/json)
+      const textareaRows = a.rows || 3;
+      const codeRows = a.rows || 4;
+
+      // Date input type from picker_appearance
+      let dateInputType = 'date';
+      if (a.picker_appearance === 'dayAndTime') dateInputType = 'datetime-local';
+      else if (a.picker_appearance === 'timeOnly') dateInputType = 'time';
+      else if (a.picker_appearance === 'monthOnly') dateInputType = 'month';
+
       let input;
       switch (a.type) {
         case 'textarea':
-          input = `<textarea class="crap-node-modal__input" data-attr="${a.name}" rows="3"${a.required ? ' required' : ''}>${val}</textarea>`;
+          input = `<textarea class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" rows="${textareaRows}"${ph}${req}${ro}${minLen}${maxLen}>${eVal}</textarea>`;
           break;
         case 'checkbox':
-          input = `<label class="crap-node-modal__checkbox"><input type="checkbox" data-attr="${a.name}"${val ? ' checked' : ''}> ${a.label}</label>`;
+          input = `<label class="crap-node-modal__checkbox"><input type="checkbox" id="${inputId}" data-attr="${esc(a.name)}"${val ? ' checked' : ''}${ro}> ${esc(a.label)}</label>`;
           break;
         case 'select':
-          input = `<select class="crap-node-modal__input" data-attr="${a.name}"${a.required ? ' required' : ''}>
-            ${(a.options || []).map(o => `<option value="${o.value}"${o.value === val ? ' selected' : ''}>${o.label}</option>`).join('')}
+          input = `<select class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}"${req}${ro}>
+            ${(a.options || []).map(o => `<option value="${esc(o.value)}"${o.value === val ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
           </select>`;
           break;
+        case 'radio':
+          input = `<div class="crap-node-modal__radio-group" data-attr="${esc(a.name)}">
+            ${(a.options || []).map((o, i) => `<label class="crap-node-modal__radio"><input type="radio" id="${inputId}-${i}" name="node-attr-${esc(a.name)}" value="${esc(o.value)}"${o.value === val ? ' checked' : ''}${ro}> ${esc(o.label)}</label>`).join('')}
+          </div>`;
+          break;
         case 'number':
-          input = `<input type="number" class="crap-node-modal__input" data-attr="${a.name}" value="${val}"${a.required ? ' required' : ''}>`;
+          input = `<input type="number" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minAttr}${maxAttr}${stepAttr}>`;
+          break;
+        case 'email':
+          input = `<input type="email" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minLen}${maxLen}>`;
+          break;
+        case 'date':
+          input = `<input type="${dateInputType}" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${req}${ro}${minDate}${maxDate}>`;
+          break;
+        case 'code':
+        case 'json':
+          input = `<textarea class="crap-node-modal__input crap-node-modal__input--mono" id="${inputId}" data-attr="${esc(a.name)}" rows="${codeRows}"${ph}${req}${ro}${minLen}${maxLen}>${eVal}</textarea>`;
           break;
         default:
-          input = `<input type="text" class="crap-node-modal__input" data-attr="${a.name}" value="${val}"${a.required ? ' required' : ''}>`;
+          input = `<input type="text" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minLen}${maxLen}>`;
       }
-      if (a.type === 'checkbox') return `<div class="crap-node-modal__field">${input}</div>`;
-      return `<div class="crap-node-modal__field"><label class="crap-node-modal__label">${a.label}${a.required ? ' *' : ''}</label>${input}</div>`;
+      const desc = a.description ? `<p class="crap-node-modal__help">${esc(a.description)}</p>` : '';
+      const label = esc(a.label) + langSuffix;
+      if (a.type === 'checkbox') return `<div class="crap-node-modal__field"${widthStyle}>${input}${desc}</div>`;
+      return `<div class="crap-node-modal__field"${widthStyle}><label class="crap-node-modal__label" for="${inputId}">${label}${a.required ? ' *' : ''}</label>${input}${desc}</div>`;
     }).join('');
 
     modal.innerHTML = `
-      <div class="crap-node-modal__backdrop"></div>
       <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header">${nodeDef.label}</div>
+        <div class="crap-node-modal__header" id="crap-node-modal-heading">${CrapRichtext._esc(nodeDef.label)}</div>
         <div class="crap-node-modal__body">${formFields}</div>
         <div class="crap-node-modal__footer">
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">Cancel</button>
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--ok">OK</button>
+          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">${t('cancel')}</button>
+          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--ok">${t('ok')}</button>
         </div>
       </div>
     `;
 
     this.shadowRoot.appendChild(modal);
+    modal.showModal();
 
     // Focus first input
     const firstInput = modal.querySelector('input, textarea, select');
     if (firstInput) firstInput.focus();
 
-    const close = () => modal.remove();
+    const close = () => { modal.close(); modal.remove(); };
 
-    modal.querySelector('.crap-node-modal__backdrop').addEventListener('click', close);
+    modal.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
     modal.querySelector('.crap-node-modal__btn--cancel').addEventListener('click', close);
-    modal.querySelector('.crap-node-modal__btn--ok').addEventListener('click', () => {
+    modal.querySelector('.crap-node-modal__btn--ok').addEventListener('click', async () => {
+      // Collect new attrs from dialog fields
       const newAttrs = {};
       for (const a of (nodeDef.attrs || [])) {
+        if (a.hidden) {
+          newAttrs[a.name] = attrs[a.name] ?? a.default ?? '';
+          continue;
+        }
         const el = modal.querySelector(`[data-attr="${a.name}"]`);
         if (!el) continue;
         if (a.type === 'checkbox') {
           newAttrs[a.name] = el.checked;
+        } else if (a.type === 'radio') {
+          const checked = el.querySelector('input[type="radio"]:checked');
+          newAttrs[a.name] = checked ? checked.value : '';
         } else {
           newAttrs[a.name] = el.value;
         }
       }
-      // Update the node at pos
-      const { state, dispatch } = this._view;
-      try {
-        const node = state.doc.nodeAt(pos);
-        if (node) {
-          const tr = state.tr.setNodeMarkup(pos, null, newAttrs);
-          dispatch(tr);
+
+      // Find the validation form
+      const validateForm = this.closest('crap-validate-form');
+      if (!validateForm || typeof validateForm.getValidationErrors !== 'function') {
+        // No validation available — apply and close
+        this._applyNodeAttrs(pos, newAttrs, nodeDef.name);
+        close();
+        this._view.focus();
+        return;
+      }
+
+      // Apply new attrs so the textarea serializes correctly for validation
+      this._applyNodeAttrs(pos, newAttrs, nodeDef.name);
+
+      // Disable OK button and show loading state
+      const okBtn = modal.querySelector('.crap-node-modal__btn--ok');
+      okBtn.disabled = true;
+      okBtn.textContent = t('validating');
+      CrapRichtext._clearDialogErrors(modal);
+
+      const errors = await validateForm.getValidationErrors();
+
+      if (errors === null) {
+        // Network error — keep new attrs, close gracefully
+        close();
+        this._view.focus();
+        return;
+      }
+
+      // Determine this node's error prefix: fieldName[nodeType#index]
+      const textarea = this.querySelector('textarea');
+      const fieldName = textarea ? textarea.name : '';
+      const nodeIndex = this._getNodeIndex(nodeDef.name, pos);
+      const prefix = `${fieldName}[${nodeDef.name}#${nodeIndex}].`;
+
+      // Filter errors matching this node
+      /** @type {Record<string, string>} */
+      const attrErrors = {};
+      for (const [key, message] of Object.entries(errors)) {
+        if (key.startsWith(prefix)) {
+          attrErrors[key.slice(prefix.length)] = message;
         }
-      } catch { /* position might have changed */ }
-      close();
-      this._view.focus();
+      }
+
+      if (Object.keys(attrErrors).length === 0) {
+        // No errors for this node — close
+        close();
+        this._view.focus();
+        return;
+      }
+
+      // Validation failed — revert to original attrs
+      this._applyNodeAttrs(pos, attrs, nodeDef.name);
+
+      // Show errors on dialog fields
+      CrapRichtext._showDialogErrors(modal, attrErrors);
+
+      // Re-enable OK button
+      okBtn.disabled = false;
+      okBtn.textContent = t('ok');
     });
+  }
+
+  /**
+   * Apply attrs to the PM node at pos via setNodeMarkup.
+   * If `expectedType` is given and the node at `pos` doesn't match,
+   * searches nearby positions for the correct node.
+   * @param {number} pos
+   * @param {object} newAttrs
+   * @param {string} [expectedType]
+   */
+  _applyNodeAttrs(pos, newAttrs, expectedType) {
+    const { state, dispatch } = this._view;
+    try {
+      let node = state.doc.nodeAt(pos);
+      if (expectedType && (!node || node.type.name !== expectedType)) {
+        for (const offset of [1, -1, 2, -2, 3, -3]) {
+          const tryPos = pos + offset;
+          if (tryPos >= 0 && tryPos < state.doc.content.size) {
+            const candidate = state.doc.nodeAt(tryPos);
+            if (candidate && candidate.type.name === expectedType) {
+              pos = tryPos;
+              node = candidate;
+              break;
+            }
+          }
+        }
+      }
+      if (node) {
+        dispatch(state.tr.setNodeMarkup(pos, null, newAttrs));
+      }
+    } catch { /* position might have changed */ }
+  }
+
+  /**
+   * Show per-field errors in the node edit dialog.
+   * @param {HTMLElement} modal
+   * @param {Record<string, string>} attrErrors - keyed by attr name
+   */
+  static _showDialogErrors(modal, attrErrors) {
+    CrapRichtext._clearDialogErrors(modal);
+    for (const [attrName, message] of Object.entries(attrErrors)) {
+      const input = modal.querySelector(`[data-attr="${attrName}"]`);
+      if (!input) continue;
+      input.classList.add('crap-node-modal__input--error');
+      const errorEl = document.createElement('p');
+      errorEl.className = 'crap-node-modal__error';
+      errorEl.textContent = message;
+      // Insert after the input, inside the .crap-node-modal__field wrapper
+      const field = input.closest('.crap-node-modal__field');
+      if (field) {
+        field.appendChild(errorEl);
+      }
+    }
+  }
+
+  /**
+   * Clear all error indicators from the node edit dialog.
+   * @param {HTMLElement} modal
+   */
+  static _clearDialogErrors(modal) {
+    for (const el of modal.querySelectorAll('.crap-node-modal__error')) {
+      el.remove();
+    }
+    for (const el of modal.querySelectorAll('.crap-node-modal__input--error')) {
+      el.classList.remove('crap-node-modal__input--error');
+    }
   }
 
   /**
@@ -729,7 +1026,7 @@ class CrapRichtext extends HTMLElement {
     // Custom node insert buttons
     if (customNodes && customNodes.length > 0) {
       const insertButtons = customNodes.map(nd =>
-        `<button type="button" data-cmd="insert-${nd.name}" title="Insert ${nd.label}">${nd.label}</button>`
+        `<button type="button" data-cmd="insert-${CrapRichtext._esc(nd.name)}" title="Insert ${CrapRichtext._esc(nd.label)}">${CrapRichtext._esc(nd.label)}</button>`
       ).join('');
       html += `<div class="richtext__toolbar-group">${insertButtons}</div>`;
     }
@@ -766,7 +1063,7 @@ class CrapRichtext extends HTMLElement {
 
       .richtext--no-resize {
         resize: none;
-        max-height: 600px;
+        max-height: 37.5rem;
       }
 
       .richtext:focus-within {
@@ -780,7 +1077,7 @@ class CrapRichtext extends HTMLElement {
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-2xs, 2px);
-        padding: 6px var(--space-sm, 8px);
+        padding: 0.375rem var(--space-sm, 8px);
         border-bottom: 1px solid var(--border-color, #e0e0e0);
       }
 
@@ -801,9 +1098,9 @@ class CrapRichtext extends HTMLElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 28px;
-        height: 28px;
-        padding: 0 6px;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 0.375rem;
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
         font-size: var(--text-xs, 0.75rem);
@@ -831,14 +1128,14 @@ class CrapRichtext extends HTMLElement {
       /* -- Editor area -- */
 
       .richtext__editor {
-        min-height: 200px;
+        min-height: 12.5rem;
         overflow-y: auto;
         flex: 1;
       }
 
       .richtext__editor .ProseMirror {
         padding: var(--space-md, 0.75rem) var(--space-lg, 1rem);
-        min-height: 200px;
+        min-height: 12.5rem;
         outline: none;
         font-family: inherit;
         font-size: var(--text-base, 0.875rem);
@@ -947,7 +1244,7 @@ class CrapRichtext extends HTMLElement {
         display: block;
         position: absolute;
         top: -2px;
-        width: 20px;
+        width: 1.25rem;
         border-top: 1px solid var(--text-primary, black);
         animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite;
       }
@@ -1008,23 +1305,9 @@ class CrapRichtext extends HTMLElement {
       /* -- Node edit modal -- */
 
       .crap-node-modal {
-        position: fixed;
-        inset: 0;
-        z-index: 10000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .crap-node-modal__backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.3);
-      }
-
-      .crap-node-modal__dialog {
-        position: relative;
-        width: 400px;
+        border: none;
+        padding: 0;
+        width: 25rem;
         max-width: 90vw;
         max-height: 80vh;
         overflow-y: auto;
@@ -1033,15 +1316,22 @@ class CrapRichtext extends HTMLElement {
         box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.12));
       }
 
+      .crap-node-modal::backdrop {
+        background: rgba(0, 0, 0, 0.3);
+      }
+
+      .crap-node-modal__dialog {
+      }
+
       .crap-node-modal__header {
-        padding: var(--space-lg, 1rem) 20px;
+        padding: var(--space-lg, 1rem) 1.25rem;
         font-weight: 600;
-        font-size: 1.05em;
+        font-size: var(--text-base, 0.875rem);
         border-bottom: 1px solid var(--border-color, #e0e0e0);
       }
 
       .crap-node-modal__body {
-        padding: var(--space-lg, 1rem) 20px;
+        padding: var(--space-lg, 1rem) 1.25rem;
         display: flex;
         flex-direction: column;
         gap: var(--space-md, 0.75rem);
@@ -1054,7 +1344,7 @@ class CrapRichtext extends HTMLElement {
       }
 
       .crap-node-modal__label {
-        font-size: 0.85em;
+        font-size: var(--text-xs, 0.75rem);
         font-weight: 500;
         color: var(--text-secondary, rgba(0, 0, 0, 0.65));
       }
@@ -1062,11 +1352,11 @@ class CrapRichtext extends HTMLElement {
       .crap-node-modal__input,
       .crap-node-modal__field select,
       .crap-node-modal__field textarea {
-        padding: 6px 10px;
+        padding: 0.375rem 0.625rem;
         border: 1px solid var(--input-border, #e0e0e0);
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
-        font-size: 0.9em;
+        font-size: var(--text-sm, 0.8125rem);
         background: var(--input-bg, #fff);
         color: var(--text-primary, rgba(0, 0, 0, 0.88));
       }
@@ -1083,24 +1373,52 @@ class CrapRichtext extends HTMLElement {
         display: flex;
         align-items: center;
         gap: var(--space-sm, 0.5rem);
-        font-size: 0.9em;
+        font-size: var(--text-sm, 0.8125rem);
         cursor: pointer;
+      }
+
+      .crap-node-modal__radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs, 0.25rem);
+      }
+
+      .crap-node-modal__radio {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm, 0.5rem);
+        font-size: var(--text-sm, 0.8125rem);
+        cursor: pointer;
+      }
+
+      .crap-node-modal__input--mono {
+        font-family: monospace;
+        font-size: var(--text-xs, 0.75rem);
+      }
+
+      .crap-node-modal__help {
+        margin: 0;
+        font-size: var(--text-xs, 0.75rem);
+        color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
       }
 
       .crap-node-modal__footer {
         display: flex;
         justify-content: flex-end;
         gap: var(--space-sm, 0.5rem);
-        padding: var(--space-md, 0.75rem) 20px;
+        padding: var(--space-md, 0.75rem) 1.25rem;
         border-top: 1px solid var(--border-color, #e0e0e0);
       }
 
       .crap-node-modal__btn {
         all: unset;
-        padding: 6px 16px;
+        display: inline-flex;
+        align-items: center;
+        height: var(--button-height-sm, 1.75rem);
+        padding: 0 var(--space-lg, 1rem);
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
-        font-size: 0.85em;
+        font-size: var(--text-sm, 0.8125rem);
         font-weight: 500;
         cursor: pointer;
       }
@@ -1115,7 +1433,7 @@ class CrapRichtext extends HTMLElement {
 
       .crap-node-modal__btn--ok {
         background: var(--color-primary, #1677ff);
-        color: #fff;
+        color: var(--text-on-primary, #fff);
       }
 
       .crap-node-modal__btn--ok:hover {
@@ -1136,6 +1454,37 @@ class CrapRichtext extends HTMLElement {
 
       .crap-node-modal__btn--danger:hover {
         background: rgba(220, 53, 69, 0.08);
+      }
+
+      /* -- Node error states -- */
+
+      .crap-custom-node--error {
+        border-color: var(--color-danger, #dc3545);
+        background: var(--color-danger-bg, rgba(220, 53, 69, 0.04));
+      }
+
+      .crap-custom-node--error .crap-custom-node__label {
+        color: var(--color-danger, #dc3545);
+      }
+
+      .crap-node-modal__input--error,
+      .crap-node-modal__field select.crap-node-modal__input--error {
+        border-color: var(--color-danger, #dc3545) !important;
+      }
+
+      .crap-node-modal__input--error:focus {
+        box-shadow: 0 0 0 2px var(--color-danger-bg, rgba(220, 53, 69, 0.08)) !important;
+      }
+
+      .crap-node-modal__error {
+        font-size: var(--text-xs, 0.75rem);
+        color: var(--color-danger, #dc3545);
+        margin: 0;
+      }
+
+      .crap-node-modal__btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
       }
     `;
   }
@@ -1187,12 +1536,15 @@ class CustomNodeView {
   }
 
   _render() {
-    const label = this.nodeDef.label || this.nodeDef.name;
-    const attrSummary = (this.nodeDef.attrs || [])
-      .slice(0, 3)
-      .map(a => this.node.attrs[a.name])
-      .filter(v => v != null && v !== '')
-      .join(' | ');
+    const esc = CrapRichtext._esc;
+    const label = esc(this.nodeDef.label || this.nodeDef.name);
+    const attrSummary = esc(
+      (this.nodeDef.attrs || [])
+        .slice(0, 3)
+        .map(a => this.node.attrs[a.name])
+        .filter(v => v != null && v !== '')
+        .join(' | ')
+    );
     this.dom.innerHTML =
       `<span class="crap-custom-node__label">${label}</span>` +
       (attrSummary ? `<span class="crap-custom-node__attrs">${attrSummary}</span>` : '');

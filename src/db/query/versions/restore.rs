@@ -50,9 +50,29 @@ pub fn restore_version(
     } else {
         None
     };
+
+    // Snapshot outgoing refs before restore for ref count adjustment
+    let old_refs = super::super::ref_count::snapshot_outgoing_refs(
+        conn,
+        slug,
+        parent_id,
+        &def.fields,
+        locale_config,
+    )?;
+
     let doc = super::super::update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
 
     restore_locale_and_join_data(conn, slug, parent_id, &def.fields, obj, locale_config)?;
+
+    // Adjust ref counts based on before/after diff
+    super::super::ref_count::after_update(
+        conn,
+        slug,
+        parent_id,
+        &def.fields,
+        locale_config,
+        old_refs,
+    )?;
 
     // Update status and create a new version for the restore
     set_document_status(conn, slug, parent_id, status)?;
@@ -138,13 +158,14 @@ fn restore_locale_and_join_data(
                         .get(&base)
                         .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
                     restore_locale_columns(
+                        conn,
                         val,
                         &base,
                         locale_config,
                         &mut set_clauses,
                         &mut params,
                         &mut idx,
-                    );
+                    )?;
                 }
                 continue;
             }
@@ -152,13 +173,14 @@ fn restore_locale_and_join_data(
             // Recurse to handle nested layout wrappers.
             if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
                 collect_locale_restore_fields(
+                    conn,
                     &field.fields,
                     obj,
                     locale_config,
                     &mut set_clauses,
                     &mut params,
                     &mut idx,
-                );
+                )?;
                 continue;
             }
             // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
@@ -166,13 +188,14 @@ fn restore_locale_and_join_data(
             if field.field_type == FieldType::Tabs {
                 for tab in &field.tabs {
                     collect_locale_restore_fields(
+                        conn,
                         &tab.fields,
                         obj,
                         locale_config,
                         &mut set_clauses,
                         &mut params,
                         &mut idx,
-                    );
+                    )?;
                 }
                 continue;
             }
@@ -180,21 +203,22 @@ fn restore_locale_and_join_data(
                 continue;
             }
             restore_locale_columns(
+                conn,
                 obj.get(&field.name),
                 &field.name,
                 locale_config,
                 &mut set_clauses,
                 &mut params,
                 &mut idx,
-            );
+            )?;
         }
 
         if !set_clauses.is_empty() {
             let sql = format!(
-                "UPDATE {} SET {} WHERE id = ?{}",
+                "UPDATE \"{}\" SET {} WHERE id = {}",
                 table,
                 set_clauses.join(", "),
-                idx
+                conn.placeholder(idx)
             );
             params.push(DbValue::Text(parent_id.to_string()));
             conn.execute(&sql, &params)
@@ -215,13 +239,14 @@ fn restore_locale_and_join_data(
 
 /// Recursively collect locale fields to restore from layout wrappers (Row/Collapsible/Tabs).
 fn collect_locale_restore_fields(
+    conn: &dyn DbConnection,
     fields: &[FieldDefinition],
     obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
     params: &mut Vec<DbValue>,
     idx: &mut usize,
-) {
+) -> Result<()> {
     for field in fields {
         if field.field_type == FieldType::Group {
             let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
@@ -235,69 +260,75 @@ fn collect_locale_restore_fields(
                 let val = obj
                     .get(&base)
                     .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
-                restore_locale_columns(val, &base, locale_config, set_clauses, params, idx);
+                restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx)?;
             }
         } else if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
             collect_locale_restore_fields(
+                conn,
                 &field.fields,
                 obj,
                 locale_config,
                 set_clauses,
                 params,
                 idx,
-            );
+            )?;
         } else if field.field_type == FieldType::Tabs {
             for tab in &field.tabs {
                 collect_locale_restore_fields(
+                    conn,
                     &tab.fields,
                     obj,
                     locale_config,
                     set_clauses,
                     params,
                     idx,
-                );
+                )?;
             }
         } else if field.localized && field.has_parent_column() {
             restore_locale_columns(
+                conn,
                 obj.get(&field.name),
                 &field.name,
                 locale_config,
                 set_clauses,
                 params,
                 idx,
-            );
+            )?;
         }
     }
+
+    Ok(())
 }
 
 /// Emit SET clauses that NULL all locale columns for a field, then set the
 /// default locale column to the snapshot value.
 fn restore_locale_columns(
+    conn: &dyn DbConnection,
     snapshot_val: Option<&Value>,
     field_name: &str,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
     params: &mut Vec<DbValue>,
     idx: &mut usize,
-) {
+) -> Result<()> {
     for locale in &locale_config.locales {
-        let col = format!("{}__{}", field_name, sanitize_locale(locale));
+        let col = format!("{}__{}", field_name, sanitize_locale(locale)?);
 
         if *locale == locale_config.default_locale {
             // Set default locale from snapshot
             match snapshot_val {
                 Some(Value::String(s)) => {
-                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
                     params.push(DbValue::Text(s.clone()));
                     *idx += 1;
                 }
                 Some(Value::Number(n)) => {
-                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
                     params.push(DbValue::Text(n.to_string()));
                     *idx += 1;
                 }
                 Some(Value::Bool(b)) => {
-                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
                     params.push(DbValue::Integer(if *b { 1 } else { 0 }));
                     *idx += 1;
                 }
@@ -310,6 +341,8 @@ fn restore_locale_columns(
             set_clauses.push(format!("{} = NULL", col));
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -430,5 +463,95 @@ mod tests {
         // Verify a version was created for the restore
         let version_count = count_versions(&conn, "posts", "p1").unwrap();
         assert_eq!(version_count, 1);
+    }
+
+    #[test]
+    fn restore_version_preserves_timezone_data() {
+        // Regression: version snapshots must include _tz companion columns
+        // and restoring a version must write them back.
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_events (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO events (id, start_date, start_date_tz, _status)
+                VALUES ('e1', '2024-06-15T14:00:00.000Z', 'America/New_York', 'published');",
+        )
+        .unwrap();
+
+        let no_locale = LocaleConfig::default();
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        // Create a snapshot that includes both the date and timezone
+        let snapshot_v1 = json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date_tz": "America/New_York"
+        });
+        create_version(&conn, "events", "e1", "published", &snapshot_v1).unwrap();
+
+        // Simulate updating the document with a different timezone
+        conn.execute_batch(
+            "UPDATE events SET start_date = '2024-06-15T18:00:00.000Z', \
+             start_date_tz = 'Europe/London' WHERE id = 'e1'",
+        )
+        .unwrap();
+
+        // Verify the update took effect
+        let row = conn
+            .query_one("SELECT start_date_tz FROM events WHERE id = 'e1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("start_date_tz").unwrap(), "Europe/London");
+
+        // Restore the original version
+        let doc = restore_version(
+            &conn,
+            "events",
+            &def,
+            "e1",
+            &snapshot_v1,
+            "published",
+            &no_locale,
+        )
+        .unwrap();
+
+        // Verify the restored document has the original date
+        assert_eq!(
+            doc.get_str("start_date"),
+            Some("2024-06-15T14:00:00.000Z"),
+            "Restored date should match the snapshot"
+        );
+
+        // Verify the _tz column was also restored by reading directly from the DB
+        let row = conn
+            .query_one("SELECT start_date_tz FROM events WHERE id = 'e1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("start_date_tz").unwrap(),
+            "America/New_York",
+            "Restored timezone should match the snapshot"
+        );
     }
 }

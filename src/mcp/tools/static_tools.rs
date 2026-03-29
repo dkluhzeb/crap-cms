@@ -516,14 +516,19 @@ pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<Path
         if !canonical.starts_with(&canonical_base) {
             bail!("Path escapes config directory");
         }
-    } else if let Some(parent) = full_path.parent() {
-        // For new files, check that the parent stays inside config_dir
-        if parent.exists() {
-            let canonical_parent = parent.canonicalize()?;
-
-            if !canonical_parent.starts_with(&canonical_base) {
-                bail!("Path escapes config directory");
+    } else {
+        // For new files, walk up the parent chain to find the nearest existing ancestor
+        // and verify it stays within config_dir.
+        let mut ancestor = full_path.parent();
+        while let Some(p) = ancestor {
+            if p.exists() {
+                let canonical_ancestor = p.canonicalize()?;
+                if !canonical_ancestor.starts_with(&canonical_base) {
+                    bail!("Path escapes config directory");
+                }
+                break;
             }
+            ancestor = p.parent();
         }
     }
     Ok(full_path)

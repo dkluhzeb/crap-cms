@@ -40,11 +40,37 @@ fn normalize_field_name(field: &mut String, fields: &[FieldDefinition]) {
         None => return,
     };
 
-    if let Some(fd) = fields.iter().find(|f| f.name == first_segment)
-        && fd.field_type == FieldType::Group
-    {
+    if is_group_field(first_segment, fields) {
         *field = field.replace('.', "__");
     }
+}
+
+/// Check if a field name refers to a Group, recursing into transparent layout wrappers.
+fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
+    for f in fields {
+        if f.name == name && f.field_type == FieldType::Group {
+            return true;
+        }
+
+        // Recurse into transparent layout wrappers
+        match f.field_type {
+            FieldType::Row | FieldType::Collapsible => {
+                if is_group_field(name, &f.fields) {
+                    return true;
+                }
+            }
+            FieldType::Tabs => {
+                for tab in &f.tabs {
+                    if is_group_field(name, &tab.fields) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
 }
 
 // ── Resolved filter types ────────────────────────────────────────────────
@@ -400,7 +426,9 @@ pub(super) fn build_json_each_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
+    use crate::core::field::{
+        BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig,
+    };
     use crate::db::query::{Filter, FilterClause, FilterOp};
 
     fn test_conn() -> (tempfile::TempDir, crate::db::BoxedConnection) {
@@ -951,6 +979,82 @@ mod tests {
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.items')");
         assert_eq!(expr, "json_extract(j0.value, '$.name')");
+    }
+
+    #[test]
+    fn normalize_group_inside_row() {
+        let group = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .build();
+        let row = FieldDefinition::builder("layout", FieldType::Row)
+            .fields(vec![group])
+            .build();
+        let fields = vec![row];
+
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "seo.title".to_string(),
+            op: FilterOp::Equals("test".to_string()),
+        })];
+        normalize_filter_fields(&mut filters, &fields);
+
+        match &filters[0] {
+            FilterClause::Single(f) => assert_eq!(f.field, "seo__title"),
+            _ => panic!("expected single"),
+        }
+    }
+
+    #[test]
+    fn normalize_group_inside_tabs() {
+        let group = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .build();
+        let tabs = FieldDefinition::builder("layout", FieldType::Tabs)
+            .tabs(vec![FieldTab {
+                label: "Main".to_string(),
+                description: None,
+                fields: vec![group],
+            }])
+            .build();
+        let fields = vec![tabs];
+
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "seo.title".to_string(),
+            op: FilterOp::Equals("test".to_string()),
+        })];
+        normalize_filter_fields(&mut filters, &fields);
+
+        match &filters[0] {
+            FilterClause::Single(f) => assert_eq!(f.field, "seo__title"),
+            _ => panic!("expected single"),
+        }
+    }
+
+    #[test]
+    fn normalize_group_inside_collapsible() {
+        let group = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+            ])
+            .build();
+        let collapsible = FieldDefinition::builder("advanced", FieldType::Collapsible)
+            .fields(vec![group])
+            .build();
+        let fields = vec![collapsible];
+
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "seo.title".to_string(),
+            op: FilterOp::Equals("test".to_string()),
+        })];
+        normalize_filter_fields(&mut filters, &fields);
+
+        match &filters[0] {
+            FilterClause::Single(f) => assert_eq!(f.field, "seo__title"),
+            _ => panic!("expected single"),
+        }
     }
 
     #[test]

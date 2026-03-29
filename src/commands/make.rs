@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 use std::path::Path;
 
+use super::MakeAction;
 use crate::{
     cli::crap_theme,
     config::CrapConfig,
@@ -14,9 +15,9 @@ use crate::{
 
 /// Dispatch the `make` subcommand.
 #[cfg(not(tarpaulin_include))] // interactive dispatcher — uses dialoguer prompts
-pub fn run(config_dir: &Path, action: super::MakeAction) -> Result<()> {
+pub fn run(config_dir: &Path, action: MakeAction) -> Result<()> {
     match action {
-        super::MakeAction::Collection {
+        MakeAction::Collection {
             slug,
             fields,
             no_timestamps,
@@ -35,7 +36,7 @@ pub fn run(config_dir: &Path, action: super::MakeAction) -> Result<()> {
             };
             make_collection_command(config_dir, slug, fields, !no_input, &opts)
         }
-        super::MakeAction::Global {
+        MakeAction::Global {
             slug,
             fields,
             force,
@@ -57,7 +58,7 @@ pub fn run(config_dir: &Path, action: super::MakeAction) -> Result<()> {
                 scaffold::make_global(config_dir, &slug, parsed.as_deref(), force)
             }
         }
-        super::MakeAction::Hook {
+        MakeAction::Hook {
             name,
             hook_type,
             collection,
@@ -67,7 +68,7 @@ pub fn run(config_dir: &Path, action: super::MakeAction) -> Result<()> {
         } => make_hook_command(
             config_dir, name, hook_type, collection, position, field, force,
         ),
-        super::MakeAction::Job {
+        MakeAction::Job {
             slug,
             schedule,
             queue,

@@ -20,20 +20,33 @@ pub(crate) fn check_option_valid(
     if let Some(Value::String(s)) = value {
         if field.has_many {
             // has_many select: value is a JSON array string like '["val1","val2"]'
-            if let Ok(values) = serde_json::from_str::<Vec<String>>(s) {
-                for v in &values {
-                    if !field.options.iter().any(|opt| opt.value == *v) {
-                        errors.push(FieldError::with_key(
-                            data_key.to_owned(),
-                            format!("{} has an invalid option: {}", field.name, v),
-                            "validation.invalid_option_value",
-                            HashMap::from([
-                                ("field".to_string(), field.name.clone()),
-                                ("value".to_string(), v.clone()),
-                            ]),
-                        ));
-                        break;
+            match serde_json::from_str::<Vec<String>>(s) {
+                Ok(values) => {
+                    for v in &values {
+                        if !field.options.iter().any(|opt| opt.value == *v) {
+                            errors.push(FieldError::with_key(
+                                data_key.to_owned(),
+                                format!("{} has an invalid option: {}", field.name, v),
+                                "validation.invalid_option_value",
+                                HashMap::from([
+                                    ("field".to_string(), field.name.clone()),
+                                    ("value".to_string(), v.clone()),
+                                ]),
+                            ));
+                            break;
+                        }
                     }
+                }
+                Err(_) => {
+                    errors.push(FieldError::with_key(
+                        data_key.to_owned(),
+                        format!(
+                            "{} has invalid multi-select value (malformed JSON)",
+                            field.name
+                        ),
+                        "validation.invalid_multi_select_json",
+                        HashMap::from([("field".to_string(), field.name.clone())]),
+                    ));
                 }
             }
         } else if !field.options.iter().any(|opt| opt.value == *s) {
@@ -217,6 +230,39 @@ mod tests {
         assert!(
             result.is_ok(),
             "Empty radio value should skip option validation"
+        );
+    }
+
+    /// Regression: malformed JSON in a has_many select must produce a
+    /// validation error, not silently pass.
+    #[test]
+    fn test_validate_has_many_select_malformed_json_rejected() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("A".to_string()), "a"),
+                    SelectOption::new(LocalizedString::Plain("B".to_string()), "b"),
+                ])
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!("[invalid json"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err(), "Malformed has_many JSON must be rejected");
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("malformed JSON"),
         );
     }
 

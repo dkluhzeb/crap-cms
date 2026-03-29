@@ -20,6 +20,8 @@ use vm_pool::VmPool;
 
 use std::{collections::HashSet, sync::Arc};
 
+use crate::core::registry::Registry;
+
 /// Thread-safe hook runner with a pool of Lua VMs for concurrent execution.
 #[derive(Clone)]
 pub struct HookRunner {
@@ -28,6 +30,8 @@ pub struct HookRunner {
     /// Since hooks are only registered during VM creation (init.lua), this set is immutable.
     /// Allows skipping VM acquisition when no registered hooks exist for an event.
     registered_events: Arc<HashSet<String>>,
+    /// Snapshot of the registry for richtext node attr validation.
+    registry: Arc<Registry>,
 }
 
 impl HookRunner {

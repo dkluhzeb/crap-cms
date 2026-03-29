@@ -52,7 +52,7 @@ crap.email.send({
 local M = {}
 
 function M.notify_on_create(ctx)
-    local admin_email = crap.env.get("ADMIN_EMAIL")
+    local admin_email = crap.env.get("CRAP_ADMIN_EMAIL")
     if admin_email then
         crap.email.send({
             to = admin_email,

@@ -124,6 +124,8 @@ pub fn inject_upload_metadata(
 pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value>) {
     // Collect all URL fields that point to upload files
     // These are: url, {size}_url, {size}_webp_url, {size}_avif_url
+    let uploads_dir = config_dir.join("uploads");
+
     for (key, value) in doc_fields {
         if (key == "url" || key.ends_with("_url"))
             && !key.contains("image")
@@ -132,6 +134,26 @@ pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value
         {
             let rel_path = url.strip_prefix('/').unwrap_or(url);
             let file_path = config_dir.join(rel_path);
+
+            // Verify the resolved path stays within the uploads directory
+            match (uploads_dir.canonicalize(), file_path.canonicalize()) {
+                (Ok(canonical_base), Ok(canonical_file)) => {
+                    if !canonical_file.starts_with(&canonical_base) {
+                        tracing::warn!(
+                            "Skipping file outside uploads directory: {}",
+                            file_path.display()
+                        );
+                        continue;
+                    }
+                }
+                _ => {
+                    tracing::warn!(
+                        "Skipping file — unable to verify path safety: {}",
+                        file_path.display()
+                    );
+                    continue;
+                }
+            }
 
             if file_path.exists()
                 && let Err(e) = fs::remove_file(&file_path)
@@ -546,5 +568,38 @@ mod tests {
 
         // Should not panic on non-string values
         delete_upload_files(tmp.path(), &doc_fields);
+    }
+
+    #[test]
+    fn delete_upload_files_blocks_path_traversal() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // Create a file outside the uploads directory
+        let secret_file = tmp.path().join("secret.txt");
+        fs::write(&secret_file, b"sensitive data").unwrap();
+
+        // Create uploads dir so canonicalize of base succeeds
+        let uploads_dir = tmp.path().join("uploads");
+        fs::create_dir_all(&uploads_dir).unwrap();
+
+        let mut doc_fields = HashMap::new();
+        doc_fields.insert("url".into(), json!("/uploads/../secret.txt"));
+
+        delete_upload_files(tmp.path(), &doc_fields);
+        assert!(
+            secret_file.exists(),
+            "Path traversal should be blocked — file outside uploads must not be deleted"
+        );
+    }
+
+    #[test]
+    fn delete_upload_files_skips_when_canonicalize_fails() {
+        // Use a non-existent base dir so canonicalize fails
+        let fake_base = std::path::Path::new("/nonexistent_base_dir_for_test");
+        let mut doc_fields = HashMap::new();
+        doc_fields.insert("url".into(), json!("/uploads/media/test.png"));
+
+        // Should not panic and should not attempt deletion
+        delete_upload_files(fake_base, &doc_fields);
     }
 }

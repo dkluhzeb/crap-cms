@@ -7,7 +7,7 @@ use crate::{
     db::{
         DbConnection, DbValue, LocaleContext, LocaleMode,
         document::row_to_document,
-        query::{get_column_names, get_locale_select_columns, group_locale_fields},
+        query::{get_column_names, get_locale_select_columns_with_opts, group_locale_fields},
     },
 };
 
@@ -16,6 +16,9 @@ use crate::{
 /// This is the standard read function — returns a fully hydrated document with
 /// nested group objects and populated join table data (arrays, blocks, relationships).
 /// Use `find_by_id_raw` when you only need flat column data without hydration.
+///
+/// Soft-deleted documents are excluded by default when `def.soft_delete` is true.
+/// Use [`find_by_id_unfiltered`] to include soft-deleted documents.
 pub fn find_by_id(
     conn: &dyn DbConnection,
     slug: &str,
@@ -24,6 +27,26 @@ pub fn find_by_id(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Option<Document>> {
     let doc = find_by_id_raw(conn, slug, def, id, locale_ctx)?;
+    match doc {
+        Some(mut d) => {
+            super::super::hydrate_document(conn, slug, &def.fields, &mut d, None, locale_ctx)?;
+            Ok(Some(d))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Like [`find_by_id`] but includes soft-deleted documents.
+///
+/// Used by trash/restore operations that need to access deleted documents.
+pub fn find_by_id_unfiltered(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<Document>> {
+    let doc = find_by_id_raw_unfiltered(conn, slug, def, id, locale_ctx)?;
     match doc {
         Some(mut d) => {
             super::super::hydrate_document(conn, slug, &def.fields, &mut d, None, locale_ctx)?;
@@ -51,7 +74,7 @@ pub fn find_by_ids(
 
     let (select_exprs, _result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -60,12 +83,16 @@ pub fn find_by_ids(
     };
 
     let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
-    let sql = format!(
-        "SELECT {} FROM {} WHERE id IN ({})",
+    let mut sql = format!(
+        "SELECT {} FROM \"{}\" WHERE id IN ({})",
         select_exprs.join(", "),
         slug,
         placeholders.join(", ")
     );
+
+    if def.soft_delete {
+        sql.push_str(" AND _deleted_at IS NULL");
+    }
 
     let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.clone())).collect();
     let rows = conn
@@ -80,7 +107,7 @@ pub fn find_by_ids(
             && ctx.config.is_enabled()
             && let LocaleMode::All = ctx.mode
         {
-            group_locale_fields(&mut doc, &def.fields, &ctx.config);
+            group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
         super::super::hydrate_document(conn, slug, &def.fields, &mut doc, None, locale_ctx)?;
         documents.push(doc);
@@ -94,6 +121,10 @@ pub fn find_by_ids(
 /// Returns flat column data as stored in the parent table. Group fields remain
 /// as `field__subfield` flat keys. Join table data (arrays, blocks, relationships)
 /// is NOT populated. Used internally by write operations that don't need hydration.
+///
+/// Soft-deleted documents are excluded by default when `def.soft_delete` is true.
+/// Use [`find_by_id_raw_unfiltered`] when you need to access soft-deleted documents
+/// (e.g., for the trash view or restore operations).
 pub(crate) fn find_by_id_raw(
     conn: &dyn DbConnection,
     slug: &str,
@@ -101,9 +132,33 @@ pub(crate) fn find_by_id_raw(
     id: &str,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Option<Document>> {
+    find_by_id_raw_inner(conn, slug, def, id, locale_ctx, false)
+}
+
+/// Like [`find_by_id_raw`] but includes soft-deleted documents.
+///
+/// Used by trash/restore operations that need to access deleted documents.
+pub(crate) fn find_by_id_raw_unfiltered(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<Document>> {
+    find_by_id_raw_inner(conn, slug, def, id, locale_ctx, true)
+}
+
+fn find_by_id_raw_inner(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+    include_deleted: bool,
+) -> Result<Option<Document>> {
     let (select_exprs, _result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -111,12 +166,16 @@ pub(crate) fn find_by_id_raw(
         }
     };
 
-    let sql = format!(
-        "SELECT {} FROM {} WHERE id = {}",
+    let mut sql = format!(
+        "SELECT {} FROM \"{}\" WHERE id = {}",
         select_exprs.join(", "),
         slug,
         conn.placeholder(1)
     );
+
+    if def.soft_delete && !include_deleted {
+        sql.push_str(" AND _deleted_at IS NULL");
+    }
 
     let row = conn
         .query_one(&sql, &[DbValue::Text(id.to_string())])
@@ -130,7 +189,7 @@ pub(crate) fn find_by_id_raw(
                 && ctx.config.is_enabled()
                 && let LocaleMode::All = ctx.mode
             {
-                group_locale_fields(&mut doc, &def.fields, &ctx.config);
+                group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
             }
             Ok(Some(doc))
         }
@@ -251,6 +310,97 @@ mod tests {
         assert!(titles.contains("First"));
         assert!(titles.contains("Second"));
         assert!(!titles.contains("Third"));
+    }
+
+    // ── Soft-delete filtering tests ───────────────────────────────────────
+
+    fn setup_soft_delete_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE articles (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    status TEXT,
+                    _deleted_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
+    }
+
+    fn soft_delete_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("articles");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("status", FieldType::Text).build(),
+        ];
+        def.soft_delete = true;
+        def
+    }
+
+    #[test]
+    fn find_by_id_excludes_soft_deleted() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, status, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Gone".into()),
+                DbValue::Text("draft".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let def = soft_delete_def();
+        let found = find_by_id(&conn, "articles", &def, "id-deleted", None).unwrap();
+        assert!(
+            found.is_none(),
+            "Soft-deleted doc should not be found by find_by_id"
+        );
+    }
+
+    #[test]
+    fn find_by_id_unfiltered_includes_soft_deleted() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, status, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Gone".into()),
+                DbValue::Text("draft".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let def = soft_delete_def();
+        let found =
+            super::find_by_id_unfiltered(&conn, "articles", &def, "id-deleted", None).unwrap();
+        assert!(
+            found.is_some(),
+            "find_by_id_unfiltered should include soft-deleted docs"
+        );
+        assert_eq!(found.unwrap().get_str("title"), Some("Gone"));
     }
 
     #[test]

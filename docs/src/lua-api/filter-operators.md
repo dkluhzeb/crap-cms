@@ -27,15 +27,15 @@ Use a table to specify an operator:
 | `equals` | `{ equals = "value" }` | `field = ?` | Exact match |
 | `not_equals` | `{ not_equals = "value" }` | `field != ?` | Not equal |
 | `like` | `{ like = "pattern%" }` | `field LIKE ?` | SQL LIKE pattern |
-| `contains` | `{ contains = "text" }` | `field LIKE '%text%'` | Substring match |
+| `contains` | `{ contains = "text" }` | `field LIKE '%text%' ESCAPE '\'` | Substring match (wildcards `%` and `_` in the search text are escaped) |
 | `greater_than` | `{ greater_than = "10" }` | `field > ?` | Greater than |
 | `less_than` | `{ less_than = "10" }` | `field < ?` | Less than |
 | `greater_than_or_equal` | `{ greater_than_or_equal = "10" }` | `field >= ?` | Greater than or equal |
 | `less_than_or_equal` | `{ less_than_or_equal = "10" }` | `field <= ?` | Less than or equal |
 | `in` | `{ ["in"] = { "a", "b" } }` | `field IN (?, ?)` | Value in list |
 | `not_in` | `{ not_in = { "a", "b" } }` | `field NOT IN (?, ?)` | Value not in list |
-| `exists` | `{ exists = true }` | `field IS NOT NULL` | Field is not null |
-| `not_exists` | `{ not_exists = true }` | `field IS NULL` | Field is null |
+| `exists` | `{ exists = true }` | `field IS NOT NULL` | Field is not null (value is ignored — only the key matters) |
+| `not_exists` | `{ not_exists = true }` | `field IS NULL` | Field is null (value is ignored — use `not_exists` for IS NULL, not `{ exists = false }`) |
 
 > **Note:** `in` is a Lua keyword, so use `["in"]` bracket syntax.
 

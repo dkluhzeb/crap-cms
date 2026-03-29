@@ -5,16 +5,15 @@ Field-level access controls which fields are visible or writable per-user.
 ## Configuration
 
 ```lua
-{
+crap.fields.select({
     name = "status",
-    type = "select",
     access = {
         read = "hooks.access.everyone",
         create = "hooks.access.admin_only",
         update = "hooks.access.admin_only",
     },
     -- ...
-}
+})
 ```
 
 | Property | Controls |
@@ -59,21 +58,19 @@ return M
 
 ```lua
 -- In collection definition
-{
+crap.fields.textarea({
     name = "internal_notes",
-    type = "textarea",
     access = {
         read = "hooks.access.admin_read",
     },
-},
-{
+}),
+crap.fields.select({
     name = "status",
-    type = "select",
     access = {
         update = "hooks.access.admin_write",
     },
     -- ...
-},
+}),
 ```
 
 ## Error Behavior

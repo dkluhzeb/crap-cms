@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use crate::{
-    core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType},
+    core::{
+        field::{BlockDefinition, FieldAdmin, FieldDefinition, FieldTab, FieldType},
+        registry::Registry,
+        richtext::RichtextNodeDef,
+    },
     hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
 };
 
@@ -342,8 +346,11 @@ fn test_validate_array_sub_field_skipped_for_draft() {
     );
 }
 
+/// Regression: unknown block types must produce a validation error, not be
+/// silently skipped — otherwise blocks with arbitrary types bypass all
+/// field validation.
 #[test]
-fn test_validate_blocks_unknown_block_type_skipped() {
+fn test_validate_blocks_unknown_block_type_rejected() {
     let lua = mlua::Lua::new();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
@@ -371,14 +378,19 @@ fn test_validate_blocks_unknown_block_type_skipped() {
         &data,
         &ValidationCtx::builder(&conn, "test").build(),
     );
+    assert!(result.is_err(), "Unknown block type must be rejected");
+    let err = result.unwrap_err();
     assert!(
-        result.is_ok(),
-        "Unknown block type rows should be silently skipped"
+        err.errors[0].message.contains("unknown block type"),
+        "error message should mention unknown block type: {}",
+        err.errors[0].message,
     );
 }
 
+/// Regression: non-object rows in an array field must produce a validation
+/// error — primitives should not silently bypass sub-field validation.
 #[test]
-fn test_validate_array_non_object_rows_skipped() {
+fn test_validate_array_non_object_rows_rejected() {
     let lua = mlua::Lua::new();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
@@ -400,9 +412,17 @@ fn test_validate_array_non_object_rows_skipped() {
         &data,
         &ValidationCtx::builder(&conn, "test").build(),
     );
+    assert!(result.is_err(), "Non-object array rows must be rejected");
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.errors.len(),
+        3,
+        "each non-object row should produce an error"
+    );
     assert!(
-        result.is_ok(),
-        "Non-object array rows should be silently skipped"
+        err.errors[0].message.contains("must be an object"),
+        "error message should mention object requirement: {}",
+        err.errors[0].message,
     );
 }
 
@@ -1083,5 +1103,181 @@ fn test_validate_tabs_inside_collapsible_inside_array_required() {
         result.unwrap_err().errors[0]
             .field
             .contains("items[0][body]")
+    );
+}
+
+#[test]
+fn test_validate_richtext_node_attrs_inside_array() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("cta", "CTA")
+            .attrs(vec![
+                FieldDefinition::builder("text", FieldType::Text)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("url", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("body", FieldType::Richtext)
+                    .admin(
+                        FieldAdmin::builder()
+                            .nodes(vec!["cta".to_string()])
+                            .richtext_format("json")
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"body": json_content}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").registry(&reg).build(),
+    );
+
+    assert!(
+        result.is_err(),
+        "richtext node attrs should be validated inside array rows"
+    );
+    let errs = result.unwrap_err().errors;
+    assert_eq!(errs.len(), 2);
+    assert!(errs[0].field.contains("cta#0"));
+    assert!(errs[1].field.contains("cta#0"));
+}
+
+#[test]
+fn test_validate_richtext_node_attrs_inside_array_draft_skips_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("cta", "CTA")
+            .attrs(vec![
+                FieldDefinition::builder("text", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("body", FieldType::Richtext)
+                    .admin(
+                        FieldAdmin::builder()
+                            .nodes(vec!["cta".to_string()])
+                            .richtext_format("json")
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"body": json_content}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test")
+            .registry(&reg)
+            .draft(true)
+            .build(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "draft mode should skip required checks for richtext node attrs in arrays"
+    );
+}
+
+#[test]
+fn test_validate_array_sub_field_date_format_enforced_in_draft() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    // Array sub-field with date format — format should be enforced even in draft mode
+    let fields = vec![
+        FieldDefinition::builder("events", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("start_date", FieldType::Date).build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = HashMap::new();
+    data.insert("events".to_string(), json!([{"start_date": "not-a-date"}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").draft(true).build(),
+    );
+
+    assert!(
+        result.is_err(),
+        "Array sub-field date format should be enforced even in draft mode"
+    );
+}
+
+#[test]
+fn test_validate_array_sub_field_required_skipped_in_draft() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    // Array sub-field with required — required should be skipped in draft
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("name", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"name": ""}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").draft(true).build(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "Array sub-field required check should be skipped in draft mode"
     );
 }

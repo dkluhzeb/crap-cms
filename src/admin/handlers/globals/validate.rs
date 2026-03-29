@@ -8,6 +8,7 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
+use serde_json::json;
 use tokio::task;
 
 use crate::{
@@ -15,7 +16,7 @@ use crate::{
         AdminState,
         handlers::{
             collections::forms::{extract_join_data_from_form, transform_select_has_many},
-            shared::{get_user_doc, strip_write_denied_string_fields},
+            shared::{check_access_or_forbid, get_user_doc, strip_write_denied_string_fields},
             validate::{
                 ValidateRequest, validation_error_response, validation_ok_response,
                 values_to_string_map,
@@ -23,7 +24,7 @@ use crate::{
         },
     },
     core::{auth::AuthUser, validate::ValidationError},
-    db::query::LocaleContext,
+    db::{AccessResult, query::LocaleContext},
     hooks::{HookContext, ValidationCtx},
     service,
 };
@@ -40,6 +41,13 @@ pub async fn validate_global(
         Some(d) => d.clone(),
         None => return validation_error_response_simple("Global not found"),
     };
+
+    // Check global-level update access
+    match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
+        Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
+        Err(_) => return validation_error_response_simple("Access check failed"),
+        _ => {}
+    }
 
     let mut form_data = values_to_string_map(&payload.data);
 
@@ -116,7 +124,7 @@ pub async fn validate_global(
 
 /// Quick error response for non-validation failures.
 fn validation_error_response_simple(msg: &str) -> Response {
-    Json(serde_json::json!({
+    Json(json!({
         "valid": false,
         "errors": { "_form": msg },
     }))

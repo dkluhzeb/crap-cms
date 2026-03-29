@@ -3,6 +3,8 @@ crap.collections.define("posts", {
   timestamps = true,
   versions = true,
   live = true,
+  soft_delete = true,
+  soft_delete_retention = "30d",
   admin = {
     use_as_title = "title",
     default_sort = "-published_at",
@@ -122,6 +124,7 @@ crap.collections.define("posts", {
     read = "access.published_or_author",
     create = "access.authenticated",
     update = "access.author_or_editor",
-    delete = "access.editor_or_above",
+    trash = "access.editor_or_above",
+    delete = "access.admin_or_director",
   },
 })

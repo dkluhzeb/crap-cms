@@ -4,6 +4,7 @@
 mod checks;
 mod custom;
 mod recursive;
+pub(crate) mod richtext_attrs;
 mod sub_fields;
 
 // Re-export public API
@@ -11,10 +12,11 @@ pub use checks::evaluate_condition_table;
 
 use std::collections::HashMap;
 
+use mlua::Lua;
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, validate::ValidationError},
+    core::{FieldDefinition, registry::Registry, validate::ValidationError},
     db::{DbConnection, LocaleContext},
 };
 
@@ -25,6 +27,10 @@ pub struct ValidationCtx<'a> {
     pub exclude_id: Option<&'a str>,
     pub is_draft: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
+    /// Registry for looking up richtext node definitions during node attr validation.
+    pub registry: Option<&'a Registry>,
+    /// When true, unique constraint checks exclude soft-deleted documents.
+    pub soft_delete: bool,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -41,6 +47,8 @@ pub struct ValidationCtxBuilder<'a> {
     exclude_id: Option<&'a str>,
     is_draft: bool,
     locale_ctx: Option<&'a LocaleContext>,
+    registry: Option<&'a Registry>,
+    soft_delete: bool,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -51,6 +59,8 @@ impl<'a> ValidationCtxBuilder<'a> {
             exclude_id: None,
             is_draft: false,
             locale_ctx: None,
+            registry: None,
+            soft_delete: false,
         }
     }
 
@@ -69,6 +79,16 @@ impl<'a> ValidationCtxBuilder<'a> {
         self
     }
 
+    pub fn registry(mut self, registry: &'a Registry) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+
+    pub fn soft_delete(mut self, soft_delete: bool) -> Self {
+        self.soft_delete = soft_delete;
+        self
+    }
+
     pub fn build(self) -> ValidationCtx<'a> {
         ValidationCtx {
             conn: self.conn,
@@ -76,6 +96,8 @@ impl<'a> ValidationCtxBuilder<'a> {
             exclude_id: self.exclude_id,
             is_draft: self.is_draft,
             locale_ctx: self.locale_ctx,
+            registry: self.registry,
+            soft_delete: self.soft_delete,
         }
     }
 }
@@ -83,7 +105,7 @@ impl<'a> ValidationCtxBuilder<'a> {
 /// Inner implementation of `validate_fields` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
 pub(crate) fn validate_fields_inner(
-    lua: &mlua::Lua,
+    lua: &Lua,
     fields: &[FieldDefinition],
     data: &HashMap<String, Value>,
     ctx: &ValidationCtx,

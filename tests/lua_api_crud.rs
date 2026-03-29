@@ -189,6 +189,49 @@ fn lua_crud_delete() {
 }
 
 #[test]
+fn lua_crud_find_pagination_fields() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        for i = 1, 5 do
+            crap.collections.create("articles", {
+                title = "Article " .. i,
+                body = "Body " .. i,
+            })
+        end
+
+        -- Page 1, limit 2 → page 1 of 3
+        local r = crap.collections.find("articles", { limit = 2, page = 1 })
+        local p = r.pagination
+        if p.totalDocs ~= 5 then return "TOTAL:" .. tostring(p.totalDocs) end
+        if p.limit ~= 2 then return "LIMIT:" .. tostring(p.limit) end
+        if p.totalPages ~= 3 then return "TOTAL_PAGES:" .. tostring(p.totalPages) end
+        if p.page ~= 1 then return "PAGE:" .. tostring(p.page) end
+        if p.hasNextPage ~= true then return "HAS_NEXT:false" end
+        if p.hasPrevPage ~= false then return "HAS_PREV:true" end
+        if p.nextPage ~= 2 then return "NEXT_PAGE:" .. tostring(p.nextPage) end
+        if p.prevPage ~= nil then return "PREV_PAGE:" .. tostring(p.prevPage) end
+        if #r.documents ~= 2 then return "DOCS:" .. tostring(#r.documents) end
+
+        -- Page 3 (last) → has prev, no next
+        local r2 = crap.collections.find("articles", { limit = 2, page = 3 })
+        local p2 = r2.pagination
+        if p2.page ~= 3 then return "P2_PAGE:" .. tostring(p2.page) end
+        if p2.hasPrevPage ~= true then return "P2_HAS_PREV:false" end
+        if p2.hasNextPage ~= false then return "P2_HAS_NEXT:true" end
+        if p2.prevPage ~= 2 then return "P2_PREV:" .. tostring(p2.prevPage) end
+        if p2.nextPage ~= nil then return "P2_NEXT:" .. tostring(p2.nextPage) end
+        if #r2.documents ~= 1 then return "P2_DOCS:" .. tostring(#r2.documents) end
+
+        return "ok"
+    "#,
+    );
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn lua_crud_find_with_where() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
     let result = eval_lua_db(

@@ -17,14 +17,76 @@ class CrapLiveEvents extends HTMLElement {
     this._source = null;
     /** @type {number} */
     this._lastSaveTime = 0;
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    this._reconnectTimer = null;
   }
+
+  static _injectStyles() {
+    if (CrapLiveEvents._stylesInjected) return;
+    CrapLiveEvents._stylesInjected = true;
+    const s = document.createElement('style');
+    s.textContent = `
+      .stale-warning {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-md);
+        background: var(--color-warning-bg, #fef3c7);
+        border: 1px solid var(--color-warning, #f59e0b);
+        border-radius: var(--radius-md);
+        margin-bottom: var(--space-md);
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+      }
+      .stale-warning__icon {
+        font-size: var(--text-lg);
+        flex-shrink: 0;
+      }
+      .stale-warning__text {
+        flex: 1;
+      }
+      .stale-warning__actions {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        flex-shrink: 0;
+      }
+      .stale-warning__reload {
+        white-space: nowrap;
+      }
+      .stale-warning__dismiss {
+        all: unset;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--space-xl);
+        height: var(--space-xl);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: var(--icon-md);
+        color: var(--text-secondary);
+      }
+      .stale-warning__dismiss:hover {
+        background: rgba(0, 0, 0, 0.1);
+        color: var(--text-primary);
+      }
+      @media (max-width: 768px) {
+        .stale-warning { flex-wrap: wrap; }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  /** @type {boolean} */
+  static _stylesInjected = false;
 
   connectedCallback() {
     if (typeof EventSource === 'undefined') return;
     if (!document.querySelector('[data-admin-layout]')) return;
 
     this._onBeforeRequest = /** @param {CustomEvent} e */ (e) => {
-      if (e.detail.requestConfig.verb !== 'get') {
+      const verb = (e.detail.requestConfig && e.detail.requestConfig.verb) || e.detail.verb || '';
+      if (verb !== 'get') {
         this._lastSaveTime = Date.now();
       }
     };
@@ -38,12 +100,21 @@ class CrapLiveEvents extends HTMLElement {
       this._source.close();
       this._source = null;
     }
+    if (this._reconnectTimer != null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this._onBeforeRequest) {
       document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+      this._onBeforeRequest = null;
     }
   }
 
   _connect() {
+    if (this._reconnectTimer != null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this._source = new EventSource('/admin/events');
     const SAVE_GRACE_MS = 5000;
 
@@ -76,7 +147,7 @@ class CrapLiveEvents extends HTMLElement {
         /** @type {Record<string, string>} */
         const opLabels = { create: t('op_created'), update: t('op_updated'), delete: t('op_deleted') };
         const msg = `${collection} ${opLabels[op] || op}`;
-        if (window.CrapToast) window.CrapToast.show(msg, 'info');
+        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: msg, type: 'info' } }));
       } catch {
         // Ignore parse errors
       }
@@ -85,7 +156,7 @@ class CrapLiveEvents extends HTMLElement {
     this._source.onerror = () => {
       if (this._source && this._source.readyState === EventSource.CLOSED) {
         this._source = null;
-        setTimeout(() => this._connect(), 5000);
+        this._reconnectTimer = setTimeout(() => this._connect(), 5000);
       }
     };
   }
@@ -95,6 +166,7 @@ class CrapLiveEvents extends HTMLElement {
    * @param {{ id: string, email: string }|null} editedBy
    */
   _showStaleWarning(action, editedBy) {
+    CrapLiveEvents._injectStyles();
     const form = document.getElementById('edit-form');
     if (!form) return;
 
@@ -113,20 +185,38 @@ class CrapLiveEvents extends HTMLElement {
       ? t('stale_deleted', { who })
       : t('stale_updated', { who });
 
-    banner.innerHTML = `
-      <span class="stale-warning__icon">&#9888;</span>
-      <span class="stale-warning__text">${message}</span>
-      <span class="stale-warning__actions">
-        ${isDeleted ? '' : `<button type="button" class="stale-warning__reload button button--ghost button--small">${t('reload')}</button>`}
-        <button type="button" class="stale-warning__dismiss">&times;</button>
-      </span>
-    `;
+    banner.textContent = '';
 
-    const reloadBtn = banner.querySelector('.stale-warning__reload');
-    if (reloadBtn) reloadBtn.onclick = () => location.reload();
+    const icon = document.createElement('span');
+    icon.className = 'stale-warning__icon';
+    icon.textContent = '\u26A0';
+    banner.appendChild(icon);
 
-    const dismissBtn = banner.querySelector('.stale-warning__dismiss');
-    if (dismissBtn) dismissBtn.onclick = () => banner.remove();
+    const text = document.createElement('span');
+    text.className = 'stale-warning__text';
+    text.textContent = message;
+    banner.appendChild(text);
+
+    const actions = document.createElement('span');
+    actions.className = 'stale-warning__actions';
+
+    if (!isDeleted) {
+      const reloadBtn = document.createElement('button');
+      reloadBtn.type = 'button';
+      reloadBtn.className = 'stale-warning__reload button button--ghost button--small';
+      reloadBtn.textContent = t('reload');
+      reloadBtn.addEventListener('click', () => location.reload());
+      actions.appendChild(reloadBtn);
+    }
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.type = 'button';
+    dismissBtn.className = 'stale-warning__dismiss';
+    dismissBtn.textContent = '\u00d7';
+    dismissBtn.addEventListener('click', () => banner.remove());
+    actions.appendChild(dismissBtn);
+
+    banner.appendChild(actions);
 
     if (isDeleted) {
       form.querySelectorAll('input, select, textarea, button[type="submit"]').forEach(

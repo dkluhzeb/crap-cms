@@ -54,7 +54,7 @@ pub fn sync_fts_table(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let fts_table = fts_table_name(slug);
-    let fts_fields = get_fts_columns(def, locale_config);
+    let fts_fields = get_fts_columns(def, locale_config)?;
 
     // Always drop existing FTS table first
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", fts_table))
@@ -113,7 +113,7 @@ fn bulk_populate_fast(
         .map(|f| format!("COALESCE({}, '')", f))
         .collect();
     let insert_sql = format!(
-        "INSERT INTO {}(id, {}) SELECT id, {} FROM {}",
+        "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
         fts_table,
         field_list,
         select_fields.join(", "),
@@ -137,14 +137,14 @@ fn bulk_populate_slow(
         .iter()
         .map(|f| format!("COALESCE({}, '')", f))
         .collect();
-    let select_sql = format!("SELECT id, {} FROM {}", select_fields.join(", "), slug);
+    let select_sql = format!("SELECT id, {} FROM \"{}\"", select_fields.join(", "), slug);
 
     let db_rows = conn
         .query_all(&select_sql, &[])
         .with_context(|| format!("Failed to query {} for FTS population", slug))?;
 
     let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
-        .map(|i| format!("?{}", i))
+        .map(|i| conn.placeholder(i))
         .collect();
     let insert_sql = format!(
         "INSERT INTO {}(id, {}) VALUES ({})",
@@ -225,7 +225,11 @@ pub fn fts_upsert_with_registry(
 
     // Delete existing row
     conn.execute(
-        &format!("DELETE FROM {} WHERE id = ?1", fts_table),
+        &format!(
+            "DELETE FROM {} WHERE id = {}",
+            fts_table,
+            conn.placeholder(1)
+        ),
         &[DbValue::Text(doc.id.to_string())],
     )
     .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
@@ -261,7 +265,7 @@ pub fn fts_upsert_with_registry(
         values.push(DbValue::Text(text));
     }
 
-    let placeholders: Vec<String> = (1..=values.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=values.len()).map(|i| conn.placeholder(i)).collect();
     let field_list: String = fts_cols.join(", ");
     let sql = format!(
         "INSERT INTO {}(id, {}) VALUES ({})",
@@ -287,7 +291,11 @@ pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     }
 
     conn.execute(
-        &format!("DELETE FROM {} WHERE id = ?1", fts_table),
+        &format!(
+            "DELETE FROM {} WHERE id = {}",
+            fts_table,
+            conn.placeholder(1)
+        ),
         &[DbValue::Text(id.to_string())],
     )
     .with_context(|| format!("FTS delete in {}", fts_table))?;

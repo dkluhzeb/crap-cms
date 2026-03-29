@@ -5,7 +5,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_batch_cached;
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
+use crate::db::query::populate::{
+    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+    locale_cache_key,
+};
 use crate::{
     core::{CollectionDefinition, Document, upload},
     db::query::read::find_by_ids,
@@ -112,7 +115,11 @@ pub(super) fn batch_fetch_single_collection(
     let mut doc_map: HashMap<String, Document> = HashMap::new();
     let mut uncached_ids: Vec<String> = Vec::new();
     for id in all_ids {
-        let key = (collection.to_string(), id.clone());
+        let key = (
+            collection.to_string(),
+            id.clone(),
+            locale_cache_key(ctx.locale_ctx),
+        );
 
         if let Some(cached) = ctx.cache.get(&key) {
             doc_map.insert(id.clone(), cached.value().clone());
@@ -149,8 +156,16 @@ pub(super) fn batch_fetch_single_collection(
             )?;
         }
         for d in fetched {
-            ctx.cache
-                .insert((collection.to_string(), d.id.to_string()), d.clone());
+            if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                ctx.cache.insert(
+                    (
+                        collection.to_string(),
+                        d.id.to_string(),
+                        locale_cache_key(ctx.locale_ctx),
+                    ),
+                    d.clone(),
+                );
+            }
             doc_map.insert(d.id.to_string(), d);
         }
     }
@@ -345,7 +360,10 @@ mod tests {
         cached_author
             .fields
             .insert("name".to_string(), json!("CachedBatchAuthor"));
-        cache.insert(("authors".to_string(), "a1".to_string()), cached_author);
+        cache.insert(
+            ("authors".to_string(), "a1".to_string(), None),
+            cached_author,
+        );
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
@@ -409,7 +427,10 @@ mod tests {
         cached_cat
             .fields
             .insert("name".to_string(), json!("CachedCategory"));
-        cache.insert(("categories".to_string(), "c1".to_string()), cached_cat);
+        cache.insert(
+            ("categories".to_string(), "c1".to_string(), None),
+            cached_cat,
+        );
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());

@@ -11,7 +11,7 @@ use super::session_cookies;
 use crate::{
     admin::AdminState,
     core::auth::{Claims, ClaimsBuilder, create_token},
-    db::query,
+    db::query::{self, is_valid_identifier},
 };
 
 /// POST /admin/api/session-refresh — issue a fresh JWT if the current one is still valid.
@@ -22,29 +22,47 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    // Check account is not locked
+    // Check account is not locked and fetch current session version
     let pool = state.pool.clone();
     let slug = claims.collection.clone();
     let user_id = claims.sub.clone();
 
-    let locked = task::spawn_blocking(move || {
+    let check_result = task::spawn_blocking(move || {
+        if !is_valid_identifier(&slug) {
+            anyhow::bail!("Invalid collection slug");
+        }
+
         let conn = pool.get()?;
-        query::is_locked(&conn, &slug, &user_id)
+
+        // Verify user still exists — is_locked and get_session_version both
+        // return defaults (false/0) for missing rows, so a deleted user would
+        // silently pass all checks and refresh their session indefinitely.
+        if !query::user_exists(&conn, &slug, &user_id)? {
+            anyhow::bail!("User no longer exists");
+        }
+
+        let locked = query::is_locked(&conn, &slug, &user_id)?;
+        let session_version = query::get_session_version(&conn, &slug, &user_id)?;
+        anyhow::Ok((locked, session_version))
     })
     .await;
 
-    match locked {
-        Ok(Ok(true)) => return StatusCode::UNAUTHORIZED.into_response(),
+    let session_version = match check_result {
+        Ok(Ok((true, _))) => return StatusCode::UNAUTHORIZED.into_response(),
+        Ok(Ok((false, sv))) => sv,
         Ok(Err(e)) => {
-            tracing::error!("Session refresh lock check: {}", e);
+            tracing::error!("Session refresh check: {}", e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
         Err(e) => {
             tracing::error!("Session refresh task error: {}", e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        // Not locked continue.
-        Ok(Ok(false)) => {}
+    };
+
+    // Reject tokens with stale session version (password was changed)
+    if claims.session_version != session_version {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
 
     // Compute fresh expiry (collection override or global config)
@@ -54,10 +72,18 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
         .unwrap_or(state.config.auth.token_expiry);
 
-    let new_claims = ClaimsBuilder::new(claims.sub, claims.collection)
+    let new_claims = match ClaimsBuilder::new(claims.sub, claims.collection)
         .email(claims.email)
         .exp((Utc::now().timestamp() as u64) + expiry)
-        .build();
+        .session_version(session_version)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Session refresh claims build: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let token = match create_token(&new_claims, state.jwt_secret.as_ref()) {
         Ok(t) => t,

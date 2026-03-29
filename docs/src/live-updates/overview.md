@@ -16,9 +16,13 @@ In `crap.toml`:
 [live]
 enabled = true           # default: true
 channel_capacity = 1024  # default: 1024
+# max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
+# max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
 ```
 
 Set `enabled = false` to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.
+
+Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive `503 Service Unavailable` and new gRPC Subscribe calls receive `UNAVAILABLE` status. Existing connections are not affected.
 
 ## Per-Collection Control
 

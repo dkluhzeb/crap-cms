@@ -87,6 +87,7 @@ pub struct JobRunBuilder {
     started_at: Option<String>,
     completed_at: Option<String>,
     heartbeat_at: Option<String>,
+    retry_after: Option<String>,
 }
 
 impl JobRunBuilder {
@@ -106,6 +107,7 @@ impl JobRunBuilder {
             started_at: None,
             completed_at: None,
             heartbeat_at: None,
+            retry_after: None,
         }
     }
 
@@ -169,6 +171,11 @@ impl JobRunBuilder {
         self
     }
 
+    pub fn retry_after(mut self, ts: impl Into<String>) -> Self {
+        self.retry_after = Some(ts.into());
+        self
+    }
+
     pub fn build(self) -> JobRun {
         JobRun {
             id: self.id,
@@ -185,6 +192,7 @@ impl JobRunBuilder {
             started_at: self.started_at,
             completed_at: self.completed_at,
             heartbeat_at: self.heartbeat_at,
+            retry_after: self.retry_after,
         }
     }
 }

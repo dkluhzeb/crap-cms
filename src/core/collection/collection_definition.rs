@@ -56,6 +56,13 @@ pub struct CollectionDefinition {
     /// Custom database indexes to optimize query performance.
     #[serde(default)]
     pub indexes: Vec<IndexDefinition>,
+    /// Enable soft deletes (move to trash instead of permanent deletion).
+    #[serde(default)]
+    pub soft_delete: bool,
+    /// Retention period for soft-deleted documents before auto-purge.
+    /// Human-readable duration: "30d", "7d", "90d". None = manual purge only.
+    #[serde(default)]
+    pub soft_delete_retention: Option<String>,
 }
 
 impl Default for CollectionDefinition {
@@ -74,6 +81,8 @@ impl Default for CollectionDefinition {
             live: None,
             versions: None,
             indexes: Vec::new(),
+            soft_delete: false,
+            soft_delete_retention: None,
         }
     }
 }
@@ -157,6 +166,11 @@ impl CollectionDefinition {
     /// Check if this collection has drafts enabled (versioning with drafts flag).
     pub fn has_drafts(&self) -> bool {
         self.versions.as_ref().is_some_and(|v| v.drafts)
+    }
+
+    /// Check if this collection has soft deletes enabled.
+    pub fn has_soft_delete(&self) -> bool {
+        self.soft_delete
     }
 }
 
@@ -391,5 +405,21 @@ mod tests {
         let v = VersionsConfig::new(false, 0);
         assert!(!v.drafts);
         assert_eq!(v.max_versions, 0);
+    }
+
+    #[test]
+    fn soft_delete_defaults_to_false() {
+        let col = make_collection("posts", None, None, None);
+        assert!(!col.has_soft_delete());
+        assert!(col.soft_delete_retention.is_none());
+    }
+
+    #[test]
+    fn soft_delete_enabled() {
+        let mut col = make_collection("posts", None, None, None);
+        col.soft_delete = true;
+        col.soft_delete_retention = Some("30d".to_string());
+        assert!(col.has_soft_delete());
+        assert_eq!(col.soft_delete_retention.as_deref(), Some("30d"));
     }
 }

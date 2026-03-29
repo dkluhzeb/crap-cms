@@ -34,8 +34,8 @@
 }
 
 .header__logo-icon {
-  height: 24px;
-  width: 24px;
+  height: var(--space-xl);
+  width: var(--space-xl);
   color: var(--color-primary);
 }
 
@@ -80,12 +80,12 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 6px var(--space-md);
+  padding: var(--space-xs2) var(--space-md);
   font-size: var(--text-sm);
 }
 
 .sidebar__navigation .material-symbols-outlined {
-  font-size: 16px;
+  font-size: var(--icon-sm);
 }
 
 .main {
@@ -94,10 +94,16 @@
   padding: var(--space-lg);
 }
 
+/* Pages with a sticky header: remove top padding (sticky header provides it) */
+.main:has(> crap-sticky-header),
+.main:has(> crap-list-settings) {
+  padding-top: 0;
+}
+
 /* Edit page two-column layout */
 .edit-layout {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  grid-template-columns: 1fr calc(var(--base) * 70);
   gap: var(--space-lg);
   align-items: start;
   grid-column: 1 / -1;
@@ -117,16 +123,17 @@
 
 .edit-layout__sidebar {
   position: sticky;
-  top: calc(var(--sticky-header-bottom, var(--header-height)) + var(--space-lg));
+  top: var(--sticky-header-bottom, var(--header-height));
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
   .edit-layout {
     grid-template-columns: 1fr;
   }
   .edit-layout__sidebar {
     position: static;
     order: -1;
+    align-self: auto;
   }
 }
 
@@ -160,10 +167,12 @@ crap-sticky-header {
   top: var(--header-height);
   z-index: 5;
   background: var(--bg-body);
-  padding-top: var(--space-lg);
-  margin-top: calc(-1 * var(--space-lg));
-  box-shadow: 0 -1px 0 var(--bg-body), 0 1px 3px rgba(0, 0, 0, 0.04);
-  overflow: hidden;
+
+  /* Break out of .main's horizontal padding so background covers edge-to-edge */
+  margin: 0 calc(-1 * var(--space-lg));
+  padding: var(--space-lg);
+
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 /* Page header */
@@ -204,7 +213,7 @@ crap-sticky-header {
 }
 
 .empty-state__icon {
-  font-size: 48px;
+  font-size: var(--icon-xl);
   color: var(--text-tertiary);
 }
 
@@ -221,11 +230,11 @@ crap-sticky-header {
   justify-content: center;
   text-align: center;
   padding: var(--space-2xl) var(--space-xl);
-  min-height: 400px;
+  min-height: var(--max-width-form);
 }
 
 .error-page h1 {
-  font-size: 4rem;
+  font-size: calc(var(--base) * 16);
   font-weight: 700;
   color: var(--text-tertiary);
   margin: 0 0 var(--space-sm);
@@ -245,7 +254,7 @@ crap-sticky-header {
   border-radius: var(--radius-md);
   padding: var(--space-md) var(--space-lg);
   color: var(--text-secondary);
-  max-width: 600px;
+  max-width: calc(var(--base) * 150);
   overflow-x: auto;
 }
 
@@ -255,7 +264,7 @@ crap-sticky-header {
 }
 
 .locale-picker__badge {
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -265,8 +274,8 @@ crap-sticky-header {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--control-lg);
+  height: var(--control-lg);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: transparent;
@@ -285,7 +294,7 @@ crap-sticky-header {
   position: absolute;
   top: calc(100% + var(--space-xs));
   right: 0;
-  min-width: 100px;
+  min-width: calc(var(--base) * 25);
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -303,7 +312,7 @@ crap-sticky-header {
   align-items: center;
   gap: var(--space-sm);
   width: 100%;
-  padding: 6px 10px;
+  padding: var(--space-xs2) var(--space-sm2);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -335,8 +344,8 @@ crap-sticky-header {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--control-lg);
+  height: var(--control-lg);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: transparent;
@@ -355,7 +364,7 @@ crap-sticky-header {
   position: absolute;
   top: calc(100% + var(--space-xs));
   right: 0;
-  min-width: 180px;
+  min-width: calc(var(--base) * 45);
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -373,7 +382,7 @@ crap-sticky-header {
   align-items: center;
   gap: var(--space-sm);
   width: 100%;
-  padding: 6px 10px;
+  padding: var(--space-xs2) var(--space-sm2);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -395,8 +404,8 @@ crap-sticky-header {
 
 .theme-picker__swatch {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
   border-radius: 50%;
   border: 1px solid var(--border-color-hover);
   flex-shrink: 0;
@@ -412,7 +421,7 @@ crap-sticky-header {
   display: none;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .layout {
     grid-template-columns: 1fr;
     grid-template-areas:
@@ -477,8 +486,8 @@ crap-sticky-header {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: var(--control-lg);
+    height: var(--control-lg);
     border: none;
     border-radius: var(--radius-md);
     background: transparent;
@@ -492,6 +501,17 @@ crap-sticky-header {
   .header__toggle:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  .header {
+    position: static;
+  }
+
+  crap-sticky-header {
+    position: static;
+    margin: 0;
+    padding: var(--space-md) var(--space-md) 0;
+    box-shadow: none;
   }
 
   .main {

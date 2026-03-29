@@ -55,7 +55,7 @@ pub async fn update_action(
     let method = form_data.remove("_method").unwrap_or_default();
 
     if method.eq_ignore_ascii_case("DELETE") {
-        return delete_action_impl(&state, &slug, &id, &auth_user).await;
+        return delete_action_impl(&state, &slug, &id, &auth_user, false, false).await;
     }
 
     do_update(&state, &slug, &id, form_data, file, &auth_user).await

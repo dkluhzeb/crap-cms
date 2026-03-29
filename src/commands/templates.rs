@@ -3,9 +3,11 @@
 use anyhow::Result;
 use std::path::Path;
 
+use crate::scaffold;
+
 /// Handle the `templates list` subcommand (no config needed).
 pub fn list(r#type: Option<String>, verbose: bool) -> Result<()> {
-    crate::scaffold::templates_list(r#type.as_deref(), verbose)
+    scaffold::templates_list(r#type.as_deref(), verbose)
 }
 
 /// Handle the `templates extract` subcommand (needs config dir).
@@ -16,5 +18,5 @@ pub fn extract(
     r#type: Option<String>,
     force: bool,
 ) -> Result<()> {
-    crate::scaffold::templates_extract(config_dir, paths, all, r#type.as_deref(), force)
+    scaffold::templates_extract(config_dir, paths, all, r#type.as_deref(), force)
 }

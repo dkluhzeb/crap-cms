@@ -26,12 +26,15 @@ my-project/
 ├── translations/          # Admin UI translation overrides (JSON per locale)
 │   └── de.json
 ├── static/                # Static file overrides (CSS, JS, fonts)
-├── data/                  # SQLite database (auto-created)
-│   └── crap.db
+├── data/                  # Runtime data (auto-created)
+│   ├── crap.db            # SQLite database
+│   ├── crap.pid           # Process ID file (when running with --detach)
+│   └── logs/              # Rotating log files (when [logging] file = true)
 ├── uploads/               # Uploaded files (auto-created per collection)
 │   └── media/
 └── types/                 # Auto-generated type definitions (see `typegen`)
-    └── crap.lua
+    ├── crap.lua           # API surface types (crap.* functions)
+    └── generated.lua      # Per-collection types (data, doc, hook, filters)
 ```
 
 ## File Loading Order
@@ -68,4 +71,4 @@ Generate type definitions with:
 crap-cms typegen
 ```
 
-This writes `types/crap.lua` with LuaLS annotations for the entire `crap.*` API. Use `-l all` to generate types for all supported languages.
+This writes two files: `types/crap.lua` (API surface types for the `crap.*` functions) and `types/generated.lua` (per-collection types derived from your field definitions). Use `-l all` to generate types for all supported languages.

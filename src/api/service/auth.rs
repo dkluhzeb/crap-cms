@@ -1,6 +1,6 @@
 //! Auth RPCs: login, me, forgot_password, reset_password, verify_email.
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use serde_json::json;
 use tonic::{Request, Response, Status};
 
@@ -8,7 +8,7 @@ use crate::{
     api::content,
     core::{
         Slug,
-        auth::{self, ClaimsBuilder},
+        auth::{self, ClaimsBuilder, ResetTokenError},
         email,
     },
     db::query,
@@ -25,10 +25,14 @@ impl ContentService {
         &self,
         request: Request<content::LoginRequest>,
     ) -> Result<Response<content::LoginResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
 
         // Check rate limit before doing any work
-        if self.login_limiter.is_blocked(&req.email) {
+        if self.login_limiter.is_blocked(&req.email) || self.ip_login_limiter.is_blocked(&ip) {
             return Err(Status::resource_exhausted(
                 "Too many login attempts. Please try again later.",
             ));
@@ -43,106 +47,85 @@ impl ContentService {
             )));
         }
 
+        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+            return Err(Status::permission_denied(
+                "Local login is disabled for this collection",
+            ));
+        }
+
         let pool = self.pool.clone();
         let slug = req.collection.clone();
         let email = req.email.clone();
         let password = req.password.clone();
         let def_owned = def.clone();
+        let check_verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
 
-        let user = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
-            let doc = query::find_by_email(&conn, &slug, &def_owned, &email)?;
-            let doc = match doc {
-                Some(d) => d,
-                None => {
-                    auth::dummy_verify();
+        // All checks in a single spawn_blocking: find user → verify password →
+        // check locked → check email verified. This ordering prevents locked/unverified
+        // accounts from leaking whether the password was correct.
+        let login_result: Result<Option<_>, &'static str> =
+            tokio::task::spawn_blocking(move || {
+                let conn = pool.get().context("DB connection")?;
+                let doc = query::find_by_email(&conn, &slug, &def_owned, &email)?;
+                let doc = match doc {
+                    Some(d) => d,
+                    None => {
+                        auth::dummy_verify();
+                        return Ok(Ok(None));
+                    }
+                };
+                let hash = query::get_password_hash(&conn, &slug, &doc.id)?;
+                let hash = match hash {
+                    Some(h) => h,
+                    None => {
+                        auth::dummy_verify();
+                        return Ok(Ok(None));
+                    }
+                };
 
-                    return Ok(None);
+                if !auth::verify_password(&password, hash.as_ref())? {
+                    return Ok(Ok(None));
                 }
-            };
-            let hash = query::get_password_hash(&conn, &slug, &doc.id)?;
-            let hash = match hash {
-                Some(h) => h,
-                None => {
-                    auth::dummy_verify();
 
-                    return Ok(None);
+                // Password is correct — now check locked and email verification
+                if query::is_locked(&conn, &slug, &doc.id)? {
+                    return Ok(Err("This account has been locked"));
                 }
-            };
+                if check_verify_email && !query::is_verified(&conn, &slug, &doc.id)? {
+                    return Ok(Err("Please verify your email before logging in"));
+                }
 
-            if !auth::verify_password(&password, hash.as_ref())? {
-                return Ok(None);
-            }
-            Ok::<_, anyhow::Error>(Some(doc))
-        })
-        .await
-        .map_err(|e| {
-            tracing::error!("Login task error: {}", e);
-            Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            tracing::error!("Login error: {}", e);
-            Status::internal("Internal error")
-        })?;
+                let session_version = query::get_session_version(&conn, &slug, &doc.id)?;
 
-        let user = match user {
-            Some(u) => u,
-            None => {
+                Ok::<_, anyhow::Error>(Ok(Some((doc, session_version))))
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("Login task error: {}", e);
+                Status::internal("Internal error")
+            })?
+            .map_err(|e| {
+                tracing::error!("Login error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+        let (user, session_version) = match login_result {
+            Ok(Some(u)) => u,
+            Ok(None) => {
                 self.login_limiter.record_failure(&req.email);
-
+                self.ip_login_limiter.record_failure(&ip);
+                return Err(Status::unauthenticated("Invalid email or password"));
+            }
+            Err(msg) => {
+                // Log the actual reason for observability, but return the same
+                // generic error as wrong-password to prevent attackers from
+                // confirming password correctness on locked/unverified accounts.
+                tracing::warn!("Login denied for '{}': {}", req.email, msg);
+                self.login_limiter.record_failure(&req.email);
+                self.ip_login_limiter.record_failure(&ip);
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
         };
-
-        // Check if account is locked
-        {
-            let pool = self.pool.clone();
-            let slug = req.collection.clone();
-            let uid = user.id.clone();
-            let locked = tokio::task::spawn_blocking(move || {
-                let conn = pool.get().context("DB connection")?;
-                query::is_locked(&conn, &slug, &uid)
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!("Lock check task error: {}", e);
-                Status::internal("Internal error")
-            })?
-            .map_err(|e| {
-                tracing::error!("Lock check error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            if locked {
-                return Err(Status::permission_denied("This account has been locked"));
-            }
-        }
-
-        // Check email verification if enabled
-        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
-            let pool = self.pool.clone();
-            let slug = req.collection.clone();
-            let uid = user.id.clone();
-            let verified = tokio::task::spawn_blocking(move || {
-                let conn = pool.get().context("DB connection")?;
-                query::is_verified(&conn, &slug, &uid)
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!("Verification check task error: {}", e);
-                Status::internal("Internal error")
-            })?
-            .map_err(|e| {
-                tracing::error!("Verification check error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            if !verified {
-                return Err(Status::permission_denied(
-                    "Please verify your email before logging in",
-                ));
-            }
-        }
 
         let user_email = user
             .fields
@@ -156,15 +139,21 @@ impl ContentService {
         let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)
             .exp((chrono::Utc::now().timestamp() as u64) + expiry)
-            .build();
+            .session_version(session_version)
+            .build()
+            .map_err(|e| {
+                tracing::error!("Claims build error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
         let token = auth::create_token(&claims, self.jwt_secret.as_ref()).map_err(|e| {
             tracing::error!("Token creation error: {}", e);
             Status::internal("Internal error")
         })?;
 
-        // Successful login — clear rate limit state
+        // Successful login — clear rate limit state for both email and IP
         self.login_limiter.clear(&req.email);
+        self.ip_login_limiter.clear(&ip);
 
         Ok(Response::new(content::LoginResponse {
             token,
@@ -195,9 +184,13 @@ impl ContentService {
         let pool = self.pool.clone();
         let collection = claims.collection.clone();
         let id = claims.sub.clone();
-        let doc = tokio::task::spawn_blocking(move || {
+        let session_version = claims.session_version;
+
+        let (doc, db_session_version) = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
-            query::find_by_id(&conn, &collection, &def, &id, None)
+            let doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
+            let sv = query::get_session_version(&conn, &collection, &id)?;
+            Ok::<_, anyhow::Error>((doc, sv))
         })
         .await
         .map_err(|e| {
@@ -211,6 +204,22 @@ impl ContentService {
 
         let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
 
+        // Reject tokens with stale session version (password was changed)
+        if session_version != db_session_version {
+            return Err(Status::unauthenticated("Session invalidated"));
+        }
+
+        // Reject locked users even if their JWT is still valid
+        let locked = doc
+            .fields
+            .get("_locked")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            != 0;
+        if locked {
+            return Err(Status::unauthenticated("Account is locked"));
+        }
+
         Ok(Response::new(content::MeResponse {
             user: Some(document_to_proto(&doc, &claims.collection)),
         }))
@@ -222,29 +231,41 @@ impl ContentService {
         &self,
         request: Request<content::ForgotPasswordRequest>,
     ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
 
-        // Rate limit: prevent email flooding (always count, always return success)
-        if self.forgot_password_limiter.is_blocked(&req.email) {
+        // Rate limit: prevent email/IP flooding
+        if self.forgot_password_limiter.is_blocked(&req.email)
+            || self.ip_forgot_password_limiter.is_blocked(&ip)
+        {
             return Ok(Response::new(content::ForgotPasswordResponse {
                 success: true,
             }));
         }
+
+        // Record rate limit immediately to prevent concurrent request bypass.
+        // Safe to record unconditionally — the response is always "success"
+        // regardless of whether the email exists, so no information is leaked.
         self.forgot_password_limiter.record_failure(&req.email);
+        self.ip_forgot_password_limiter.record_failure(&ip);
 
-        let def = self.get_collection_def(&req.collection)?;
+        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
 
-        if !def.is_auth_collection() {
-            return Err(Status::invalid_argument(format!(
-                "Collection '{}' is not an auth collection",
-                req.collection
-            )));
-        }
+        let def = match self.get_collection_def(&req.collection) {
+            Ok(d) => d,
+            // Return success for non-existent collections to prevent leaking validity
+            Err(_) => return Ok(ok_response),
+        };
 
-        if !def.auth.as_ref().is_some_and(|a| a.forgot_password) {
-            return Err(Status::permission_denied(
-                "Password reset is not enabled for this collection",
-            ));
+        if !def.is_auth_collection()
+            || !def.auth.as_ref().is_some_and(|a| a.forgot_password)
+            || def.auth.as_ref().is_some_and(|a| a.disable_local)
+        {
+            // Return success to prevent leaking collection configuration
+            return Ok(ok_response);
         }
 
         let pool = self.pool.clone();
@@ -255,7 +276,6 @@ impl ContentService {
         let email_renderer = self.email_renderer.clone();
         let server_config = self.server_config.clone();
         let reset_expiry = self.reset_token_expiry;
-
         // Fire and forget -- always return success
         tokio::task::spawn_blocking(move || {
             let conn = match pool.get() {
@@ -286,11 +306,13 @@ impl ContentService {
                 return;
             }
 
-            let base_url = if server_config.host == "0.0.0.0" {
-                format!("http://localhost:{}", server_config.admin_port)
-            } else {
-                format!("http://{}:{}", server_config.host, server_config.admin_port)
-            };
+            let base_url = server_config.public_url.clone().unwrap_or_else(|| {
+                if server_config.host == "0.0.0.0" {
+                    format!("http://localhost:{}", server_config.admin_port)
+                } else {
+                    format!("http://{}:{}", server_config.host, server_config.admin_port)
+                }
+            });
             let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
 
             let html = match email_renderer.render(
@@ -330,7 +352,21 @@ impl ContentService {
         &self,
         request: Request<content::ResetPasswordRequest>,
     ) -> Result<Response<content::ResetPasswordResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
+
+        // Rate limit by IP — prevents brute-forcing reset tokens.
+        // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
+        // reset failures blocking legitimate login attempts from the same IP.
+        if self.ip_forgot_password_limiter.is_blocked(&ip) {
+            return Err(Status::resource_exhausted(
+                "Too many attempts, try again later",
+            ));
+        }
+
         let def = self.get_collection_def(&req.collection)?;
 
         if !def.is_auth_collection() {
@@ -338,6 +374,12 @@ impl ContentService {
                 "Collection '{}' is not an auth collection",
                 req.collection
             )));
+        }
+
+        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+            return Err(Status::permission_denied(
+                "Local login is disabled for this collection",
+            ));
         }
 
         if let Err(e) = self.password_policy.validate(&req.new_password) {
@@ -350,40 +392,55 @@ impl ContentService {
         let password = req.new_password.clone();
         let def_owned = def;
 
-        tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
-            let (user, exp) = query::find_by_reset_token(&conn, &slug, &def_owned, &token)?
-                .ok_or_else(|| anyhow!("Invalid reset token"))?;
+        let result: Result<(), anyhow::Error> = tokio::task::spawn_blocking(move || {
+            let mut conn = pool.get().context("DB connection")?;
+            let tx = conn.transaction().context("Start transaction")?;
+            let (user, exp) = query::find_by_reset_token(&tx, &slug, &def_owned, &token)?
+                .ok_or(ResetTokenError::NotFound)?;
 
-            if chrono::Utc::now().timestamp() >= exp {
-                query::clear_reset_token(&conn, &slug, &user.id)?;
-
-                return Err(anyhow!("Reset token has expired"));
+            // Locked accounts must not be able to reset their password.
+            // Return NotFound to avoid leaking that the account exists but is locked.
+            if query::is_locked(&tx, &slug, &user.id)? {
+                query::clear_reset_token(&tx, &slug, &user.id)?;
+                tx.commit()?;
+                return Err(ResetTokenError::NotFound.into());
             }
 
-            query::update_password(&conn, &slug, &user.id, &password)?;
-            query::clear_reset_token(&conn, &slug, &user.id)?;
+            if chrono::Utc::now().timestamp() >= exp {
+                query::clear_reset_token(&tx, &slug, &user.id)?;
+                tx.commit()?;
+
+                return Err(ResetTokenError::Expired.into());
+            }
+
+            query::update_password(&tx, &slug, &user.id, &password)?;
+            query::clear_reset_token(&tx, &slug, &user.id)?;
+            tx.commit()?;
             Ok(())
         })
         .await
         .map_err(|e| {
             tracing::error!("Reset password task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            let msg = e.to_string();
-
-            if msg.contains("Invalid reset token") || msg.contains("expired") {
-                Status::invalid_argument(msg)
-            } else {
-                tracing::error!("Reset password error: {}", e);
-                Status::internal("Internal error")
-            }
         })?;
 
-        Ok(Response::new(content::ResetPasswordResponse {
-            success: true,
-        }))
+        match result {
+            Ok(()) => Ok(Response::new(content::ResetPasswordResponse {
+                success: true,
+            })),
+            Err(e) => {
+                // Record failure on invalid/expired token — not on success
+                self.ip_forgot_password_limiter.record_failure(&ip);
+
+                match e.downcast_ref::<ResetTokenError>() {
+                    Some(_) => Err(Status::invalid_argument(e.to_string())),
+                    None => {
+                        tracing::error!("Reset password error: {}", e);
+                        Err(Status::internal("Internal error"))
+                    }
+                }
+            }
+        }
     }
 
     /// Verify an email address using a verification token.
@@ -413,13 +470,20 @@ impl ContentService {
         let def_owned = def;
 
         let found = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
-            match query::find_by_verification_token(&conn, &slug, &def_owned, &token)? {
+            let mut conn = pool.get().context("DB connection")?;
+            let tx = conn.transaction().context("Start transaction")?;
+            match query::find_by_verification_token(&tx, &slug, &def_owned, &token)? {
                 Some((user, exp)) => {
                     if chrono::Utc::now().timestamp() >= exp {
+                        // Clean up expired token
+                        if let Err(e) = query::clear_verification_token(&tx, &slug, &user.id) {
+                            tracing::warn!("Failed to clear expired verification token: {}", e);
+                        }
+                        tx.commit()?;
                         return Ok(false); // Token expired
                     }
-                    query::mark_verified(&conn, &slug, &user.id)?;
+                    query::mark_verified(&tx, &slug, &user.id)?;
+                    tx.commit()?;
                     Ok(true)
                 }
                 None => Ok(false),

@@ -26,9 +26,11 @@ pub(super) fn collection_upload_to_lua(
 
             if !upload.mime_types.is_empty() {
                 let mt = lua.create_table()?;
+
                 for (i, m) in upload.mime_types.iter().enumerate() {
                     mt.set(i + 1, m.as_str())?;
                 }
+
                 u.set("mime_types", mt)?;
             }
             if let Some(max) = upload.max_file_size {
@@ -36,6 +38,7 @@ pub(super) fn collection_upload_to_lua(
             }
             if !upload.image_sizes.is_empty() {
                 let sizes = lua.create_table()?;
+
                 for (i, s) in upload.image_sizes.iter().enumerate() {
                     let st = lua.create_table()?;
                     st.set("name", s.name.as_str())?;
@@ -50,6 +53,7 @@ pub(super) fn collection_upload_to_lua(
                     st.set("fit", fit_str)?;
                     sizes.set(i + 1, st)?;
                 }
+
                 u.set("image_sizes", sizes)?;
             }
             if let Some(ref thumb) = upload.admin_thumbnail {
@@ -63,11 +67,13 @@ pub(super) fn collection_upload_to_lua(
                     w.set("quality", webp.quality)?;
                     fo.set("webp", w)?;
                 }
+
                 if let Some(ref avif) = upload.format_options.avif {
                     let a = lua.create_table()?;
                     a.set("quality", avif.quality)?;
                     fo.set("avif", a)?;
                 }
+
                 u.set("format_options", fo)?;
             }
             tbl.set("upload", u)?;
