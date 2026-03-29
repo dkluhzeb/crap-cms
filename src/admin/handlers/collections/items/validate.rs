@@ -106,6 +106,7 @@ pub async fn validate_create(
         let val_ctx = ValidationCtx::builder(&tx, &slug_owned)
             .draft(is_draft)
             .locale_ctx(locale_ctx.as_ref())
+            .soft_delete(def_owned.soft_delete)
             .build();
 
         let result =
@@ -210,6 +211,7 @@ pub async fn validate_update(
             .exclude_id(Some(&id_owned))
             .draft(is_draft)
             .locale_ctx(locale_ctx.as_ref())
+            .soft_delete(def_owned.soft_delete)
             .build();
 
         let result =

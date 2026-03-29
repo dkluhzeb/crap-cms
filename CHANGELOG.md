@@ -311,6 +311,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   others did not. All table name interpolations now use double-quoted
   identifiers (`"table"`) for defense-in-depth consistency.
 
+- **Global tables missing timezone companion columns** — Date fields
+  with `timezone = true` in globals did not get the `_tz` companion
+  column (both CREATE and ALTER TABLE paths). The column was created
+  with the field's own type instead of TEXT, or omitted entirely.
+  Collection tables handled this correctly; global migration code was
+  missing the `companion_text` check. Timezone data for global date
+  fields was silently lost or stored with the wrong type.
+
+- **Global tables missing default values** — Fields with
+  `default_value` in globals never had their SQL DEFAULT clause
+  applied (both CREATE and ALTER TABLE paths). Collection tables
+  handled this correctly; global migration code never called
+  `append_default_value`. Checkbox fields also missed their implicit
+  `DEFAULT 0`. New rows inserted into global tables got NULL instead
+  of the configured default.
+
+- **gRPC RestoreVersion not wrapped in transaction** — The gRPC
+  `RestoreVersion` handler performed multiple SQL operations (update
+  document, adjust ref counts, set status, create version) on a bare
+  connection without a transaction. A failure partway through could
+  leave the document in an inconsistent state. The admin UI handler
+  was already correctly wrapped. Now both paths use a transaction.
+
+- **Lua CRUD validation missing registry and soft_delete** — The Lua
+  API's `crap.collections.create()` and `crap.collections.update()`
+  called field validation without the registry (needed for richtext
+  custom node attribute validation) and without the `soft_delete` flag
+  (needed for unique constraint checks to exclude soft-deleted
+  documents). This meant unique fields on soft-delete collections
+  could reject values that only exist in soft-deleted rows, and
+  richtext custom node validation was silently skipped. Also fixed
+  the missing `soft_delete` flag in the bulk API `UpdateMany` and
+  admin validation handlers.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

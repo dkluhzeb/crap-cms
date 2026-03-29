@@ -307,6 +307,54 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_unique_soft_delete_excludes_deleted_rows() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT, _deleted_at TEXT);
+             INSERT INTO test (id, slug, _deleted_at) VALUES ('deleted1', 'taken', '2024-01-01');",
+        )
+        .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+
+        // With soft_delete=true, the soft-deleted row should be excluded from the unique check
+        let mut data = HashMap::new();
+        data.insert("slug".to_string(), json!("taken"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .soft_delete(true)
+                .build(),
+        );
+        assert!(
+            result.is_ok(),
+            "Unique check with soft_delete=true should ignore soft-deleted rows"
+        );
+
+        // With soft_delete=false (the old default), the same value would fail
+        let mut data = HashMap::new();
+        data.insert("slug".to_string(), json!("taken"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .soft_delete(false)
+                .build(),
+        );
+        assert!(
+            result.is_err(),
+            "Unique check with soft_delete=false should include soft-deleted rows"
+        );
+    }
+
+    #[test]
     fn test_validate_unique_localized_without_locale_ctx_uses_bare_column() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();

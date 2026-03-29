@@ -738,14 +738,20 @@ impl ContentService {
                 return Err(Status::permission_denied("Update access denied"));
             }
 
-            let version = query::find_version_by_id(&conn, &collection, &version_id)
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("RestoreVersion tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            let version = query::find_version_by_id(&tx, &collection, &version_id)
                 .map_err(|e| {
                     tracing::error!("RestoreVersion error: {}", e);
                     Status::internal("Internal error")
                 })?
                 .ok_or_else(|| Status::not_found(format!("Version '{}' not found", version_id)))?;
-            query::restore_version(
-                &conn,
+
+            let doc = query::restore_version(
+                &tx,
                 &collection,
                 &def_owned,
                 &document_id,
@@ -756,7 +762,14 @@ impl ContentService {
             .map_err(|e| {
                 tracing::error!("RestoreVersion error: {}", e);
                 Status::internal("Internal error")
-            })
+            })?;
+
+            tx.commit().map_err(|e| {
+                tracing::error!("RestoreVersion commit error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            Ok(doc)
         })
         .await
         .map_err(|e| {

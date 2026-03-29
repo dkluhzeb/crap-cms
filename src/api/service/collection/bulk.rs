@@ -153,6 +153,7 @@ impl ContentService {
                     let val_ctx = ValidationCtx::builder(&tx, &collection)
                         .exclude_id(Some(&doc.id))
                         .locale_ctx(locale_ctx.as_ref())
+                        .soft_delete(def_owned.soft_delete)
                         .build();
                     let final_ctx = hook_runner
                         .run_before_write(&def_owned.hooks, &def_owned.fields, hook_ctx, &val_ctx)

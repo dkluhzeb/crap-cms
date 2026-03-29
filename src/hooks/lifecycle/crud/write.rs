@@ -262,9 +262,14 @@ pub(super) fn register_create(
 
             // Validation (always runs unless hooks=false)
             if run_hooks {
+                let r = reg
+                    .read()
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                 let val_ctx = ValidationCtx::builder(conn, &collection)
                     .draft(is_draft)
                     .locale_ctx(locale_ctx.as_ref())
+                    .registry(&r)
+                    .soft_delete(def.soft_delete)
                     .build();
                 validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
                     .map_err(|e| RuntimeError(format!("validation error: {}", e)))?;
@@ -535,10 +540,15 @@ pub(super) fn register_update(
             }
 
             if run_hooks {
+                let r = reg
+                    .read()
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                 let val_ctx = ValidationCtx::builder(conn, &collection)
                     .exclude_id(Some(&id))
                     .draft(is_draft)
                     .locale_ctx(locale_ctx.as_ref())
+                    .registry(&r)
+                    .soft_delete(def.soft_delete)
                     .build();
                 validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
                     .map_err(|e| RuntimeError(format!("validation error: {}", e)))?;
