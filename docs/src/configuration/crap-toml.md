@@ -108,9 +108,12 @@ host = "0.0.0.0"        # Bind address
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
-pool_max_size = 32       # Max connections in the pool
+pool_max_size = 64       # Max connections in the pool
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
 connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
+mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
+wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
 
 [admin]
 dev_mode = false         # Reload templates per-request (enable in development)
@@ -174,7 +177,7 @@ from_name = "Crap CMS"  # Sender display name
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 # max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
-                         # Default: max(available_parallelism, 4), capped at 32
+                         # Default: number of CPU cores (fallback: 4)
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
@@ -245,7 +248,10 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `path` | string | `"data/crap.db"` | SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is. |
-| `pool_max_size` | integer | `32` | Maximum number of connections in the SQLite connection pool. |
+| `pool_max_size` | integer | `64` | Maximum number of connections in the SQLite connection pool. |
+| `cache_size` | integer | `-16384` | SQLite page cache size. Negative = KB, positive = pages. Default 16MB. |
+| `mmap_size` | integer | `268435456` | SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable. |
+| `wal_autocheckpoint` | integer | `1000` | WAL auto-checkpoint threshold in pages. |
 | `busy_timeout` | duration | `30000` (`"30s"`) | SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (`"30s"`, `"1m"`). |
 | `connection_timeout` | duration | `5` | Pool checkout timeout in seconds. How long `pool.get()` waits for a free connection before returning an error. |
 
@@ -357,7 +363,7 @@ When configured, email enables password reset ("Forgot password?" link on login)
 |-------|------|---------|-------------|
 | `on_init` | string[] | `[]` | Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup. |
 | `max_depth` | integer | `3` | Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. `0` = never run hooks from Lua CRUD. |
-| `vm_pool_size` | integer | `max(cpus, 4)` capped at 32 | Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32. |
+| `vm_pool_size` | integer | CPU cores | Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores (fallback: 4 if detection fails). |
 | `max_instructions` | integer | `10000000` | Maximum Lua instructions per hook invocation. `0` = unlimited. |
 | `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes. Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
 | `allow_private_networks` | boolean | `false` | Allow `crap.http.request` to reach private/loopback/link-local IPs. |

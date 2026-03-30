@@ -109,10 +109,9 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            // Release connection before service call (which acquires its own)
-            drop(conn);
-            let (doc, _req_context) = service::create_document(
-                &pool,
+
+            let (doc, _req_context) = service::create_document_with_conn(
+                &mut conn,
                 &runner,
                 &collection,
                 &def_owned,
@@ -409,10 +408,9 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            // Release connection before service call (which acquires its own)
-            drop(conn);
-            let (doc, _req_context) = service::update_document(
-                &pool,
+
+            let (doc, _req_context) = service::update_document_with_conn(
+                &mut conn,
                 &runner,
                 &collection,
                 &id,
@@ -544,10 +542,9 @@ impl ContentService {
             }
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-            // Release connection before service call (which acquires its own)
-            drop(conn);
-            service::delete_document(
-                &pool,
+
+            service::delete_document_with_conn(
+                &mut conn,
                 &runner,
                 &collection,
                 &id,

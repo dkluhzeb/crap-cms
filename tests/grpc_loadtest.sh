@@ -355,11 +355,13 @@ scenario_create() {
     # Cleanup: delete all loadtest posts
     info "  Cleaning up loadtest posts..."
     local deleted
-    deleted=$(grpcurl -plaintext -H "authorization: Bearer ${JWT_TOKEN}" -d '{
+    local result
+    result=$(grpcurl -plaintext -H "authorization: Bearer ${JWT_TOKEN}" -d '{
         "collection": "posts",
-        "where": "{\"slug\":{\"like\":\"loadtest-ghz-%\"}}"
-    }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null \
-        | jq -r '.deleted // 0')
+        "where": "{\"slug\":{\"like\":\"loadtest-ghz-%\"}}",
+        "forceHardDelete": true
+    }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null)
+    deleted=$(echo "$result" | jq -r '(.deleted // 0) + (.softDeleted // 0)')
     ok "Cleaned up ${deleted} loadtest posts"
 }
 

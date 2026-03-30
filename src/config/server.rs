@@ -105,7 +105,7 @@ impl Default for ServerConfig {
 pub struct DatabaseConfig {
     /// Path to the SQLite database file.
     pub path: String,
-    /// Maximum number of connections in the pool. Default: 32.
+    /// Maximum number of connections in the pool. Default: 64.
     pub pool_max_size: u32,
     /// SQLite busy timeout in milliseconds. Default: 30000 (30s).
     /// Accepts integer milliseconds or human-readable string ("30s", "1m").
@@ -115,15 +115,42 @@ pub struct DatabaseConfig {
     /// Accepts integer seconds or human-readable string ("5s", "10s").
     #[serde(with = "serde_duration")]
     pub connection_timeout: u64,
+    /// SQLite page cache size in KB. Negative = KB, positive = pages. Default: 16384 (16MB).
+    /// Higher values improve read performance for large datasets.
+    #[serde(default = "default_cache_size")]
+    pub cache_size: i64,
+    /// SQLite memory-mapped I/O size in bytes. Default: 268435456 (256MB).
+    /// Set to 0 to disable. Improves read throughput for databases smaller than this value.
+    #[serde(default = "default_mmap_size")]
+    pub mmap_size: u64,
+    /// SQLite WAL auto-checkpoint threshold in pages. Default: 1000.
+    /// Lower values keep the WAL file smaller; higher values reduce checkpoint frequency.
+    #[serde(default = "default_wal_autocheckpoint")]
+    pub wal_autocheckpoint: u32,
+}
+
+fn default_cache_size() -> i64 {
+    -16384
+}
+
+fn default_mmap_size() -> u64 {
+    268_435_456
+}
+
+fn default_wal_autocheckpoint() -> u32 {
+    1000
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             path: "data/crap.db".to_string(),
-            pool_max_size: 32,
+            pool_max_size: 64,
             busy_timeout: 30000,
             connection_timeout: 5,
+            cache_size: default_cache_size(),
+            mmap_size: default_mmap_size(),
+            wal_autocheckpoint: default_wal_autocheckpoint(),
         }
     }
 }

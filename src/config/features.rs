@@ -336,8 +336,8 @@ impl Default for HooksConfig {
             on_init: Vec::new(),
             max_depth: 3,
             vm_pool_size: std::thread::available_parallelism()
-                .map(|n| n.get().clamp(4, 32))
-                .unwrap_or(8),
+                .map(|n| n.get())
+                .unwrap_or(4),
             max_instructions: 10_000_000,
             max_memory: 52_428_800, // 50 MB
             allow_private_networks: false,
@@ -475,7 +475,7 @@ mod tests {
         let hooks = HooksConfig::default();
         assert!(hooks.on_init.is_empty());
         assert_eq!(hooks.max_depth, 3);
-        assert!(hooks.vm_pool_size >= 4 && hooks.vm_pool_size <= 32);
+        assert!(hooks.vm_pool_size >= 1);
         assert_eq!(hooks.max_instructions, 10_000_000);
         assert_eq!(hooks.max_memory, 52_428_800);
         assert!(!hooks.allow_private_networks);

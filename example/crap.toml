@@ -2,10 +2,12 @@
 admin_port = 3000
 grpc_port = 50051
 host = "0.0.0.0"
+compression = "gzip"
+grpc_reflection = true
 
 [database]
 path = "data/crap.db"
-# pool_max_size = 32
+# pool_max_size = 64
 
 [admin]
 dev_mode = false
@@ -17,7 +19,9 @@ token_expiry = 7200
 
 [depth]
 default_depth = 1
-max_depth = 10
+max_depth = 5
+populate_cache = true
+populate_cache_max_age_secs = 60
 
 [upload]
 max_file_size = "50MB"
@@ -40,7 +44,7 @@ locales = ["en", "de"]
 fallback = true
 
 [jobs]
-poll_interval = 5
+poll_interval = 1
 
 [pagination]
 # default_limit = 20
@@ -64,4 +68,4 @@ file = true
 
 [hooks]
 on_init = ["hooks.on_init"]
-vm_pool_size = 16
+# vm_pool_size = 16  # default: number of CPU cores

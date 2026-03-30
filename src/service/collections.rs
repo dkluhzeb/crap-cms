@@ -30,9 +30,21 @@ pub fn create_document(
     input: WriteInput<'_>,
     user: Option<&Document>,
 ) -> Result<WriteResult> {
+    let mut conn = pool.get().context("DB connection")?;
+    create_document_with_conn(&mut conn, runner, slug, def, input, user)
+}
+
+/// Like [`create_document`], but accepts an existing connection (avoids a second pool.get()).
+pub fn create_document_with_conn(
+    conn: &mut crate::db::BoxedConnection,
+    runner: &HookRunner,
+    slug: &str,
+    def: &CollectionDefinition,
+    input: WriteInput<'_>,
+    user: Option<&Document>,
+) -> Result<WriteResult> {
     let is_draft = input.draft && def.has_drafts();
 
-    let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let ui_locale = input.ui_locale.as_deref();
@@ -102,9 +114,22 @@ pub fn update_document(
     input: WriteInput<'_>,
     user: Option<&Document>,
 ) -> Result<WriteResult> {
+    let mut conn = pool.get().context("DB connection")?;
+    update_document_with_conn(&mut conn, runner, slug, id, def, input, user)
+}
+
+/// Like [`update_document`], but accepts an existing connection.
+pub fn update_document_with_conn(
+    conn: &mut crate::db::BoxedConnection,
+    runner: &HookRunner,
+    slug: &str,
+    id: &str,
+    def: &CollectionDefinition,
+    input: WriteInput<'_>,
+    user: Option<&Document>,
+) -> Result<WriteResult> {
     let is_draft = input.draft && def.has_drafts();
 
-    let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let ui_locale = input.ui_locale.as_deref();
@@ -234,12 +259,36 @@ pub fn delete_document(
     locale_config: Option<&LocaleConfig>,
 ) -> Result<HashMap<String, Value>> {
     let mut conn = pool.get().context("DB connection")?;
+    delete_document_with_conn(
+        &mut conn,
+        runner,
+        slug,
+        id,
+        def,
+        user,
+        config_dir,
+        locale_config,
+    )
+}
 
+/// Like [`delete_document`], but accepts an existing connection.
+#[allow(clippy::too_many_arguments)]
+pub fn delete_document_with_conn(
+    conn: &mut crate::db::BoxedConnection,
+    runner: &HookRunner,
+    slug: &str,
+    id: &str,
+    def: &CollectionDefinition,
+    user: Option<&Document>,
+    config_dir: Option<&std::path::Path>,
+    locale_config: Option<&LocaleConfig>,
+) -> Result<HashMap<String, Value>> {
     // For upload collections, load the document before deleting to get file paths
     let upload_doc_fields = if def.is_upload_collection() {
         let locale_ctx = LocaleContext::from_locale_string(None, &LocaleConfig::default());
 
-        match query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref()) {
+        let conn_ref: &dyn crate::db::DbConnection = conn;
+        match query::find_by_id(conn_ref, slug, def, id, locale_ctx.as_ref()) {
             Ok(Some(doc)) => Some(doc.fields.clone()),
             Ok(None) => None,
             Err(e) => {

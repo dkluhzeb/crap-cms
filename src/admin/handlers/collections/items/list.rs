@@ -250,7 +250,14 @@ pub async fn list_items(
     });
 
     let base_url = format!("/admin/collections/{}", slug);
-    let where_params = extract_where_params(raw_query);
+    let mut where_params = extract_where_params(raw_query);
+    if is_trash {
+        if where_params.is_empty() {
+            where_params = "trash=1".to_string();
+        } else {
+            where_params = format!("trash=1&{}", where_params);
+        }
+    }
 
     // Resolve columns and build column keys for cell computation
     let table_columns = resolve_columns(

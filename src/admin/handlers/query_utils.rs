@@ -184,9 +184,9 @@ pub(crate) fn build_list_url_with_cursor(
         parts.push(format!("{}={}", param, url_encode(value)));
     }
 
-    // Preserve where params from original query string
+    // Preserve where params and trash flag from original query string
     for part in raw_where.split('&') {
-        if part.starts_with("where%5B") || part.starts_with("where[") {
+        if part.starts_with("where%5B") || part.starts_with("where[") || part == "trash=1" {
             parts.push(part.to_string());
         }
     }

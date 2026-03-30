@@ -20,6 +20,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   binaries, enabling the install script to verify downloads
   automatically.
 
+- **gRPC write handlers acquired two pool connections** — The gRPC
+  Create, Update, and Delete handlers acquired a connection for
+  auth/access checks, dropped it, then the service layer acquired a
+  second one. Under high concurrency this caused pool exhaustion and
+  5+ second latencies. Now reuses the same connection via
+  `_with_conn` service variants, halving pool pressure on writes.
+
+- **SQLite performance defaults too conservative** — Added configurable
+  `cache_size` (default 16MB), `mmap_size` (default 256MB),
+  `temp_store = MEMORY`, and `wal_autocheckpoint` to `[database]`
+  config. Previous defaults used SQLite's 2MB cache with no
+  memory-mapping. Pool `max_size` default raised from 32 to 64.
+
+- **Lua VM pool capped at 32 regardless of hardware** — The auto-sized
+  `vm_pool_size` default was clamped to `max(cpus, 4)` with a ceiling
+  of 32, limiting concurrent hook execution on powerful servers.
+  Removed both the floor and ceiling — now auto-sizes to exactly the
+  number of CPU cores (fallback: 4 if detection fails). Override with
+  `hooks.vm_pool_size` in `crap.toml`.
+
+- **Trash pagination navigated away from trash view** — The "Next" and
+  "Previous" buttons in the trash list did not preserve `?trash=1` in
+  the pagination URLs. Clicking next navigated to the regular (non-
+  trash) document list. Now preserves the trash parameter across all
+  pagination links.
+
+- **Load test cleanup failed on soft-delete collections** — The gRPC
+  load test script's cleanup used `DeleteMany` without
+  `forceHardDelete`, so soft-delete collections reported 0 deleted.
+  Now uses `forceHardDelete: true` and sums both `deleted` and
+  `softDeleted` counts.
+
+- **Example `populate_cache` not enabled** — The example project now
+  enables the relationship populate cache with a 60-second TTL,
+  gRPC compression, and optimized depth/polling settings for better
+  out-of-the-box demo performance.
+
 ## [0.1.0-alpha.3] — 2026-03-30
 
 ### Added

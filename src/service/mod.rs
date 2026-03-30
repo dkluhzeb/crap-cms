@@ -22,7 +22,8 @@ pub use types::{PersistOptions, WriteInput, WriteResult};
 pub use write_input_builder::WriteInputBuilder;
 
 pub use collections::{
-    create_document, delete_document, restore_document, unpublish_document, update_document,
+    create_document, create_document_with_conn, delete_document, delete_document_with_conn,
+    restore_document, unpublish_document, update_document, update_document_with_conn,
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_document};
