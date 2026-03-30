@@ -187,9 +187,11 @@ impl ContentService {
             Err(_) => return Err(Status::unauthenticated("User lookup failed")),
         };
 
-        // Reject tokens with stale session version (password was changed)
-        let db_session_version =
-            query::get_session_version(conn, &claims.collection, &claims.sub).unwrap_or(0);
+        // Reject tokens with stale session version (password was changed).
+        // On DB error, reject the token — do not silently default to 0 which
+        // would let stale tokens through during transient failures.
+        let db_session_version = query::get_session_version(conn, &claims.collection, &claims.sub)
+            .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
 
         if claims.session_version != db_session_version {
             return Err(Status::unauthenticated("Session invalidated"));

@@ -234,6 +234,7 @@ fn sync_join_tables_inner(
                                 rebuild_junction_table_for_polymorphic(
                                     conn,
                                     &table_name,
+                                    collection_slug,
                                     has_locale_col,
                                 )?;
                             }
@@ -388,6 +389,7 @@ fn sync_join_tables_inner(
 fn rebuild_junction_table_for_polymorphic(
     conn: &dyn DbConnection,
     table_name: &str,
+    collection_slug: &str,
     has_locale: bool,
 ) -> Result<()> {
     let temp = format!("_{}_migrate", table_name);
@@ -399,15 +401,16 @@ fn rebuild_junction_table_for_polymorphic(
 
     let locale_col = if has_locale { ", _locale TEXT" } else { "" };
     let locale_pk = if has_locale { ", _locale" } else { "" };
+
     conn.execute_batch(&format!(
         "CREATE TABLE \"{}\" (\
-            parent_id TEXT NOT NULL, \
+            parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
             related_id TEXT NOT NULL, \
             related_collection TEXT NOT NULL DEFAULT '', \
             _order INTEGER NOT NULL DEFAULT 0{}, \
             PRIMARY KEY (parent_id, related_id, related_collection{})\
         )",
-        table_name, locale_col, locale_pk
+        table_name, collection_slug, locale_col, locale_pk
     ))?;
 
     if has_locale {
@@ -1514,7 +1517,9 @@ mod tests {
         )
         .unwrap();
 
-        // Step 2: Insert some data
+        // Step 2: Insert parent row and junction data
+        conn.execute("INSERT INTO posts (id) VALUES ('p1')", &[])
+            .unwrap();
         conn.execute(
             "INSERT INTO posts_related (parent_id, related_id, _order) VALUES (?1, ?2, ?3)",
             &[text("p1"), text("r1"), int(0)],
@@ -1594,6 +1599,8 @@ mod tests {
         )
         .unwrap();
 
+        conn.execute("INSERT INTO posts (id) VALUES ('p1')", &[])
+            .unwrap();
         conn.execute(
             "INSERT INTO posts_related (parent_id, related_id, _order, _locale) VALUES (?1, ?2, ?3, ?4)",
             &[text("p1"), text("r1"), int(0), text("en")],
@@ -1675,5 +1682,68 @@ mod tests {
         assert_eq!(specs[0].col_name, "meta__starts_at");
         assert_eq!(specs[1].col_name, "meta__starts_at_tz");
         assert!(specs[1].companion_text);
+    }
+
+    // ── polymorphic junction rebuild ──────────────────────────────────────
+
+    #[test]
+    fn polymorphic_junction_rebuild_preserves_fk() {
+        // Regression: rebuild_junction_table_for_polymorphic dropped the
+        // REFERENCES ... ON DELETE CASCADE constraint on parent_id.
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        // Create parent table
+        conn.execute(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, _ref_count INTEGER DEFAULT 0)",
+            &[],
+        )
+        .unwrap();
+
+        // Create a non-polymorphic junction table with FK
+        conn.execute_batch(
+            "CREATE TABLE posts_tags (\
+                parent_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, \
+                related_id TEXT NOT NULL, \
+                _order INTEGER NOT NULL DEFAULT 0, \
+                PRIMARY KEY (parent_id, related_id)\
+            )",
+        )
+        .unwrap();
+
+        // Insert test data
+        conn.execute("INSERT INTO posts (id) VALUES ('p1')", &[])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO posts_tags (parent_id, related_id, _order) VALUES ('p1', 'tag1', 0)",
+            &[],
+        )
+        .unwrap();
+
+        // Rebuild for polymorphic upgrade
+        rebuild_junction_table_for_polymorphic(&conn, "posts_tags", "posts", false).unwrap();
+
+        // Verify columns
+        let cols = get_table_columns(&conn, "posts_tags").unwrap();
+        assert!(
+            cols.contains("related_collection"),
+            "must have related_collection"
+        );
+
+        // Verify data migrated
+        let rows = conn
+            .query_all("SELECT parent_id, related_id FROM posts_tags", &[])
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+
+        // Verify FK still works: cascade delete should remove junction row
+        conn.execute("DELETE FROM posts WHERE id = 'p1'", &[])
+            .unwrap();
+        let rows = conn.query_all("SELECT * FROM posts_tags", &[]).unwrap();
+        assert_eq!(
+            rows.len(),
+            0,
+            "FK ON DELETE CASCADE must be preserved after polymorphic rebuild"
+        );
     }
 }

@@ -954,10 +954,10 @@ pub(crate) fn load_auth_user(
     )
     .ok()??;
 
-    // Reject tokens with stale session version (password was changed)
-    let db_session_version = query::get_session_version(&conn, &claims.collection, &claims.sub)
-        .ok()
-        .unwrap_or(0);
+    // Reject tokens with stale session version (password was changed).
+    // On DB error, reject the token — do not silently default to 0.
+    let db_session_version =
+        query::get_session_version(&conn, &claims.collection, &claims.sub).ok()?;
 
     if claims.session_version != db_session_version {
         return None;

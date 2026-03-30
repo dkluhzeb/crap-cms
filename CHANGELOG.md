@@ -989,6 +989,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   comment incorrectly documented `GET/POST` but the route only accepts
   POST (correct for CSRF protection). Fixed the comment.
 
+- **Polymorphic junction table rebuild dropped foreign key** —
+  `rebuild_junction_table_for_polymorphic` (upgrading a has-many
+  relationship to polymorphic) recreated the table without the
+  `REFERENCES parent(id) ON DELETE CASCADE` constraint on `parent_id`.
+  Cascading deletes stopped working for upgraded junction tables, leaving
+  orphaned rows when a parent document was deleted.
+
+- **Session version lookup swallowed DB errors** — `resolve_auth_user`
+  (API) and `load_auth_user` (admin) used `unwrap_or(0)` on the session
+  version query. A transient database failure returned 0, which matched
+  tokens with `session_version = 0` (never changed password), bypassing
+  session invalidation after a password change. Now propagates the error
+  and rejects the token on failure.
+
+- **Ref-count backfill interpolated count into SQL** —
+  `increment_ref_count` in `backfill_ref_counts.rs` embedded the count
+  value directly in the SQL string via `format!` instead of using a
+  parameterized placeholder. Now uses `conn.placeholder(2)`.
+
+- **Scaffold accepted arbitrary field names** — `parse_field_token` did
+  not validate field names, allowing special characters (quotes, spaces,
+  semicolons) that could produce broken or injectable Lua output in
+  generated collection files. Now rejects names that aren't alphanumeric
+  plus underscore. Block type names and labels are now escaped for safe
+  Lua string embedding.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

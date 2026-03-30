@@ -443,12 +443,16 @@ fn increment_ref_count(
     count: i64,
 ) -> Result<()> {
     let p1 = conn.placeholder(1);
+    let p2 = conn.placeholder(2);
     let sql = format!(
-        "UPDATE \"{}\" SET _ref_count = _ref_count + {} WHERE id = {p1}",
-        collection, count
+        "UPDATE \"{}\" SET _ref_count = _ref_count + {p2} WHERE id = {p1}",
+        collection
     );
-    conn.execute(&sql, &[DbValue::Text(id.to_string())])
-        .with_context(|| format!("Failed to increment _ref_count on {}/{}", collection, id))?;
+    conn.execute(
+        &sql,
+        &[DbValue::Text(id.to_string()), DbValue::Integer(count)],
+    )
+    .with_context(|| format!("Failed to increment _ref_count on {}/{}", collection, id))?;
 
     Ok(())
 }
