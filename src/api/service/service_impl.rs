@@ -179,11 +179,12 @@ impl ContentService {
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
         let def = match registry.get_collection(&claims.collection) {
             Some(d) => d.clone(),
-            None => return Ok(None),
+            None => return Err(Status::unauthenticated("Auth collection no longer exists")),
         };
         let doc = match query::find_by_id(conn, &claims.collection, &def, &claims.sub, None) {
             Ok(Some(d)) => d,
-            _ => return Ok(None),
+            Ok(None) => return Err(Status::unauthenticated("User no longer exists")),
+            Err(_) => return Err(Status::unauthenticated("User lookup failed")),
         };
 
         // Reject tokens with stale session version (password was changed)

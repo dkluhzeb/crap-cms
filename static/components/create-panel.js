@@ -190,15 +190,22 @@ class CrapCreatePanel extends HTMLElement {
       const action = form.getAttribute('action') || `/admin/collections/${collection}`;
       const method = form.getAttribute('method') || 'POST';
 
+      // Read and decode CSRF token from cookie
+      const getCsrf = () => {
+        const match = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
+        if (!match) return '';
+        try { return decodeURIComponent(match[1]); } catch { return match[1]; }
+      };
+
+      const csrf = getCsrf();
+
       // Ensure CSRF token is in form data
-      const csrfCookie = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-      if (csrfCookie && !formData.has('_csrf')) {
-        formData.set('_csrf', csrfCookie[1]);
+      if (csrf && !formData.has('_csrf')) {
+        formData.set('_csrf', csrf);
       }
 
       const headers = { 'X-Inline-Create': '1' };
-      const csrfMatch = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-      if (csrfMatch) headers['X-CSRF-Token'] = csrfMatch[1];
+      if (csrf) headers['X-CSRF-Token'] = csrf;
 
       const resp = await fetch(action, {
         method: method.toUpperCase(),
@@ -208,7 +215,8 @@ class CrapCreatePanel extends HTMLElement {
       });
 
       const createdId = resp.headers.get('X-Created-Id');
-      const createdLabel = resp.headers.get('X-Created-Label');
+      const rawLabel = resp.headers.get('X-Created-Label');
+      const createdLabel = rawLabel ? decodeURIComponent(rawLabel) : null;
 
       if (createdId) {
         // Success — item was created

@@ -76,7 +76,7 @@ class CrapDirtyForm extends HTMLElement {
           window.location.href = e.detail.path;
           setTimeout(() => { this._bypassing = false; }, 500);
         }
-      }).catch(() => { this._dirty = false; });
+      }).catch(() => { /* keep dirty flag — dialog was dismissed */ });
     };
     document.addEventListener('htmx:configRequest', this._onConfigRequest);
 
@@ -91,7 +91,7 @@ class CrapDirtyForm extends HTMLElement {
           history.back();
           setTimeout(() => { this._bypassing = false; }, 500);
         }
-      }).catch(() => { this._dirty = false; });
+      }).catch(() => { /* keep dirty flag — dialog was dismissed */ });
     };
     window.addEventListener('popstate', this._onPopState);
 

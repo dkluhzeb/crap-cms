@@ -67,10 +67,22 @@ pub fn get_locale_select_columns(
 
 /// Like [`get_locale_select_columns`] but with additional options.
 /// When `soft_delete` is true, includes the `_deleted_at` column.
+/// When `has_drafts` is true, includes the `_status` column.
 pub fn get_locale_select_columns_with_opts(
     fields: &[FieldDefinition],
     timestamps: bool,
     soft_delete: bool,
+    locale_ctx: &LocaleContext,
+) -> Result<(Vec<String>, Vec<String>)> {
+    get_locale_select_columns_full(fields, timestamps, soft_delete, false, locale_ctx)
+}
+
+/// Full version with all options including draft status column.
+pub fn get_locale_select_columns_full(
+    fields: &[FieldDefinition],
+    timestamps: bool,
+    soft_delete: bool,
+    has_drafts: bool,
     locale_ctx: &LocaleContext,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let mut select_exprs = vec!["id".to_string()];
@@ -84,6 +96,11 @@ pub fn get_locale_select_columns_with_opts(
         "",
         false,
     )?;
+
+    if has_drafts {
+        select_exprs.push("_status".to_string());
+        result_names.push("_status".to_string());
+    }
 
     if soft_delete {
         select_exprs.push("_deleted_at".to_string());
@@ -317,13 +334,18 @@ fn group_locale_fields_inner(
 }
 
 /// Map a flat field name to the actual locale-suffixed column name for writes.
+///
+/// `inherited_localized` accounts for parent Group localization: when a Group
+/// has `localized: true`, all its children get locale-suffixed columns even if
+/// the child's own `localized` flag is false.
 pub(crate) fn locale_write_column(
     field_name: &str,
     field: &FieldDefinition,
     locale_ctx: &Option<&LocaleContext>,
+    inherited_localized: bool,
 ) -> Result<String> {
     if let Some(ctx) = locale_ctx
-        && field.localized
+        && (field.localized || inherited_localized)
         && ctx.config.is_enabled()
     {
         let req_locale = match &ctx.mode {
@@ -407,7 +429,7 @@ mod tests {
             config: locale_cfg,
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
-        let col = locale_write_column("title", &field, &ctx_ref).unwrap();
+        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
         assert_eq!(
             col, "title",
             "Non-localized field should pass through unchanged"
@@ -423,7 +445,7 @@ mod tests {
             config: locale_cfg,
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
-        let col = locale_write_column("title", &field, &ctx_ref).unwrap();
+        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
         assert_eq!(col, "title__de");
     }
 
@@ -436,7 +458,7 @@ mod tests {
             config: locale_cfg,
         };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
-        let col = locale_write_column("title", &field, &ctx_ref).unwrap();
+        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
         assert_eq!(col, "title__en", "Default mode should use default locale");
     }
 
@@ -595,6 +617,103 @@ mod tests {
             "Localized Group→Tabs: meta__title__de"
         );
         assert!(names.contains(&"meta__title".to_string()));
+    }
+
+    // ── Timezone companion column tests ──────────────────────────────
+
+    // ── inherited_localized regression tests ──────────────────────────
+
+    /// Regression: when a parent Group has `localized: true`, child fields
+    /// with `localized: false` must still get a locale suffix via
+    /// `inherited_localized`.
+    #[test]
+    fn locale_write_column_inherited_localized_adds_suffix() {
+        let field = make_field("title", FieldType::Text); // localized = false
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
+        let ctx_ref: Option<&LocaleContext> = Some(&ctx);
+
+        let col = locale_write_column("title", &field, &ctx_ref, true).unwrap();
+        assert_eq!(
+            col, "title__de",
+            "inherited_localized=true should add locale suffix even when field.localized=false"
+        );
+    }
+
+    /// Regression: when `inherited_localized` is false and the field itself
+    /// is not localized, the column name must be returned unchanged.
+    #[test]
+    fn locale_write_column_not_inherited_not_localized_unchanged() {
+        let field = make_field("title", FieldType::Text); // localized = false
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
+        let ctx_ref: Option<&LocaleContext> = Some(&ctx);
+
+        let col = locale_write_column("title", &field, &ctx_ref, false).unwrap();
+        assert_eq!(
+            col, "title",
+            "inherited_localized=false + field.localized=false should not add locale suffix"
+        );
+    }
+
+    // ── has_drafts column tests ─────────────────────────────────────────
+
+    /// Regression: `get_locale_select_columns_full` must include `_status`
+    /// when `has_drafts` is true.
+    #[test]
+    fn get_locale_select_columns_full_includes_status_when_has_drafts() {
+        let fields = vec![make_field("title", FieldType::Text)];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
+
+        let (exprs, names) =
+            get_locale_select_columns_full(&fields, false, false, true, &ctx).unwrap();
+
+        assert!(
+            exprs.contains(&"_status".to_string()),
+            "_status should be in SELECT exprs when has_drafts=true, got: {:?}",
+            exprs
+        );
+        assert!(
+            names.contains(&"_status".to_string()),
+            "_status should be in result names when has_drafts=true, got: {:?}",
+            names
+        );
+    }
+
+    /// Regression: `get_locale_select_columns_full` must NOT include `_status`
+    /// when `has_drafts` is false.
+    #[test]
+    fn get_locale_select_columns_full_excludes_status_when_no_drafts() {
+        let fields = vec![make_field("title", FieldType::Text)];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
+
+        let (exprs, names) =
+            get_locale_select_columns_full(&fields, false, false, false, &ctx).unwrap();
+
+        assert!(
+            !exprs.contains(&"_status".to_string()),
+            "_status should NOT be in SELECT exprs when has_drafts=false, got: {:?}",
+            exprs
+        );
+        assert!(
+            !names.contains(&"_status".to_string()),
+            "_status should NOT be in result names when has_drafts=false, got: {:?}",
+            names
+        );
     }
 
     // ── Timezone companion column tests ──────────────────────────────

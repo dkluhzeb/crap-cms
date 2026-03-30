@@ -74,9 +74,13 @@ fn sqlite_column_type_for(ft: &FieldType) -> &'static str {
 }
 
 fn sqlite_date_offset_expr(seconds: i64, param_pos: usize) -> (String, DbValue) {
+    // Use the absolute value with explicit sign to avoid double-negation
+    // when a negative value is passed (e.g., -30 would produce "--30 seconds").
+    let abs = seconds.unsigned_abs();
+    let sign = if seconds >= 0 { "-" } else { "+" };
     (
         format!("datetime('now', ?{})", param_pos),
-        DbValue::Text(format!("-{} seconds", seconds)),
+        DbValue::Text(format!("{}{} seconds", sign, abs)),
     )
 }
 
@@ -1303,6 +1307,50 @@ mod tests {
     fn normalize_timestamp_already_iso() {
         let iso = "2024-01-15T12:30:45.000Z";
         assert_eq!(sqlite_normalize_timestamp(iso), iso);
+    }
+
+    // ── sqlite_date_offset_expr sign handling ──────────────────────────
+
+    /// Regression: positive seconds must produce a negative offset modifier
+    /// (subtracting time), and negative seconds must produce a positive
+    /// offset modifier (adding time).
+    #[test]
+    fn date_offset_expr_positive_input() {
+        let (_expr, value) = sqlite_date_offset_expr(30, 1);
+        assert_eq!(
+            value,
+            DbValue::Text("-30 seconds".to_string()),
+            "positive input should produce negative offset"
+        );
+    }
+
+    #[test]
+    fn date_offset_expr_negative_input() {
+        let (_expr, value) = sqlite_date_offset_expr(-30, 1);
+        assert_eq!(
+            value,
+            DbValue::Text("+30 seconds".to_string()),
+            "negative input should produce positive offset"
+        );
+    }
+
+    #[test]
+    fn date_offset_expr_zero() {
+        let (_expr, value) = sqlite_date_offset_expr(0, 1);
+        assert_eq!(
+            value,
+            DbValue::Text("-0 seconds".to_string()),
+            "zero should produce -0 seconds"
+        );
+    }
+
+    #[test]
+    fn date_offset_expr_sql_format() {
+        let (expr, _value) = sqlite_date_offset_expr(30, 3);
+        assert_eq!(
+            expr, "datetime('now', ?3)",
+            "SQL expression should use the given param position"
+        );
     }
 
     /// Regression: multi-byte UTF-8 input must not panic from string slicing.

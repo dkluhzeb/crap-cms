@@ -455,14 +455,30 @@ pub(crate) fn htmx_redirect(url: &str) -> Response {
 
 /// Like `htmx_redirect`, but also includes `X-Created-Id` and `X-Created-Label`
 /// headers so inline create panels can identify the newly created document.
+/// The label is percent-encoded to safely handle non-ASCII characters in HTTP headers.
 pub(crate) fn htmx_redirect_with_created(url: &str, id: &str, label: &str) -> Response {
+    let encoded_label = percent_encode_header(label);
     Response::builder()
         .status(StatusCode::OK)
         .header("HX-Redirect", url)
         .header("X-Created-Id", id)
-        .header("X-Created-Label", label)
+        .header("X-Created-Label", &encoded_label)
         .body(axum::body::Body::empty())
         .unwrap_or_else(|_| Redirect::to(url).into_response())
+}
+
+/// Percent-encode a string so it is safe for HTTP header values.
+/// Non-ASCII bytes and control characters are encoded as `%XX`.
+fn percent_encode_header(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_graphic() || b == b' ' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 /// Render a template and set the X-Crap-Toast header for client-side notifications.

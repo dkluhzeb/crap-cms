@@ -54,7 +54,7 @@ pub async fn list_versions_page(
     let per_page = params
         .per_page
         .unwrap_or(state.config.pagination.default_limit)
-        .min(state.config.pagination.max_limit);
+        .clamp(1, state.config.pagination.max_limit);
     let offset = (page - 1) * per_page;
 
     let conn = match state.pool.get() {

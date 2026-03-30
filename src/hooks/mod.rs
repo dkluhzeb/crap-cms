@@ -141,6 +141,15 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
     lua.globals().set("loadfile", mlua::Value::Nil)?;
     lua.globals().set("dofile", mlua::Value::Nil)?;
 
+    // Prevent loading native C modules (.so/.dll) via require or loadlib.
+    let pkg: Table = lua.globals().get("package")?;
+    pkg.set("cpath", "")?;
+    pkg.set("loadlib", mlua::Value::Nil)?;
+
+    // Remove string.dump to prevent bytecode inspection/manipulation.
+    let string_table: Table = lua.globals().get("string")?;
+    string_table.set("dump", mlua::Value::Nil)?;
+
     Ok(())
 }
 
@@ -230,6 +239,37 @@ mod tests {
         let lua = sandboxed_lua();
         let result: i64 = lua.load("return os.time()").eval().unwrap();
         assert!(result > 0);
+    }
+
+    // ── Regression: sandbox removes package.cpath, package.loadlib,
+    //    string.dump ─────────────────────────────────────────────────
+
+    #[test]
+    fn sandbox_removes_package_cpath() {
+        let lua = sandboxed_lua();
+        let result: String = lua.load("return package.cpath").eval().unwrap();
+        assert_eq!(result, "", "package.cpath must be empty string");
+    }
+
+    #[test]
+    fn sandbox_removes_package_loadlib() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.load("return package.loadlib").eval().unwrap();
+        assert!(matches!(val, Value::Nil), "package.loadlib must be nil");
+    }
+
+    #[test]
+    fn sandbox_removes_string_dump() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.load("return string.dump").eval().unwrap();
+        assert!(matches!(val, Value::Nil), "string.dump must be nil");
+    }
+
+    #[test]
+    fn sandbox_removes_os_execute_via_value() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.load("return os.execute").eval().unwrap();
+        assert!(matches!(val, Value::Nil), "os.execute must be nil");
     }
 
     #[test]

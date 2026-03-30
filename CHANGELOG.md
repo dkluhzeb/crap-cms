@@ -838,6 +838,120 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   negative `limit` and `offset` values, which have undefined behavior in
   SQLite. Now clamped to 0 before binding.
 
+- **gRPC auth silently downgraded deleted users to anonymous** — When a
+  valid JWT referenced a user that was subsequently deleted, the gRPC
+  `resolve_auth_user` returned `Ok(None)` instead of an error, silently
+  treating the request as anonymous. Now returns `unauthenticated` error.
+
+- **Bulk `UpdateMany`/`DeleteMany` bypassed per-document access checks** —
+  When no access function was configured for a collection, bulk operations
+  skipped per-document access checks entirely instead of delegating to the
+  default access system. Now always runs access checks regardless of
+  whether an explicit access function is configured.
+
+- **Back-references used wrong junction table for Group-nested fields** —
+  `back_references.rs` constructed junction table names without the group
+  prefix (e.g., `posts_tags` instead of `posts_meta__tags` for a field
+  inside a Group), causing delete protection to miss references through
+  Group-nested has-many relationships, Arrays, and Blocks.
+
+- **Locale write path ignored inherited Group localization** — When a Group
+  had `localized: true`, its sub-fields got locale-suffixed columns in the
+  database (via migrations), but the write path (`locale_write_column`)
+  only checked each field's own `localized` flag. Data was written to the
+  unsuffixed column but read from the locale-suffixed one, causing apparent
+  data loss. Now propagates `inherited_localized` through write paths.
+
+- **`_status` column missing from locale-mode queries** — Collections with
+  both drafts and localization enabled did not include the `_status` column
+  in locale-aware SELECT queries, while the non-locale path included it.
+  Downstream code inspecting `_status` would find it absent. Added
+  `get_locale_select_columns_full` which includes `_status` when
+  `has_drafts` is true.
+
+- **Upload file cleanup skipped on `force_hard_delete`** — When
+  `force_hard_delete` was used on a soft-delete upload collection, the
+  upload file cleanup was skipped because the condition only checked
+  `!def.soft_delete`. Now also cleans up files when `force_hard_delete`
+  is true.
+
+- **Lua sandbox allowed native C module loading** — `package.cpath` and
+  `package.loadlib` were not removed from the Lua sandbox. A hook author
+  who could place a `.so`/`.dll` in the package search path could load
+  arbitrary native code. Now clears `package.cpath`, removes
+  `package.loadlib`, and removes `string.dump`.
+
+- **`user delete` CLI command bypassed ref_count** — The CLI user delete
+  command called `query::delete` directly, bypassing ref count decrements.
+  This left stale `_ref_count > 0` values on referenced documents, making
+  them undeletable. Now uses a transaction with `before_hard_delete`.
+
+- **gRPC `Me` endpoint checked `_locked` via field value** — The `Me`
+  endpoint inspected `doc.fields["_locked"]` instead of using the
+  `query::is_locked()` DB query. If `_locked` was stripped by field-level
+  access controls, the check would always pass. Now queries the DB
+  directly, matching the login endpoint behavior.
+
+- **gRPC `RestoreVersion` used deferred transaction** — `restore_version_impl`
+  used `conn.transaction()` instead of `conn.transaction_immediate()`,
+  which could cause SQLite `BUSY` errors under concurrent writes. Now
+  uses immediate transaction like all other write operations.
+
+- **`sqlite_date_offset_expr` double-negation on negative input** — The
+  function always prepended `-` to the seconds value. If a negative value
+  was passed (future offset), it would produce `--30 seconds` which SQLite
+  cannot parse. Now uses absolute value with explicit sign.
+
+- **Join table names not quoted in SQL** — Array, Block, and Relationship
+  join table SQL statements used unquoted table names, which could cause
+  subtle errors if table names contained SQL reserved words. Now
+  consistently double-quotes all join table names.
+
+- **Non-ASCII `X-Created-Label` header silently failed** — The inline
+  create panel's `X-Created-Label` response header failed silently for
+  non-ASCII document titles (e.g., accented characters, CJK) because HTTP
+  headers only allow visible ASCII. Now percent-encodes the label, and the
+  JS side decodes it.
+
+- **Version list pagination accepted `per_page=0`** — The version list
+  page (collections and globals) had no lower bound on `per_page`,
+  allowing `per_page=0` which produced infinite empty pages. Now uses
+  `.clamp(1, max_limit)`.
+
+- **Email verification allowed for locked accounts** — The verify-email
+  endpoint marked locked users as verified, inconsistent with the
+  reset-password handler which rejects locked accounts. Now blocks
+  verification for locked accounts.
+
+- **CSRF token not URL-decoded in `<crap-create-panel>`** — The create
+  panel extracted the CSRF cookie value without `decodeURIComponent()`,
+  while other components (delete dialog, conditions) properly decoded it.
+  Could cause CSRF validation failures. Now uses a shared decode pattern.
+
+- **`<crap-dirty-form>` catch handler cleared dirty flag** — When the
+  confirm dialog promise rejected, the `.catch()` handler silently cleared
+  `this._dirty`, removing unsaved-changes protection. Now preserves the
+  dirty flag on rejection.
+
+- **`<crap-conditions>` stale form reference after HTMX swap** — The
+  `_initialized` guard prevented re-initialization after disconnect/
+  reconnect, leaving `_debouncedServer` bound to a stale form element.
+  Now resets `_initialized` in `disconnectedCallback`.
+
+- **`<crap-list-settings>` used `innerHTML` with translation strings** —
+  The add-filter button concatenated `t('add_condition')` into `innerHTML`,
+  which could be an XSS vector if translation strings were attacker-
+  controlled. Now uses `createElement`/`textContent`.
+
+- **`<crap-sidebar>` Escape handler fired when sidebar closed** — The
+  Escape key handler closed the sidebar unconditionally even when already
+  closed, potentially interfering with other Escape handlers (modals,
+  dialogs). Now only fires when the sidebar is open.
+
+- **Logout route comment said GET/POST** — The `logout_action` handler
+  comment incorrectly documented `GET/POST` but the route only accepts
+  POST (correct for CSRF protection). Fixed the comment.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

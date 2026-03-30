@@ -73,7 +73,7 @@ pub fn update_global(
         .to_string();
 
     let mut col = UpdateCollector::new();
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "")?;
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "", false)?;
 
     if col.set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);

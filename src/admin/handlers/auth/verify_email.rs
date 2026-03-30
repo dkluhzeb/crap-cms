@@ -56,6 +56,13 @@ pub async fn verify_email(
                     return Ok(false);
                 }
 
+                // Block verification for locked accounts (consistent with reset_password)
+                if query::is_locked(&tx, &def.slug, &user.id)? {
+                    query::clear_verification_token(&tx, &def.slug, &user.id)?;
+                    tx.commit()?;
+                    return Ok(false);
+                }
+
                 query::mark_verified(&tx, &def.slug, &user.id)?;
                 tx.commit()?;
 

@@ -21,7 +21,7 @@ class CrapSidebar extends HTMLElement {
     };
 
     this._onEscape = (e) => {
-      if (e.key === 'Escape') this._close();
+      if (e.key === 'Escape' && this._isOpen()) this._close();
     };
 
     this._onNav = () => this._close();
@@ -40,6 +40,11 @@ class CrapSidebar extends HTMLElement {
   _close() {
     this.querySelector('.sidebar')?.classList.remove('sidebar--open');
     document.querySelector('.sidebar-backdrop')?.classList.remove('sidebar-backdrop--visible');
+  }
+
+  /** @returns {boolean} Whether the sidebar is currently open. */
+  _isOpen() {
+    return !!this.querySelector('.sidebar--open');
   }
 }
 

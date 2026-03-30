@@ -743,7 +743,7 @@ impl ContentService {
                 return Err(Status::permission_denied("Update access denied"));
             }
 
-            let tx = conn.transaction().map_err(|e| {
+            let tx = conn.transaction_immediate().map_err(|e| {
                 tracing::error!("RestoreVersion tx error: {}", e);
                 Status::internal("Internal error")
             })?;

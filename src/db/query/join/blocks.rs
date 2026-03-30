@@ -22,7 +22,7 @@ pub fn set_block_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
+                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
             &[
@@ -34,7 +34,7 @@ pub fn set_block_rows(
     } else {
         let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
             &[DbValue::Text(parent_id.to_string())],
         )
         .with_context(|| format!("Failed to clear blocks table {}", table_name))?;
@@ -54,7 +54,7 @@ pub fn set_block_rows(
             conn.placeholder(6),
         );
         let sql = format!(
-            "INSERT INTO {} (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})",
+            "INSERT INTO \"{}\" (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})",
             table_name
         );
         for (order, row) in rows.iter().enumerate() {
@@ -94,7 +94,7 @@ pub fn set_block_rows(
             conn.placeholder(5),
         );
         let sql = format!(
-            "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
+            "INSERT INTO \"{}\" (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
             table_name
         );
         for (order, row) in rows.iter().enumerate() {
@@ -142,7 +142,7 @@ pub fn find_block_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT id, _block_type, data FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                "SELECT id, _block_type, data FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
                 table_name
             ),
             vec![
@@ -154,7 +154,7 @@ pub fn find_block_rows(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT id, _block_type, data FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                "SELECT id, _block_type, data FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
                 table_name
             ),
             vec![DbValue::Text(parent_id.to_string())],

@@ -270,7 +270,11 @@ class CrapListSettings extends HTMLElement {
     const addBtn = document.createElement('button');
     addBtn.type = 'button';
     addBtn.className = 'button button--ghost button--small';
-    addBtn.innerHTML = '<span class="material-symbols-outlined">add</span> ' + t('add_condition');
+    const addIcon = document.createElement('span');
+    addIcon.className = 'material-symbols-outlined';
+    addIcon.textContent = 'add';
+    addBtn.appendChild(addIcon);
+    addBtn.appendChild(document.createTextNode(' ' + t('add_condition')));
     addBtn.addEventListener('click', () => addRow());
     container.appendChild(addBtn);
 

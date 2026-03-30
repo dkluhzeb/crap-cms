@@ -28,7 +28,7 @@ pub fn set_array_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
+                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
             &[
@@ -39,7 +39,7 @@ pub fn set_array_rows(
     } else {
         let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
             &[DbValue::Text(parent_id.to_string())],
         )?;
     }
@@ -89,7 +89,7 @@ pub fn set_array_rows(
         (all_cols, placeholders)
     };
     let sql = format!(
-        "INSERT INTO {} ({}) VALUES ({})",
+        "INSERT INTO \"{}\" ({}) VALUES ({})",
         table_name, all_cols, placeholders
     );
 
@@ -175,7 +175,7 @@ pub fn find_array_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT {} FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                "SELECT {} FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
                 select_cols, table_name
             ),
             vec![
@@ -187,7 +187,7 @@ pub fn find_array_rows(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT {} FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                "SELECT {} FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
                 select_cols, table_name
             ),
             vec![DbValue::Text(parent_id.to_string())],

@@ -186,14 +186,15 @@ impl ContentService {
         let id = claims.sub.clone();
         let session_version = claims.session_version;
 
-        let (doc, db_session_version) = tokio::task::spawn_blocking(move || {
+        let (doc, db_session_version, is_locked) = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             let mut doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
             if let Some(ref mut d) = doc {
                 query::hydrate_document(&conn, &collection, &def.fields, d, None, None)?;
             }
             let sv = query::get_session_version(&conn, &collection, &id)?;
-            Ok::<_, anyhow::Error>((doc, sv))
+            let locked = query::is_locked(&conn, &collection, &id)?;
+            Ok::<_, anyhow::Error>((doc, sv, locked))
         })
         .await
         .map_err(|e| {
@@ -213,13 +214,7 @@ impl ContentService {
         }
 
         // Reject locked users even if their JWT is still valid
-        let locked = doc
-            .fields
-            .get("_locked")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-            != 0;
-        if locked {
+        if is_locked {
             return Err(Status::unauthenticated("Account is locked"));
         }
 

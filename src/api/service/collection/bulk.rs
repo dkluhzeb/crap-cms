@@ -112,8 +112,9 @@ impl ContentService {
             )
             .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
 
-            // All-or-nothing update access check
-            if def_owned.access.update.is_some() {
+            // All-or-nothing update access check (always run, even when no
+            // access function is configured — check_access respects default_deny)
+            {
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
                 for doc in &docs {
                     let result = hook_runner
@@ -348,8 +349,9 @@ impl ContentService {
                 let docs = query::find(&tx, &collection, &def_owned, &find_query, None)
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
-                // All-or-nothing access check (using the resolved permission)
-                if access_owned.is_some() {
+                // All-or-nothing access check (always run, even when no
+                // access function is configured — check_access respects default_deny)
+                {
                     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
                     for doc in &docs {
                         let result = hook_runner

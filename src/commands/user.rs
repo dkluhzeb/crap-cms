@@ -524,8 +524,26 @@ pub fn user_delete(
         }
     }
 
-    let conn = pool.get().context("Failed to get database connection")?;
-    query::delete(&conn, collection, &doc.id).context("Failed to delete user")?;
+    let mut conn = pool.get().context("Failed to get database connection")?;
+    let reg = registry
+        .read()
+        .map_err(|_| anyhow!("Failed to read registry"))?;
+    let def = reg
+        .get_collection(collection)
+        .ok_or_else(|| anyhow!("Collection '{}' not found in registry", collection))?;
+    let lc = crate::config::LocaleConfig::default();
+
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start transaction")?;
+
+    // Decrement ref counts on documents this user references
+    query::ref_count::before_hard_delete(&tx, collection, &doc.id, &def.fields, &lc)
+        .context("Failed to adjust ref counts")?;
+
+    query::delete(&tx, collection, &doc.id).context("Failed to delete user")?;
+
+    tx.commit().context("Failed to commit delete transaction")?;
 
     cli::success(&format!(
         "Deleted user {} ({}) from '{}'",

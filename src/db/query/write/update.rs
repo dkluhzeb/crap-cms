@@ -27,7 +27,7 @@ pub fn update(
 
     let mut col = UpdateCollector::new();
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "")?;
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "", false)?;
 
     if def.timestamps {
         col.set_clauses
@@ -72,7 +72,7 @@ pub fn update_partial(
 
     let mut col = UpdateCollector::new_partial();
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "")?;
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "", false)?;
 
     if def.timestamps {
         col.set_clauses
@@ -141,6 +141,7 @@ pub(in crate::db::query) fn collect_update_params(
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
     prefix: &str,
+    inherited_localized: bool,
 ) -> Result<()> {
     for field in fields {
         match field.field_type {
@@ -157,14 +158,31 @@ pub(in crate::db::query) fn collect_update_params(
                     collector,
                     conn,
                     &new_prefix,
+                    inherited_localized || field.localized,
                 )?;
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_update_params(&field.fields, data, locale_ctx, collector, conn, prefix)?;
+                collect_update_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    collector,
+                    conn,
+                    prefix,
+                    inherited_localized,
+                )?;
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_update_params(&tab.fields, data, locale_ctx, collector, conn, prefix)?;
+                    collect_update_params(
+                        &tab.fields,
+                        data,
+                        locale_ctx,
+                        collector,
+                        conn,
+                        prefix,
+                        inherited_localized,
+                    )?;
                 }
             }
             _ => {
@@ -176,7 +194,8 @@ pub(in crate::db::query) fn collect_update_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                let col_name = locale_write_column(&data_key, field, locale_ctx)?;
+                let col_name =
+                    locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
 
                 if let Some(value) = data.get(&data_key) {
                     collector.set_clauses.push(format!(
@@ -210,7 +229,8 @@ pub(in crate::db::query) fn collect_update_params(
                     // Timezone companion column for date fields
                     if field.field_type == FieldType::Date && field.timezone {
                         let tz_key = format!("{}_tz", data_key);
-                        let tz_col = locale_write_column(&tz_key, field, locale_ctx)?;
+                        let tz_col =
+                            locale_write_column(&tz_key, field, locale_ctx, inherited_localized)?;
                         collector.set_clauses.push(format!(
                             "{} = {}",
                             tz_col,

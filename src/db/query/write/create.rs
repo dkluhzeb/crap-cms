@@ -40,7 +40,15 @@ pub fn create(
         idx: 2,
     };
 
-    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn, "")?;
+    collect_insert_params(
+        &def.fields,
+        data,
+        &locale_ctx,
+        &mut collector,
+        conn,
+        "",
+        false,
+    )?;
 
     if def.timestamps {
         collector.columns.push("created_at".to_string());
@@ -77,6 +85,7 @@ pub(super) fn collect_insert_params(
     collector: &mut InsertCollector,
     conn: &dyn DbConnection,
     prefix: &str,
+    inherited_localized: bool,
 ) -> Result<()> {
     for field in fields {
         match field.field_type {
@@ -93,14 +102,31 @@ pub(super) fn collect_insert_params(
                     collector,
                     conn,
                     &new_prefix,
+                    inherited_localized || field.localized,
                 )?;
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_insert_params(&field.fields, data, locale_ctx, collector, conn, prefix)?;
+                collect_insert_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    collector,
+                    conn,
+                    prefix,
+                    inherited_localized,
+                )?;
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_insert_params(&tab.fields, data, locale_ctx, collector, conn, prefix)?;
+                    collect_insert_params(
+                        &tab.fields,
+                        data,
+                        locale_ctx,
+                        collector,
+                        conn,
+                        prefix,
+                        inherited_localized,
+                    )?;
                 }
             }
             _ => {
@@ -112,7 +138,8 @@ pub(super) fn collect_insert_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                let col_name = locale_write_column(&data_key, field, locale_ctx)?;
+                let col_name =
+                    locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
 
                 if let Some(value) = data.get(&data_key) {
                     collector.columns.push(col_name);
@@ -143,7 +170,8 @@ pub(super) fn collect_insert_params(
                     // Timezone companion column for date fields
                     if field.field_type == FieldType::Date && field.timezone {
                         let tz_key = format!("{}_tz", data_key);
-                        let tz_col = locale_write_column(&tz_key, field, locale_ctx)?;
+                        let tz_col =
+                            locale_write_column(&tz_key, field, locale_ctx, inherited_localized)?;
                         collector.columns.push(tz_col);
                         collector.placeholders.push(conn.placeholder(collector.idx));
 

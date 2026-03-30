@@ -176,8 +176,9 @@ pub(super) fn register_delete(
                     .map_err(|e| RuntimeError(format!("FTS delete error: {}", e)))?;
             }
 
-            // Clean up upload files after successful DB delete (skip for soft-delete)
-            if !def.soft_delete
+            // Clean up upload files after successful DB delete (skip for soft-delete
+            // unless force_hard_delete was requested)
+            if (!def.soft_delete || force_hard_delete)
                 && let Some(fields) = upload_doc_fields
                 && let Some(config_dir) = lua.app_data_ref::<ConfigDir>()
             {

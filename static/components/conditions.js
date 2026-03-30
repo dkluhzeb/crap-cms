@@ -37,6 +37,7 @@ class CrapConditions extends HTMLElement {
       el.removeEventListener(type, fn);
     }
     this._clientListeners = [];
+    this._initialized = false;
   }
 
   /**

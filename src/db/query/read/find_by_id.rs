@@ -7,7 +7,7 @@ use crate::{
     db::{
         DbConnection, DbValue, LocaleContext, LocaleMode,
         document::row_to_document,
-        query::{get_column_names, get_locale_select_columns_with_opts, group_locale_fields},
+        query::{get_column_names, get_locale_select_columns_full, group_locale_fields},
     },
 };
 
@@ -73,9 +73,13 @@ pub fn find_by_ids(
     }
 
     let (select_exprs, _result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
-        }
+        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
+            &def.fields,
+            def.timestamps,
+            def.soft_delete,
+            def.has_drafts(),
+            ctx,
+        )?,
         _ => {
             let names = get_column_names(def);
             (names.clone(), names)
@@ -157,9 +161,13 @@ fn find_by_id_raw_inner(
     include_deleted: bool,
 ) -> Result<Option<Document>> {
     let (select_exprs, _result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
-        }
+        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
+            &def.fields,
+            def.timestamps,
+            def.soft_delete,
+            def.has_drafts(),
+            ctx,
+        )?,
         _ => {
             let names = get_column_names(def);
             (names.clone(), names)

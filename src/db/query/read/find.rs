@@ -9,7 +9,7 @@ use crate::db::{
     DbConnection, DbValue, FindQuery, LocaleContext, LocaleMode,
     query::{
         filter::{build_where_clause, resolve_filter_column, resolve_filters},
-        fts, get_column_names, get_locale_select_columns_with_opts, group_locale_fields,
+        fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
         validate_query_fields,
     },
 };
@@ -29,9 +29,13 @@ pub fn find(
     validate_query_fields(def, query, locale_ctx)?;
 
     let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
-        }
+        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
+            &def.fields,
+            def.timestamps,
+            def.soft_delete,
+            def.has_drafts(),
+            ctx,
+        )?,
         _ => {
             let names = get_column_names(def);
             (names.clone(), names)
