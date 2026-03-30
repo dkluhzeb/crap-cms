@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,7 @@
                     <main>
                         <h1 id="live-update-hooks"><a class="header" href="#live-update-hooks">Live Update Hooks</a></h1>
 <h2 id="before_broadcast"><a class="header" href="#before_broadcast"><code>before_broadcast</code></a></h2>
-<p>A lifecycle event that fires inside the write transaction, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.</p>
+<p>A lifecycle event that fires after the write transaction has committed, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.</p>
 <h3 id="collection-level"><a class="header" href="#collection-level">Collection-Level</a></h3>
 <pre><code class="language-lua">crap.collections.define("posts", {
     hooks = {

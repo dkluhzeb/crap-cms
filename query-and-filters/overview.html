@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,7 +189,7 @@
 <tr><td>Equals</td><td><code>status = "published"</code> or <code>{ equals = "val" }</code></td><td><code>{"equals": "val"}</code></td><td><code>field = ?</code></td></tr>
 <tr><td>Not equals</td><td><code>{ not_equals = "val" }</code></td><td><code>{"not_equals": "val"}</code></td><td><code>field != ?</code></td></tr>
 <tr><td>Like</td><td><code>{ like = "pattern%" }</code></td><td><code>{"like": "pattern%"}</code></td><td><code>field LIKE ?</code></td></tr>
-<tr><td>Contains</td><td><code>{ contains = "text" }</code></td><td><code>{"contains": "text"}</code></td><td><code>field LIKE '%text%'</code></td></tr>
+<tr><td>Contains</td><td><code>{ contains = "text" }</code></td><td><code>{"contains": "text"}</code></td><td><code>field LIKE '%text%' ESCAPE '\'</code> (wildcards <code>%</code> and <code>_</code> in the search text are escaped)</td></tr>
 <tr><td>Greater than</td><td><code>{ greater_than = "10" }</code></td><td><code>{"greater_than": "10"}</code></td><td><code>field &gt; ?</code></td></tr>
 <tr><td>Less than</td><td><code>{ less_than = "10" }</code></td><td><code>{"less_than": "10"}</code></td><td><code>field &lt; ?</code></td></tr>
 <tr><td>Greater/equal</td><td><code>{ greater_than_or_equal = "10" }</code></td><td><code>{"greater_than_or_equal": "10"}</code></td><td><code>field &gt;= ?</code></td></tr>
@@ -201,6 +201,10 @@
 </tbody>
 </table>
 </div>
+<blockquote>
+<p><strong>Note:</strong> For <code>exists</code>/<code>not_exists</code>, the value is ignored — only the key matters. Use <code>not_exists</code> for IS NULL (not <code>{ exists = false }</code>).</p>
+<p><strong>gRPC shorthand limitation:</strong> In Lua, bare values like <code>{ count = 42 }</code> or <code>{ active = true }</code> are coerced to string equals. The gRPC <code>where</code> JSON only accepts string or operator object values — numeric/boolean shorthand is not supported.</p>
+</blockquote>
 <h2 id="sorting"><a class="header" href="#sorting">Sorting</a></h2>
 <p>Prefix a field name with <code>-</code> for descending order. When <code>order_by</code> is omitted, results are sorted by <code>created_at DESC</code> (newest first) for collections with timestamps, or <code>id ASC</code> otherwise. When sorting by a non-id field, an <code>id</code> tiebreaker is always appended for stable ordering.</p>
 <p><strong>Lua:</strong></p>

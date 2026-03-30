@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -203,18 +203,16 @@ fallback = true
 <p>Mark individual fields as localized in your Lua definitions:</p>
 <pre><code class="language-lua">crap.collections.define("pages", {
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             localized = true,  -- this field has per-locale values
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             required = true,
             -- not localized — single value shared across all locales
-        },
+        }),
     },
 })
 </code></pre>
@@ -230,12 +228,11 @@ fallback = true
 </ul>
 <h3 id="unique--localized"><a class="header" href="#unique--localized">Unique + Localized</a></h3>
 <p>When a field has both <code>unique = true</code> and <code>localized = true</code>, uniqueness is enforced <strong>per locale</strong>. Two documents can have the same value in different locales, but not in the same locale:</p>
-<pre><code class="language-lua">{
+<pre><code class="language-lua">crap.fields.text({
     name = "slug",
-    type = "text",
     unique = true,
     localized = true,
-}
+})
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -329,9 +326,8 @@ end
         plural = { en = "Pages", de = "Seiten" },
     },
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             localized = true,
             admin = {
@@ -339,15 +335,14 @@ end
                 placeholder = { en = "Enter page title", de = "Seitentitel eingeben" },
                 description = { en = "The main heading", de = "Die Hauptüberschrift" },
             },
-        },
-        {
+        }),
+        crap.fields.select({
             name = "status",
-            type = "select",
             options = {
                 { label = { en = "Draft", de = "Entwurf" }, value = "draft" },
                 { label = { en = "Published", de = "Veröffentlicht" }, value = "published" },
             },
-        },
+        }),
     },
 })
 </code></pre>
@@ -380,7 +375,7 @@ end
   "no_items_yet": "Keine {{name}} vorhanden"
 }
 </code></pre>
-<p>Templates pass values as hash parameters: <code>{{t "page_of" page=page total=total_pages}}</code>.</p>
+<p>Templates pass values as hash parameters: <code>{{t "page_of" page=pagination.page total=pagination.total_pages}}</code>.</p>
 <h3 id="available-keys"><a class="header" href="#available-keys">Available Keys</a></h3>
 <p>See <code>translations/en.json</code> in the source tree for all available translation keys.</p>
 <h2 id="backward-compatibility"><a class="header" href="#backward-compatibility">Backward Compatibility</a></h2>

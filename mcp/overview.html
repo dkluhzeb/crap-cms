@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,7 +188,7 @@ and globals. Any CMS instance automatically gets a full MCP API matching its sch
 enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
-api_key = ""                # API key for HTTP transport auth (empty = no auth)
+api_key = ""                # API key for HTTP auth (required when http = true)
 include_collections = []    # Whitelist (empty = all)
 exclude_collections = []    # Blacklist (takes precedence over include)
 </code></pre>
@@ -213,7 +213,9 @@ exclude_collections = []    # Blacklist (takes precedence over include)
 <h3 id="http"><a class="header" href="#http">HTTP</a></h3>
 <p>When <code>mcp.http = true</code>, the admin server exposes a <code>POST /mcp</code> endpoint.
 Send JSON-RPC 2.0 requests as the request body.</p>
-<p>If <code>mcp.api_key</code> is set, requests must include an <code>Authorization: Bearer &lt;key&gt;</code> header.</p>
+<p>An <code>api_key</code> is <strong>required</strong> when HTTP transport is enabled. Requests must include
+an <code>Authorization: Bearer &lt;key&gt;</code> header. The server will refuse to start if
+<code>mcp.http = true</code> and <code>api_key</code> is empty.</p>
 <h2 id="auto-generated-tools"><a class="header" href="#auto-generated-tools">Auto-Generated Tools</a></h2>
 <h3 id="content-crud-per-collection"><a class="header" href="#content-crud-per-collection">Content CRUD (per collection)</a></h3>
 <p>For each collection (e.g., <code>posts</code>), five tools are generated:</p>
@@ -288,14 +290,13 @@ options, and relationship types are all reflected in the JSON Schema.</p>
 }
 </code></pre>
 <h3 id="field-level"><a class="header" href="#field-level">Field level</a></h3>
-<pre><code class="language-lua">{
+<pre><code class="language-lua">crap.fields.select({
   name = "status",
-  type = "select",
   mcp = {
     description = "Publication status - controls visibility on the frontend",
   },
   options = { ... },
-}
+})
 </code></pre>
 <p>If no <code>mcp.description</code> is set, the tool falls back to <code>admin.description</code>
 (for fields) or a generated description based on the collection label.</p>
@@ -313,10 +314,14 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 (equivalent to Lua’s <code>overrideAccess = true</code>), gated by transport-level authentication:</p>
 <ul>
 <li><strong>stdio:</strong> Access is controlled by who can run the process.</li>
-<li><strong>HTTP:</strong> Access is controlled by the <code>api_key</code> setting. <strong>Always set an API key
-in production.</strong> Without one, the <code>/mcp</code> endpoint is unauthenticated.</li>
+<li><strong>HTTP:</strong> Access is controlled by the <code>api_key</code> setting. An API key is <strong>required</strong>
+when <code>http = true</code> — the server will refuse to start without one. As a defense-in-depth
+measure, the HTTP endpoint also rejects all requests if the API key is somehow empty
+at runtime.</li>
 </ul>
-<p>To restrict which collections are visible, use <code>include_collections</code> / <code>exclude_collections</code>.</p>
+<p>To restrict which collections are accessible, use <code>include_collections</code> /
+<code>exclude_collections</code>. These filters are enforced both in tool listing (<code>tools/list</code>)
+and at execution time, so knowing a collection slug is not enough to bypass the filter.</p>
 <p>All MCP write operations (create, update, delete) are logged at <code>info</code> level for
 audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC).</p>
 <h2 id="resources"><a class="header" href="#resources">Resources</a></h2>
@@ -329,7 +334,7 @@ audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC
 <tbody>
 <tr><td><code>crap://schema/collections</code></td><td>Full schema of all collections as JSON</td></tr>
 <tr><td><code>crap://schema/globals</code></td><td>Full schema of all globals as JSON</td></tr>
-<tr><td><code>crap://config</code></td><td>Current configuration (secrets sanitized)</td></tr>
+<tr><td><code>crap://config</code></td><td>Current configuration (secrets sanitized: <code>auth.secret</code>, <code>email.smtp_pass</code>, <code>mcp.api_key</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -343,12 +348,34 @@ audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC
 <tbody>
 <tr><td><code>where</code></td><td>object</td><td>Filter conditions (same syntax as gRPC/Lua API)</td></tr>
 <tr><td><code>order_by</code></td><td>string</td><td>Sort field (prefix with <code>-</code> for descending, e.g., <code>"-created_at"</code>)</td></tr>
-<tr><td><code>limit</code></td><td>integer</td><td>Max results to return</td></tr>
-<tr><td><code>offset</code></td><td>integer</td><td>Skip N results (pagination)</td></tr>
+<tr><td><code>limit</code></td><td>integer</td><td>Max results per page</td></tr>
+<tr><td><code>page</code></td><td>integer</td><td>Page number, 1-indexed (page mode only)</td></tr>
+<tr><td><code>after_cursor</code></td><td>string</td><td>Forward cursor (cursor mode only, mutually exclusive with <code>page</code> and <code>before_cursor</code>)</td></tr>
+<tr><td><code>before_cursor</code></td><td>string</td><td>Backward cursor (cursor mode only, mutually exclusive with <code>page</code> and <code>after_cursor</code>)</td></tr>
+<tr><td><code>depth</code></td><td>integer</td><td>Relationship population depth</td></tr>
 <tr><td><code>search</code></td><td>string</td><td>Full-text search query</td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="response-format"><a class="header" href="#response-format">Response Format</a></h3>
+<p><code>find_*</code> tools return a JSON object with <code>docs</code> and <code>pagination</code>:</p>
+<pre><code class="language-json">{
+  "docs": [
+    { "id": "abc123", "title": "Hello World", "created_at": "2026-01-15T09:00:00Z" }
+  ],
+  "pagination": {
+    "totalDocs": 25,
+    "limit": 10,
+    "hasNextPage": true,
+    "hasPrevPage": false,
+    "totalPages": 3,
+    "page": 1,
+    "pageStart": 1,
+    "nextPage": 2
+  }
+}
+</code></pre>
+<p>In cursor mode, <code>page</code>/<code>totalPages</code>/<code>pageStart</code>/<code>nextPage</code>/<code>prevPage</code> are replaced by <code>startCursor</code>/<code>endCursor</code>.</p>
 <h3 id="where-clause-example"><a class="header" href="#where-clause-example">Where clause example</a></h3>
 <pre><code class="language-json">{
   "name": "find_posts",

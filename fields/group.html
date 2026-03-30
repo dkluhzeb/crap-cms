@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -200,7 +200,12 @@
 })
 </code></pre>
 <h2 id="sub-fields"><a class="header" href="#sub-fields">Sub-Fields</a></h2>
-<p>Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.) but do not support nested groups, arrays, or relationships.</p>
+<p>Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.), including nested groups, arrays, blocks, and relationships.</p>
+<ul>
+<li><strong>Nested groups</strong> use stacked prefixes: <code>outer__inner__field</code>.</li>
+<li><strong>Arrays/Blocks inside groups</strong> create prefixed join tables: <code>{collection}_{group}__{field}</code>.</li>
+<li><strong>Relationships inside groups</strong> create prefixed junction tables (for has-many) or prefixed columns (for has-one).</li>
+</ul>
 <h2 id="api-representation"><a class="header" href="#api-representation">API Representation</a></h2>
 <p>In API responses (after hydration), group fields appear as a nested object:</p>
 <pre><code class="language-json">{

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,12 +188,6 @@
 <p>Single file (has-one):</p>
 <pre><code class="language-lua">crap.fields.upload({
     name = "featured_image",
-    relation_to = "media",
-})
-</code></pre>
-<p>Or using the expanded relationship syntax:</p>
-<pre><code class="language-lua">crap.fields.upload({
-    name = "featured_image",
     relationship = {
         collection = "media",
         max_depth = 1,
@@ -209,13 +203,9 @@
     },
 })
 </code></pre>
-<p>Or with flat syntax:</p>
-<pre><code class="language-lua">crap.fields.upload({
-    name = "gallery",
-    relation_to = "media",
-    has_many = true,
-})
-</code></pre>
+<blockquote>
+<p><strong>Note:</strong> The flat <code>relation_to</code> syntax is deprecated for upload fields too. Use <code>relationship = { collection = "..." }</code> instead.</p>
+</blockquote>
 <p>The target collection should be an upload collection (defined with <code>upload = true</code>).</p>
 <h2 id="api-representation"><a class="header" href="#api-representation">API Representation</a></h2>
 <h3 id="has-one"><a class="header" href="#has-one">Has-one</a></h3>

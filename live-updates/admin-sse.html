@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,9 +187,9 @@
 <p>Events are sent with event type <code>mutation</code>:</p>
 <pre><code>event: mutation
 id: 42
-data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123"}
+data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","edited_by":"user_456"}
 </code></pre>
-<p>The <code>data</code> payload is JSON with the same fields as the gRPC <code>MutationEvent</code> (excluding the full document <code>data</code> for efficiency — admin SSE only sends metadata).</p>
+<p>The <code>data</code> payload is JSON with the same fields as the gRPC <code>MutationEvent</code> (excluding the full document <code>data</code> for efficiency), plus an <code>edited_by</code> field containing the user ID of the authenticated user who made the change (or <code>null</code> for unauthenticated operations).</p>
 <h2 id="admin-ui-integration"><a class="header" href="#admin-ui-integration">Admin UI Integration</a></h2>
 <p>The admin UI automatically connects to the SSE endpoint on all authenticated pages. When a mutation event is received, a toast notification is shown via the <code>&lt;crap-toast&gt;</code> component.</p>
 <p>The SSE connection:</p>
@@ -200,6 +200,11 @@ data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","o
 </ul>
 <h2 id="access-control"><a class="header" href="#access-control">Access Control</a></h2>
 <p>Same as gRPC Subscribe: read access is checked at connection time per collection/global. Events for inaccessible collections are filtered out.</p>
+<blockquote>
+<p><strong>Note:</strong> Access control is <strong>snapshotted at subscribe time</strong>. If a user’s permissions change after they subscribe to the SSE stream (e.g., their role is updated or access rules are modified), they will continue receiving events based on the original permissions until the SSE connection is closed. To force a re-evaluation, the client must reconnect.</p>
+</blockquote>
+<h2 id="connection-limits"><a class="header" href="#connection-limits">Connection Limits</a></h2>
+<p>The maximum number of concurrent SSE connections is controlled by <code>max_sse_connections</code> in <code>[live]</code> (default: 1000). When the limit is reached, new connections receive <code>503 Service Unavailable</code>. Set to <code>0</code> for unlimited.</p>
 <h2 id="custom-integration"><a class="header" href="#custom-integration">Custom Integration</a></h2>
 <p>If you override the admin templates, the SSE listener is in <code>static/components/live-events.js</code>. You can customize or replace it by placing your own <code>static/components/live-events.js</code> in your config dir’s <code>static/</code> folder.</p>
 

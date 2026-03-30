@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>crap.auth - Crap CMS</title>
+        <title>Soft Deletes - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -177,48 +177,139 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="crapauth"><a class="header" href="#crapauth">crap.auth</a></h1>
-<p>Password hashing and verification helpers using Argon2id.</p>
-<h2 id="functions"><a class="header" href="#functions">Functions</a></h2>
-<h3 id="crapauthhash_passwordpassword"><a class="header" href="#crapauthhash_passwordpassword"><code>crap.auth.hash_password(password)</code></a></h3>
-<p>Hash a plaintext password using Argon2id.</p>
-<p><strong>Parameters:</strong></p>
-<ul>
-<li><code>password</code> (string) — Plaintext password.</li>
-</ul>
-<p><strong>Returns:</strong> string — The hashed password string.</p>
-<pre><code class="language-lua">local hash = crap.auth.hash_password("secret123")
--- hash is an Argon2id hash string like "$argon2id$v=19$..."
+                        <h1 id="soft-deletes"><a class="header" href="#soft-deletes">Soft Deletes</a></h1>
+<p>Collections can opt into soft deletes so that deleted documents are moved to trash instead of being permanently removed. Trashed documents can be restored or permanently purged after a configurable retention period.</p>
+<h2 id="enabling"><a class="header" href="#enabling">Enabling</a></h2>
+<pre><code class="language-lua">crap.collections.define("posts", {
+  soft_delete = true,
+  soft_delete_retention = "30d",  -- optional: auto-purge after 30 days
+  -- ...
+})
 </code></pre>
-<h3 id="crapauthverify_passwordpassword-hash"><a class="header" href="#crapauthverify_passwordpassword-hash"><code>crap.auth.verify_password(password, hash)</code></a></h3>
-<p>Verify a plaintext password against a stored hash.</p>
-<p><strong>Parameters:</strong></p>
+<p>When <code>soft_delete = true</code>:</p>
 <ul>
-<li><code>password</code> (string) — Plaintext password to check.</li>
-<li><code>hash</code> (string) — Stored Argon2id hash.</li>
+<li>Deleting a document sets a <code>_deleted_at</code> timestamp instead of removing the row</li>
+<li>Soft-deleted documents are excluded from all reads, counts, and search</li>
+<li>Upload files are preserved until the document is permanently purged</li>
+<li>Version history is preserved</li>
 </ul>
-<p><strong>Returns:</strong> boolean — <code>true</code> if the password matches.</p>
-<pre><code class="language-lua">local valid = crap.auth.verify_password("secret123", stored_hash)
-if valid then
-    crap.log.info("Password matches")
-end
+<h2 id="permissions"><a class="header" href="#permissions">Permissions</a></h2>
+<p>Soft deletes introduce a split between trashing (reversible) and permanent deletion (destructive):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Action</th><th>Permission</th><th>Fallback</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>Move to trash</td><td><code>access.trash</code></td><td><code>access.update</code></td><td>Soft-delete a document</td></tr>
+<tr><td>Restore from trash</td><td><code>access.trash</code></td><td><code>access.update</code></td><td>Un-delete a trashed document</td></tr>
+<tr><td>Delete permanently</td><td><code>access.delete</code></td><td><em>(blocks if not set)</em></td><td>Permanently remove a document</td></tr>
+<tr><td>Empty trash</td><td><code>access.delete</code></td><td><em>(blocks if not set)</em></td><td>Permanently remove all trashed documents</td></tr>
+<tr><td>Auto-purge</td><td><em>(none)</em></td><td>—</td><td>System-level scheduler, always runs</td></tr>
+</tbody>
+</table>
+</div>
+<p>Example configuration:</p>
+<pre><code class="language-lua">access = {
+  read = "access.anyone",
+  create = "access.editor_or_above",
+  update = "access.editor_or_above",
+  trash = "access.editor_or_above",       -- editors can trash and restore
+  delete = "access.admin_or_director",    -- only admins can permanently delete
+}
 </code></pre>
+<p>If <code>access.trash</code> is not set, it falls back to <code>access.update</code> — any user who can edit a document can also trash it. If <code>access.delete</code> is not set, permanent deletion is only possible via the auto-purge scheduler.</p>
+<h2 id="admin-ui"><a class="header" href="#admin-ui">Admin UI</a></h2>
+<h3 id="trash-view"><a class="header" href="#trash-view">Trash view</a></h3>
+<p>The collection list shows a <strong>Trash</strong> button when <code>soft_delete</code> is enabled. Clicking it shows the trash view (<code>?trash=1</code>) with:</p>
+<ul>
+<li><strong>Restore button</strong> — moves the document back to the active list</li>
+<li><strong>Delete permanently button</strong> — permanently removes the document (only shown when <code>access.delete</code> is configured)</li>
+<li><strong>Empty trash button</strong> — permanently removes all trashed documents (only shown when <code>access.delete</code> is configured)</li>
+</ul>
+<h3 id="delete-dialog"><a class="header" href="#delete-dialog">Delete dialog</a></h3>
+<p>The delete button on list rows and the edit sidebar opens a modal dialog:</p>
+<ul>
+<li><strong>Soft-delete collections</strong>: Shows “Move to trash” (primary) and “Delete permanently” (danger) buttons</li>
+<li><strong>Hard-delete collections</strong>: Shows only “Delete permanently” button</li>
+<li>“Delete permanently” is hidden when the user lacks <code>access.delete</code> permission</li>
+</ul>
+<h2 id="retention--auto-purge"><a class="header" href="#retention--auto-purge">Retention &amp; Auto-Purge</a></h2>
+<p>Set <code>soft_delete_retention</code> to automatically purge expired documents:</p>
+<pre><code class="language-lua">soft_delete_retention = "30d"   -- purge after 30 days
+soft_delete_retention = "7d"    -- purge after 7 days
+soft_delete_retention = "90d"   -- purge after 90 days
+</code></pre>
+<p>The scheduler runs the purge job periodically. Documents with <code>_deleted_at</code> older than the retention period are permanently deleted, including upload file cleanup.</p>
+<p>If <code>soft_delete_retention</code> is not set, trashed documents persist indefinitely until manually purged via the admin UI or CLI.</p>
+<p>Supported formats: <code>"30d"</code> (days), <code>"24h"</code> (hours), or raw seconds.</p>
+<h2 id="api"><a class="header" href="#api">API</a></h2>
+<h3 id="grpc"><a class="header" href="#grpc">gRPC</a></h3>
+<pre><code class="language-protobuf">// Soft-delete (default for soft_delete collections)
+rpc Delete (DeleteRequest) returns (DeleteResponse);
+
+// Force permanent deletion
+DeleteRequest { collection: "posts", id: "abc", force_hard_delete: true }
+
+// Restore from trash
+rpc Restore (RestoreRequest) returns (RestoreResponse);
+</code></pre>
+<p>The <code>DeleteResponse</code> includes a <code>soft_deleted</code> boolean indicating whether the deletion was soft or hard.</p>
+<h3 id="lua"><a class="header" href="#lua">Lua</a></h3>
+<pre><code class="language-lua">-- Soft delete (moves to trash)
+crap.collections.delete("posts", id)
+
+-- Force permanent delete
+crap.collections.delete("posts", id, { forceHardDelete = true })
+
+-- Restore from trash
+crap.collections.restore("posts", id)
+</code></pre>
+<h3 id="mcp"><a class="header" href="#mcp">MCP</a></h3>
+<p>MCP delete tools automatically use soft delete when the collection has it enabled.</p>
+<h3 id="cli"><a class="header" href="#cli">CLI</a></h3>
+<pre><code class="language-bash"># List all trashed documents
+crap trash list
+
+# List trashed documents in a specific collection
+crap trash list --collection posts
+
+# Restore a document from trash
+crap trash restore posts abc123
+
+# Purge all expired documents (respects soft_delete_retention)
+crap trash purge
+
+# Purge documents older than 7 days
+crap trash purge --older-than 7d
+
+# Dry run — show what would be purged without deleting
+crap trash purge --dry-run
+
+# Empty all trash in a collection (requires --confirm)
+crap trash empty posts --confirm
+</code></pre>
+<h2 id="database-schema"><a class="header" href="#database-schema">Database Schema</a></h2>
+<p>When <code>soft_delete = true</code>, a <code>_deleted_at TEXT</code> column is added to the collection table. The value is <code>NULL</code> for active documents and an ISO 8601 timestamp for soft-deleted documents.</p>
+<p>All read queries automatically append <code>AND _deleted_at IS NULL</code> to exclude trashed documents. The <code>include_deleted</code> flag on <code>FindQuery</code> overrides this for the trash view.</p>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
 <ul>
-<li>Available in both init.lua and hooks.</li>
-<li>Uses the same Argon2id implementation as the built-in auth system.</li>
-<li>Useful for custom auth strategies or migrating users from external systems.</li>
+<li>Soft-deleted documents retain all join table data (arrays, blocks, relationships) — nothing is cascaded</li>
+<li>FTS index entries are removed on soft-delete and re-synced on restore</li>
+<li>Upload files are kept on disk until the document is permanently purged</li>
+<li>Version history is preserved through soft-delete and restore</li>
+<li>Back-reference warnings still appear on the delete confirmation for upload/media collections</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../lua-api/util.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../collections/versions.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../lua-api/env.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../fields/overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -228,11 +319,11 @@ end
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../lua-api/util.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../collections/versions.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../lua-api/env.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../fields/overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

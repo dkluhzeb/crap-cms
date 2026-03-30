@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,18 +186,43 @@
   rpc Create (CreateRequest) returns (CreateResponse);
   rpc Update (UpdateRequest) returns (UpdateResponse);
   rpc Delete (DeleteRequest) returns (DeleteResponse);
+  rpc Count (CountRequest) returns (CountResponse);
+  rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
+  rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
   rpc GetGlobal (GetGlobalRequest) returns (GetGlobalResponse);
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
+  rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
+  rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
+  rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
+  rpc ListVersions (ListVersionsRequest) returns (ListVersionsResponse);
+  rpc RestoreVersion (RestoreVersionRequest) returns (RestoreVersionResponse);
+  rpc ListJobs (ListJobsRequest) returns (ListJobsResponse);
+  rpc TriggerJob (TriggerJobRequest) returns (TriggerJobResponse);
+  rpc GetJobRun (GetJobRunRequest) returns (GetJobRunResponse);
+  rpc ListJobRuns (ListJobRunsRequest) returns (ListJobRunsResponse);
 }
 </code></pre>
 <h2 id="port"><a class="header" href="#port">Port</a></h2>
 <p>Default: <code>50051</code> (configurable via <code>[server] grpc_port</code> in <code>crap.toml</code>).</p>
+<h2 id="message-size-limits"><a class="header" href="#message-size-limits">Message Size Limits</a></h2>
+<p>The maximum gRPC message size (both request and response) defaults to <strong>16MB</strong> — configurable via <code>grpc_max_message_size</code> in <code>[server]</code>. This is higher than Tonic’s built-in 4MB default to accommodate large <code>Find</code> responses with deep relationship population.</p>
+<pre><code class="language-toml">[server]
+grpc_max_message_size = "32MB"  # increase for very large responses
+</code></pre>
+<h2 id="timeouts"><a class="header" href="#timeouts">Timeouts</a></h2>
+<p>An optional request timeout can be set via <code>grpc_timeout</code> in <code>[server]</code>. When set, RPCs exceeding the timeout return <code>DEADLINE_EXCEEDED</code>.</p>
+<pre><code class="language-toml">[server]
+grpc_timeout = "30s"
+</code></pre>
+<h2 id="bulk-operation-limits"><a class="header" href="#bulk-operation-limits">Bulk Operation Limits</a></h2>
+<p><code>UpdateMany</code> and <code>DeleteMany</code> process at most <strong>10,000</strong> documents per call. This prevents unbounded memory usage when a broad filter matches a very large dataset. For larger operations, use paginated calls with a <code>where</code> clause to process documents in batches.</p>
 <h2 id="server-reflection"><a class="header" href="#server-reflection">Server Reflection</a></h2>
-<p>The server supports gRPC reflection, so tools like <code>grpcurl</code> work without importing the proto file:</p>
+<p>When enabled (<code>grpc_reflection = true</code> in <code>[server]</code>, disabled by default), the server supports gRPC reflection, so tools like <code>grpcurl</code> work without importing the proto file:</p>
 <pre><code class="language-bash"># List services
 grpcurl -plaintext localhost:50051 list
 

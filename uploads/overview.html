@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -196,7 +196,7 @@
         },
     },
     fields = {
-        { name = "alt", type = "text", admin = { description = "Alt text" } },
+        crap.fields.text({ name = "alt", admin = { description = "Alt text" } }),
     },
 })
 </code></pre>
@@ -261,7 +261,7 @@
     ├── a1b2c3_my-photo_card.webp
     └── a1b2c3_my-photo_card.avif
 </code></pre>
-<p>Filenames are sanitized (lowercase, non-alphanumeric characters replaced with hyphens) and prefixed with a random 10-character nanoid.</p>
+<p>Filenames are sanitized (lowercase, characters that are not alphanumeric, hyphens, or underscores are replaced with hyphens) and prefixed with a random 10-character nanoid.</p>
 <h2 id="url-structure"><a class="header" href="#url-structure">URL Structure</a></h2>
 <p>Files are served at <code>/uploads/&lt;collection&gt;/&lt;filename&gt;</code>:</p>
 <pre><code>/uploads/media/a1b2c3_my-photo.jpg

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,8 +191,12 @@
         created_at = "...",     -- Present on read/update
         updated_at = "...",
     },
+    locale = "en",              -- Locale for this operation (nil if not locale-specific)
     draft = true,               -- Whether this is a draft save (versioned collections only)
     hook_depth = 0,             -- Current recursion depth (0 = top-level, 1+ = from Lua CRUD in hooks)
+    context = {                 -- Request-scoped shared table (persists across all hooks in the same request)
+        -- Hooks can read and write arbitrary keys here to share data
+    },
     user = {                    -- Authenticated user document (nil if unauthenticated)
         id = "user_123",
         email = "admin@example.com",
@@ -203,7 +207,7 @@
 }
 </code></pre>
 <h2 id="typed-contexts"><a class="header" href="#typed-contexts">Typed Contexts</a></h2>
-<p>The type generator (<code>crap-cms types lua</code>) emits per-collection context types with typed
+<p>The type generator (<code>crap-cms typegen</code>) emits per-collection context types with typed
 <code>data</code> fields for IDE autocomplete:</p>
 <ul>
 <li><strong>Collections:</strong> <code>crap.hook.{PascalCase}</code> — e.g., <code>crap.hook.Posts</code> has
@@ -257,8 +261,8 @@ end
 <tr><td><code>id</code></td><td>update, delete, read</td><td>Document ID</td></tr>
 <tr><td><code>created_at</code></td><td>read, update</td><td>ISO 8601 timestamp</td></tr>
 <tr><td><code>updated_at</code></td><td>read, update</td><td>ISO 8601 timestamp</td></tr>
-<tr><td><code>user</code></td><td>always (nil if unauthenticated)</td><td>Authenticated user document</td></tr>
-<tr><td><code>ui_locale</code></td><td>always (nil if not set)</td><td>Admin UI locale code</td></tr>
+<tr><td><code>user</code></td><td>write hooks, after_read (nil if unauthenticated)</td><td>Authenticated user document</td></tr>
+<tr><td><code>ui_locale</code></td><td>write hooks, after_read (nil if not set)</td><td>Admin UI locale code</td></tr>
 </tbody>
 </table>
 </div>
@@ -338,6 +342,32 @@ recursion when hooks create/update documents in the same collection.</p>
     return ctx
 end
 </code></pre>
+<h2 id="context-request-scoped-shared-table"><a class="header" href="#context-request-scoped-shared-table">Context (Request-Scoped Shared Table)</a></h2>
+<p>The <code>context</code> field is a request-scoped table that persists across all hooks in the same request. It allows hooks to share data with each other without relying on module-level state.</p>
+<p>Each hook in the chain receives the same <code>context</code> table, and any modifications made by one hook are visible to all subsequent hooks in the same request. The table starts empty at the beginning of each request.</p>
+<p>This is useful for:</p>
+<ul>
+<li>Passing computed values from <code>before_validate</code> to <code>before_change</code> without recomputing</li>
+<li>Sharing request metadata between hooks</li>
+<li>Accumulating data across multiple hooks for use in <code>after_change</code></li>
+</ul>
+<pre><code class="language-lua">-- In before_validate hook: compute and share a value
+function M.before_validate(ctx)
+    ctx.context.original_title = ctx.data.title
+    return ctx
+end
+
+-- In after_change hook: use the shared value
+function M.after_change(ctx)
+    if ctx.context.original_title ~= ctx.data.title then
+        crap.log.info("Title changed from: " .. (ctx.context.original_title or "nil"))
+    end
+    return ctx
+end
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> The <code>context</code> table is not the same as module-level variables. Module-level variables persist across requests on the same VM (see <a href="overview.html#state--module-caching">Hooks Overview</a>), while <code>context</code> is scoped to a single request and automatically cleaned up.</p>
+</blockquote>
 
                     </main>
 

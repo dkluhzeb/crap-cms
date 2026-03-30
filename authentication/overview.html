@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,6 +190,7 @@
 <li><strong>CSRF protection</strong> — admin UI forms and HTMX requests are protected with double-submit cookie tokens.</li>
 <li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>).</li>
 <li><strong><code>_password_hash</code></strong> — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.</li>
+<li><strong><code>_locked</code></strong> — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See <a href="auth-collections.html#account-locking">Auth Collections</a>.</li>
 <li><strong>Custom strategies</strong> — pluggable auth via Lua functions (API keys, LDAP, SSO).</li>
 <li><strong>Password reset</strong> — token-based forgot/reset password flow via admin UI and gRPC. Requires email configuration.</li>
 <li><strong>Email verification</strong> — optional per-collection. When enabled, users must verify their email before logging in.</li>
@@ -209,11 +210,11 @@
 crap.collections.define("users", {
     auth = true,
     fields = {
-        { name = "name", type = "text", required = true },
-        { name = "role", type = "select", options = {
+        crap.fields.text({ name = "name", required = true }),
+        crap.fields.select({ name = "role", options = {
             { label = "Admin", value = "admin" },
             { label = "Editor", value = "editor" },
-        }},
+        }}),
     },
 })
 </code></pre>
@@ -253,7 +254,7 @@ from_name = "My App"
 <p>When email is configured, a “Forgot password?” link appears on the admin login page. The flow:</p>
 <ol>
 <li>User clicks “Forgot password?” and enters their email</li>
-<li>Server generates a single-use reset token (nanoid, stored in DB with 1-hour expiry). Login rate limiting applies — too many failed attempts will temporarily lock out the email.</li>
+<li>Server generates a single-use reset token (nanoid, stored in DB with 1-hour expiry). Forgot-password rate limiting applies — after <code>max_forgot_password_attempts</code> requests within <code>forgot_password_window_seconds</code>, further requests are silently accepted without sending email.</li>
 <li>Reset email is sent with a link to <code>/admin/reset-password?token=xxx</code></li>
 <li>User sets a new password via the form</li>
 <li>Token is consumed (single-use) and user is redirected to login</li>
@@ -270,6 +271,7 @@ from_name = "My App"
 <li>Clicking the verification link marks the user as verified (if token hasn’t expired)</li>
 </ol>
 <p>Available via gRPC as <code>VerifyEmail</code> RPC.</p>
+<p>The verification endpoint is rate-limited by IP (using the forgot-password rate limiter). Only actual token validation failures (invalid or expired tokens) count toward the rate limit — transient system errors do not penalize the user’s IP.</p>
 <p><strong>Note:</strong> Email verification requires SMTP to be configured. If SMTP is not configured, verification emails won’t be sent (logged as warnings) and unverified users will be unable to log in.</p>
 
                     </main>

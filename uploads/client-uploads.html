@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -331,7 +331,7 @@ Authorization: Bearer &lt;jwt&gt;
 <li><strong>Validates</strong> the MIME type against the collection’s <code>mime_types</code> allowlist</li>
 <li><strong>Checks</strong> file size against <code>max_file_size</code></li>
 <li><strong>Sanitizes</strong> the filename (lowercase, hyphens, unique prefix)</li>
-<li><strong>Saves</strong> the original file to <code>uploads/{collection}/{id}_{filename}</code></li>
+<li><strong>Saves</strong> the original file to <code>uploads/{collection}/{nanoid}_{filename}</code> (a random 10-character nanoid prefix, not the document ID)</li>
 <li><strong>Resizes</strong> images according to <code>image_sizes</code> (if configured)</li>
 <li><strong>Generates</strong> WebP/AVIF variants (if <code>format_options</code> configured)</li>
 <li><strong>Runs</strong> before-hooks within a transaction</li>
@@ -366,12 +366,11 @@ curl http://localhost:3000/uploads/media/a1b2c3_photo.jpg \
 <pre><code class="language-lua">-- collections/posts.lua
 crap.collections.define("posts", {
     fields = {
-        { name = "title", type = "text", required = true },
-        {
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.relationship({
             name = "cover_image",
-            type = "relationship",
             relationship = { collection = "media", has_many = false },
-        },
+        }),
     },
 })
 </code></pre>

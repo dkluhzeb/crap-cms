@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,7 +184,7 @@
 <pre><code class="language-lua">crap.collections.define("posts", {
     labels = { singular = "Post", plural = "Posts" },
     fields = {
-        { name = "title", type = "text", required = true },
+        crap.fields.text({ name = "title", required = true }),
     },
 })
 </code></pre>
@@ -196,7 +196,7 @@ compatible with <code>define()</code> — you can modify it and pass it back.</p
 <pre><code class="language-lua">local def = crap.collections.config.get("posts")
 if def then
     -- Add a field
-    def.fields[#def.fields + 1] = { name = "extra", type = "text" }
+    def.fields[#def.fields + 1] = crap.fields.text({ name = "extra" })
     crap.collections.define("posts", def)
 end
 </code></pre>
@@ -205,7 +205,7 @@ end
 <pre><code class="language-lua">for slug, def in pairs(crap.collections.config.list()) do
     if def.upload then
         -- Add alt_text to every upload collection
-        def.fields[#def.fields + 1] = { name = "alt_text", type = "text" }
+        def.fields[#def.fields + 1] = crap.fields.text({ name = "alt_text" })
         crap.collections.define(slug, def)
     end
 end
@@ -257,10 +257,10 @@ end
 <tr><td><code>after_cursor</code></td><td>string</td><td><code>nil</code></td><td>Forward cursor from a previous <code>result.pagination.endCursor</code>. Fetches the page after the cursor position. Mutually exclusive with <code>page</code>/<code>offset</code>/<code>before_cursor</code>. Only effective when <code>[pagination] mode = "cursor"</code> in <code>crap.toml</code>.</td></tr>
 <tr><td><code>before_cursor</code></td><td>string</td><td><code>nil</code></td><td>Backward cursor from a previous <code>result.pagination.startCursor</code>. Fetches the page before the cursor position. Mutually exclusive with <code>page</code>/<code>offset</code>/<code>after_cursor</code>. Only effective when <code>[pagination] mode = "cursor"</code> in <code>crap.toml</code>.</td></tr>
 <tr><td><code>depth</code></td><td>integer</td><td><code>0</code></td><td>Population depth for relationship fields.</td></tr>
-<tr><td><code>select</code></td><td>string[]</td><td><code>nil</code></td><td>Fields to return. <code>nil</code> = all fields. Always includes <code>id</code>, <code>created_at</code>, <code>updated_at</code>.</td></tr>
+<tr><td><code>select</code></td><td>string[]</td><td><code>nil</code></td><td>Fields to return. <code>nil</code> = all fields. Always includes <code>id</code>. When specified, <code>created_at</code> and <code>updated_at</code> are only included if explicitly listed.</td></tr>
 <tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields (e.g., <code>"en"</code>, <code>"de"</code>).</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks. Set to <code>false</code> to enforce collection-level and field-level access for the current user.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
 <tr><td><code>search</code></td><td>string</td><td><code>nil</code></td><td>FTS5 full-text search query. Filters results to documents matching this search term.</td></tr>
 </tbody>
 </table>
@@ -290,7 +290,7 @@ local doc = crap.collections.find_by_id("posts", "abc123", { select = { "title",
 <tr><td><code>select</code></td><td>string[]</td><td><code>nil</code></td><td>Fields to return. <code>nil</code> = all fields. Always includes <code>id</code>.</td></tr>
 <tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Return the latest draft version snapshot instead of the published main-table data. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields (e.g., <code>"en"</code>, <code>"de"</code>).</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks. Set to <code>false</code> to enforce collection-level and field-level access for the current user.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
 </tbody>
 </table>
 </div>
@@ -317,7 +317,7 @@ local draft = crap.collections.create("articles", {
 <tbody>
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
 <tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Create as draft. Skips required field validation. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks. Set to <code>false</code> to enforce collection-level and field-level access for the current user.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
 <tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes.</td></tr>
 </tbody>
 </table>
@@ -344,7 +344,7 @@ crap.collections.update("articles", "abc123", {
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
 <tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Version-only save. Creates a draft version snapshot without modifying the main table. Only affects versioned collections with <code>drafts = true</code>.</td></tr>
 <tr><td><code>unpublish</code></td><td>boolean</td><td><code>false</code></td><td>Set document status to draft and create a draft version snapshot. Ignores the <code>data</code> fields when unpublishing. Only affects versioned collections.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks. Set to <code>false</code> to enforce collection-level and field-level access for the current user.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip collection-level and field-level access for the current user.</td></tr>
 <tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes.</td></tr>
 </tbody>
 </table>
@@ -357,12 +357,16 @@ crap.collections.update("articles", "abc123", {
 </ul>
 <p>This matches the behavior of the gRPC API and admin UI.</p>
 <h2 id="crapcollectionsdeletecollection-id-opts"><a class="header" href="#crapcollectionsdeletecollection-id-opts">crap.collections.delete(collection, id, opts?)</a></h2>
-<p>Delete a document. Returns <code>true</code> on success.</p>
+<p>Delete a document. Returns <code>true</code> on success. For collections with <code>soft_delete = true</code>, moves the document to trash by default. For upload collections, associated files are cleaned up on permanent deletion (not on soft delete).</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">crap.collections.delete("posts", "abc123")
+<pre><code class="language-lua">-- Soft-delete (moves to trash if collection has soft_delete)
+crap.collections.delete("posts", "abc123")
 
--- With access control enforcement
-crap.collections.delete("posts", "abc123", { overrideAccess = false })
+-- Force permanent delete even on soft-delete collections
+crap.collections.delete("posts", "abc123", { forceHardDelete = true })
+
+-- Bypass access control for internal operations
+crap.collections.delete("posts", "abc123", { overrideAccess = true })
 </code></pre>
 <h3 id="options-3"><a class="header" href="#options-3">Options</a></h3>
 <div class="table-wrapper">
@@ -371,17 +375,25 @@ crap.collections.delete("posts", "abc123", { overrideAccess = false })
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks. Set to <code>false</code> to enforce collection-level access for the current user.</td></tr>
-<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip before_delete and after_delete hooks. The DB operation still executes.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> to skip <code>access.trash</code> (soft delete) or <code>access.delete</code> (permanent delete) checks.</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run lifecycle hooks. Set to <code>false</code> to skip before_delete and after_delete hooks.</td></tr>
+<tr><td><code>forceHardDelete</code></td><td>boolean</td><td><code>false</code></td><td>Permanently delete even when the collection has <code>soft_delete = true</code>. Requires <code>access.delete</code> permission when <code>overrideAccess = false</code>.</td></tr>
 </tbody>
 </table>
 </div>
+<h2 id="crapcollectionsrestorecollection-id"><a class="header" href="#crapcollectionsrestorecollection-id">crap.collections.restore(collection, id)</a></h2>
+<p>Restore a soft-deleted document from trash. Returns <code>true</code> on success. Only works on collections with <code>soft_delete = true</code>. Re-syncs the FTS index after restore.</p>
+<p><strong>Only available inside hooks with transaction context.</strong></p>
+<pre><code class="language-lua">crap.collections.restore("posts", "abc123")
+</code></pre>
 <h2 id="lifecycle-hooks-in-lua-crud"><a class="header" href="#lifecycle-hooks-in-lua-crud">Lifecycle Hooks in Lua CRUD</a></h2>
 <p>Lua CRUD operations run the <strong>same lifecycle hooks</strong> as the gRPC API and admin UI:</p>
 <ul>
 <li><strong><code>create</code></strong>: before_validate → validate → before_change → DB insert → after_change</li>
 <li><strong><code>update</code></strong>: before_validate → validate → before_change → DB update → after_change</li>
-<li><strong><code>delete</code></strong>: before_delete → DB delete → after_delete</li>
+<li><strong><code>update_many</code></strong>: per-document: before_validate → validate → before_change → DB update → after_change</li>
+<li><strong><code>delete</code></strong>: before_delete → DB delete → upload file cleanup → after_delete</li>
+<li><strong><code>delete_many</code></strong>: per-document: before_delete → DB delete → upload file cleanup → after_delete</li>
 <li><strong><code>find</code> / <code>find_by_id</code></strong>: before_read → DB query → after_read</li>
 </ul>
 <p>All hooks have full CRUD access within the same transaction.</p>
@@ -412,17 +424,24 @@ end
 crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
 </code></pre>
 <h2 id="access-control-in-hooks"><a class="header" href="#access-control-in-hooks">Access Control in Hooks</a></h2>
-<p>By default, all Lua CRUD functions bypass access control (<code>overrideAccess = true</code>). Hooks are trusted server-side code with full access.</p>
-<p>When you set <code>overrideAccess = false</code>, the function enforces the same access rules as the external API:</p>
+<p>By default, all Lua CRUD functions <strong>enforce access control</strong> (<code>overrideAccess = false</code>). This follows the principle of least privilege — if your hook needs to bypass access checks, it must explicitly opt in with <code>overrideAccess = true</code>.</p>
+<blockquote>
+<p><strong>Breaking change (0.1.0-alpha.3):</strong> The default was changed from <code>true</code> to <code>false</code>. If you have hooks that call CRUD functions without specifying <code>overrideAccess</code>, they now enforce access control. Add <code>overrideAccess = true</code> to restore the old behavior.</p>
+</blockquote>
+<p>When <code>overrideAccess</code> is <code>false</code> (the default), the function enforces the same access rules as the external API:</p>
 <ul>
 <li><strong>Collection-level access</strong> — the relevant access function (<code>read</code>, <code>create</code>, <code>update</code>, <code>delete</code>) is called with the authenticated user from the original request.</li>
 <li><strong>Field-level access</strong> — for <code>find</code>/<code>find_by_id</code>, fields the user can’t read are stripped from results. For <code>create</code>/<code>update</code>, fields the user can’t write are silently removed from the input data.</li>
 <li><strong>Constrained read access</strong> — if a read access function returns a filter table instead of <code>true</code>, those filters are merged into the query (same as the gRPC/admin behavior).</li>
 </ul>
-<pre><code class="language-lua">-- Example: fetch only posts the current user is allowed to see
+<pre><code class="language-lua">-- Default: access control is enforced (only shows posts the user can see)
 local result = crap.collections.find("posts", {
     where = { status = "published" },
-    overrideAccess = false,
+})
+
+-- Bypass access control for internal/admin operations
+local all = crap.collections.find("posts", {
+    overrideAccess = true,
 })
 </code></pre>
 <h2 id="crapcollectionscountcollection-query"><a class="header" href="#crapcollectionscountcollection-query">crap.collections.count(collection, query?)</a></h2>
@@ -442,7 +461,7 @@ local published = crap.collections.count("posts", {
 <tbody>
 <tr><td><code>where</code></td><td>table</td><td><code>{}</code></td><td>Field filters. Same syntax as <code>find</code>.</td></tr>
 <tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks.</td></tr>
 <tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents.</td></tr>
 <tr><td><code>search</code></td><td>string</td><td><code>nil</code></td><td>FTS5 full-text search query (same as <code>find</code>).</td></tr>
 </tbody>
@@ -451,7 +470,8 @@ local published = crap.collections.count("posts", {
 <h2 id="crapcollectionsupdate_manycollection-query-data-opts"><a class="header" href="#crapcollectionsupdate_manycollection-query-data-opts">crap.collections.update_many(collection, query, data, opts?)</a></h2>
 <p>Update multiple documents matching a query. Returns <code>{ modified = N }</code>.</p>
 <p><strong>All-or-nothing semantics:</strong> finds all matching documents, checks update access for each (if <code>overrideAccess = false</code>), and only proceeds if all pass. If any document fails access, an error is returned and nothing is modified.</p>
-<p>Does <strong>not</strong> fire per-document hooks (before_change, after_change, etc.).</p>
+<p>Runs the full per-document lifecycle by default: <code>before_validate</code> → field validation → <code>before_change</code> → DB update → <code>after_change</code> — the same pipeline as single-document <code>update</code>. Set <code>hooks = false</code> in opts to skip hooks and validation for performance on large batch operations.</p>
+<p>Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are <strong>not</strong> reset to <code>0</code> as they would be in a full single-document update.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
 <pre><code class="language-lua">local result = crap.collections.update_many("posts", {
     where = { status = "draft" },
@@ -459,8 +479,15 @@ local published = crap.collections.count("posts", {
     status = "published",
 })
 print(result.modified)  -- number of updated documents
+
+-- Skip hooks and validation for performance
+local result = crap.collections.update_many("posts", {
+    where = { status = "draft" },
+}, {
+    status = "published",
+}, { hooks = false })
 </code></pre>
-<h3 id="query-parameters-2"><a class="header" href="#query-parameters-2">Query Parameters</a></h3>
+<h3 id="query-parameters-2nd-argument"><a class="header" href="#query-parameters-2nd-argument">Query Parameters (2nd argument)</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -468,31 +495,47 @@ print(result.modified)  -- number of updated documents
 </thead>
 <tbody>
 <tr><td><code>where</code></td><td>table</td><td><code>{}</code></td><td>Field filters to match documents.</td></tr>
-<tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks.</td></tr>
-<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents.</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="data"><a class="header" href="#data">Data</a></h3>
+<h3 id="options-4th-argument"><a class="header" href="#options-4th-argument">Options (4th argument)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks.</td></tr>
+<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents.</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run per-document lifecycle hooks. Set to <code>false</code> to skip all hooks (<code>before_validate</code>, <code>before_change</code>, <code>after_change</code>) and field validation.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="data-3rd-argument"><a class="header" href="#data-3rd-argument">Data (3rd argument)</a></h3>
 <p>The <code>data</code> table contains fields to update on all matched documents (partial update).</p>
-<h2 id="crapcollectionsdelete_manycollection-query"><a class="header" href="#crapcollectionsdelete_manycollection-query">crap.collections.delete_many(collection, query)</a></h2>
-<p>Delete multiple documents matching a query. Returns <code>{ deleted = N }</code>.</p>
+<h2 id="crapcollectionsdelete_manycollection-query-opts"><a class="header" href="#crapcollectionsdelete_manycollection-query-opts">crap.collections.delete_many(collection, query, opts?)</a></h2>
+<p>Delete multiple documents matching a query. Returns <code>{ deleted = N, skipped = N }</code>. For upload collections, associated files are automatically cleaned up from disk for each deleted document. Documents that are still referenced by other documents are skipped (hard delete only) and reported in <code>skipped</code>.</p>
 <p><strong>All-or-nothing semantics:</strong> finds all matching documents, checks delete access for each (if <code>overrideAccess = false</code>), and only proceeds if all pass.</p>
-<p>Does <strong>not</strong> fire per-document hooks (before_delete, after_delete, etc.).</p>
+<p>Fires per-document lifecycle hooks (<code>before_delete</code>, <code>after_delete</code>) by default. Set <code>hooks = false</code> in opts to skip for performance on large batch operations.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
 <pre><code class="language-lua">local result = crap.collections.delete_many("posts", {
     where = { status = "archived" },
 })
 print(result.deleted)  -- number of deleted documents
+print(result.skipped)  -- number skipped due to outstanding references
 
--- With access control enforcement
+-- Bypass access control for internal operations
 local result = crap.collections.delete_many("posts", {
     where = { status = "archived" },
-    overrideAccess = false,
-})
+}, { overrideAccess = true })
+
+-- Skip hooks for performance
+local result = crap.collections.delete_many("posts", {
+    where = { status = "archived" },
+}, { hooks = false })
 </code></pre>
-<h3 id="query-parameters-3"><a class="header" href="#query-parameters-3">Query Parameters</a></h3>
+<h3 id="query-parameters-2nd-argument-1"><a class="header" href="#query-parameters-2nd-argument-1">Query Parameters (2nd argument)</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -500,7 +543,20 @@ local result = crap.collections.delete_many("posts", {
 </thead>
 <tbody>
 <tr><td><code>where</code></td><td>table</td><td><code>{}</code></td><td>Field filters to match documents.</td></tr>
-<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>true</code></td><td>Skip access control checks.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="options-3rd-argument"><a class="header" href="#options-3rd-argument">Options (3rd argument)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks.</td></tr>
+<tr><td><code>hooks</code></td><td>boolean</td><td><code>true</code></td><td>Run per-document lifecycle hooks. Set to <code>false</code> to skip <code>before_delete</code> and <code>after_delete</code> hooks.</td></tr>
+<tr><td><code>locale</code></td><td>string</td><td><code>nil</code></td><td>Locale code for localized fields.</td></tr>
+<tr><td><code>draft</code></td><td>boolean</td><td><code>false</code></td><td>Include draft documents.</td></tr>
 </tbody>
 </table>
 </div>

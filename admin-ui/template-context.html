@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -195,7 +195,7 @@
 <tr><td><code>document</code></td><td>object</td><td>edit pages</td><td>Current document with raw data</td></tr>
 <tr><td><code>fields</code></td><td>array</td><td>edit/create/global edit</td><td>Processed field contexts for main content area</td></tr>
 <tr><td><code>sidebar_fields</code></td><td>array</td><td>edit/create/global edit</td><td>Field contexts for sidebar panel (fields with <code>admin.position = "sidebar"</code>)</td></tr>
-<tr><td><code>items</code></td><td>array</td><td>collection items</td><td>Document list with enriched data</td></tr>
+<tr><td><code>docs</code></td><td>array</td><td>collection items</td><td>Document list with enriched data</td></tr>
 <tr><td><code>editing</code></td><td>boolean</td><td>edit/create</td><td><code>true</code> when editing, <code>false</code> when creating</td></tr>
 <tr><td><code>pagination</code></td><td>object</td><td>items, versions</td><td>Pagination state</td></tr>
 <tr><td><code>versions</code></td><td>array</td><td>edit (versioned)</td><td>Recent version entries</td></tr>
@@ -212,6 +212,7 @@
 <h2 id="base-context-every-page"><a class="header" href="#base-context-every-page">Base Context (Every Page)</a></h2>
 <h3 id="crap--app-metadata"><a class="header" href="#crap--app-metadata"><code>crap</code> — App Metadata</a></h3>
 <pre><code class="language-handlebars">{{crap.version}}      {{!-- "0.1.0" --}}
+{{crap.build_hash}}   {{!-- Git commit hash at build time --}}
 {{crap.dev_mode}}     {{!-- true/false --}}
 {{crap.auth_enabled}} {{!-- true if any auth collection exists --}}
 </code></pre>
@@ -242,6 +243,7 @@
 <tr><td><code>collection_delete</code></td><td><code>/admin/collections/{slug}/{id}/delete</code></td></tr>
 <tr><td><code>collection_versions</code></td><td><code>/admin/collections/{slug}/{id}/versions</code></td></tr>
 <tr><td><code>global_edit</code></td><td><code>/admin/globals/{slug}</code></td></tr>
+<tr><td><code>global_versions</code></td><td><code>/admin/globals/{slug}/versions</code></td></tr>
 <tr><td><code>auth_login</code></td><td><code>/admin/login</code></td></tr>
 <tr><td><code>auth_forgot</code></td><td><code>/admin/forgot-password</code></td></tr>
 <tr><td><code>auth_reset</code></td><td><code>/admin/reset-password</code></td></tr>
@@ -407,8 +409,8 @@
   &lt;a href="/admin/globals/{{this.slug}}"&gt;{{this.display_name}}&lt;/a&gt;
 {{/each}}
 </code></pre>
-<p>Collection card fields: <code>slug</code>, <code>display_name</code>, <code>singular_name</code>, <code>count</code>.</p>
-<p>Global card fields: <code>slug</code>, <code>display_name</code>.</p>
+<p>Collection card fields: <code>slug</code>, <code>display_name</code>, <code>singular_name</code>, <code>count</code>, <code>last_updated</code>, <code>is_auth</code>, <code>is_upload</code>, <code>has_versions</code>.</p>
+<p>Global card fields: <code>slug</code>, <code>display_name</code>, <code>last_updated</code>, <code>has_versions</code>.</p>
 <hr>
 <h2 id="collection-items-list"><a class="header" href="#collection-items-list">Collection Items (List)</a></h2>
 <p><strong>Page type:</strong> <code>collection_items</code></p>
@@ -419,15 +421,15 @@
 <tr><th>Key</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>items</code></td><td>array</td><td>Document list</td></tr>
+<tr><td><code>docs</code></td><td>array</td><td>Document list</td></tr>
 <tr><td><code>search</code></td><td>string/null</td><td>Current search query</td></tr>
 <tr><td><code>pagination</code></td><td>object</td><td>Pagination state</td></tr>
 <tr><td><code>has_drafts</code></td><td>boolean</td><td>Shorthand for <code>collection.has_drafts</code></td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="items"><a class="header" href="#items"><code>items</code></a></h3>
-<pre><code class="language-handlebars">{{#each items}}
+<h3 id="docs"><a class="header" href="#docs"><code>docs</code></a></h3>
+<pre><code class="language-handlebars">{{#each docs}}
   &lt;tr&gt;
     &lt;td&gt;{{this.title_value}}&lt;/td&gt;
     &lt;td&gt;{{this.status}}&lt;/td&gt;
@@ -439,7 +441,7 @@
   &lt;/tr&gt;
 {{/each}}
 </code></pre>
-<p>Each item:</p>
+<p>Each doc:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -450,7 +452,6 @@
 <tr><td><code>title_value</code></td><td>string</td><td>Value of the title field (falls back to filename for uploads, then ID)</td></tr>
 <tr><td><code>created_at</code></td><td>string/null</td><td>Creation timestamp</td></tr>
 <tr><td><code>updated_at</code></td><td>string/null</td><td>Last update timestamp</td></tr>
-<tr><td><code>status</code></td><td>string</td><td><code>"published"</code> or <code>"draft"</code></td></tr>
 <tr><td><code>thumbnail_url</code></td><td>string/null</td><td>Thumbnail URL (upload collections with images only)</td></tr>
 </tbody>
 </table>
@@ -640,7 +641,15 @@
 </thead>
 <tbody>
 <tr><td><code>global</code></td><td>object</td><td>Global definition</td></tr>
-<tr><td><code>fields</code></td><td>array</td><td>Processed field contexts</td></tr>
+<tr><td><code>fields</code></td><td>array</td><td>Processed field contexts (main area)</td></tr>
+<tr><td><code>sidebar_fields</code></td><td>array</td><td>Processed field contexts (sidebar)</td></tr>
+<tr><td><code>has_drafts</code></td><td>boolean</td><td>Whether the global has drafts enabled</td></tr>
+<tr><td><code>has_versions</code></td><td>boolean</td><td>Whether the global has versions enabled</td></tr>
+<tr><td><code>versions</code></td><td>array</td><td>Recent version entries (up to 3)</td></tr>
+<tr><td><code>has_more_versions</code></td><td>boolean</td><td><code>true</code> if more than 3 versions exist</td></tr>
+<tr><td><code>restore_url_prefix</code></td><td>string</td><td>URL prefix for version restore actions</td></tr>
+<tr><td><code>versions_url</code></td><td>string</td><td>URL to the full versions list page</td></tr>
+<tr><td><code>doc_status</code></td><td>string</td><td>Document status (<code>"published"</code> or <code>"draft"</code>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -750,6 +759,21 @@
 </code></pre>
 <p>Each locale entry: <code>value</code> (e.g., <code>"en"</code>), <code>label</code> (e.g., <code>"EN"</code>), <code>selected</code> (boolean).</p>
 <p>When editing a non-default locale, non-localized fields are rendered as readonly (locale-locked).</p>
+<h3 id="editor-locale-content-locale"><a class="header" href="#editor-locale-content-locale">Editor Locale (Content Locale)</a></h3>
+<p>In addition to the UI translation locale (<code>has_locales</code>/<code>current_locale</code>/<code>locales</code>), edit/create pages also receive content editor locale variables when locale is enabled:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>has_editor_locales</code></td><td>boolean</td><td>Always <code>true</code> when locale is enabled</td></tr>
+<tr><td><code>editor_locale</code></td><td>string</td><td>Currently selected content locale (e.g., <code>"en"</code>)</td></tr>
+<tr><td><code>editor_locales</code></td><td>array</td><td>All configured locales with selection state</td></tr>
+</tbody>
+</table>
+</div>
+<p>These control which content locale is being edited, separate from the admin UI translation locale.</p>
 <hr>
 <h2 id="field-context"><a class="header" href="#field-context">Field Context</a></h2>
 <p>The <code>fields</code> array contains processed field context objects, one per field. These are used by <code>{{{render_field field}}}</code> or can be iterated manually.</p>
@@ -1039,7 +1063,7 @@ end)
     &lt;/tr&gt;
   &lt;/thead&gt;
   &lt;tbody&gt;
-    {{#each items}}
+    {{#each docs}}
       &lt;tr&gt;
         &lt;td&gt;
           &lt;a href="/admin/collections/{{../collection.slug}}/{{this.id}}"&gt;

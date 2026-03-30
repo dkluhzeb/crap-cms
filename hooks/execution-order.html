@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,16 +188,14 @@
 <pre><code class="language-lua">-- collections/posts.lua
 crap.collections.define("posts", {
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             hooks = { before_change = { "hooks.fields.uppercase" } },
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             hooks = { before_change = { "hooks.fields.normalize_slug" } },
-        },
+        }),
     },
     hooks = {
         before_change = { "hooks.posts.set_defaults", "hooks.posts.validate_business_rules" },

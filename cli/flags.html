@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -217,7 +217,7 @@ crap-cms serve
 </code></pre>
 <h2 id="commands"><a class="header" href="#commands">Commands</a></h2>
 <h3 id="serve--start-the-server"><a class="header" href="#serve--start-the-server"><code>serve</code> — Start the server</a></h3>
-<pre><code class="language-bash">crap-cms serve [-d] [--json] [--only &lt;admin|api&gt;] [--no-scheduler]
+<pre><code class="language-bash">crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only &lt;admin|api&gt;] [--no-scheduler]
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -226,14 +226,21 @@ crap-cms serve
 </thead>
 <tbody>
 <tr><td><code>-d</code>, <code>--detach</code></td><td>Run in the background (prints PID and exits)</td></tr>
+<tr><td><code>--stop</code></td><td>Stop a running detached instance (SIGTERM, then SIGKILL after 10s)</td></tr>
+<tr><td><code>--restart</code></td><td>Restart a running detached instance (stop + start)</td></tr>
+<tr><td><code>--status</code></td><td>Show whether a detached instance is running (PID, uptime)</td></tr>
 <tr><td><code>--json</code></td><td>Output logs as structured JSON (for log aggregation)</td></tr>
 <tr><td><code>--only &lt;admin|api&gt;</code></td><td>Start only the specified server. Omit to start both.</td></tr>
 <tr><td><code>--no-scheduler</code></td><td>Disable the background job scheduler</td></tr>
 </tbody>
 </table>
 </div>
-<pre><code class="language-bash">crap-cms serve
-crap-cms serve -d
+<p><code>--detach</code>, <code>--stop</code>, <code>--restart</code>, and <code>--status</code> are mutually exclusive.</p>
+<pre><code class="language-bash">crap-cms serve                    # foreground
+crap-cms serve -d                 # detached (background)
+crap-cms serve --status           # is it running?
+crap-cms serve --stop             # stop detached instance
+crap-cms serve --restart          # stop + start detached
 crap-cms serve --json
 crap-cms serve --only admin       # admin UI only
 crap-cms serve --only api         # gRPC API only
@@ -312,10 +319,11 @@ crap-cms user unverify [-c &lt;COLLECTION&gt;] [-e &lt;EMAIL&gt;] [--id &lt;ID&g
 </code></pre>
 <p>Manually mark a user’s email as verified or unverified. Only works on collections with <code>verify_email = true</code>. Useful when email is not configured.</p>
 <h4 id="user-change-password"><a class="header" href="#user-change-password"><code>user change-password</code></a></h4>
+<p>Change a user’s password. Prompts for the new password if <code>-p</code> is omitted.</p>
 <pre><code class="language-bash">crap-cms user change-password [-c &lt;COLLECTION&gt;] [-e &lt;EMAIL&gt;] [--id &lt;ID&gt;] [-p &lt;PASSWORD&gt;]
 </code></pre>
 <h3 id="init--scaffold-a-new-config-directory"><a class="header" href="#init--scaffold-a-new-config-directory"><code>init</code> — Scaffold a new config directory</a></h3>
-<pre><code class="language-bash">crap-cms init [DIR]
+<pre><code class="language-bash">crap-cms init [DIR] [--no-input]
 </code></pre>
 <p>Runs an interactive wizard that scaffolds a complete config directory. Defaults to <code>./crap-cms</code> if no directory is given.</p>
 <p>The wizard prompts for:</p>
@@ -614,7 +622,7 @@ crap-cms proto -o ./proto/
 <tbody>
 <tr><td><code>create &lt;NAME&gt;</code></td><td>Generate a new migration file (e.g., <code>backfill_slugs</code>)</td></tr>
 <tr><td><code>up</code></td><td>Sync schema + run pending migrations</td></tr>
-<tr><td><code>down [-s N]</code></td><td>Roll back last N migrations (default: 1)</td></tr>
+<tr><td><code>down [-s|--steps N]</code></td><td>Roll back last N migrations (default: 1)</td></tr>
 <tr><td><code>list</code></td><td>Show all migration files with status</td></tr>
 <tr><td><code>fresh [-y|--confirm]</code></td><td>Drop all tables and recreate (destructive, requires confirmation)</td></tr>
 </tbody>
@@ -843,6 +851,39 @@ crap-cms images purge --older-than 30d
 <p>Reads JSON-RPC 2.0 from stdin, writes responses to stdout. Use with Claude Desktop,
 Cursor, VS Code, or any MCP-compatible client. See <a href="../mcp/overview.html">MCP Overview</a>
 for configuration and usage.</p>
+<h3 id="logs--view-and-manage-log-files"><a class="header" href="#logs--view-and-manage-log-files"><code>logs</code> — View and manage log files</a></h3>
+<pre><code class="language-bash">crap-cms logs [-f] [-n &lt;lines&gt;]
+crap-cms logs clear
+</code></pre>
+<p>View log output from file-based logging. Requires <code>[logging] file = true</code> in <code>crap.toml</code> (auto-enabled when running with <code>--detach</code>).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-f</code>, <code>--follow</code></td><td>Follow log output in real time (like <code>tail -f</code>)</td></tr>
+<tr><td><code>-n</code>, <code>--lines &lt;N&gt;</code></td><td>Number of lines to show (default: 100)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Subcommands:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Subcommand</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>clear</code></td><td>Remove old rotated log files, keeping only the current one</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-bash">crap-cms logs                # show last 100 lines
+crap-cms logs -f             # follow in real time
+crap-cms logs -n 50          # show last 50 lines
+crap-cms logs clear          # remove old rotated files
+</code></pre>
+<p>Log files are stored in <code>data/logs/</code> (or the path configured in <code>[logging] path</code>). Old files are automatically pruned on startup based on <code>max_files</code>. See <a href="../configuration/crap-toml.html">Configuration Reference</a> for all logging options.</p>
 <h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
 <div class="table-wrapper">
 <table>
@@ -851,7 +892,7 @@ for configuration and usage.</p>
 </thead>
 <tbody>
 <tr><td><code>CRAP_CONFIG_DIR</code></td><td>Path to the config directory (same as <code>--config</code> flag; flag takes priority)</td></tr>
-<tr><td><code>RUST_LOG</code></td><td>Controls log verbosity. Default: <code>crap_cms=debug,info</code>. Example: <code>RUST_LOG=crap_cms=trace</code></td></tr>
+<tr><td><code>RUST_LOG</code></td><td>Controls log verbosity. Default: <code>crap_cms=debug,info</code> for <code>serve</code>, <code>crap_cms=error</code> for all other commands. Example: <code>RUST_LOG=crap_cms=trace</code></td></tr>
 <tr><td><code>CRAP_LOG_FORMAT</code></td><td>Set to <code>json</code> for structured JSON log output (same as <code>--json</code> flag)</td></tr>
 </tbody>
 </table>

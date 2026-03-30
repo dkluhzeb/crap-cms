@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -260,17 +260,20 @@ Undo/redo buttons are always available regardless of feature configuration.</p>
 mentions, etc.) inside richtext content. Register nodes in <code>init.lua</code>, then enable
 them on specific fields via <code>admin.nodes</code>.</p>
 <h3 id="registration"><a class="header" href="#registration">Registration</a></h3>
+<p>Node attributes use the same <code>crap.fields.*</code> factory functions as collection fields.
+Only scalar types are allowed: <code>text</code>, <code>number</code>, <code>textarea</code>, <code>select</code>, <code>radio</code>,
+<code>checkbox</code>, <code>date</code>, <code>email</code>, <code>json</code>, <code>code</code>.</p>
 <pre><code class="language-lua">-- init.lua
 crap.richtext.register_node("cta", {
     label = "Call to Action",
     inline = false, -- block-level node
     attrs = {
-        { name = "text", type = "text", label = "Button Text", required = true },
-        { name = "url", type = "text", label = "URL", required = true },
-        { name = "style", type = "select", label = "Style", options = {
+        crap.fields.text({ name = "text", required = true, admin = { label = "Button Text" } }),
+        crap.fields.text({ name = "url", required = true, admin = { label = "URL", placeholder = "https://..." } }),
+        crap.fields.select({ name = "style", admin = { label = "Style" }, options = {
             { label = "Primary", value = "primary" },
             { label = "Secondary", value = "secondary" },
-        }},
+        }}),
     },
     searchable_attrs = { "text" },
     render = function(attrs)
@@ -306,7 +309,10 @@ crap.richtext.register_node("cta", {
 </tbody>
 </table>
 </div>
-<h3 id="attribute-types"><a class="header" href="#attribute-types">Attribute types</a></h3>
+<h3 id="allowed-attribute-types"><a class="header" href="#allowed-attribute-types">Allowed attribute types</a></h3>
+<p>Node attrs support all scalar field types. Complex types (<code>array</code>, <code>group</code>, <code>blocks</code>,
+<code>relationship</code>, <code>upload</code>, <code>richtext</code>, <code>row</code>, <code>collapsible</code>, <code>tabs</code>, <code>join</code>) are rejected
+at registration time.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -315,9 +321,99 @@ crap.richtext.register_node("cta", {
 <tbody>
 <tr><td><code>text</code></td><td>Text input</td></tr>
 <tr><td><code>number</code></td><td>Number input</td></tr>
-<tr><td><code>select</code></td><td>Dropdown with options</td></tr>
-<tr><td><code>checkbox</code></td><td>Checkbox</td></tr>
 <tr><td><code>textarea</code></td><td>Multi-line textarea</td></tr>
+<tr><td><code>select</code></td><td>Dropdown with options</td></tr>
+<tr><td><code>radio</code></td><td>Radio button group</td></tr>
+<tr><td><code>checkbox</code></td><td>Checkbox</td></tr>
+<tr><td><code>date</code></td><td>Date picker</td></tr>
+<tr><td><code>email</code></td><td>Email input</td></tr>
+<tr><td><code>json</code></td><td>Monospace textarea</td></tr>
+<tr><td><code>code</code></td><td>Monospace textarea</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="supported-attribute-features"><a class="header" href="#supported-attribute-features">Supported attribute features</a></h3>
+<p>Node attrs support most field features that make sense in the richtext context.</p>
+<h4 id="admin-display-hints"><a class="header" href="#admin-display-hints">Admin display hints</a></h4>
+<p>These control how attributes appear in the node edit modal:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>admin.hidden</code></td><td>Attribute is not rendered in the modal (value preserved)</td></tr>
+<tr><td><code>admin.readonly</code></td><td>Input is read-only / disabled</td></tr>
+<tr><td><code>admin.width</code></td><td>CSS width on the field container (e.g. <code>"50%"</code>)</td></tr>
+<tr><td><code>admin.step</code></td><td><code>step</code> attribute on number inputs (e.g. <code>"0.01"</code>)</td></tr>
+<tr><td><code>admin.rows</code></td><td>Number of rows for textarea/code/json fields</td></tr>
+<tr><td><code>admin.language</code></td><td>Language label suffix for code fields (e.g. <code>"JSON"</code>)</td></tr>
+<tr><td><code>admin.placeholder</code></td><td>Placeholder text on inputs</td></tr>
+<tr><td><code>admin.description</code></td><td>Help text below the input</td></tr>
+<tr><td><code>min</code> / <code>max</code></td><td>Min/max on number inputs</td></tr>
+<tr><td><code>min_length</code> / <code>max_length</code></td><td>Minlength/maxlength on text/textarea inputs</td></tr>
+<tr><td><code>min_date</code> / <code>max_date</code></td><td>Min/max on date inputs</td></tr>
+<tr><td><code>picker_appearance</code></td><td>Date input type: <code>"dayOnly"</code> (default), <code>"dayAndTime"</code>, <code>"timeOnly"</code>, <code>"monthOnly"</code></td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="server-side-validation"><a class="header" href="#server-side-validation">Server-side validation</a></h4>
+<p>Node attribute values inside richtext content are validated server-side on create/update.
+The following checks run automatically:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Check</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>required</code></td><td>Attribute must have a non-empty value</td></tr>
+<tr><td><code>validate</code></td><td>Custom Lua validation function</td></tr>
+<tr><td><code>min_length</code> / <code>max_length</code></td><td>Text length bounds</td></tr>
+<tr><td><code>min</code> / <code>max</code></td><td>Numeric bounds</td></tr>
+<tr><td><code>min_date</code> / <code>max_date</code></td><td>Date bounds</td></tr>
+<tr><td>email format</td><td>Valid email for <code>email</code> type attrs</td></tr>
+<tr><td>option validity</td><td>Value must be in <code>options</code> for <code>select</code>/<code>radio</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Validation errors reference the node location: <code>"content[cta#0].url"</code> (first CTA node’s
+<code>url</code> attribute in the <code>content</code> field).</p>
+<h4 id="before_validate-hooks"><a class="header" href="#before_validate-hooks"><code>before_validate</code> hooks</a></h4>
+<p>Node attrs support <code>hooks.before_validate</code> for normalizing values before validation:</p>
+<pre><code class="language-lua">crap.richtext.register_node("cta", {
+    label = "CTA",
+    attrs = {
+        crap.fields.text({
+            name = "url",
+            required = true,
+            hooks = {
+                before_validate = { "hooks.trim_whitespace" },
+            },
+        }),
+    },
+})
+</code></pre>
+<p>The hook receives <code>(value, context)</code> and returns the transformed value. Runs before
+validation checks.</p>
+<h4 id="unsupported-features"><a class="header" href="#unsupported-features">Unsupported features</a></h4>
+<p>These features have no effect on node attributes and will produce a warning at
+registration time:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Reason</th></tr>
+</thead>
+<tbody>
+<tr><td><code>hooks.before_change</code></td><td>No per-attr write lifecycle</td></tr>
+<tr><td><code>hooks.after_change</code></td><td>No per-attr write lifecycle</td></tr>
+<tr><td><code>hooks.after_read</code></td><td>No per-attr read lifecycle</td></tr>
+<tr><td><code>access</code> (read/create/update)</td><td>No per-attr access control</td></tr>
+<tr><td><code>unique</code></td><td>No DB column</td></tr>
+<tr><td><code>index</code></td><td>No DB column</td></tr>
+<tr><td><code>localized</code></td><td>Richtext field itself is localized or not</td></tr>
+<tr><td><code>mcp.description</code></td><td>Not exposed as MCP fields</td></tr>
+<tr><td><code>has_many</code></td><td>Doesn’t apply to scalar node attrs</td></tr>
+<tr><td><code>admin.condition</code></td><td>Not yet supported (deferred)</td></tr>
 </tbody>
 </table>
 </div>

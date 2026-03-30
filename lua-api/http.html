@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -214,7 +214,7 @@ local resp = crap.http.request({
     method = "POST",
     headers = {
         ["Content-Type"] = "application/json",
-        ["Authorization"] = "Bearer " .. crap.env.get("API_TOKEN"),
+        ["Authorization"] = "Bearer " .. crap.env.get("CRAP_API_TOKEN"),
     },
     body = crap.util.json_encode({ event = "document.created", id = ctx.data.id }),
     timeout = 10,
@@ -222,10 +222,15 @@ local resp = crap.http.request({
 </code></pre>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
 <ul>
-<li>Uses <a href="https://docs.rs/ureq">ureq</a> (blocking HTTP client). Since Lua hooks run inside <code>spawn_blocking</code>, blocking I/O is correct and won’t stall the async runtime.</li>
+<li>Uses <a href="https://docs.rs/reqwest">reqwest</a> (blocking HTTP client). Since Lua hooks run inside <code>spawn_blocking</code>, blocking I/O is correct and won’t stall the async runtime.</li>
 <li>Non-2xx responses are <strong>not</strong> errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.</li>
 <li>Available in both init.lua and hooks.</li>
 </ul>
+<h2 id="security"><a class="header" href="#security">Security</a></h2>
+<h3 id="private-network-blocking"><a class="header" href="#private-network-blocking">Private network blocking</a></h3>
+<p>When <code>hooks.allow_private_networks</code> is <code>false</code> (the default), <code>crap.http.request</code> resolves the URL hostname and rejects requests targeting loopback, private (RFC 1918), link-local, and unspecified IP addresses. This prevents SSRF attacks against internal services. Set <code>allow_private_networks = true</code> in <code>crap.toml</code> only if your hooks need to reach internal services.</p>
+<h3 id="dns-rebinding-protection"><a class="header" href="#dns-rebinding-protection">DNS rebinding protection</a></h3>
+<p>DNS is resolved once during validation, checked against the SSRF policy, and the validated IP is pinned via <code>reqwest::ClientBuilder::resolve()</code>. The HTTP client connects to the exact validated address — no second DNS lookup occurs. Redirects are individually resolved, validated, and pinned before following.</p>
 
                     </main>
 

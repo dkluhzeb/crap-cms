@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -209,19 +209,20 @@
 <tbody>
 <tr><td><code>token_expiry</code></td><td>integer</td><td><code>7200</code></td><td>JWT token lifetime in seconds. Overrides the global <code>[auth] token_expiry</code>.</td></tr>
 <tr><td><code>disable_local</code></td><td>boolean</td><td><code>false</code></td><td>When <code>true</code>, the password login form is hidden. Only custom strategies can authenticate.</td></tr>
+<tr><td><code>verify_email</code></td><td>boolean</td><td><code>false</code></td><td>When <code>true</code>, new users must verify their email before logging in. Requires email configuration.</td></tr>
+<tr><td><code>forgot_password</code></td><td>boolean</td><td><code>true</code></td><td>When <code>true</code>, enables the “Forgot password?” flow. Requires email configuration.</td></tr>
 <tr><td><code>strategies</code></td><td>AuthStrategy[]</td><td><code>{}</code></td><td>Custom auth strategies. See <a href="custom-strategies.html">Custom Strategies</a>.</td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="email-auto-injection"><a class="header" href="#email-auto-injection">Email Auto-Injection</a></h2>
 <p>When <code>auth = true</code> and no <code>email</code> field exists in the field definitions, one is automatically injected:</p>
-<pre><code class="language-lua">{
+<pre><code class="language-lua">crap.fields.email({
     name = "email",
-    type = "email",
     required = true,
     unique = true,
     admin = { placeholder = "user@example.com" },
-}
+})
 </code></pre>
 <p>If you define your own <code>email</code> field, it’s used as-is.</p>
 <h2 id="password-storage"><a class="header" href="#password-storage">Password Storage</a></h2>
@@ -233,6 +234,8 @@
 <li>Is <strong>never</strong> shown in admin forms</li>
 <li>Is only accessed by dedicated auth functions (<code>update_password</code>, <code>get_password_hash</code>)</li>
 </ul>
+<h2 id="password-policy"><a class="header" href="#password-policy">Password Policy</a></h2>
+<p>All password-setting paths (create, update, reset, CLI) enforce the password policy configured in <code>[auth.password_policy]</code> in <code>crap.toml</code>. Defaults: min 8 Unicode characters, max 128 bytes. <code>min_length</code> counts Unicode codepoints (so multi-byte characters count as 1). <code>max_length</code> counts bytes (to bound Argon2 hashing cost). See <a href="../configuration/crap-toml.html#authpassword_policy">crap.toml reference</a> for all options.</p>
 <h2 id="password-in-createupdate"><a class="header" href="#password-in-createupdate">Password in Create/Update</a></h2>
 <p>When creating or updating a user, the <code>password</code> field (if present in the data) is:</p>
 <ol>
@@ -245,6 +248,17 @@
 <li><strong>Create form</strong> — password is required</li>
 <li><strong>Edit form</strong> — password is optional (“leave blank to keep current”)</li>
 </ul>
+<h2 id="account-locking"><a class="header" href="#account-locking">Account Locking</a></h2>
+<p>Auth collections support a <code>_locked</code> system field. When a user’s <code>_locked</code> field is set to a truthy value (e.g., <code>1</code>), that user is immediately denied access:</p>
+<ul>
+<li><strong>JWT validation</strong> — every authenticated request checks <code>_locked</code> after resolving the user from the token. A locked user’s token is effectively revoked, even if it hasn’t expired.</li>
+<li><strong><code>Me</code> RPC</strong> — returns an <code>unauthenticated</code> error for locked users.</li>
+<li><strong>Admin UI</strong> — the session is rejected and the user is redirected to the login page.</li>
+</ul>
+<p>Locking takes effect immediately — no token refresh or logout is needed. Use the CLI to lock/unlock users:</p>
+<pre><code class="language-bash">crap-cms -C ./my-project user lock -e admin@example.com
+crap-cms -C ./my-project user unlock -e admin@example.com
+</code></pre>
 <h2 id="jwt-claims"><a class="header" href="#jwt-claims">JWT Claims</a></h2>
 <p>Tokens contain:</p>
 <div class="table-wrapper">
@@ -257,6 +271,7 @@
 <tr><td><code>collection</code></td><td>Auth collection slug (e.g., “users”)</td></tr>
 <tr><td><code>email</code></td><td>User email</td></tr>
 <tr><td><code>exp</code></td><td>Expiration timestamp (Unix)</td></tr>
+<tr><td><code>iat</code></td><td>Issued-at timestamp (Unix)</td></tr>
 </tbody>
 </table>
 </div>

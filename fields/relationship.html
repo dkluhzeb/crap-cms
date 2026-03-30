@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -235,6 +235,22 @@
 </tbody>
 </table>
 </div>
+<h3 id="legacy-flat-syntax-deprecated"><a class="header" href="#legacy-flat-syntax-deprecated">Legacy Flat Syntax (Deprecated)</a></h3>
+<p>A flat syntax is still supported but <strong>deprecated</strong> — a warning is logged at startup when it’s used:</p>
+<pre><code class="language-lua">-- Deprecated: triggers a warning
+crap.fields.relationship({
+    name = "author",
+    relation_to = "users",
+    has_many = false,
+})
+
+-- Preferred: use the relationship table
+crap.fields.relationship({
+    name = "author",
+    relationship = { collection = "users" },
+})
+</code></pre>
+<p>The flat syntax does not support <code>max_depth</code> or polymorphic collections. Migrate to the <code>relationship = { ... }</code> table form.</p>
 <h2 id="junction-table-schema"><a class="header" href="#junction-table-schema">Junction Table Schema</a></h2>
 <p>For a has-many field <code>tags</code> on collection <code>posts</code>, the junction table is:</p>
 <pre><code class="language-sql">CREATE TABLE posts_tags (

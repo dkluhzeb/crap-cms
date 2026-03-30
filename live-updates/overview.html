@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,8 +190,11 @@
 <pre><code class="language-toml">[live]
 enabled = true           # default: true
 channel_capacity = 1024  # default: 1024
+# max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
+# max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
 </code></pre>
 <p>Set <code>enabled = false</code> to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.</p>
+<p>Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive <code>503 Service Unavailable</code> and new gRPC Subscribe calls receive <code>UNAVAILABLE</code> status. Existing connections are not affected.</p>
 <h2 id="per-collection-control"><a class="header" href="#per-collection-control">Per-Collection Control</a></h2>
 <p>Each collection (and global) can control whether it emits events via the <code>live</code> field:</p>
 <pre><code class="language-lua">-- Broadcast all events (default when absent)

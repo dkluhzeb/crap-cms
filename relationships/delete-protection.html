@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>crap.auth - Crap CMS</title>
+        <title>Delete Protection - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -177,48 +177,98 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="crapauth"><a class="header" href="#crapauth">crap.auth</a></h1>
-<p>Password hashing and verification helpers using Argon2id.</p>
-<h2 id="functions"><a class="header" href="#functions">Functions</a></h2>
-<h3 id="crapauthhash_passwordpassword"><a class="header" href="#crapauthhash_passwordpassword"><code>crap.auth.hash_password(password)</code></a></h3>
-<p>Hash a plaintext password using Argon2id.</p>
-<p><strong>Parameters:</strong></p>
+                        <h1 id="delete-protection"><a class="header" href="#delete-protection">Delete Protection</a></h1>
+<p>Every collection table has a <code>_ref_count</code> column that tracks how many documents reference it. When <code>_ref_count &gt; 0</code>, the document cannot be deleted — this prevents orphaned references across collections.</p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
+<p>When document A has a relationship field pointing to document B, B’s <code>_ref_count</code> is incremented. When A is updated to point elsewhere or hard-deleted, B’s <code>_ref_count</code> is decremented. This makes delete protection an <strong>O(1)</strong> check — no scanning required.</p>
+<p>Reference counting covers all relationship types:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Storage</th><th>Tracked</th></tr>
+</thead>
+<tbody>
+<tr><td>Has-one relationship</td><td>Column on parent table</td><td>Yes</td></tr>
+<tr><td>Has-many relationship</td><td>Junction table</td><td>Yes</td></tr>
+<tr><td>Polymorphic (has-one/many)</td><td><code>collection/id</code> format</td><td>Yes</td></tr>
+<tr><td>Localized relationships</td><td>Per-locale columns</td><td>Yes</td></tr>
+<tr><td>Upload fields</td><td>Same as relationship</td><td>Yes</td></tr>
+<tr><td>Array sub-field refs</td><td>Column in array table</td><td>Yes</td></tr>
+<tr><td>Block sub-field refs</td><td>JSON in blocks table</td><td>Yes</td></tr>
+<tr><td>Global outgoing refs</td><td>Global table columns</td><td>Yes</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="scope"><a class="header" href="#scope">Scope</a></h2>
+<p>Delete protection applies to <strong>all collections</strong>, not just uploads. Any document referenced by another document is protected.</p>
+<h2 id="soft-delete-interaction"><a class="header" href="#soft-delete-interaction">Soft Delete Interaction</a></h2>
+<p>Soft-deleting a document does <strong>not</strong> adjust ref counts. The outgoing references remain counted because:</p>
 <ul>
-<li><code>password</code> (string) — Plaintext password.</li>
+<li>Soft-deleted documents can be restored, so their references should remain tracked</li>
+<li>Trashed documents still “own” their references in the database</li>
 </ul>
-<p><strong>Returns:</strong> string — The hashed password string.</p>
-<pre><code class="language-lua">local hash = crap.auth.hash_password("secret123")
--- hash is an Argon2id hash string like "$argon2id$v=19$..."
+<p>Only <strong>hard deletion</strong> (permanent) decrements ref counts on the targets.</p>
+<p>Soft-deleted documents that are referenced by other documents can still be trashed — the ref count check only blocks deletion of the <em>target</em> document.</p>
+<h2 id="admin-ui"><a class="header" href="#admin-ui">Admin UI</a></h2>
+<p>The delete confirmation page shows a warning when a document has <code>_ref_count &gt; 0</code>:</p>
+<blockquote>
+<p><strong>This document is referenced by other content.</strong>
+Referenced by 3 document(s).
+[Show details]</p>
+</blockquote>
+<p>Clicking <strong>Show details</strong> lazy-loads the full list of referencing documents, fields, and counts via the back-references API endpoint.</p>
+<h2 id="api-behavior"><a class="header" href="#api-behavior">API Behavior</a></h2>
+<h3 id="admin--grpc"><a class="header" href="#admin--grpc">Admin &amp; gRPC</a></h3>
+<p>Attempting to delete a document with <code>_ref_count &gt; 0</code> returns an error:</p>
+<pre><code>Cannot delete '&lt;id&gt;' from '&lt;collection&gt;': referenced by N document(s)
 </code></pre>
-<h3 id="crapauthverify_passwordpassword-hash"><a class="header" href="#crapauthverify_passwordpassword-hash"><code>crap.auth.verify_password(password, hash)</code></a></h3>
-<p>Verify a plaintext password against a stored hash.</p>
-<p><strong>Parameters:</strong></p>
-<ul>
-<li><code>password</code> (string) — Plaintext password to check.</li>
-<li><code>hash</code> (string) — Stored Argon2id hash.</li>
-</ul>
-<p><strong>Returns:</strong> boolean — <code>true</code> if the password matches.</p>
-<pre><code class="language-lua">local valid = crap.auth.verify_password("secret123", stored_hash)
-if valid then
-    crap.log.info("Password matches")
-end
+<h3 id="lua-api"><a class="header" href="#lua-api">Lua API</a></h3>
+<pre><code class="language-lua">-- Single delete: fails with error if referenced
+local ok, err = pcall(crap.collections.delete, "media", "m1")
+
+-- Bulk delete: skips referenced documents and reports the count
+local result = crap.collections.delete_many("media", {
+    where = { status = { equals = "unused" } }
+})
+-- result.deleted = documents actually deleted
+-- result.skipped = documents skipped due to outstanding references
 </code></pre>
-<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
-<ul>
-<li>Available in both init.lua and hooks.</li>
-<li>Uses the same Argon2id implementation as the built-in auth system.</li>
-<li>Useful for custom auth strategies or migrating users from external systems.</li>
-</ul>
+<h3 id="force-hard-delete"><a class="header" href="#force-hard-delete">Force Hard Delete</a></h3>
+<p>The <code>forceHardDelete</code> option bypasses the ref count check. This is used internally for <strong>Empty Trash</strong> operations and can be used in Lua hooks:</p>
+<pre><code class="language-lua">crap.collections.delete("media", "m1", {
+    forceHardDelete = true  -- skips ref count check
+})
+</code></pre>
+<h2 id="back-references-api"><a class="header" href="#back-references-api">Back-References API</a></h2>
+<p>To see which documents reference a target, use the back-references endpoint:</p>
+<pre><code>GET /admin/collections/{slug}/{id}/back-references
+</code></pre>
+<p>Returns a JSON array:</p>
+<pre><code class="language-json">[
+    {
+        "owner_slug": "posts",
+        "owner_label": "Posts",
+        "field_name": "image",
+        "field_label": "Image",
+        "document_ids": ["p1", "p2"],
+        "count": 2,
+        "is_global": false
+    }
+]
+</code></pre>
+<p>This endpoint performs the full back-reference scan, so it’s heavier than the ref count check. It’s designed for on-demand use (e.g., the “Show details” button).</p>
+<h2 id="migration"><a class="header" href="#migration">Migration</a></h2>
+<p>When upgrading to a version with reference counting, the <code>_ref_count</code> column is automatically added to all collection and global tables. A one-time backfill migration computes the initial counts from existing relationship data. This runs automatically on first startup and is gated by a <code>_crap_meta</code> flag so it only runs once.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../lua-api/util.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../relationships/overview.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../lua-api/env.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../relationships/population-depth.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -228,11 +278,11 @@ end
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../lua-api/util.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../relationships/overview.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../lua-api/env.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../relationships/population-depth.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

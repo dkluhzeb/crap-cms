@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -209,17 +209,25 @@ If custom strategies are configured, the middleware checks them before redirecti
 </ol>
 <h2 id="security"><a class="header" href="#security">Security</a></h2>
 <h3 id="rate-limiting"><a class="header" href="#rate-limiting">Rate Limiting</a></h3>
-<p>Login endpoints enforce per-email rate limiting. After <code>max_login_attempts</code> (default: 5) failed attempts within the lockout window, further login attempts for that email are temporarily blocked for <code>login_lockout_seconds</code> (default: 300). Configure in <code>crap.toml</code>:</p>
+<p>Login and forgot-password endpoints enforce dual rate limiting — per-email and per-IP:</p>
+<ul>
+<li><strong>Per-email</strong>: After <code>max_login_attempts</code> (default: 5) failed attempts, further login attempts for that email are blocked for <code>login_lockout_seconds</code> (default: 300s).</li>
+<li><strong>Per-IP</strong>: After <code>max_ip_login_attempts</code> (default: 20) failed attempts from the same IP, all login attempts from that IP are blocked. The higher threshold tolerates shared IPs (offices, NAT).</li>
+</ul>
+<p>Forgot-password requests are similarly limited per-email (<code>max_forgot_password_attempts</code>) and per-IP (<code>max_ip_login_attempts</code> with <code>forgot_password_window_seconds</code>).</p>
 <pre><code class="language-toml">[auth]
-max_login_attempts = 5
-login_lockout_seconds = 300
+max_login_attempts = 5          # per-email threshold
+max_ip_login_attempts = 20      # per-IP threshold (login + forgot-password)
+login_lockout_seconds = "5m"    # lockout window for login
+max_forgot_password_attempts = 3
+forgot_password_window_seconds = "15m"
 </code></pre>
-<p>Rate limiting applies to both the admin UI login and the gRPC <code>Login</code> RPC.</p>
+<p>Rate limiting applies to the admin UI login, admin forgot-password, and the gRPC <code>Login</code> and <code>ForgotPassword</code> RPCs. Behind a reverse proxy, the admin UI reads the client IP from <code>X-Forwarded-For</code>.</p>
 <h3 id="csrf-protection"><a class="header" href="#csrf-protection">CSRF Protection</a></h3>
 <p>All admin UI form submissions and HTMX requests are protected by a double-submit cookie pattern:</p>
 <ul>
-<li>A <code>crap_csrf</code> cookie (SameSite=Strict, not HttpOnly) is set on every response</li>
-<li>POST, PUT, and DELETE requests must include a matching token via either:
+<li>A <code>crap_csrf</code> cookie (SameSite=Strict, not HttpOnly) is set when absent (persists with a 24-hour Max-Age)</li>
+<li>POST, PUT, PATCH, and DELETE requests must include a matching token via either:
 <ul>
 <li><code>X-CSRF-Token</code> header (used by HTMX requests)</li>
 <li><code>_csrf</code> form field (used by plain form submissions)</li>

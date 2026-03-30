@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,7 +197,10 @@
 <tr><td><code>upload</code></td><td>boolean or table</td><td><code>nil</code></td><td>Upload config (see <a href="../uploads/overview.html">Uploads</a>)</td></tr>
 <tr><td><code>access</code></td><td>table</td><td><code>{}</code></td><td>Access control function refs</td></tr>
 <tr><td><code>versions</code></td><td>boolean or table</td><td><code>nil</code></td><td>Versioning and drafts config (see <a href="versions.html">Versions &amp; Drafts</a>)</td></tr>
+<tr><td><code>soft_delete</code></td><td>boolean</td><td><code>false</code></td><td>Enable soft deletes (see <a href="soft-deletes.html">Soft Deletes</a>)</td></tr>
+<tr><td><code>soft_delete_retention</code></td><td>string</td><td><code>nil</code></td><td>Auto-purge retention period (e.g., <code>"30d"</code>). Requires <code>soft_delete = true</code>.</td></tr>
 <tr><td><code>live</code></td><td>boolean or string</td><td><code>nil</code></td><td>Live update broadcasting (see <a href="../live-updates/overview.html">Live Updates</a>)</td></tr>
+<tr><td><code>mcp</code></td><td>table</td><td><code>{}</code></td><td>MCP tool config. <code>{ description = "..." }</code> for MCP tool descriptions.</td></tr>
 <tr><td><code>indexes</code></td><td>IndexDefinition[]</td><td><code>{}</code></td><td>Compound indexes (see <a href="#indexes">Indexes</a> below)</td></tr>
 </tbody>
 </table>
@@ -226,11 +229,12 @@
 <tbody>
 <tr><td><code>before_validate</code></td><td>string[]</td><td>Runs before field validation. Has CRUD access.</td></tr>
 <tr><td><code>before_change</code></td><td>string[]</td><td>Runs after validation, before write. Has CRUD access.</td></tr>
-<tr><td><code>after_change</code></td><td>string[]</td><td>Runs after create/update. No CRUD access (fire-and-forget).</td></tr>
+<tr><td><code>after_change</code></td><td>string[]</td><td>Runs after create/update (inside transaction). Has CRUD access. Errors roll back.</td></tr>
 <tr><td><code>before_read</code></td><td>string[]</td><td>Runs before returning read results. No CRUD access.</td></tr>
 <tr><td><code>after_read</code></td><td>string[]</td><td>Runs after read, before response. No CRUD access.</td></tr>
 <tr><td><code>before_delete</code></td><td>string[]</td><td>Runs before delete. Has CRUD access.</td></tr>
-<tr><td><code>after_delete</code></td><td>string[]</td><td>Runs after delete. No CRUD access (fire-and-forget).</td></tr>
+<tr><td><code>after_delete</code></td><td>string[]</td><td>Runs after delete (inside transaction). Has CRUD access. Errors roll back.</td></tr>
+<tr><td><code>before_broadcast</code></td><td>string[]</td><td>Runs after commit, before broadcast. No CRUD access. See <a href="../live-updates/hooks.html">Live Updates</a>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -353,23 +357,20 @@ crap.fields.date({ name = "published_at", index = true }),
         list_searchable_fields = { "title", "slug", "content" },
     },
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             hooks = {
                 before_validate = { "hooks.posts.trim_title" },
             },
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             required = true,
             unique = true,
-        },
-        {
+        }),
+        crap.fields.select({
             name = "status",
-            type = "select",
             required = true,
             default_value = "draft",
             options = {
@@ -377,13 +378,12 @@ crap.fields.date({ name = "published_at", index = true }),
                 { label = "Published", value = "published" },
                 { label = "Archived", value = "archived" },
             },
-        },
-        { name = "content", type = "richtext" },
-        {
+        }),
+        crap.fields.richtext({ name = "content" }),
+        crap.fields.relationship({
             name = "tags",
-            type = "relationship",
             relationship = { collection = "tags", has_many = true },
-        },
+        }),
     },
     hooks = {
         before_change = { "hooks.posts.auto_slug" },

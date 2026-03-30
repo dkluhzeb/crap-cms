@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -209,9 +209,10 @@ smtp_pass = "${SMTP_PASSWORD}"
 <p>Substitution only applies to string values — <code>${VAR}</code> patterns in comments are safely ignored.</p>
 <p>This allows keeping secrets out of config files and varying configuration across environments.</p>
 <h2 id="duration-values"><a class="header" href="#duration-values">Duration Values</a></h2>
-<p>Most time-related fields accept <strong>both</strong> an integer (seconds) and a human-readable string:</p>
-<pre><code class="language-toml"># These are equivalent:
+<p>Most time-related fields accept an integer (seconds), a human-readable string with a suffix, or a bare number string:</p>
+<pre><code class="language-toml"># These are all equivalent:
 token_expiry = 7200
+token_expiry = "7200"
 token_expiry = "2h"
 
 # Supported suffixes: s (seconds), m (minutes), h (hours), d (days)
@@ -219,7 +220,7 @@ poll_interval = "5s"
 login_lockout_seconds = "5m"
 auto_purge = "7d"
 </code></pre>
-<p>Fields that support this: <code>token_expiry</code>, <code>login_lockout_seconds</code>, <code>reset_token_expiry</code>, <code>forgot_password_window_seconds</code>, <code>max_age_seconds</code>, <code>poll_interval</code>, <code>cron_interval</code>, <code>heartbeat_interval</code>, <code>auto_purge</code>, <code>grpc_rate_limit_window</code>.</p>
+<p>Fields that support this: <code>token_expiry</code>, <code>login_lockout_seconds</code>, <code>reset_token_expiry</code>, <code>forgot_password_window_seconds</code>, <code>max_age</code>, <code>poll_interval</code>, <code>cron_interval</code>, <code>heartbeat_interval</code>, <code>auto_purge</code>, <code>grpc_rate_limit_window</code>, <code>connection_timeout</code>, <code>smtp_timeout</code>, <code>busy_timeout</code>, <code>request_timeout</code>, <code>grpc_timeout</code>.</p>
 <h2 id="file-size-values"><a class="header" href="#file-size-values">File Size Values</a></h2>
 <p>File size fields accept <strong>both</strong> an integer (bytes) and a human-readable string:</p>
 <pre><code class="language-toml"># These are equivalent:
@@ -232,7 +233,24 @@ max_file_size = "500B"
 max_file_size = "100KB"
 max_file_size = "1GB"
 </code></pre>
-<p>Fields that support this: <code>max_file_size</code> (global and per-collection).</p>
+<p>Fields that support this: <code>max_file_size</code> (global and per-collection), <code>max_memory</code>, <code>http_max_response_bytes</code>, <code>grpc_max_message_size</code>.</p>
+<h2 id="configuration-validation"><a class="header" href="#configuration-validation">Configuration Validation</a></h2>
+<p><code>crap.toml</code> is validated at startup. Fatal validation errors prevent the server from starting with a descriptive error message. Non-fatal issues log warnings.</p>
+<p><strong>Fatal errors:</strong></p>
+<ul>
+<li><code>database.pool_max_size = 0</code></li>
+<li><code>database.connection_timeout = 0</code></li>
+<li><code>hooks.vm_pool_size = 0</code></li>
+<li><code>server.admin_port</code> or <code>server.grpc_port</code> is <code>0</code></li>
+<li><code>server.admin_port == server.grpc_port</code> (ports must be distinct)</li>
+<li><code>auth.password_policy.min_length &gt; auth.password_policy.max_length</code></li>
+</ul>
+<p><strong>Warnings (server starts but logs a warning):</strong></p>
+<ul>
+<li><code>jobs.max_concurrent = 0</code> — no jobs will execute</li>
+<li><code>auth.secret</code> is set but shorter than 32 characters</li>
+<li><code>depth.max_depth = 0</code> — all population requests capped to 0</li>
+</ul>
 <h2 id="full-reference"><a class="header" href="#full-reference">Full Reference</a></h2>
 <pre><code class="language-toml"># Optional: warn if the running binary doesn't match this version
 # crap_version = "0.1.0"
@@ -241,10 +259,16 @@ max_file_size = "1GB"
 admin_port = 3000       # Admin UI port
 grpc_port = 50051       # gRPC API port
 host = "0.0.0.0"        # Bind address
+# public_url = "https://cms.example.com"  # Public-facing base URL for generated links
+# h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
+# trust_proxy = false   # Trust X-Forwarded-For (enable behind reverse proxy)
 # compression = "off"   # "off" (default), "gzip", "br", "all"
-# grpc_reflection = true         # Enable gRPC server reflection (default: true)
-# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled)
+# grpc_reflection = false        # Enable gRPC server reflection (default: false)
+# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
+# grpc_max_message_size = "16MB" # Max gRPC message size (default 16MB)
+# request_timeout = "30s"        # Admin HTTP request timeout (none by default)
+# grpc_timeout = "30s"           # gRPC request timeout (none by default)
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
@@ -257,10 +281,22 @@ dev_mode = false         # Reload templates per-request (enable in development)
 require_auth = true      # Block admin when no auth collection exists (default: true)
 # access = "access.admin_panel"  # Lua function: which users can access the admin UI
 
+# [admin.csp]                    # Content-Security-Policy (enabled by default)
+# enabled = true
+# script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com"]
+# style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
+# font_src = ["'self'", "https://fonts.gstatic.com"]
+# img_src = ["'self'", "data:"]
+# connect_src = ["'self'"]
+# frame_ancestors = ["'none'"]
+# form_action = ["'self'"]
+# base_uri = ["'self'"]
+
 [auth]
 secret = ""              # JWT signing key. Empty = auto-generated and persisted to data/.jwt_secret
 token_expiry = "2h"      # Default token expiry (accepts integer seconds or "2h", "30m", etc.)
-max_login_attempts = 5   # Failed attempts before temporary lockout
+max_login_attempts = 5   # Failed attempts per email before temporary lockout
+max_ip_login_attempts = 20  # Failed attempts per IP before lockout (higher for shared IPs)
 login_lockout_seconds = "5m"  # Lockout duration after max attempts
 reset_token_expiry = "1h"    # Password reset token expiry
 max_forgot_password_attempts = 3   # Forgot-password requests per email before rate limiting
@@ -300,6 +336,7 @@ from_name = "Crap CMS"  # Sender display name
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
+# max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
                          # Default: max(available_parallelism, 4), capped at 32
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
@@ -310,6 +347,8 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 channel_capacity = 1024  # Broadcast channel buffer size
+# max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
+# max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
 
 [locale]
 default_locale = "en"    # Default locale code
@@ -333,8 +372,16 @@ allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (defa
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 allowed_headers = ["Content-Type", "Authorization"]
 exposed_headers = []     # Response headers exposed to the browser
-max_age_seconds = "1h"   # How long browsers cache preflight results
+max_age = "1h"   # How long browsers cache preflight results
 allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] origins
+
+[mcp]
+# enabled = false         # Enable MCP server
+# http = false            # Mount POST /mcp on admin server
+# config_tools = false    # Enable config read/write tools
+# api_key = ""            # API key for HTTP transport
+# include_collections = [] # Only expose these collections
+# exclude_collections = [] # Hide these collections
 </code></pre>
 <h2 id="section-details"><a class="header" href="#section-details">Section Details</a></h2>
 <h3 id="server"><a class="header" href="#server"><code>[server]</code></a></h3>
@@ -347,10 +394,16 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>admin_port</code></td><td>integer</td><td><code>3000</code></td><td>Port for the Axum admin UI</td></tr>
 <tr><td><code>grpc_port</code></td><td>integer</td><td><code>50051</code></td><td>Port for the Tonic gRPC API</td></tr>
 <tr><td><code>host</code></td><td>string</td><td><code>"0.0.0.0"</code></td><td>Bind address for both servers</td></tr>
+<tr><td><code>h2c</code></td><td>boolean</td><td><code>false</code></td><td>Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don’t support h2c fall back to HTTP/1.1 on the same port.</td></tr>
+<tr><td><code>trust_proxy</code></td><td>boolean</td><td><code>false</code></td><td>Trust the <code>X-Forwarded-For</code> header for client IP extraction on the <strong>admin HTTP server</strong>. <strong>Enable when running behind a reverse proxy</strong> (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic’s <code>remote_addr()</code>.</td></tr>
 <tr><td><code>compression</code></td><td>string</td><td><code>"off"</code></td><td>Response compression. <code>"off"</code> = disabled (default), <code>"gzip"</code> = gzip only, <code>"br"</code> = brotli only, <code>"all"</code> = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in.</td></tr>
-<tr><td><code>grpc_reflection</code></td><td>boolean</td><td><code>true</code></td><td>Enable gRPC server reflection. Allows clients (e.g., <code>grpcurl</code>, Postman) to discover services and methods without a <code>.proto</code> file. Disable in production to hide the API surface from unauthenticated probing.</td></tr>
-<tr><td><code>grpc_rate_limit_requests</code></td><td>integer</td><td><code>0</code></td><td>Maximum number of gRPC requests per IP within the sliding window. <code>0</code> = disabled (default). When enabled, requests exceeding the limit receive <code>ResourceExhausted</code> status.</td></tr>
+<tr><td><code>grpc_reflection</code></td><td>boolean</td><td><code>false</code></td><td>Enable gRPC server reflection. Allows clients (e.g., <code>grpcurl</code>, Postman) to discover services and methods without a <code>.proto</code> file. Disabled by default to hide the API surface from unauthenticated probing.</td></tr>
+<tr><td><code>public_url</code></td><td>string</td><td>—</td><td>Public-facing base URL (e.g., <code>"https://cms.example.com"</code>). Used for password reset emails and other generated links. If not set, defaults to <code>http://{host}:{admin_port}</code>.</td></tr>
+<tr><td><code>grpc_rate_limit_requests</code></td><td>integer</td><td><code>0</code></td><td>Maximum number of gRPC requests per IP within the sliding window. <code>0</code> = disabled (default). <strong>Recommended to enable in production</strong> (e.g., <code>100</code>). When enabled, requests exceeding the limit receive <code>ResourceExhausted</code> status.</td></tr>
 <tr><td><code>grpc_rate_limit_window</code></td><td>integer/string</td><td><code>60</code> (<code>"1m"</code>)</td><td>Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (<code>"1m"</code>, <code>"30s"</code>).</td></tr>
+<tr><td><code>grpc_max_message_size</code></td><td>integer/string</td><td><code>16777216</code> (<code>"16MB"</code>)</td><td>Maximum gRPC message size in bytes (applies to both send and receive). Tonic’s built-in default is 4MB, which can be exceeded by large <code>Find</code> responses with deep population. Accepts bytes or file size string (<code>"16MB"</code>, <code>"32MB"</code>).</td></tr>
+<tr><td><code>request_timeout</code></td><td>integer/string</td><td>— (none)</td><td>Admin HTTP request timeout. When set, requests exceeding this duration return <code>408 Request Timeout</code>. SSE streams are exempt (handled by shutdown). Accepts seconds or human-readable (<code>"30s"</code>, <code>"5m"</code>).</td></tr>
+<tr><td><code>grpc_timeout</code></td><td>integer/string</td><td>— (none)</td><td>gRPC request timeout. When set, RPCs exceeding this duration return <code>DEADLINE_EXCEEDED</code>. Applies to all RPCs including Subscribe streams. Accepts seconds or human-readable (<code>"30s"</code>, <code>"5m"</code>).</td></tr>
 </tbody>
 </table>
 </div>
@@ -378,9 +431,40 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>dev_mode</code></td><td>boolean</td><td><code>false</code></td><td>When true, templates are reloaded from disk on every request. The scaffold sets this to <code>true</code> for new projects. Set to <code>false</code> in production for cached templates.</td></tr>
 <tr><td><code>require_auth</code></td><td>boolean</td><td><code>true</code></td><td>When true and no auth collection exists, the admin panel shows a “Setup Required” page (HTTP 503) instead of being open. Set to <code>false</code> for fully open dev mode without authentication.</td></tr>
 <tr><td><code>access</code></td><td>string</td><td>—</td><td>Lua function ref (e.g., <code>"access.admin_panel"</code>) that gates admin panel access. Called after successful authentication with <code>{ user }</code> context. Return <code>true</code> to allow, <code>false</code>/<code>nil</code> to deny (HTTP 403).</td></tr>
+<tr><td><code>default_timezone</code></td><td>string</td><td><code>""</code></td><td>Default IANA timezone for date fields with <code>timezone = true</code> that don’t specify their own <code>default_timezone</code>. Pre-selects the timezone in the admin dropdown. Example: <code>"America/New_York"</code>.</td></tr>
+<tr><td><code>csp</code></td><td>table</td><td><em>(see below)</em></td><td>Content-Security-Policy header configuration. See <code>[admin.csp]</code>.</td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="admincsp"><a class="header" href="#admincsp"><code>[admin.csp]</code></a></h3>
+<p>Content-Security-Policy header configuration for the admin UI. Each field is a list of CSP sources for the corresponding directive. Theme developers can extend these lists to allow external resources (CDNs, custom fonts, analytics, etc.).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable the CSP header. Set to <code>false</code> to disable entirely.</td></tr>
+<tr><td><code>default_src</code></td><td>string[]</td><td><code>["'self'"]</code></td><td>Fallback for any directive not explicitly set.</td></tr>
+<tr><td><code>script_src</code></td><td>string[]</td><td><code>["'self'", "'unsafe-inline'", "https://unpkg.com"]</code></td><td>Allowed script sources. Includes <code>'unsafe-inline'</code> for theme bootstrap and CSRF injection scripts.</td></tr>
+<tr><td><code>style_src</code></td><td>string[]</td><td><code>["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]</code></td><td>Allowed stylesheet sources. Includes <code>'unsafe-inline'</code> for Web Component Shadow DOM styles.</td></tr>
+<tr><td><code>font_src</code></td><td>string[]</td><td><code>["'self'", "https://fonts.gstatic.com"]</code></td><td>Allowed font sources. Includes Google Fonts for Material Symbols icons.</td></tr>
+<tr><td><code>img_src</code></td><td>string[]</td><td><code>["'self'", "data:"]</code></td><td>Allowed image sources. Includes <code>data:</code> for inline SVGs.</td></tr>
+<tr><td><code>connect_src</code></td><td>string[]</td><td><code>["'self'"]</code></td><td>Allowed targets for <code>fetch</code>, XHR, and WebSocket connections.</td></tr>
+<tr><td><code>frame_ancestors</code></td><td>string[]</td><td><code>["'none'"]</code></td><td>Who can embed this page in a frame. <code>'none'</code> prevents clickjacking.</td></tr>
+<tr><td><code>form_action</code></td><td>string[]</td><td><code>["'self'"]</code></td><td>Allowed form submission targets.</td></tr>
+<tr><td><code>base_uri</code></td><td>string[]</td><td><code>["'self'"]</code></td><td>Allowed URLs for <code>&lt;base&gt;</code> tags.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Example: allowing a custom CDN and analytics:</strong></p>
+<pre><code class="language-toml">[admin.csp]
+script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.example.com", "https://analytics.example.com"]
+style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.example.com"]
+font_src = ["'self'", "https://fonts.gstatic.com", "https://cdn.example.com"]
+img_src = ["'self'", "data:", "https://cdn.example.com"]
+connect_src = ["'self'", "https://analytics.example.com"]
+</code></pre>
 <h3 id="auth"><a class="header" href="#auth"><code>[auth]</code></a></h3>
 <div class="table-wrapper">
 <table>
@@ -390,11 +474,12 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tbody>
 <tr><td><code>secret</code></td><td>string</td><td><code>""</code> (empty)</td><td>JWT signing secret. If empty, a random secret is auto-generated and <strong>persisted to <code>data/.jwt_secret</code></strong> so tokens survive restarts. Set explicitly if you prefer to manage the secret yourself.</td></tr>
 <tr><td><code>token_expiry</code></td><td>integer/string</td><td><code>7200</code> (<code>"2h"</code>)</td><td>Default JWT token lifetime. Accepts seconds (integer) or human-readable (<code>"2h"</code>, <code>"30m"</code>). Can be overridden per auth collection.</td></tr>
-<tr><td><code>max_login_attempts</code></td><td>integer</td><td><code>5</code></td><td>Maximum failed login attempts before temporary lockout. Tracked per email address.</td></tr>
-<tr><td><code>login_lockout_seconds</code></td><td>integer/string</td><td><code>300</code> (<code>"5m"</code>)</td><td>Duration of lockout after <code>max_login_attempts</code> is reached. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>max_login_attempts</code></td><td>integer</td><td><code>5</code></td><td>Maximum failed login attempts per email before temporary lockout.</td></tr>
+<tr><td><code>max_ip_login_attempts</code></td><td>integer</td><td><code>20</code></td><td>Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests.</td></tr>
+<tr><td><code>login_lockout_seconds</code></td><td>integer/string</td><td><code>300</code> (<code>"5m"</code>)</td><td>Duration of lockout after <code>max_login_attempts</code> or <code>max_ip_login_attempts</code> is reached. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>reset_token_expiry</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>Password reset token expiry. The “Forgot password” email link expires after this duration. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>max_forgot_password_attempts</code></td><td>integer</td><td><code>3</code></td><td>Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email.</td></tr>
-<tr><td><code>forgot_password_window_seconds</code></td><td>integer/string</td><td><code>900</code> (<code>"15m"</code>)</td><td>Rate limit window for forgot-password requests. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>forgot_password_window_seconds</code></td><td>integer/string</td><td><code>900</code> (<code>"15m"</code>)</td><td>Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable.</td></tr>
 </tbody>
 </table>
 </div>
@@ -406,8 +491,8 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>min_length</code></td><td>integer</td><td><code>8</code></td><td>Minimum password length.</td></tr>
-<tr><td><code>max_length</code></td><td>integer</td><td><code>128</code></td><td>Maximum password length. Prevents DoS via Argon2 on huge inputs.</td></tr>
+<tr><td><code>min_length</code></td><td>integer</td><td><code>8</code></td><td>Minimum password length in Unicode characters (codepoints). Multi-byte characters (accented letters, CJK, emoji) each count as 1. Must be ≤ <code>max_length</code> or the server refuses to start.</td></tr>
+<tr><td><code>max_length</code></td><td>integer</td><td><code>128</code></td><td>Maximum password length in bytes. Prevents DoS via Argon2 on huge inputs. Uses byte count (not characters) to bound hashing cost.</td></tr>
 <tr><td><code>require_uppercase</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one uppercase letter (A-Z).</td></tr>
 <tr><td><code>require_lowercase</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one lowercase letter (a-z).</td></tr>
 <tr><td><code>require_digit</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one digit (0-9).</td></tr>
@@ -498,6 +583,8 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tbody>
 <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable live event streaming (SSE + gRPC Subscribe).</td></tr>
 <tr><td><code>channel_capacity</code></td><td>integer</td><td><code>1024</code></td><td>Internal broadcast channel buffer size. Increase if subscribers lag.</td></tr>
+<tr><td><code>max_sse_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent SSE connections. When reached, new connections receive <code>503 Service Unavailable</code>. <code>0</code> = unlimited.</td></tr>
+<tr><td><code>max_subscribe_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive <code>UNAVAILABLE</code> status. <code>0</code> = unlimited.</td></tr>
 </tbody>
 </table>
 </div>
@@ -526,7 +613,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>poll_interval</code></td><td>integer/string</td><td><code>1</code> (<code>"1s"</code>)</td><td>How often to poll for pending jobs. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>cron_interval</code></td><td>integer/string</td><td><code>60</code> (<code>"1m"</code>)</td><td>How often to evaluate cron schedules. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>heartbeat_interval</code></td><td>integer/string</td><td><code>10</code> (<code>"10s"</code>)</td><td>How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable.</td></tr>
-<tr><td><code>auto_purge</code></td><td>integer/string</td><td><code>"7d"</code></td><td>Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (<code>"7d"</code>, <code>"24h"</code>, <code>"30m"</code>, <code>"3600"</code>). Absent = 7 days default.</td></tr>
+<tr><td><code>auto_purge</code></td><td>integer/string</td><td><code>"7d"</code></td><td>Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (<code>"7d"</code>, <code>"24h"</code>, <code>"30m"</code>, <code>"3600"</code>). Set to <code>""</code> (empty string) to disable auto-purge. Absent = 7 days default.</td></tr>
 <tr><td><code>image_queue_batch_size</code></td><td>integer</td><td><code>10</code></td><td>Number of pending image format conversions to claim per scheduler poll cycle. Increase for higher throughput on capable hardware.</td></tr>
 </tbody>
 </table>
@@ -554,7 +641,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>allowed_methods</code></td><td>string[]</td><td><code>["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]</code></td><td>HTTP methods allowed in CORS preflight.</td></tr>
 <tr><td><code>allowed_headers</code></td><td>string[]</td><td><code>["Content-Type", "Authorization"]</code></td><td>Request headers allowed in CORS requests.</td></tr>
 <tr><td><code>exposed_headers</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Response headers the browser is allowed to access.</td></tr>
-<tr><td><code>max_age_seconds</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>How long browsers may cache preflight results. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>max_age</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>How long browsers may cache preflight results. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>allow_credentials</code></td><td>boolean</td><td><code>false</code></td><td>Allow credentials (cookies, <code>Authorization</code> header). <strong>Cannot be used with <code>allowed_origins = ["*"]</code></strong> — if both are set, credentials are ignored with a warning.</td></tr>
 </tbody>
 </table>
@@ -570,13 +657,29 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>enabled</code></td><td>boolean</td><td><code>false</code></td><td>Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports.</td></tr>
 <tr><td><code>http</code></td><td>boolean</td><td><code>false</code></td><td>Mount <code>POST /mcp</code> on the admin server for HTTP-based MCP access.</td></tr>
 <tr><td><code>config_tools</code></td><td>boolean</td><td><code>false</code></td><td>Enable config generation tools (<code>read_config_file</code>, <code>write_config_file</code>, <code>list_config_files</code>). Opt-in because they allow filesystem writes.</td></tr>
-<tr><td><code>api_key</code></td><td>string</td><td><code>""</code> (empty)</td><td>API key for HTTP transport. When set, requests must include <code>Authorization: Bearer &lt;key&gt;</code>. Empty = no auth.</td></tr>
-<tr><td><code>include_collections</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Only expose these collections via MCP. Empty = all collections.</td></tr>
-<tr><td><code>exclude_collections</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Hide these collections from MCP. Takes precedence over <code>include_collections</code>.</td></tr>
+<tr><td><code>api_key</code></td><td>string</td><td><code>""</code> (empty)</td><td>API key for HTTP transport. <strong>Required</strong> when <code>http = true</code> — the server will refuse to start without one. Requests must include <code>Authorization: Bearer &lt;key&gt;</code>.</td></tr>
+<tr><td><code>include_collections</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Only expose these collections via MCP. Empty = all collections. Enforced at both tool listing and execution time.</td></tr>
+<tr><td><code>exclude_collections</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Hide these collections from MCP. Takes precedence over <code>include_collections</code>. Enforced at both tool listing and execution time.</td></tr>
 </tbody>
 </table>
 </div>
 <p>See <a href="../mcp/overview.html">MCP Overview</a> for usage details.</p>
+<h3 id="logging"><a class="header" href="#logging"><code>[logging]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>file</code></td><td>boolean</td><td><code>false</code></td><td>Enable file-based logging. When <code>false</code> (default), logs go to stdout only. <strong>Auto-enabled</strong> when running with <code>--detach</code> (where stdout is unavailable).</td></tr>
+<tr><td><code>path</code></td><td>string</td><td><code>"data/logs"</code></td><td>Log directory path. Relative paths are resolved from the config directory. Use an absolute path to log elsewhere.</td></tr>
+<tr><td><code>rotation</code></td><td>string</td><td><code>"daily"</code></td><td>Log rotation strategy: <code>"daily"</code> (one file per day), <code>"hourly"</code> (one file per hour), or <code>"never"</code> (single file, no rotation).</td></tr>
+<tr><td><code>max_files</code></td><td>integer</td><td><code>30</code></td><td>Maximum rotated log files to keep. Old files are pruned on startup.</td></tr>
+</tbody>
+</table>
+</div>
+<p>File logging writes to rotating files in the configured directory. Each project has its own log directory, so multiple instances on the same machine are naturally isolated.</p>
+<p>Use <code>crap-cms logs</code> to view log output, <code>crap-cms logs -f</code> to follow in real time, and <code>crap-cms logs clear</code> to remove old rotated files. See the <a href="../cli/flags.html">CLI Reference</a> for details.</p>
 <p>When locales are configured, any field with <code>localized = true</code> in its Lua definition gets one column per locale (<code>title__en</code>, <code>title__de</code>) instead of a single <code>title</code> column. The API accepts a <code>locale</code> parameter on Find, FindByID, Create, Update, GetGlobal, and UpdateGlobal to control which locale to read/write. The admin UI shows a locale selector in the edit sidebar.</p>
 <p><strong>Special locale values:</strong></p>
 <ul>
@@ -618,6 +721,12 @@ smtp_user = "noreply@example.com"
 smtp_pass = "your-smtp-password"
 from_address = "noreply@example.com"
 from_name = "My App"
+
+[logging]
+file = true
+# path = "data/logs"
+# rotation = "daily"
+# max_files = 30
 
 [hooks]
 on_init = ["hooks.seed.run"]

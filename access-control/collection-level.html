@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,6 +185,7 @@
         read   = "hooks.access.public_read",
         create = "hooks.access.authenticated",
         update = "hooks.access.authenticated",
+        trash  = "hooks.access.authenticated",
         delete = "hooks.access.admin_only",
     },
     -- ...
@@ -194,16 +195,24 @@
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Property</th><th>Controls</th></tr>
+<tr><th>Property</th><th>Controls</th><th>Fallback</th></tr>
 </thead>
 <tbody>
-<tr><td><code>read</code></td><td><code>Find</code> and <code>FindByID</code> operations</td></tr>
-<tr><td><code>create</code></td><td><code>Create</code> operation</td></tr>
-<tr><td><code>update</code></td><td><code>Update</code> operation</td></tr>
-<tr><td><code>delete</code></td><td><code>Delete</code> operation</td></tr>
+<tr><td><code>read</code></td><td><code>Find</code> and <code>FindByID</code> operations</td><td>—</td></tr>
+<tr><td><code>create</code></td><td><code>Create</code> operation</td><td>—</td></tr>
+<tr><td><code>update</code></td><td><code>Update</code> operation</td><td>—</td></tr>
+<tr><td><code>trash</code></td><td>Soft-delete (move to trash) and restore. Only relevant when <code>soft_delete = true</code>.</td><td><code>update</code></td></tr>
+<tr><td><code>delete</code></td><td>Permanent deletion, empty trash. For collections without <code>soft_delete</code>, this is the only delete permission.</td><td>—</td></tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p><strong>Note:</strong> When <code>soft_delete = true</code>, <code>trash</code> and <code>delete</code> are separate permissions.
+<code>trash</code> controls the reversible action (low privilege), <code>delete</code> controls the
+destructive action (high privilege). If <code>trash</code> is not set, it falls back to
+<code>update</code>. If <code>delete</code> is not set, permanent deletion is restricted to the
+auto-purge scheduler. See <a href="../collections/soft-deletes.html">Soft Deletes</a>.</p>
+</blockquote>
 <h2 id="writing-access-functions"><a class="header" href="#writing-access-functions">Writing Access Functions</a></h2>
 <p>Access functions live in Lua modules under the config directory:</p>
 <pre><code class="language-lua">-- hooks/access.lua

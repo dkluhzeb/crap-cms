@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
+            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a8be9f9.js"></script>
+        <script src="../toc-5408acc1.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -222,11 +222,77 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
 <p>This normalization ensures consistent storage and correct behavior when filtering and sorting.</p>
 <h2 id="admin-rendering"><a class="header" href="#admin-rendering">Admin Rendering</a></h2>
 <p>Renders as the appropriate HTML5 input type based on <code>picker_appearance</code>. For <code>dayOnly</code> and <code>dayAndTime</code>, the stored ISO string is automatically converted to the format the HTML input expects (<code>YYYY-MM-DD</code> and <code>YYYY-MM-DDTHH:MM</code> respectively).</p>
+<h2 id="date-constraints"><a class="header" href="#date-constraints">Date Constraints</a></h2>
+<p>Use <code>min_date</code> and <code>max_date</code> to restrict the allowed range. Values are validated server-side and set as HTML <code>min</code>/<code>max</code> attributes on the input.</p>
+<pre><code class="language-lua">crap.fields.date({
+    name = "event_date",
+    min_date = "2026-01-01",
+    max_date = "2026-12-31",
+})
+</code></pre>
+<p>Both values use ISO 8601 format. Dates outside the range produce a validation error.</p>
 <h2 id="validation"><a class="header" href="#validation">Validation</a></h2>
-<p>Non-empty date values are validated against recognized date/datetime/time/month formats. Invalid formats produce a validation error.</p>
+<p>Non-empty date values are validated against recognized date/datetime/time/month formats. Invalid formats produce a validation error. If <code>min_date</code> or <code>max_date</code> are set, the value is also checked against those bounds.</p>
+<h2 id="timezone-support"><a class="header" href="#timezone-support">Timezone Support</a></h2>
+<p>Date fields can opt into timezone awareness with <code>timezone = true</code>. This stores the user’s selected IANA timezone in a companion column and converts between local time and UTC automatically.</p>
+<h3 id="enabling"><a class="header" href="#enabling">Enabling</a></h3>
+<pre><code class="language-lua">crap.fields.date({
+    name = "start_date",
+    picker_appearance = "dayAndTime",
+    timezone = true,
+    default_timezone = "America/New_York",  -- optional pre-selected timezone
+})
+</code></pre>
+<p>Only <code>dayAndTime</code> supports timezones — timezone only makes sense when there’s a time component. Using <code>timezone = true</code> with <code>dayOnly</code>, <code>timeOnly</code>, or <code>monthOnly</code> emits a warning and is ignored.</p>
+<h3 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h3>
+<ol>
+<li><strong>Admin UI</strong>: A timezone dropdown appears next to the date input. The user selects a timezone and enters a <strong>local time</strong>.</li>
+<li><strong>On save</strong>: The local time is converted to UTC using the selected timezone (via <code>chrono-tz</code>). Both the UTC date and the IANA timezone string are stored.</li>
+<li><strong>On reload</strong>: The UTC value is converted <strong>back to local time</strong> for display. The user always sees the time they entered — re-saving without changes produces the same UTC value (no drift).</li>
+</ol>
+<h3 id="storage"><a class="header" href="#storage">Storage</a></h3>
+<p>Two columns are created:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Column</th><th>Type</th><th>Example</th></tr>
+</thead>
+<tbody>
+<tr><td><code>start_date</code></td><td>TEXT</td><td><code>2026-05-02T12:00:00.000Z</code> (UTC)</td></tr>
+<tr><td><code>start_date_tz</code></td><td>TEXT</td><td><code>America/Sao_Paulo</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The naming follows the pattern <code>{field_name}_tz</code>. Inside Groups, it becomes <code>{group}__{field}_tz</code>.</p>
+<h3 id="api-responses"><a class="header" href="#api-responses">API Responses</a></h3>
+<p>Both fields appear in gRPC and MCP responses:</p>
+<pre><code class="language-json">{
+  "start_date": "2026-05-02T12:00:00.000Z",
+  "start_date_tz": "America/Sao_Paulo"
+}
+</code></pre>
+<p>The date is always UTC. Frontends convert to local display:</p>
+<pre><code class="language-javascript">const local = new Date(doc.start_date)
+    .toLocaleString("en-US", { timeZone: doc.start_date_tz });
+</code></pre>
+<h3 id="global-default-timezone"><a class="header" href="#global-default-timezone">Global Default Timezone</a></h3>
+<p>Set a default timezone for all date fields in <code>crap.toml</code>:</p>
+<pre><code class="language-toml">[admin]
+default_timezone = "America/New_York"
+</code></pre>
+<p>This pre-selects the timezone in the admin dropdown for any date field with <code>timezone = true</code> that doesn’t specify its own <code>default_timezone</code>. The field-level setting takes precedence.</p>
+<h3 id="compatibility"><a class="header" href="#compatibility">Compatibility</a></h3>
+<ul>
+<li><strong>Localized fields</strong>: Each locale gets its own <code>_tz</code> column (e.g., <code>start_date_tz__en</code>)</li>
+<li><strong>Groups / Rows / Tabs / Collapsible / Arrays</strong>: Companion columns follow the parent field’s naming rules</li>
+<li><strong>Versioning</strong>: Timezone data is included in version snapshots and restored correctly</li>
+<li><strong>Migration</strong>: Adding <code>timezone = true</code> to an existing field creates the <code>_tz</code> column via <code>ALTER TABLE ADD COLUMN</code> with NULL default. No data migration needed.</li>
+<li><strong>Lua plugins</strong>: The <code>timezone</code> and <code>default_timezone</code> properties survive roundtrips through <code>crap.collections.config.list()</code> and <code>crap.collections.define()</code></li>
+</ul>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
 <ul>
 <li>Pure dates are stored with UTC noon (<code>T12:00:00.000Z</code>) so timezone offsets up to ±12h never flip the calendar date</li>
+<li>When <code>timezone = true</code> with <code>dayOnly</code>, noon is calculated in the selected timezone then converted to UTC</li>
 <li>Comparison operators (<code>greater_than</code>, <code>less_than</code>) work correctly on the normalized ISO string representation</li>
 <li>The <code>picker_appearance</code> option controls whether the picker shows date-only or date+time</li>
 </ul>
