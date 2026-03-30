@@ -507,6 +507,22 @@ pub(crate) fn html_with_toast(
     }
 }
 
+/// Return a 422 response with only the toast header — HTMX won't swap the body,
+/// so the user keeps their form data while seeing the error notification.
+pub(crate) fn toast_only_error(msg: &str) -> Response {
+    let json_toast = json!({ "message": msg, "type": "error" }).to_string();
+    let mut resp = Response::builder()
+        .status(StatusCode::UNPROCESSABLE_ENTITY)
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    if let Ok(val) = json_toast.parse() {
+        resp.headers_mut().insert("X-Crap-Toast", val);
+    }
+
+    resp
+}
+
 /// Render a template, falling back to a plain error page on failure.
 pub(crate) fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response {
     match state.render(template, data) {

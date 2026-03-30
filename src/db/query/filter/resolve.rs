@@ -73,6 +73,36 @@ fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
     false
 }
 
+/// Find a field by name, recursing into transparent layout wrappers (Row, Collapsible, Tabs).
+fn find_field_recursive<'a>(
+    name: &str,
+    fields: &'a [FieldDefinition],
+) -> Option<&'a FieldDefinition> {
+    for f in fields {
+        if f.name == name {
+            return Some(f);
+        }
+
+        match f.field_type {
+            FieldType::Row | FieldType::Collapsible => {
+                if let Some(found) = find_field_recursive(name, &f.fields) {
+                    return Some(found);
+                }
+            }
+            FieldType::Tabs => {
+                for tab in &f.tabs {
+                    if let Some(found) = find_field_recursive(name, &tab.fields) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
 // ── Resolved filter types ────────────────────────────────────────────────
 
 /// A filter resolved to its SQL representation.
@@ -129,9 +159,7 @@ pub(super) fn resolve_filter(
     let root = &field[..dot_pos];
     let rest = &field[dot_pos + 1..];
 
-    let field_def = fields
-        .iter()
-        .find(|f| f.name == root)
+    let field_def = find_field_recursive(root, fields)
         .ok_or_else(|| anyhow!("Unknown field '{}' in filter path '{}'", root, field))?;
 
     let join_table = format!("{}_{}", slug, root);

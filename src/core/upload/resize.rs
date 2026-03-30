@@ -241,14 +241,14 @@ mod tests {
     fn resize_image_cover_extreme_aspect_ratio_no_overflow() {
         // Wide source with tall target — the intermediate width calculation
         // could overflow u32 without the .min(u32::MAX) guard.
-        // We use moderate dimensions to avoid huge memory allocations during
-        // the actual resize, while still exercising the ratio math.
-        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(1000, 1, |_, _| {
+        // Use small dimensions (10x1 → 1x10) to exercise the ratio math
+        // without allocating a huge intermediate image.
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(10, 1, |_, _| {
             image::Rgba([0, 0, 0, 255])
         }));
         let size = ImageSizeBuilder::new("extreme")
             .width(1)
-            .height(1000)
+            .height(10)
             .fit(ImageFit::Cover)
             .build();
 

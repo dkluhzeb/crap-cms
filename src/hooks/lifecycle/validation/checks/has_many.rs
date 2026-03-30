@@ -52,7 +52,7 @@ pub(crate) fn check_has_many_elements(
         for v in &values {
             if field.field_type == FieldType::Text {
                 if let Some(min_len) = field.min_length
-                    && v.len() < min_len
+                    && v.chars().count() < min_len
                 {
                     errors.push(FieldError::with_key(
                         data_key.to_owned(),
@@ -70,7 +70,7 @@ pub(crate) fn check_has_many_elements(
                     break;
                 }
                 if let Some(max_len) = field.max_length
-                    && v.len() > max_len
+                    && v.chars().count() > max_len
                 {
                     errors.push(FieldError::with_key(
                         data_key.to_owned(),
@@ -525,5 +525,49 @@ mod tests {
                 .message
                 .contains("at most 3 characters")
         );
+    }
+
+    /// Regression: has_many length validation must count characters, not bytes.
+    /// Multibyte UTF-8 characters (emoji, CJK, accented) were overcounted with `.len()`.
+    #[test]
+    fn test_has_many_text_length_counts_chars_not_bytes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+
+        // "café" = 4 chars but 5 bytes (é is 2 bytes in UTF-8)
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .max_length(4)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["café"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_ok(), "café is 4 chars — should pass max_length=4");
+
+        // "你好" = 2 chars but 6 bytes
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_length(2)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["你好"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_ok(), "你好 is 2 chars — should pass min_length=2");
     }
 }

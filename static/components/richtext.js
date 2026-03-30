@@ -594,7 +594,7 @@ class CrapRichtext extends HTMLElement {
           </div>
           <div class="crap-node-modal__field">
             <label class="crap-node-modal__checkbox">
-              <input type="checkbox" data-field="rel" ${attrs.rel === 'nofollow' ? 'checked' : ''}>
+              <input type="checkbox" data-field="rel" ${attrs.rel && attrs.rel.includes('nofollow') ? 'checked' : ''}>
               ${t('link_nofollow')}
             </label>
           </div>
@@ -630,7 +630,11 @@ class CrapRichtext extends HTMLElement {
       const targetEl = modal.querySelector('[data-field="target"]');
       const target = targetEl && targetEl.checked ? '_blank' : null;
       const relEl = modal.querySelector('[data-field="rel"]');
-      const rel = relEl && relEl.checked ? 'nofollow' : null;
+      // Preserve existing rel tokens (e.g. noopener, noreferrer) while toggling nofollow
+      const existingRel = (attrs.rel || '').split(/\s+/).filter(Boolean);
+      const otherTokens = existingRel.filter((t) => t !== 'nofollow');
+      const relTokens = relEl && relEl.checked ? ['nofollow', ...otherTokens] : otherTokens;
+      const rel = relTokens.length > 0 ? relTokens.join(' ') : null;
 
       const markType = schema.marks.link;
       let { tr } = this._view.state;

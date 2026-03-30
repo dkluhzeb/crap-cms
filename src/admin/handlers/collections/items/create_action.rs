@@ -22,7 +22,7 @@ use crate::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
                 get_user_doc, html_with_toast, htmx_redirect_with_created, redirect_response,
-                split_sidebar_fields, strip_write_denied_string_fields,
+                split_sidebar_fields, strip_write_denied_string_fields, toast_only_error,
                 translate_validation_errors,
             },
         },
@@ -129,12 +129,17 @@ pub async fn create_action(
         None
     };
 
-    // Validate password against policy (create requires a password for auth collections)
+    // Create requires a non-empty password for auth collections
+    if def.is_auth_collection() && password.as_deref().unwrap_or("").is_empty() {
+        return toast_only_error("Password is required");
+    }
+
+    // Validate password against policy
     if let Some(ref pw) = password
         && !pw.is_empty()
         && let Err(e) = state.config.auth.password_policy.validate(pw)
     {
-        return html_with_toast(&state, "collections/edit_form", &json!({}), &e.to_string());
+        return toast_only_error(&e.to_string());
     }
 
     // Convert comma-separated multi-select values to JSON arrays

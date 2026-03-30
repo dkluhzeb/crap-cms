@@ -12,9 +12,12 @@ use crate::{
             convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    core::upload,
+    core::{
+        event::{EventOperation, EventTarget},
+        upload,
+    },
     db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
-    hooks::{HookContext, HookEvent, ValidationCtx},
+    hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::PublishEventInput},
     service::{self, versions},
 };
 
@@ -63,6 +66,8 @@ impl ContentService {
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
         let run_hooks = req.hooks.unwrap_or(true);
+        let has_drafts = def.has_drafts();
+        let draft = req.draft;
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
@@ -72,196 +77,225 @@ impl ContentService {
         let collection = req.collection.clone();
         let req_where = req.r#where.clone();
         let def_owned = def;
-        let modified = tokio::task::spawn_blocking(move || -> Result<i64, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+        let collection_for_event = req.collection.clone();
+        let (modified, updated_ids) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, Vec<String>), Status> {
+                let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
-            // Auth + read access (all on blocking thread)
-            let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
-            let read_access = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &hook_runner,
-                &mut conn,
-            )?;
+                // Auth + read access (all on blocking thread)
+                let auth_user =
+                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                let read_access = ContentService::check_access_blocking(
+                    def_owned.access.read.as_deref(),
+                    &auth_user,
+                    None,
+                    None,
+                    &hook_runner,
+                    &mut conn,
+                )?;
 
-            if matches!(read_access, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
-
-            let filters = FilterBuilder::new(&def_owned.fields, &read_access)
-                .where_json(req_where.as_deref())
-                .build()?;
-
-            let tx = conn
-                .transaction_immediate()
-                .context("Start transaction")
-                .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
-
-            let mut find_query = FindQuery::new();
-            find_query.filters = filters;
-            find_query.limit = Some(BULK_QUERY_LIMIT);
-            let docs = query::find(
-                &tx,
-                &collection,
-                &def_owned,
-                &find_query,
-                locale_ctx.as_ref(),
-            )
-            .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
-
-            // All-or-nothing update access check (always run, even when no
-            // access function is configured — check_access respects default_deny)
-            {
-                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-                for doc in &docs {
-                    let result = hook_runner
-                        .check_access(
-                            def_owned.access.update.as_deref(),
-                            user_doc,
-                            Some(&doc.id),
-                            None,
-                            &tx,
-                        )
-                        .map_err(|e| {
-                            tracing::error!("Access check error: {}", e);
-                            Status::internal("Internal error")
-                        })?;
-
-                    if matches!(result, AccessResult::Denied) {
-                        return Err(Status::permission_denied("Update access denied"));
-                    }
+                if matches!(read_access, AccessResult::Denied) {
+                    return Err(Status::permission_denied("Read access denied"));
                 }
-            }
 
-            // Strip field-level update-denied fields (same as single Update)
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let denied =
-                hook_runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
-            for name in &denied {
-                data.remove(name);
-                join_data.remove(name);
-            }
+                let filters = FilterBuilder::new(&def_owned.fields, &read_access)
+                    .where_json(req_where.as_deref())
+                    .draft_filter(has_drafts, !draft.unwrap_or(false))
+                    .build()?;
 
-            let mut count = 0i64;
-            for doc in &docs {
-                let hook_data = service::build_hook_data(&data, &join_data);
+                let tx = conn
+                    .transaction_immediate()
+                    .context("Start transaction")
+                    .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
 
-                // Run the full before-write lifecycle: BeforeValidate → validation → BeforeChange.
-                // Captures modified data from hooks so it flows into the actual DB write.
-                let (write_data, write_join_data) = if run_hooks {
-                    let hook_ctx = HookContext::builder(&collection, "update")
-                        .data(hook_data)
-                        .user(user_doc)
-                        .build();
-                    let val_ctx = ValidationCtx::builder(&tx, &collection)
-                        .exclude_id(Some(&doc.id))
-                        .locale_ctx(locale_ctx.as_ref())
-                        .soft_delete(def_owned.soft_delete)
-                        .build();
-                    let final_ctx = hook_runner
-                        .run_before_write(&def_owned.hooks, &def_owned.fields, hook_ctx, &val_ctx)
-                        .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
-                    let final_data = final_ctx.to_string_map(&def_owned.fields);
-                    (final_data, final_ctx.data)
-                } else {
-                    (data.clone(), join_data.clone())
-                };
-
-                // Snapshot outgoing refs before mutation for ref count adjustment
-                let locale_cfg = locale_ctx
-                    .as_ref()
-                    .map(|lc| lc.config.clone())
-                    .unwrap_or_default();
-                let old_refs = query::ref_count::snapshot_outgoing_refs(
-                    &tx,
-                    &collection,
-                    &doc.id,
-                    &def_owned.fields,
-                    &locale_cfg,
-                )
-                .map_err(|e| map_db_error(e, "UpdateMany ref snapshot error", &db_kind))?;
-
-                let updated = query::update_partial(
+                let mut find_query = FindQuery::new();
+                find_query.filters = filters;
+                find_query.limit = Some(BULK_QUERY_LIMIT);
+                let docs = query::find(
                     &tx,
                     &collection,
                     &def_owned,
-                    &doc.id,
-                    &write_data,
-                    locale_ctx.as_ref(),
-                )
-                .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
-                query::save_join_table_data(
-                    &tx,
-                    &collection,
-                    &def_owned.fields,
-                    &doc.id,
-                    &write_join_data,
+                    &find_query,
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
 
-                // Adjust ref counts based on before/after diff
-                query::ref_count::after_update(
-                    &tx,
-                    &collection,
-                    &doc.id,
+                // All-or-nothing update access check (always run, even when no
+                // access function is configured — check_access respects default_deny)
+                {
+                    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                    for doc in &docs {
+                        let result = hook_runner
+                            .check_access(
+                                def_owned.access.update.as_deref(),
+                                user_doc,
+                                Some(&doc.id),
+                                None,
+                                &tx,
+                            )
+                            .map_err(|e| {
+                                tracing::error!("Access check error: {}", e);
+                                Status::internal("Internal error")
+                            })?;
+
+                        if matches!(result, AccessResult::Denied) {
+                            return Err(Status::permission_denied("Update access denied"));
+                        }
+                    }
+                }
+
+                // Strip field-level update-denied fields (same as single Update)
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let denied = hook_runner.check_field_write_access(
                     &def_owned.fields,
-                    &locale_cfg,
-                    old_refs,
-                )
-                .map_err(|e| map_db_error(e, "UpdateMany ref count error", &db_kind))?;
-                if tx.supports_fts() {
-                    query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))
-                        .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+                    user_doc,
+                    "update",
+                    &tx,
+                );
+                for name in &denied {
+                    data.remove(name);
+                    join_data.remove(name);
                 }
 
-                if def_owned.has_versions() {
-                    let vs_ctx = versions::VersionSnapshotCtx::builder(&collection, &updated.id)
-                        .fields(&def_owned.fields)
-                        .versions(def_owned.versions.as_ref())
-                        .has_drafts(def_owned.has_drafts())
-                        .build();
-                    versions::create_version_snapshot(&tx, &vs_ctx, "published", &updated)
-                        .map_err(|e| map_db_error(e, "UpdateMany version error", &db_kind))?;
+                let mut count = 0i64;
+                let mut ids = Vec::new();
+                for doc in &docs {
+                    let hook_data = service::build_hook_data(&data, &join_data);
+
+                    // Run the full before-write lifecycle: BeforeValidate → validation → BeforeChange.
+                    // Captures modified data from hooks so it flows into the actual DB write.
+                    let (write_data, write_join_data) = if run_hooks {
+                        let hook_ctx = HookContext::builder(&collection, "update")
+                            .data(hook_data)
+                            .user(user_doc)
+                            .build();
+                        let val_ctx = ValidationCtx::builder(&tx, &collection)
+                            .exclude_id(Some(&doc.id))
+                            .locale_ctx(locale_ctx.as_ref())
+                            .soft_delete(def_owned.soft_delete)
+                            .build();
+                        let final_ctx = hook_runner
+                            .run_before_write(
+                                &def_owned.hooks,
+                                &def_owned.fields,
+                                hook_ctx,
+                                &val_ctx,
+                            )
+                            .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
+                        let final_data = final_ctx.to_string_map(&def_owned.fields);
+                        (final_data, final_ctx.data)
+                    } else {
+                        (data.clone(), join_data.clone())
+                    };
+
+                    // Snapshot outgoing refs before mutation for ref count adjustment
+                    let locale_cfg = locale_ctx
+                        .as_ref()
+                        .map(|lc| lc.config.clone())
+                        .unwrap_or_default();
+                    let old_refs = query::ref_count::snapshot_outgoing_refs(
+                        &tx,
+                        &collection,
+                        &doc.id,
+                        &def_owned.fields,
+                        &locale_cfg,
+                    )
+                    .map_err(|e| map_db_error(e, "UpdateMany ref snapshot error", &db_kind))?;
+
+                    let updated = query::update_partial(
+                        &tx,
+                        &collection,
+                        &def_owned,
+                        &doc.id,
+                        &write_data,
+                        locale_ctx.as_ref(),
+                    )
+                    .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+                    query::save_join_table_data(
+                        &tx,
+                        &collection,
+                        &def_owned.fields,
+                        &doc.id,
+                        &write_join_data,
+                        locale_ctx.as_ref(),
+                    )
+                    .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+
+                    // Adjust ref counts based on before/after diff
+                    query::ref_count::after_update(
+                        &tx,
+                        &collection,
+                        &doc.id,
+                        &def_owned.fields,
+                        &locale_cfg,
+                        old_refs,
+                    )
+                    .map_err(|e| map_db_error(e, "UpdateMany ref count error", &db_kind))?;
+                    if tx.supports_fts() {
+                        query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))
+                            .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+                    }
+
+                    if def_owned.has_versions() {
+                        let vs_ctx =
+                            versions::VersionSnapshotCtx::builder(&collection, &updated.id)
+                                .fields(&def_owned.fields)
+                                .versions(def_owned.versions.as_ref())
+                                .has_drafts(def_owned.has_drafts())
+                                .build();
+                        versions::create_version_snapshot(&tx, &vs_ctx, "published", &updated)
+                            .map_err(|e| map_db_error(e, "UpdateMany version error", &db_kind))?;
+                    }
+
+                    if run_hooks {
+                        let mut after_data = updated.fields.clone();
+                        after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
+                        let after_ctx = HookContext::builder(&collection, "update")
+                            .data(after_data)
+                            .user(user_doc)
+                            .build();
+                        hook_runner
+                            .run_after_write(
+                                &def_owned.hooks,
+                                &def_owned.fields,
+                                HookEvent::AfterChange,
+                                after_ctx,
+                                &tx,
+                            )
+                            .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
+                    }
+
+                    ids.push(doc.id.to_string());
+                    count += 1;
                 }
 
-                if run_hooks {
-                    let mut after_data = updated.fields.clone();
-                    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
-                    let after_ctx = HookContext::builder(&collection, "update")
-                        .data(after_data)
-                        .user(user_doc)
-                        .build();
-                    hook_runner
-                        .run_after_write(
-                            &def_owned.hooks,
-                            &def_owned.fields,
-                            HookEvent::AfterChange,
-                            after_ctx,
-                            &tx,
-                        )
-                        .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
-                }
-
-                count += 1;
-            }
-
-            tx.commit()
-                .context("Commit transaction")
-                .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
-            Ok(count)
-        })
-        .await
-        .map_err(|e| {
-            tracing::error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+                tx.commit()
+                    .context("Commit transaction")
+                    .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+                Ok((count, ids))
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("Task error: {}", e);
+                Status::internal("Internal error")
+            })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();
+        }
+
+        // Publish mutation events for Subscribe stream listeners
+        let def = self.get_collection_def(&collection_for_event)?;
+        for doc_id in &updated_ids {
+            self.hook_runner.publish_event(
+                &self.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
+                PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
+                    .collection(collection_for_event.clone())
+                    .document_id(doc_id.clone())
+                    .build(),
+            );
         }
 
         Ok(Response::new(content::UpdateManyResponse { modified }))
@@ -313,9 +347,10 @@ impl ContentService {
         let deny_msg_owned = deny_msg.to_string();
         let soft_delete = will_soft_delete;
         let def_owned = def;
+        let collection_for_event = req.collection.clone();
 
-        let (hard_count, soft_count) =
-            tokio::task::spawn_blocking(move || -> Result<(i64, i64), Status> {
+        let (hard_count, soft_count, deleted_ids) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, i64, Vec<String>), Status> {
                 let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
                 // Auth + read access (all on blocking thread)
@@ -336,6 +371,7 @@ impl ContentService {
 
                 let filters = FilterBuilder::new(&def_owned.fields, &read_access)
                     .where_json(req_where.as_deref())
+                    .draft_filter(def_owned.has_drafts(), true)
                     .build()?;
 
                 let tx = conn
@@ -377,6 +413,7 @@ impl ContentService {
                 let mut hard_count = 0i64;
                 let mut soft_count = 0i64;
                 let mut hard_deleted_indices = Vec::new();
+                let mut deleted_ids = Vec::new();
 
                 for (idx, doc) in docs.iter().enumerate() {
                     // Ref count protection only applies to hard deletes — soft-deleted
@@ -409,6 +446,8 @@ impl ContentService {
                             )
                             .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
                     }
+
+                    deleted_ids.push(doc.id.to_string());
 
                     if soft_delete {
                         query::soft_delete(&tx, &collection, &doc.id)
@@ -465,7 +504,7 @@ impl ContentService {
                     }
                 }
 
-                Ok((hard_count, soft_count))
+                Ok((hard_count, soft_count, deleted_ids))
             })
             .await
             .map_err(|e| {
@@ -475,6 +514,20 @@ impl ContentService {
 
         if let Some(c) = &self.populate_cache {
             c.clear();
+        }
+
+        // Publish mutation events for Subscribe stream listeners
+        let def = self.get_collection_def(&collection_for_event)?;
+        for doc_id in &deleted_ids {
+            self.hook_runner.publish_event(
+                &self.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
+                PublishEventInput::builder(EventTarget::Collection, EventOperation::Delete)
+                    .collection(collection_for_event.clone())
+                    .document_id(doc_id.clone())
+                    .build(),
+            );
         }
 
         Ok(Response::new(content::DeleteManyResponse {

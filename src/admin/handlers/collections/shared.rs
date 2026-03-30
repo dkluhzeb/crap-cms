@@ -11,7 +11,7 @@ use crate::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
                 get_user_doc, html_with_toast, htmx_redirect, redirect_response,
-                split_sidebar_fields, strip_write_denied_string_fields,
+                split_sidebar_fields, strip_write_denied_string_fields, toast_only_error,
                 translate_validation_errors,
             },
         },
@@ -277,8 +277,7 @@ pub(super) async fn do_update(
         && !pw.is_empty()
         && let Err(e) = state.config.auth.password_policy.validate(pw)
     {
-        return html_with_toast(state, "collections/edit_form", &json!({}), &e.to_string())
-            .into_response();
+        return toast_only_error(&e.to_string()).into_response();
     }
 
     // Convert comma-separated multi-select values to JSON arrays

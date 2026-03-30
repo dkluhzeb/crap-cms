@@ -187,6 +187,7 @@ class CrapRelationshipSearch extends HTMLElement {
         viewLink.setAttribute('href', href);
         viewLink.setAttribute('hx-get', href);
         viewLink.style.display = '';
+        if (typeof htmx !== 'undefined') htmx.process(viewLink);
       } else {
         viewLink.style.display = 'none';
       }

@@ -1015,6 +1015,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   plus underscore. Block type names and labels are now escaped for safe
   Lua string embedding.
 
+- **`forceHardDelete` bypassed referential integrity** — The Lua CRUD
+  `crap.collections.delete()` with `forceHardDelete = true` skipped the
+  `_ref_count` check entirely, allowing hard-deletion of documents still
+  referenced by others. This corrupted ref counts on target documents and
+  created dangling references. Now always checks ref counts for hard
+  deletes regardless of how they are triggered.
+
+- **Array/Blocks sub-field validation incomplete** — Fields inside Array
+  and Blocks rows only ran 4 of 9 validation checks (required, date format,
+  custom Lua validate, richtext node attrs). Missing checks: `min_length`/
+  `max_length`, `min`/`max` numeric bounds, email format, select option
+  validation, and has-many element validation. A Text field with
+  `max_length = 10` inside an Array accepted values of any length; a Number
+  field with `min = 0` accepted negatives; a Select field accepted values
+  not in the options list.
+
+- **`has_many` length validation counted bytes** — Per-element `min_length`
+  and `max_length` checks on has-many Text fields used `.len()` (byte
+  count) instead of `.chars().count()`. Multibyte UTF-8 values (emoji, CJK,
+  accented characters) were overcounted, producing false validation errors.
+
+- **Filter validation rejected fields inside layout wrappers** — Array,
+  Blocks, and has-many Relationship fields inside Row, Collapsible, or Tabs
+  wrappers were not found by `get_valid_filter_paths`, causing API filter
+  queries on those fields to be rejected with "Invalid field". The same
+  issue existed in `resolve_filter` (SQL generation stage) which also did
+  a flat lookup. Both now recurse into layout wrappers.
+
+- **Version snapshot restore lost Group fields inside layout wrappers** —
+  `extract_snapshot_data` did not recurse into Row/Collapsible/Tabs wrappers
+  nested inside Groups. Restoring a version snapshot silently dropped those
+  fields. Refactored to a recursive prefix-based approach matching the
+  write path.
+
+- **No server-side password requirement on auth user creation** — Creating
+  a user in an auth collection via the admin UI with an empty password
+  field succeeded silently, producing an account with no password hash
+  that could never log in. The client-side `required` attribute was the
+  only protection. Now returns a validation error server-side.
+
+- **Password policy error rendered broken page** — When password policy
+  validation failed during create or update, the handler rendered
+  `collections/edit_form` with an empty JSON context (`&json!({})`),
+  producing a blank page with only the toast error. Now returns a 422
+  with only the toast header, so HTMX preserves the form content and the
+  user sees the error without losing their input.
+
+- **API `parse_where_json` rejected numeric and boolean shorthand** —
+  Filter queries like `{"active": true}` or `{"count": 42}` were rejected
+  with "value must be string or operator object". Clients had to use the
+  verbose form `{"active": {"equals": "true"}}`. Now accepts numbers and
+  booleans as shorthand equals filters, consistent with `value_to_string`
+  which already supported them. Also fixed inside `or` groups.
+
+- **`UpdateMany`/`DeleteMany` skipped draft filtering** — Bulk update and
+  delete operations did not apply the draft status filter, potentially
+  affecting draft documents that should have been excluded. `find` and
+  `count` correctly applied this filter. `UpdateMany` now respects the
+  `draft` request field; `DeleteMany` defaults to published-only.
+
+- **`UpdateMany`/`DeleteMany` missing mutation events** — Bulk operations
+  did not publish mutation events to the event bus, so `Subscribe` stream
+  listeners were never notified of bulk changes. Now publishes per-document
+  events after commit.
+
+- **CSRF token not URL-decoded in list-settings.js** — The column picker
+  save handler did not `decodeURIComponent()` the CSRF cookie value,
+  unlike every other CSRF reader in the codebase. Tokens containing
+  URL-encoded characters would fail with a CSRF mismatch.
+
+- **Richtext link `rel` attribute lossy on edit** — Editing a link with
+  `rel="nofollow noopener noreferrer"` showed the nofollow checkbox as
+  unchecked (strict `=== 'nofollow'` comparison), and re-saving stripped
+  all other rel tokens. Now uses `.includes('nofollow')` and preserves
+  existing tokens.
+
+- **Relationship view link bypassed SPA navigation** — Dynamically setting
+  `hx-get` on the relationship field "view" link did not call
+  `htmx.process()`, so HTMX never registered the attribute. Clicking the
+  link caused a full page reload instead of SPA-style navigation.
+
+- **Slow resize test allocated 1 billion pixels** — The
+  `resize_image_cover_extreme_aspect_ratio_no_overflow` test used 1000x1 →
+  1x1000 dimensions, causing a 1000000x1000 intermediate allocation that
+  took over 60 seconds. Reduced to 10x1 → 1x10 which exercises the same
+  ratio math instantly.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

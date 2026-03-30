@@ -119,7 +119,9 @@ pub(super) fn register_delete(
             };
 
             // Block deletion of documents that are referenced by other documents.
-            if !force_hard_delete {
+            // Always check ref counts for hard deletes (including forceHardDelete)
+            // to prevent dangling references and _ref_count corruption.
+            if !def.soft_delete || force_hard_delete {
                 let ref_count = query::ref_count::get_ref_count(conn, &collection, &id)
                     .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
                 if ref_count > 0 {

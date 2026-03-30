@@ -6,6 +6,7 @@ use serde_json::{Map as JsonMap, Value};
 use crate::core::{FieldDefinition, FieldType, registry::Registry, validate::FieldError};
 
 use super::{
+    checks,
     checks::is_valid_date_format,
     custom::run_validate_function_inner,
     richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
@@ -211,7 +212,22 @@ fn validate_leaf_sub_field(
         }
     }
 
-    // 4. Richtext node attr validation
+    // 4. Length bounds (min_length / max_length)
+    checks::check_length_bounds(sf, qualified_name, value, is_empty, errors);
+
+    // 5. Numeric bounds (min / max)
+    checks::check_numeric_bounds(sf, qualified_name, value, is_empty, errors);
+
+    // 6. Email format validation
+    checks::check_email_format(sf, qualified_name, value, is_empty, errors);
+
+    // 7. Select/radio option validation
+    checks::check_option_valid(sf, qualified_name, value, is_empty, errors);
+
+    // 8. Has-many element validation (per-element length/numeric bounds, row counts)
+    checks::check_has_many_elements(sf, qualified_name, value, is_empty, errors);
+
+    // 9. Richtext node attr validation
     if sf.field_type == FieldType::Richtext
         && !is_empty
         && !sf.admin.nodes.is_empty()

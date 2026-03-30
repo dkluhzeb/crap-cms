@@ -116,7 +116,15 @@ pub fn get_valid_filter_paths(
     let exact = get_valid_filter_columns(def, locale_ctx);
     let mut prefixes = HashSet::new();
 
-    for field in &def.fields {
+    collect_prefix_roots(&def.fields, &mut prefixes);
+
+    (exact, prefixes)
+}
+
+/// Recursively collect Array/Blocks/has-many Relationship field names,
+/// descending into transparent layout wrappers (Row, Collapsible, Tabs).
+fn collect_prefix_roots(fields: &[crate::core::FieldDefinition], prefixes: &mut HashSet<String>) {
+    for field in fields {
         match field.field_type {
             FieldType::Array | FieldType::Blocks => {
                 prefixes.insert(field.name.clone());
@@ -128,11 +136,17 @@ pub fn get_valid_filter_paths(
                     prefixes.insert(field.name.clone());
                 }
             }
+            FieldType::Row | FieldType::Collapsible => {
+                collect_prefix_roots(&field.fields, prefixes);
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    collect_prefix_roots(&tab.fields, prefixes);
+                }
+            }
             _ => {}
         }
     }
-
-    (exact, prefixes)
 }
 
 /// Validate a single filter field name against exact columns or dot-path prefixes.
@@ -240,5 +254,63 @@ mod tests {
         assert!(validate_slug("Posts").is_err());
         assert!(validate_slug("my-slug").is_err());
         assert!(validate_slug("_private").is_err());
+    }
+
+    /// Regression: get_valid_filter_paths did not recurse into layout wrappers,
+    /// so Array/Blocks fields inside Row/Tabs/Collapsible were rejected as invalid.
+    #[test]
+    fn filter_paths_include_array_inside_layout_wrappers() {
+        use crate::core::{
+            CollectionDefinition,
+            field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig},
+        };
+
+        // Array inside a Row
+        let def = CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![
+                                FieldDefinition::builder("name", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build();
+
+        let (_, prefixes) = get_valid_filter_paths(&def, None);
+        assert!(
+            prefixes.contains("items"),
+            "Array inside Row should be a valid filter prefix root"
+        );
+
+        // has-many Relationship inside Tabs
+        let def = CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("tabbed", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "main",
+                        vec![
+                            FieldDefinition::builder("tags", FieldType::Relationship)
+                                .relationship(RelationshipConfig {
+                                    collection: "tags".into(),
+                                    has_many: true,
+                                    max_depth: None,
+                                    polymorphic: vec![],
+                                })
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build();
+
+        let (_, prefixes) = get_valid_filter_paths(&def, None);
+        assert!(
+            prefixes.contains("tags"),
+            "has-many Relationship inside Tabs should be a valid filter prefix root"
+        );
     }
 }
