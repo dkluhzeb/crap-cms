@@ -1260,6 +1260,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   non-deterministically fire if run at an exact hour boundary. Now uses
   a fixed time at minute :30 to guarantee deterministic behavior.
 
+- **Lua RuntimeError lost anyhow cause chain** — All `RuntimeError`
+  conversions in the hooks system used `format!("{}", e)` which only
+  printed the top-level error message. Nested causes from `anyhow`
+  errors (e.g., SMTP connection errors, DB errors) were silently
+  discarded, making job failures and hook errors difficult to diagnose.
+  Now uses `format!("{:#}", e)` to print the full cause chain.
+
+- **`jobs list` CLI did not show errors** — The `jobs list` table only
+  showed ID, Job, Status, Attempt, and Created. Failed jobs required
+  `jobs show <id>` to see the error. Now includes a truncated Error
+  column in the list view for at-a-glance diagnosis.
+
+- **Example Lua files missing `overrideAccess`** — The example seed
+  migration, jobs (`process_inquiry`, `cleanup_archived`,
+  `weekly_report`), hooks (`prevent_last_admin`), and access strategy
+  (`api_key_strategy`) did not pass `overrideAccess = true` to CRUD
+  calls. After the `overrideAccess` default change to `false`, these
+  all failed with "access denied" at runtime. All example Lua files
+  now explicitly set `overrideAccess = true`.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

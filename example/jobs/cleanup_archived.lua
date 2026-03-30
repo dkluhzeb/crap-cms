@@ -11,6 +11,7 @@ function M.run(context)
       status = "archived",
       created_at = { less_than = cutoff },
     },
+    overrideAccess = true,
   })
 
   if not result or not result.documents then
@@ -19,7 +20,7 @@ function M.run(context)
 
   local count = 0
   for _, doc in ipairs(result.documents) do
-    crap.collections.delete("inquiries", doc.id)
+    crap.collections.delete("inquiries", doc.id, { overrideAccess = true })
     count = count + 1
   end
 

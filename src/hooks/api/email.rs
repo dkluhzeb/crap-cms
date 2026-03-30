@@ -16,7 +16,7 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
         let text: Option<String> = opts.get("text")?;
 
         send_email(&email_config, &to, &subject, &html, text.as_deref())
-            .map_err(|e| RuntimeError(format!("email send error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("email send error: {:#}", e)))?;
 
         Ok(true)
     })?;

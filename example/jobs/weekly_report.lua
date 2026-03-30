@@ -4,13 +4,14 @@ local M = {}
 ---@param context crap.JobHandlerContext
 function M.run(context)
   ---@type crap.find_result.Posts
-  local posts = crap.collections.find("posts", { limit = 0 })
+  local posts = crap.collections.find("posts", { limit = 0, overrideAccess = true })
   ---@type crap.find_result.Projects
-  local projects = crap.collections.find("projects", { limit = 0 })
+  local projects = crap.collections.find("projects", { limit = 0, overrideAccess = true })
   ---@type crap.find_result.Inquiries
   local inquiries = crap.collections.find("inquiries", {
     where = { status = "new" },
     limit = 0,
+    overrideAccess = true,
   })
 
   crap.log.info(

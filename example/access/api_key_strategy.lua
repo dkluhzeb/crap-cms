@@ -27,7 +27,7 @@ return function(context)
 	end
 
 	-- Look up user
-	local user = crap.collections.find_by_id(context.collection, user_id)
+	local user = crap.collections.find_by_id(context.collection, user_id, { overrideAccess = true })
 	if not user then
 		return nil
 	end

@@ -34,14 +34,14 @@ pub(super) fn register_globals_get(
         let def = {
             let r = reg
                 .read()
-                .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
             r.get_global(&slug)
                 .cloned()
                 .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))?
         };
 
         let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
-            .map_err(|e| RuntimeError(format!("get_global error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("get_global error: {:#}", e)))?;
 
         document_to_lua_table(lua, &doc)
     })?;
@@ -72,7 +72,7 @@ pub(super) fn register_globals_update(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_global(&slug)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))?
@@ -89,10 +89,10 @@ pub(super) fn register_globals_update(
                 &def.fields,
                 &lc,
             )
-            .map_err(|e| RuntimeError(format!("ref count snapshot error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("ref count snapshot error: {:#}", e)))?;
 
             query::update_global(conn, &slug, &def, &data, locale_ctx.as_ref())
-                .map_err(|e| RuntimeError(format!("update_global error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("update_global error: {:#}", e)))?;
 
             query::save_join_table_data(
                 conn,
@@ -102,7 +102,7 @@ pub(super) fn register_globals_update(
                 &join_data,
                 locale_ctx.as_ref(),
             )
-            .map_err(|e| RuntimeError(format!("join data error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("join data error: {:#}", e)))?;
 
             query::ref_count::after_update(
                 conn,
@@ -112,11 +112,11 @@ pub(super) fn register_globals_update(
                 &lc,
                 old_refs,
             )
-            .map_err(|e| RuntimeError(format!("ref count update error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("ref count update error: {:#}", e)))?;
 
             // Re-fetch to hydrate join data in the returned document
             let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
-                .map_err(|e| RuntimeError(format!("get_global error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("get_global error: {:#}", e)))?;
 
             document_to_lua_table(lua, &doc)
         },
@@ -141,7 +141,7 @@ pub(super) fn register_jobs_queue(
         let job_def = {
             let r = reg
                 .read()
-                .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
             r.get_job(&slug)
                 .cloned()
                 .ok_or_else(|| RuntimeError(format!("Job '{}' not defined", slug)))?
@@ -151,7 +151,7 @@ pub(super) fn register_jobs_queue(
             Some(tbl) => {
                 let json_val = api::lua_to_json(lua, &Value::Table(tbl))?;
                 serde_json::to_string(&json_val)
-                    .map_err(|e| RuntimeError(format!("JSON error: {}", e)))?
+                    .map_err(|e| RuntimeError(format!("JSON error: {:#}", e)))?
             }
             None => "{}".to_string(),
         };
@@ -164,7 +164,7 @@ pub(super) fn register_jobs_queue(
             job_def.retries + 1,
             &job_def.queue,
         )
-        .map_err(|e| RuntimeError(format!("queue error: {}", e)))?;
+        .map_err(|e| RuntimeError(format!("queue error: {:#}", e)))?;
 
         Ok(job_run.id)
     })?;

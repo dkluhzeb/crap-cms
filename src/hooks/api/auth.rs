@@ -10,11 +10,11 @@ pub(super) fn register_auth(lua: &Lua, crap: &Table) -> Result<()> {
     let hash_pw_fn = lua.create_function(|_, password: String| {
         hash_password(&password)
             .map(|h| h.as_ref().to_string())
-            .map_err(|e| mlua::Error::RuntimeError(format!("hash_password error: {}", e)))
+            .map_err(|e| mlua::Error::RuntimeError(format!("hash_password error: {:#}", e)))
     })?;
     let verify_pw_fn = lua.create_function(|_, (password, hash): (String, String)| {
         verify_password(&password, &hash)
-            .map_err(|e| mlua::Error::RuntimeError(format!("verify_password error: {}", e)))
+            .map_err(|e| mlua::Error::RuntimeError(format!("verify_password error: {:#}", e)))
     })?;
 
     auth_table.set("hash_password", hash_pw_fn)?;

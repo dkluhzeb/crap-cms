@@ -19,7 +19,7 @@ function M.run(context)
   end
 
   ---@type crap.doc.Inquiries?
-  local inquiry = crap.collections.find_by_id("inquiries", inquiry_id)
+  local inquiry = crap.collections.find_by_id("inquiries", inquiry_id, { overrideAccess = true })
   if not inquiry then
     crap.log.warn("process_inquiry: inquiry not found: " .. inquiry_id)
     return
@@ -71,7 +71,7 @@ function M.run(context)
   -- Update status to contacted
   crap.collections.update("inquiries", inquiry_id, {
     status = "contacted",
-  })
+  }, { overrideAccess = true })
 
   crap.log.info("Processed inquiry: " .. inquiry_id)
 end
