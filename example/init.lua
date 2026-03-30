@@ -3,6 +3,19 @@ crap.log.info("Crap Studio initializing...")
 -- Load plugins (runs after collections/*.lua are loaded)
 require("plugins.seo").install({ exclude = { "pages", "inquiries" } })
 
+-- ── Helpers ──────────────────────────────────────────────────
+
+--- Escape a string for safe HTML output.
+local function html_escape(s)
+	if not s then return "" end
+	return tostring(s)
+		:gsub("&", "&amp;")
+		:gsub("<", "&lt;")
+		:gsub(">", "&gt;")
+		:gsub('"', "&quot;")
+		:gsub("'", "&#39;")
+end
+
 -- ── Custom richtext nodes ────────────────────────────────────
 
 -- Block-level: Call to Action button
@@ -38,11 +51,11 @@ crap.richtext.register_node("cta", {
 	render = function(attrs)
 		local style = ""
 		if attrs.padding and attrs.padding ~= "" then
-			style = string.format(' style="padding: %spx 0"', attrs.padding)
+			style = string.format(' style="padding: %spx 0"', html_escape(attrs.padding))
 		end
 		return string.format(
 			'<a href="%s" class="btn btn--%s"%s>%s</a>',
-			attrs.url, attrs.style or "primary", style, attrs.text
+			html_escape(attrs.url), html_escape(attrs.style or "primary"), style, html_escape(attrs.text)
 		)
 	end,
 })
@@ -57,7 +70,7 @@ crap.richtext.register_node("mention", {
 	},
 	searchable_attrs = { "name" },
 	render = function(attrs)
-		return string.format('<span class="mention">@%s</span>', attrs.name)
+		return string.format('<span class="mention">@%s</span>', html_escape(attrs.name))
 	end,
 })
 

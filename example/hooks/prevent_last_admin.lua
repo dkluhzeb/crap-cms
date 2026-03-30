@@ -9,6 +9,7 @@ return function(context)
   ---@type crap.find_result.Users
   local result = crap.collections.find("users", {
     where = { role = "admin" },
+    overrideAccess = true,
   })
 
   local admin_count = result and result.pagination.totalDocs or 0

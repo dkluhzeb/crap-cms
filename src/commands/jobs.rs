@@ -128,15 +128,29 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
             return Ok(());
         }
 
-        let mut table = Table::new(vec!["ID", "Job", "Status", "Attempt", "Created"]);
+        let mut table = Table::new(vec!["ID", "Job", "Status", "Attempt", "Error", "Created"]);
 
         for run in &runs {
             let attempt = format!("{}/{}", run.attempt, run.max_attempts);
+            let error = run
+                .error
+                .as_deref()
+                .map(|e| {
+                    let truncated: String = e.chars().take(50).collect();
+                    if truncated.len() < e.len() {
+                        format!("{truncated}…")
+                    } else {
+                        truncated
+                    }
+                })
+                .unwrap_or_default();
+
             table.row(vec![
                 &run.id,
                 &run.slug,
                 run.status.as_str(),
                 &attempt,
+                &error,
                 run.created_at.as_deref().unwrap_or("-"),
             ]);
         }

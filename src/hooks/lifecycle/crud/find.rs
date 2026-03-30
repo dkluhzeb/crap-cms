@@ -98,7 +98,7 @@ pub(super) fn register_find(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -156,7 +156,7 @@ pub(super) fn register_find(
                     None,
                     None,
                 )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
                 match result {
                     AccessResult::Denied => {
                         return Err(RuntimeError("Read access denied".into()));
@@ -172,13 +172,13 @@ pub(super) fn register_find(
                 .ui_locale(hook_ui_locale.as_deref())
                 .build();
             run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-                .map_err(|e| RuntimeError(format!("before_read hook error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("before_read hook error: {:#}", e)))?;
 
             query::validate_query_fields(&def, &find_query, locale_ctx.as_ref())
-                .map_err(|e| RuntimeError(format!("find error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("find error: {:#}", e)))?;
 
             let mut docs = query::find(conn, &collection, &def, &find_query, locale_ctx.as_ref())
-                .map_err(|e| RuntimeError(format!("find error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("find error: {:#}", e)))?;
             let total = query::count_with_search(
                 conn,
                 &collection,
@@ -188,7 +188,7 @@ pub(super) fn register_find(
                 find_query.search.as_deref(),
                 find_query.include_deleted,
             )
-            .map_err(|e| RuntimeError(format!("count error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("count error: {:#}", e)))?;
 
             // Hydrate join table data + populate relationships
             let select_slice = find_query.select.as_deref();
@@ -201,12 +201,12 @@ pub(super) fn register_find(
                     select_slice,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| RuntimeError(format!("hydrate error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("hydrate error: {:#}", e)))?;
             }
             if depth > 0 {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 let pop_ctx = query::PopulateContext::new(conn, &r, &collection, &def);
                 let mut pop_opts = query::PopulateOpts::new(depth);
                 if let Some(s) = select_slice {
@@ -216,7 +216,7 @@ pub(super) fn register_find(
                     pop_opts = pop_opts.locale_ctx(lc);
                 }
                 query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)
-                    .map_err(|e| RuntimeError(format!("populate error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("populate error: {:#}", e)))?;
             }
             // Assemble sizes for upload collections
             if let Some(ref upload_config) = def.upload
@@ -343,7 +343,7 @@ pub(super) fn register_find_by_id(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -364,7 +364,7 @@ pub(super) fn register_find_by_id(
                 .ui_locale(hook_ui_locale.as_deref())
                 .build();
             run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-                .map_err(|e| RuntimeError(format!("before_read hook error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("before_read hook error: {:#}", e)))?;
 
             // Check access and determine constraints
             let access_constraints = if !override_access {
@@ -378,7 +378,7 @@ pub(super) fn register_find_by_id(
                     Some(&id),
                     None,
                 )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
                 match result {
                     AccessResult::Denied => {
                         return Err(RuntimeError("Read access denied".into()));
@@ -400,7 +400,7 @@ pub(super) fn register_find_by_id(
                 access_constraints,
                 use_draft,
             )
-            .map_err(|e| RuntimeError(format!("find_by_id error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("find_by_id error: {:#}", e)))?;
 
             if let Some(ref mut d) = doc {
                 let select_slice = select.as_deref();
@@ -408,7 +408,7 @@ pub(super) fn register_find_by_id(
                 if depth > 0 {
                     let r = reg
                         .read()
-                        .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                     let mut visited = HashSet::new();
                     let pop_ctx = query::PopulateContext::new(conn, &r, &collection, &def);
                     let mut pop_opts = query::PopulateOpts::new(depth);
@@ -419,7 +419,7 @@ pub(super) fn register_find_by_id(
                         pop_opts = pop_opts.locale_ctx(lc);
                     }
                     query::populate_relationships(&pop_ctx, d, &mut visited, &pop_opts)
-                        .map_err(|e| RuntimeError(format!("populate error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("populate error: {:#}", e)))?;
                 }
                 if let Some(ref upload_config) = def.upload
                     && upload_config.enabled
@@ -491,7 +491,7 @@ pub(super) fn register_count(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -529,7 +529,7 @@ pub(super) fn register_count(
                     None,
                     None,
                 )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
                 match result {
                     AccessResult::Denied => {
                         return Err(RuntimeError("Read access denied".into()));
@@ -548,7 +548,7 @@ pub(super) fn register_count(
                 search.as_deref(),
                 false,
             )
-            .map_err(|e| RuntimeError(format!("count error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("count error: {:#}", e)))?;
 
             Ok(count)
         },

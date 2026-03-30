@@ -13,7 +13,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
     let get_collection_fn = lua.create_function(move |lua, slug: String| -> LuaResult<Value> {
         let r = reg
             .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
 
         match r.get_collection(&slug) {
             Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
@@ -27,7 +27,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
     let get_global_fn = lua.create_function(move |lua, slug: String| -> LuaResult<Value> {
         let r = reg
             .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
 
         match r.get_global(&slug) {
             Some(def) => {
@@ -67,7 +67,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
     let list_collections_fn = lua.create_function(move |lua, ()| -> LuaResult<Table> {
         let r = reg
             .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
 
         let tbl = lua.create_table()?;
 
@@ -105,7 +105,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
     let list_globals_fn = lua.create_function(move |lua, ()| -> LuaResult<Table> {
         let r = reg
             .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
 
         let tbl = lua.create_table()?;
 

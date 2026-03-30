@@ -1260,6 +1260,110 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   non-deterministically fire if run at an exact hour boundary. Now uses
   a fixed time at minute :30 to guarantee deterministic behavior.
 
+- **Lua RuntimeError lost anyhow cause chain** — All `RuntimeError`
+  conversions in the hooks system used `format!("{}", e)` which only
+  printed the top-level error message. Nested causes from `anyhow`
+  errors (e.g., SMTP connection errors, DB errors) were silently
+  discarded, making job failures and hook errors difficult to diagnose.
+  Now uses `format!("{:#}", e)` to print the full cause chain.
+
+- **`jobs list` CLI did not show errors** — The `jobs list` table only
+  showed ID, Job, Status, Attempt, and Created. Failed jobs required
+  `jobs show <id>` to see the error. Now includes a truncated Error
+  column in the list view for at-a-glance diagnosis.
+
+- **Example Lua files missing `overrideAccess`** — The example seed
+  migration, jobs (`process_inquiry`, `cleanup_archived`,
+  `weekly_report`), hooks (`prevent_last_admin`), and access strategy
+  (`api_key_strategy`) did not pass `overrideAccess = true` to CRUD
+  calls. After the `overrideAccess` default change to `false`, these
+  all failed with "access denied" at runtime. All example Lua files
+  now explicitly set `overrideAccess = true`.
+
+- **AfterChange hooks missing `id` in draft-version update** (HIGH) —
+  When saving a draft version via Lua `crap.collections.update`, the
+  AfterChange hook context did not include the document `id` in
+  `ctx.data`. Now includes `id` before running field-level and
+  collection-level hooks.
+
+- **AfterChange hooks missing `id` in unpublish** (HIGH) — The
+  unpublish code path built the AfterChange context from
+  `updated_doc.fields` without inserting the document `id`. Hooks
+  could not identify which document was unpublished.
+
+- **`update_many` AfterChange field hooks missing `id`** — The
+  `id` was inserted into `after_data` after field-level AfterChange
+  hooks had already run, so field hooks saw no `id` while
+  collection-level hooks did. Moved the insertion before field hooks
+  for consistency with single create/update.
+
+- **Admin login leaked account state** (HIGH) — When a correct
+  password was provided for a locked or unverified account, the admin
+  login returned distinct error messages (`error_account_locked`,
+  `error_verify_email`), confirming password correctness and account
+  state to an attacker. The gRPC handler already returned a generic
+  error for all cases. Now both return the same generic "invalid
+  credentials" response, with the actual reason logged at debug level.
+
+- **XSS in example richtext CTA/mention renders** (HIGH) — The
+  example `init.lua` CTA and mention custom richtext node render
+  functions interpolated user-controlled attributes (`url`, `text`,
+  `style`, `name`) directly into HTML via `string.format` without
+  escaping. A CMS author could inject arbitrary HTML/JS into the
+  public-facing site. Now escapes all attributes with an
+  `html_escape` helper.
+
+- **Upload API delete used wrong access check for soft-delete** —
+  The upload DELETE endpoint always checked `access.delete` even when
+  the collection has `soft_delete` enabled. Now uses
+  `resolve_trash()` for soft-delete collections, matching the gRPC
+  and admin handlers.
+
+- **Non-constant-time HMAC comparison in example** — The example
+  `api_key_strategy.lua` compared HMAC signatures with `~=` (standard
+  string comparison), enabling timing attacks. Now uses a double-HMAC
+  pattern for constant-time comparison.
+
+- **gRPC `UpdateMany` missing draft flag in validation** — The
+  `ValidationCtx` for bulk updates did not pass the `draft` flag from
+  the request. Draft bulk updates incorrectly enforced required-field
+  validation, causing them to fail when required fields were omitted
+  (which is allowed in draft mode).
+
+- **Upload API leaked read-denied fields** — The upload POST and PATCH
+  endpoints returned the full document in the response without
+  stripping fields the user lacks read access to. Now applies
+  `check_field_read_access` and removes denied fields before
+  responding.
+
+- **Lua `crap.globals.get`/`update` had no access control** (HIGH) —
+  The Lua globals API bypassed all access control — no
+  `overrideAccess` option, no collection-level checks, no field-level
+  stripping. Any hook code could read and write all global data
+  regardless of user permissions. Now supports `overrideAccess` option
+  (default `false`), enforces collection-level read/update access, and
+  strips field-level read/write-denied fields.
+
+- **Lua `crap.globals.update` skipped validation** (HIGH) — Data
+  written via `crap.globals.update()` bypassed all field validation
+  (required, unique, length, numeric bounds, custom validators). Invalid
+  data could be persisted directly. Now runs `validate_fields_inner`
+  before writing.
+
+- **Lua `crap.collections.create`/`update` leaked read-denied fields**
+  — The returned document from Lua CRUD create and update operations
+  included fields the user lacks read access to. The `find` and
+  `find_by_id` functions correctly stripped these. Now all return paths
+  (create, draft update, non-draft update) strip read-denied fields
+  when `overrideAccess = false`.
+
+- **`empty_trash` skipped lifecycle hooks** — The admin "Empty trash"
+  action permanently deleted documents without running `BeforeDelete`
+  or `AfterDelete` hooks. Hooks that perform cleanup side effects
+  (cascade deletes, audit logging, external sync) were silently
+  skipped. Now runs both hooks per document, matching the behavior of
+  single delete and `DeleteMany`.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

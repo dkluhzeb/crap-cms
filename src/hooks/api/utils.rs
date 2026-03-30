@@ -160,13 +160,13 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
         let json_value = lua_to_json(lua, &value)?;
 
         serde_json::to_string(&json_value)
-            .map_err(|e| RuntimeError(format!("JSON encode error: {}", e)))
+            .map_err(|e| RuntimeError(format!("JSON encode error: {:#}", e)))
     })?;
     util_table.set("json_encode", json_encode_fn.clone())?;
 
     let json_decode_fn: Function = lua.create_function(|lua, s: String| {
         let value: Value = serde_json::from_str(&s)
-            .map_err(|e| RuntimeError(format!("JSON decode error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("JSON decode error: {:#}", e)))?;
         json_to_lua(lua, &value)
     })?;
     util_table.set("json_decode", json_decode_fn.clone())?;

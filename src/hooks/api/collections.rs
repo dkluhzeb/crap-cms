@@ -19,7 +19,7 @@ pub(super) fn register_collections(
             .map_err(|e| RuntimeError(format!("Failed to parse collection '{}': {}", slug, e)))?;
         let mut reg = reg_clone
             .write()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
         reg.register_collection(def);
         Ok(())
     })?;
@@ -29,7 +29,7 @@ pub(super) fn register_collections(
     let get_collection = lua.create_function(move |lua, slug: String| -> mlua::Result<Value> {
         let reg = reg_clone
             .read()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
         match reg.get_collection(&slug) {
             Some(def) => Ok(Value::Table(collection_config_to_lua(lua, def)?)),
             None => Ok(Value::Nil),
@@ -42,7 +42,7 @@ pub(super) fn register_collections(
     let list_collections = lua.create_function(move |lua, ()| -> mlua::Result<Table> {
         let reg = reg_clone
             .read()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
         let map = lua.create_table()?;
         for (slug, def) in reg.collections.iter() {
             map.set(slug.as_ref(), collection_config_to_lua(lua, def)?)?;

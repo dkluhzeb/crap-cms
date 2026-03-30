@@ -33,9 +33,9 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     let b64_decode_fn = lua.create_function(|_, data: String| -> LuaResult<String> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data.as_bytes())
-            .map_err(|e| RuntimeError(format!("base64 decode error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("base64 decode error: {:#}", e)))?;
         String::from_utf8(bytes)
-            .map_err(|e| RuntimeError(format!("base64 decode utf8 error: {}", e)))
+            .map_err(|e| RuntimeError(format!("base64 decode utf8 error: {:#}", e)))
     })?;
     crypto_table.set("base64_decode", b64_decode_fn)?;
 
@@ -43,7 +43,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     let encrypt_fn = lua.create_function(move |_, plaintext: String| -> LuaResult<String> {
         let key_hash = digest::digest(&digest::SHA256, secret.as_bytes());
         let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
-            .map_err(|e| RuntimeError(format!("cipher init: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("cipher init: {:#}", e)))?;
 
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_bytes);
@@ -51,7 +51,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_bytes())
-            .map_err(|e| RuntimeError(format!("encrypt error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("encrypt error: {:#}", e)))?;
 
         let mut combined = nonce_bytes.to_vec();
         combined.extend_from_slice(&ciphertext);
@@ -63,7 +63,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     let decrypt_fn = lua.create_function(move |_, encoded: String| -> LuaResult<String> {
         let combined = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_bytes())
-            .map_err(|e| RuntimeError(format!("base64 decode: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("base64 decode: {:#}", e)))?;
 
         if combined.len() < 12 {
             return Err(RuntimeError("ciphertext too short".into()));
@@ -73,13 +73,13 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 
         let key_hash = digest::digest(&digest::SHA256, secret2.as_bytes());
         let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
-            .map_err(|e| RuntimeError(format!("cipher init: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("cipher init: {:#}", e)))?;
 
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|e| RuntimeError(format!("decrypt error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("decrypt error: {:#}", e)))?;
 
-        String::from_utf8(plaintext).map_err(|e| RuntimeError(format!("decrypt utf8: {}", e)))
+        String::from_utf8(plaintext).map_err(|e| RuntimeError(format!("decrypt utf8: {:#}", e)))
     })?;
     crypto_table.set("decrypt", decrypt_fn)?;
 

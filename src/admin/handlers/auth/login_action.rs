@@ -56,11 +56,13 @@ async fn verify_credentials(
         }
 
         if query::is_locked(&conn, &slug, &user.id)? {
-            return Ok(Some(Err("error_account_locked".to_string())));
+            tracing::debug!("Login denied for {}: account locked", user.id);
+            return Ok(None);
         }
 
         if verify_email && !query::is_verified(&conn, &slug, &user.id)? {
-            return Ok(Some(Err("error_verify_email".to_string())));
+            tracing::debug!("Login denied for {}: email not verified", user.id);
+            return Ok(None);
         }
 
         let session_version = query::get_session_version(&conn, &slug, &user.id)?;

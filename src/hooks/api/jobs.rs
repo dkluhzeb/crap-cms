@@ -15,7 +15,7 @@ pub(super) fn register_jobs(lua: &Lua, crap: &Table, registry: SharedRegistry) -
 
         let mut reg = reg_clone
             .write()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
 
         reg.register_job(def);
 

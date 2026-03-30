@@ -40,7 +40,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
         // Parse attrs using the shared field parser (crap.fields.* factory syntax)
         let attrs = if let Ok(attrs_tbl) = spec.get::<Table>("attrs") {
             let fields = parse_fields(&attrs_tbl)
-                .map_err(|e| RuntimeError(format!("Invalid node attrs: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("Invalid node attrs: {:#}", e)))?;
 
             // Validate: only scalar types allowed as node attrs
             for f in &fields {
@@ -107,7 +107,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
             .has_render(has_render)
             .build();
         let mut reg = reg_clone.write()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
         reg.register_richtext_node(def);
 
         Ok(())
@@ -151,7 +151,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
         // Detect format: starts with '{' → JSON, otherwise HTML
         if content.starts_with('{') {
             render_prosemirror_to_html(content, &render_custom)
-                .map_err(|e| RuntimeError(format!("Render error: {}", e)))
+                .map_err(|e| RuntimeError(format!("Render error: {:#}", e)))
         } else {
             Ok(render_html_custom_nodes(content, &render_custom))
         }

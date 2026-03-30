@@ -69,7 +69,7 @@ pub(super) fn register_delete(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -91,7 +91,7 @@ pub(super) fn register_delete(
 
                 let result =
                     check_access_with_lua(lua, access_ref, user_doc.as_ref(), Some(&id), None)
-                        .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
 
                 if matches!(result, AccessResult::Denied) {
                     return Err(RuntimeError("Delete access denied".into()));
@@ -123,7 +123,7 @@ pub(super) fn register_delete(
             // to prevent dangling references and _ref_count corruption.
             if !def.soft_delete || force_hard_delete {
                 let ref_count = query::ref_count::get_ref_count(conn, &collection, &id)
-                    .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?
+                    .map_err(|e| RuntimeError(format!("ref count check error: {:#}", e)))?
                     .unwrap_or(0);
                 if ref_count > 0 {
                     return Err(RuntimeError(format!(
@@ -150,18 +150,18 @@ pub(super) fn register_delete(
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
                 run_hooks_inner(lua, &def.hooks, HookEvent::BeforeDelete, hook_ctx)
-                    .map_err(|e| RuntimeError(format!("before_delete hook error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("before_delete hook error: {:#}", e)))?;
             }
 
             // Decrement ref counts before hard delete (CASCADE removes junction rows).
             if !def.soft_delete || force_hard_delete {
                 query::ref_count::before_hard_delete(conn, &collection, &id, &def.fields, &lc)
-                    .map_err(|e| RuntimeError(format!("ref count error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("ref count error: {:#}", e)))?;
             }
 
             if def.soft_delete && !force_hard_delete {
                 let deleted = query::soft_delete(conn, &collection, &id)
-                    .map_err(|e| RuntimeError(format!("soft_delete error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("soft_delete error: {:#}", e)))?;
                 if !deleted {
                     return Err(RuntimeError(format!(
                         "Document '{}' not found or already deleted in '{}'",
@@ -170,7 +170,7 @@ pub(super) fn register_delete(
                 }
             } else {
                 let deleted = query::delete(conn, &collection, &id)
-                    .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("delete error: {:#}", e)))?;
                 if !deleted {
                     return Err(RuntimeError(format!(
                         "Document '{}' not found in '{}'",
@@ -182,7 +182,7 @@ pub(super) fn register_delete(
             // Sync FTS index (remove from FTS for both hard and soft delete)
             if conn.supports_fts() {
                 query::fts::fts_delete(conn, &collection, &id)
-                    .map_err(|e| RuntimeError(format!("FTS delete error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("FTS delete error: {:#}", e)))?;
             }
 
             // Clean up upload files after successful DB delete (skip for soft-delete
@@ -201,7 +201,7 @@ pub(super) fn register_delete(
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
                 run_hooks_inner(lua, &def.hooks, HookEvent::AfterDelete, after_ctx)
-                    .map_err(|e| RuntimeError(format!("after_delete hook error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("after_delete hook error: {:#}", e)))?;
             }
 
             Ok(true)
@@ -228,7 +228,7 @@ pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistr
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -253,7 +253,7 @@ pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistr
                     Some(&id),
                     None,
                 )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
 
                 if matches!(result, AccessResult::Denied) {
                     return Err(RuntimeError("Restore access denied".into()));
@@ -261,7 +261,7 @@ pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistr
             }
 
             let restored = query::restore(conn, &collection, &id)
-                .map_err(|e| RuntimeError(format!("restore error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("restore error: {:#}", e)))?;
 
             if !restored {
                 return Err(RuntimeError(format!(
@@ -276,7 +276,7 @@ pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistr
                     query::find_by_id_unfiltered(conn, &collection, &def, &id, None)
             {
                 query::fts::fts_upsert(conn, &collection, &doc, Some(&def))
-                    .map_err(|e| RuntimeError(format!("FTS upsert error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("FTS upsert error: {:#}", e)))?;
             }
 
             Ok(true)
@@ -332,7 +332,7 @@ pub(super) fn register_update_many(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -364,7 +364,7 @@ pub(super) fn register_update_many(
                     None,
                     None,
                 )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
                 match result {
                     AccessResult::Denied => {
                         return Err(RuntimeError("Update access denied".into()));
@@ -377,7 +377,7 @@ pub(super) fn register_update_many(
             let mut find_all = FindQuery::new();
             find_all.filters = find_query.filters;
             let docs = query::find(conn, &collection, &def, &find_all, locale_ctx.as_ref())
-                .map_err(|e| RuntimeError(format!("find error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("find error: {:#}", e)))?;
 
             // Check per-doc update access (all-or-nothing)
             if !override_access {
@@ -392,7 +392,7 @@ pub(super) fn register_update_many(
                         Some(&doc.id),
                         None,
                     )
-                    .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
 
                     if matches!(result, AccessResult::Denied) {
                         return Err(RuntimeError(format!(
@@ -485,7 +485,7 @@ pub(super) fn register_update_many(
                         "update",
                     )
                     .map_err(|e| {
-                        RuntimeError(format!("before_validate field hook error: {}", e))
+                        RuntimeError(format!("before_validate field hook error: {:#}", e))
                     })?;
 
                     // Collection-level BeforeValidate
@@ -496,7 +496,9 @@ pub(super) fn register_update_many(
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
                     let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeValidate, hook_ctx)
-                        .map_err(|e| RuntimeError(format!("before_validate hook error: {}", e)))?;
+                        .map_err(|e| {
+                            RuntimeError(format!("before_validate hook error: {:#}", e))
+                        })?;
                     hook_data = ctx.data;
                 }
 
@@ -504,7 +506,7 @@ pub(super) fn register_update_many(
                 if run_hooks {
                     let r = reg
                         .read()
-                        .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                     let val_ctx = ValidationCtx::builder(conn, &collection)
                         .exclude_id(Some(&doc.id))
                         .locale_ctx(locale_ctx.as_ref())
@@ -513,7 +515,7 @@ pub(super) fn register_update_many(
                         .registry(&r)
                         .build();
                     validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
-                        .map_err(|e| RuntimeError(format!("validation error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("validation error: {:#}", e)))?;
                 }
 
                 if hooks_enabled {
@@ -526,7 +528,9 @@ pub(super) fn register_update_many(
                         &collection,
                         "update",
                     )
-                    .map_err(|e| RuntimeError(format!("before_change field hook error: {}", e)))?;
+                    .map_err(|e| {
+                        RuntimeError(format!("before_change field hook error: {:#}", e))
+                    })?;
 
                     // Collection-level BeforeChange (capture modified data)
                     let hook_ctx = HookContext::builder(&collection, "update")
@@ -537,7 +541,7 @@ pub(super) fn register_update_many(
                         .build();
                     let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx)
                         .map_err(|e| {
-                        RuntimeError(format!("before_change hook error: {}", e))
+                        RuntimeError(format!("before_change hook error: {:#}", e))
                     })?;
                     hook_data = ctx.data;
                 }
@@ -555,7 +559,7 @@ pub(super) fn register_update_many(
                     &def.fields,
                     &lc,
                 )
-                .map_err(|e| RuntimeError(format!("ref count snapshot error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("ref count snapshot error: {:#}", e)))?;
 
                 let updated = query::update_partial(
                     conn,
@@ -565,7 +569,7 @@ pub(super) fn register_update_many(
                     &final_data,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| RuntimeError(format!("update error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("update error: {:#}", e)))?;
                 query::save_join_table_data(
                     conn,
                     &collection,
@@ -574,7 +578,7 @@ pub(super) fn register_update_many(
                     &hook_data,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| RuntimeError(format!("join data error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("join data error: {:#}", e)))?;
 
                 query::ref_count::after_update(
                     conn,
@@ -584,11 +588,11 @@ pub(super) fn register_update_many(
                     &lc,
                     old_refs,
                 )
-                .map_err(|e| RuntimeError(format!("ref count update error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("ref count update error: {:#}", e)))?;
 
                 if conn.supports_fts() {
                     query::fts::fts_upsert(conn, &collection, &updated, Some(&def))
-                        .map_err(|e| RuntimeError(format!("FTS upsert error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("FTS upsert error: {:#}", e)))?;
                 }
 
                 if def.has_versions() {
@@ -598,11 +602,13 @@ pub(super) fn register_update_many(
                         .has_drafts(def.has_drafts())
                         .build();
                     versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)
-                        .map_err(|e| RuntimeError(format!("version snapshot error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("version snapshot error: {:#}", e)))?;
                 }
 
                 if hooks_enabled {
                     let mut after_data = updated.fields.clone();
+                    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
+
                     run_field_hooks_inner(
                         lua,
                         &def.fields,
@@ -611,9 +617,7 @@ pub(super) fn register_update_many(
                         &collection,
                         "update",
                     )
-                    .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
-
-                    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
+                    .map_err(|e| RuntimeError(format!("after_change field hook error: {:#}", e)))?;
                     let after_ctx = HookContext::builder(&collection, "update")
                         .data(after_data)
                         .locale(locale_str.as_deref())
@@ -621,7 +625,7 @@ pub(super) fn register_update_many(
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx)
-                        .map_err(|e| RuntimeError(format!("after_change hook error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("after_change hook error: {:#}", e)))?;
                 }
 
                 modified += 1;
@@ -681,7 +685,7 @@ pub(super) fn register_delete_many(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
                 r.get_collection(&collection)
                     .cloned()
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
@@ -718,7 +722,7 @@ pub(super) fn register_delete_many(
                     .app_data_ref::<UserContext>()
                     .and_then(|uc| uc.0.clone());
                 let result = check_access_with_lua(lua, access_ref, user_doc.as_ref(), None, None)
-                    .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
                 match result {
                     AccessResult::Denied => {
                         return Err(RuntimeError("Delete access denied".into()));
@@ -731,7 +735,7 @@ pub(super) fn register_delete_many(
             let mut find_all = FindQuery::new();
             find_all.filters = find_query.filters;
             let docs = query::find(conn, &collection, &def, &find_all, locale_ctx.as_ref())
-                .map_err(|e| RuntimeError(format!("find error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("find error: {:#}", e)))?;
 
             // Check per-doc delete access (all-or-nothing)
             if !override_access {
@@ -746,7 +750,7 @@ pub(super) fn register_delete_many(
                         Some(&doc.id),
                         None,
                     )
-                    .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
 
                     if matches!(result, AccessResult::Denied) {
                         return Err(RuntimeError(format!(
@@ -791,7 +795,7 @@ pub(super) fn register_delete_many(
                 // docs remain referenceable (ref counts are NOT decremented).
                 if !soft_delete {
                     let ref_count = query::ref_count::get_ref_count(conn, &collection, &doc.id)
-                        .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?
+                        .map_err(|e| RuntimeError(format!("ref count check error: {:#}", e)))?
                         .unwrap_or(0);
                     if ref_count > 0 {
                         tracing::debug!(
@@ -812,7 +816,7 @@ pub(super) fn register_delete_many(
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::BeforeDelete, hook_ctx)
-                        .map_err(|e| RuntimeError(format!("before_delete hook error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("before_delete hook error: {:#}", e)))?;
                 }
 
                 // Decrement ref counts before hard delete (CASCADE removes junction rows).
@@ -825,18 +829,18 @@ pub(super) fn register_delete_many(
                         &def.fields,
                         &lc,
                     )
-                    .map_err(|e| RuntimeError(format!("ref count error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("ref count error: {:#}", e)))?;
                 }
 
                 if soft_delete {
                     let deleted = query::soft_delete(conn, &collection, &doc.id)
-                        .map_err(|e| RuntimeError(format!("soft_delete error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("soft_delete error: {:#}", e)))?;
                     if !deleted {
                         continue; // already deleted by another operation
                     }
                 } else {
                     let deleted = query::delete(conn, &collection, &doc.id)
-                        .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("delete error: {:#}", e)))?;
                     if !deleted {
                         continue; // already deleted by another operation
                     }
@@ -844,7 +848,7 @@ pub(super) fn register_delete_many(
 
                 if conn.supports_fts() {
                     query::fts::fts_delete(conn, &collection, &doc.id)
-                        .map_err(|e| RuntimeError(format!("FTS delete error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("FTS delete error: {:#}", e)))?;
                 }
 
                 // Clean up upload files after successful DB delete (skip for soft-delete)
@@ -859,7 +863,7 @@ pub(super) fn register_delete_many(
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::AfterDelete, after_ctx)
-                        .map_err(|e| RuntimeError(format!("after_delete hook error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("after_delete hook error: {:#}", e)))?;
                 }
 
                 deleted += 1;

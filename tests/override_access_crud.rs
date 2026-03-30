@@ -513,10 +513,11 @@ fn update_override_access_false_strips_status_for_editor() {
     let result = runner
         .eval_lua_with_conn(&code, &conn, Some(&editor))
         .unwrap();
-    // status should remain "draft" (update was stripped), notes should remain "secret-a"
+    // status should remain "draft" (update was stripped),
+    // notes is read-denied for editor so it comes back as NIL
     assert_eq!(
-        result, "draft|secret-a",
-        "editor's status and notes updates should be stripped"
+        result, "draft|NIL",
+        "editor's status and notes updates should be stripped, notes read-denied"
     );
 }
 

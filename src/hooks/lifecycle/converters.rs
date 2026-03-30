@@ -146,13 +146,13 @@ pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Opti
 
     let after_cursor = match tbl.get::<Option<String>>("after_cursor").ok().flatten() {
         Some(s) => Some(
-            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {}", e)))?,
+            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {:#}", e)))?,
         ),
         None => None,
     };
     let before_cursor = match tbl.get::<Option<String>>("before_cursor").ok().flatten() {
         Some(s) => Some(
-            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {}", e)))?,
+            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {:#}", e)))?,
         ),
         None => None,
     };

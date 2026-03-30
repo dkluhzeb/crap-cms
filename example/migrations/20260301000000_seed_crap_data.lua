@@ -2,6 +2,7 @@ local M = {}
 
 function M.up()
 	crap.log.info("Seeding Crap Studio data...")
+	local opts = { overrideAccess = true }
 
 	-- ========================
 	-- USERS (6)
@@ -13,7 +14,7 @@ function M.up()
 		role = "admin",
 		skills = { "strategy", "design" },
 		bio = "Founder & Creative Director at Crap Studio. 15 years of experience in digital design and brand strategy.",
-	})
+	}, opts)
 
 	local director = crap.collections.create("users", {
 		email = "sam@crap.studio",
@@ -22,7 +23,7 @@ function M.up()
 		role = "director",
 		skills = { "development", "strategy" },
 		bio = "Technical Director. Full-stack architect with a passion for performance and clean code.",
-	})
+	}, opts)
 
 	local editor = crap.collections.create("users", {
 		email = "jordan@crap.studio",
@@ -31,7 +32,7 @@ function M.up()
 		role = "editor",
 		skills = { "copywriting", "strategy" },
 		bio = "Content Lead. Storyteller, strategist, and occasional poet.",
-	})
+	}, opts)
 
 	local designer = crap.collections.create("users", {
 		email = "taylor@crap.studio",
@@ -40,7 +41,7 @@ function M.up()
 		role = "author",
 		skills = { "design", "motion", "3d" },
 		bio = "Senior Designer. Specializes in motion graphics and 3D visualization.",
-	})
+	}, opts)
 
 	local dev = crap.collections.create("users", {
 		email = "casey@crap.studio",
@@ -49,7 +50,7 @@ function M.up()
 		role = "author",
 		skills = { "development", "3d" },
 		bio = "Senior Developer. WebGL enthusiast and creative technologist.",
-	})
+	}, opts)
 
 	local photographer = crap.collections.create("users", {
 		email = "riley@crap.studio",
@@ -58,7 +59,7 @@ function M.up()
 		role = "author",
 		skills = { "photography", "design" },
 		bio = "Visual Artist. Commercial and editorial photographer.",
-	})
+	}, opts)
 
 	-- ========================
 	-- CATEGORIES (6)
@@ -68,58 +69,58 @@ function M.up()
 		slug = "design",
 		description = "Visual design, branding, and UI/UX",
 		color = "#8b5cf6",
-	})
+	}, opts)
 
 	local cat_dev = crap.collections.create("categories", {
 		title = "Development",
 		slug = "development",
 		description = "Web development, engineering, and architecture",
 		color = "#3b82f6",
-	})
+	}, opts)
 
 	local cat_strategy = crap.collections.create("categories", {
 		title = "Strategy",
 		slug = "strategy",
 		description = "Digital strategy and consulting",
 		color = "#10b981",
-	})
+	}, opts)
 
 	local cat_motion = crap.collections.create("categories", {
 		title = "Motion",
 		slug = "motion",
 		description = "Motion graphics and animation",
 		color = "#f59e0b",
-	})
+	}, opts)
 
 	local cat_brand = crap.collections.create("categories", {
 		title = "Branding",
 		slug = "branding",
 		description = "Brand identity and visual systems",
 		color = "#ec4899",
-	})
+	}, opts)
 
 	local cat_culture = crap.collections.create("categories", {
 		title = "Culture",
 		slug = "culture",
 		description = "Studio life, team updates, and events",
 		color = "#6366f1",
-	})
+	}, opts)
 
 	-- ========================
 	-- TAGS (12)
 	-- ========================
-	local tag_react = crap.collections.create("tags", { name = "React", slug = "react", tag_type = "technology" })
-	local tag_rust = crap.collections.create("tags", { name = "Rust", slug = "rust", tag_type = "technology" })
-	local tag_webgl = crap.collections.create("tags", { name = "WebGL", slug = "webgl", tag_type = "technology" })
-	local tag_figma = crap.collections.create("tags", { name = "Figma", slug = "figma", tag_type = "technology" })
-	local tag_ux = crap.collections.create("tags", { name = "UX Research", slug = "ux-research", tag_type = "topic" })
-	local tag_a11y = crap.collections.create("tags", { name = "Accessibility", slug = "accessibility", tag_type = "topic" })
-	local tag_perf = crap.collections.create("tags", { name = "Performance", slug = "performance", tag_type = "topic" })
-	local tag_ds = crap.collections.create("tags", { name = "Design Systems", slug = "design-systems", tag_type = "topic" })
-	local tag_ai = crap.collections.create("tags", { name = "AI/ML", slug = "ai-ml", tag_type = "technology" })
-	local tag_fintech = crap.collections.create("tags", { name = "Fintech", slug = "fintech", tag_type = "industry" })
-	local tag_health = crap.collections.create("tags", { name = "Healthcare", slug = "healthcare", tag_type = "industry" })
-	local tag_ecom = crap.collections.create("tags", { name = "E-commerce", slug = "e-commerce", tag_type = "industry" })
+	local tag_react = crap.collections.create("tags", { name = "React", slug = "react", tag_type = "technology" }, opts)
+	local tag_rust = crap.collections.create("tags", { name = "Rust", slug = "rust", tag_type = "technology" }, opts)
+	local tag_webgl = crap.collections.create("tags", { name = "WebGL", slug = "webgl", tag_type = "technology" }, opts)
+	local tag_figma = crap.collections.create("tags", { name = "Figma", slug = "figma", tag_type = "technology" }, opts)
+	local tag_ux = crap.collections.create("tags", { name = "UX Research", slug = "ux-research", tag_type = "topic" }, opts)
+	local tag_a11y = crap.collections.create("tags", { name = "Accessibility", slug = "accessibility", tag_type = "topic" }, opts)
+	local tag_perf = crap.collections.create("tags", { name = "Performance", slug = "performance", tag_type = "topic" }, opts)
+	local tag_ds = crap.collections.create("tags", { name = "Design Systems", slug = "design-systems", tag_type = "topic" }, opts)
+	local tag_ai = crap.collections.create("tags", { name = "AI/ML", slug = "ai-ml", tag_type = "technology" }, opts)
+	local tag_fintech = crap.collections.create("tags", { name = "Fintech", slug = "fintech", tag_type = "industry" }, opts)
+	local tag_health = crap.collections.create("tags", { name = "Healthcare", slug = "healthcare", tag_type = "industry" }, opts)
+	local tag_ecom = crap.collections.create("tags", { name = "E-commerce", slug = "e-commerce", tag_type = "industry" }, opts)
 
 	-- ========================
 	-- CLIENTS (5)
@@ -132,7 +133,7 @@ function M.up()
 		contact_email = "michael@novafinancial.com",
 		industry = "finance",
 		notes = "Enterprise client. Annual retainer for ongoing design work.",
-	})
+	}, opts)
 
 	local client_pulse = crap.collections.create("clients", {
 		company_name = "Pulse Health",
@@ -142,7 +143,7 @@ function M.up()
 		contact_email = "sarah@pulsehealth.io",
 		industry = "healthcare",
 		notes = "Series B startup. Building their patient portal.",
-	})
+	}, opts)
 
 	local client_apex = crap.collections.create("clients", {
 		company_name = "Apex Retail",
@@ -151,7 +152,7 @@ function M.up()
 		contact_name = "David Okonkwo",
 		contact_email = "david@apexretail.com",
 		industry = "retail",
-	})
+	}, opts)
 
 	local client_verde = crap.collections.create("clients", {
 		company_name = "Verde Education",
@@ -160,7 +161,7 @@ function M.up()
 		contact_name = "Lisa Chang",
 		contact_email = "lisa@verde.edu",
 		industry = "education",
-	})
+	}, opts)
 
 	local client_echo = crap.collections.create("clients", {
 		company_name = "Echo Media Group",
@@ -169,7 +170,7 @@ function M.up()
 		contact_name = "James Wright",
 		contact_email = "james@echomedia.co",
 		industry = "media",
-	})
+	}, opts)
 
 	-- ========================
 	-- SERVICES (5)
@@ -190,7 +191,7 @@ function M.up()
 			{ title = "Social media templates", included = true },
 		},
 		icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
-	})
+	}, opts)
 
 	local svc_web = crap.collections.create("services", {
 		title = "Web Development",
@@ -208,7 +209,7 @@ function M.up()
 			{ title = "Ongoing maintenance", included = false },
 		},
 		icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
-	})
+	}, opts)
 
 	local svc_ux = crap.collections.create("services", {
 		title = "UX Design",
@@ -225,7 +226,7 @@ function M.up()
 			{ title = "Design system", included = true },
 		},
 		icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>',
-	})
+	}, opts)
 
 	local svc_motion = crap.collections.create("services", {
 		title = "Motion Design",
@@ -242,7 +243,7 @@ function M.up()
 			{ title = "Presentation decks", included = true },
 		},
 		icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
-	})
+	}, opts)
 
 	local svc_consult = crap.collections.create("services", {
 		title = "Digital Strategy",
@@ -259,7 +260,7 @@ function M.up()
 			{ title = "Implementation support", included = false },
 		},
 		icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
-	})
+	}, opts)
 
 	-- ========================
 	-- PROJECTS (10)
@@ -299,7 +300,7 @@ function M.up()
 			},
 		},
 		published_at = "2024-09-01T10:00:00Z",
-	})
+	}, opts)
 
 	local proj_pulse_portal = crap.collections.create("projects", {
 		title = "Pulse Health Patient Portal",
@@ -326,7 +327,7 @@ function M.up()
 				body = "<h2>Building for Healthcare</h2><p>The Pulse Health portal is designed to make healthcare accessible and intuitive. Every interaction is crafted with WCAG 2.1 AA compliance and HIPAA security requirements in mind.</p>",
 			},
 		},
-	})
+	}, opts)
 
 	local proj_apex_ecom = crap.collections.create("projects", {
 		title = "Apex Retail E-Commerce Platform",
@@ -363,7 +364,7 @@ function M.up()
 			},
 		},
 		published_at = "2024-07-15T10:00:00Z",
-	})
+	}, opts)
 
 	local proj_verde_lms = crap.collections.create("projects", {
 		title = "Verde Learning Management System",
@@ -383,7 +384,7 @@ function M.up()
 			{ title = "Student dashboard", completed = false },
 			{ title = "Assessment engine", completed = false },
 		},
-	})
+	}, opts)
 
 	local proj_echo_cms = crap.collections.create("projects", {
 		title = "Echo Media Content Hub",
@@ -397,7 +398,7 @@ function M.up()
 		categories = { cat_dev.id, cat_strategy.id },
 		tags = { tag_rust.id, tag_ai.id },
 		budget = 150000,
-	})
+	}, opts)
 
 	local proj_ds = crap.collections.create("projects", {
 		title = "Crap Design System",
@@ -422,7 +423,7 @@ function M.up()
 				body = "<h2>One System, Every Project</h2><p>The Crap Design System ensures consistency across all our deliverables while giving each project room to breathe with customizable tokens and composable components.</p>",
 			},
 		},
-	})
+	}, opts)
 
 	local proj_brand_motion = crap.collections.create("projects", {
 		title = "Nova Animated Brand Assets",
@@ -443,7 +444,7 @@ function M.up()
 			{ title = "Pitch deck template", completed = true },
 		},
 		published_at = "2024-11-01T10:00:00Z",
-	})
+	}, opts)
 
 	local proj_pulse_brand = crap.collections.create("projects", {
 		title = "Pulse Health Brand Refresh",
@@ -458,7 +459,7 @@ function M.up()
 		categories = { cat_brand.id },
 		tags = { tag_health.id, tag_figma.id },
 		budget = 45000,
-	})
+	}, opts)
 
 	local proj_apex_mobile = crap.collections.create("projects", {
 		title = "Apex Mobile Shopping App",
@@ -472,7 +473,7 @@ function M.up()
 		categories = { cat_dev.id, cat_design.id },
 		tags = { tag_react.id, tag_ecom.id, tag_ai.id },
 		budget = 200000,
-	})
+	}, opts)
 
 	local proj_internal_site = crap.collections.create("projects", {
 		title = "Crap Studio Website",
@@ -491,13 +492,13 @@ function M.up()
 			{ title = "Blog", completed = false },
 			{ title = "Contact form", completed = false },
 		},
-	})
+	}, opts)
 
 	-- ========================
 	-- POSTS (20)
 	-- ========================
 	local function create_post(data)
-		return crap.collections.create("posts", data)
+		return crap.collections.create("posts", data, opts)
 	end
 
 	create_post({
@@ -822,7 +823,7 @@ function M.up()
 		template = "landing",
 		show_in_nav = true,
 		nav_order = 1,
-	})
+	}, opts)
 
 	crap.collections.create("pages", {
 		title = "About",
@@ -841,7 +842,7 @@ function M.up()
 		template = "default",
 		show_in_nav = true,
 		nav_order = 2,
-	})
+	}, opts)
 
 	crap.collections.create("pages", {
 		title = "Contact",
@@ -856,7 +857,7 @@ function M.up()
 		template = "default",
 		show_in_nav = true,
 		nav_order = 4,
-	})
+	}, opts)
 
 	crap.collections.create("pages", {
 		title = "Careers",
@@ -877,7 +878,7 @@ function M.up()
 		template = "default",
 		show_in_nav = true,
 		nav_order = 5,
-	})
+	}, opts)
 
 	-- ========================
 	-- EVENTS (5)
@@ -899,7 +900,7 @@ function M.up()
 		categories = { cat_design.id },
 		registration_url = "https://meetup.com/example",
 		max_attendees = 50,
-	})
+	}, opts)
 
 	crap.collections.create("events", {
 		title = "WebGL Workshop: Creative Coding Fundamentals",
@@ -914,7 +915,7 @@ function M.up()
 		registration_url = "https://eventbrite.com/example",
 		max_attendees = 100,
 		registration_deadline = "2026-04-08T23:59:00Z",
-	})
+	}, opts)
 
 	crap.collections.create("events", {
 		title = "CSS Day 2026 - Taylor Kim Speaking",
@@ -931,7 +932,7 @@ function M.up()
 		},
 		speakers = { designer.id },
 		categories = { cat_motion.id },
-	})
+	}, opts)
 
 	crap.collections.create("events", {
 		title = "Studio Open House",
@@ -948,7 +949,7 @@ function M.up()
 		},
 		categories = { cat_culture.id },
 		max_attendees = 75,
-	})
+	}, opts)
 
 	crap.collections.create("events", {
 		title = "Rust for Web Developers Webinar",
@@ -961,7 +962,7 @@ function M.up()
 		speakers = { director.id },
 		categories = { cat_dev.id },
 		max_attendees = 200,
-	})
+	}, opts)
 
 	-- ========================
 	-- TESTIMONIALS (8)
@@ -974,7 +975,7 @@ function M.up()
 		rating = 5,
 		project = proj_nova_rebrand.id,
 		featured = true,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "Sarah Kim",
@@ -984,7 +985,7 @@ function M.up()
 		rating = 5,
 		project = proj_pulse_portal.id,
 		featured = true,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "David Okonkwo",
@@ -994,7 +995,7 @@ function M.up()
 		rating = 5,
 		project = proj_apex_ecom.id,
 		featured = true,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "Lisa Chang",
@@ -1003,7 +1004,7 @@ function M.up()
 		quote = "Working with Crap feels like having a senior tech team embedded in your company. They truly care about the product.",
 		rating = 4,
 		project = proj_verde_lms.id,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "James Wright",
@@ -1012,7 +1013,7 @@ function M.up()
 		quote = "Even in the planning phase, Crap's strategic thinking has been invaluable. Can't wait to see the finished product.",
 		rating = 5,
 		project = proj_echo_cms.id,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "Amanda Foster",
@@ -1021,7 +1022,7 @@ function M.up()
 		quote = "The brand identity Crap created for us has been instrumental in our Series A fundraising. Investors consistently comment on our polished presence.",
 		rating = 5,
 		featured = true,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "Robert Chen",
@@ -1029,7 +1030,7 @@ function M.up()
 		company = "Pacific Northwest Health",
 		quote = "Crap's understanding of healthcare UX is unmatched. They balance compliance requirements with genuinely delightful user experiences.",
 		rating = 4,
-	})
+	}, opts)
 
 	crap.collections.create("testimonials", {
 		author_name = "Elena Vasquez",
@@ -1037,7 +1038,7 @@ function M.up()
 		company = "Bloom Creative",
 		quote = "We hired Crap for a quick brand refresh and ended up with a complete transformation. Best investment we've made.",
 		rating = 5,
-	})
+	}, opts)
 
 	-- ========================
 	-- INQUIRIES (5)
@@ -1052,7 +1053,7 @@ function M.up()
 		status = "qualified",
 		assigned_to = director.id,
 		internal_notes = "Strong lead. They have budget approval and a Q3 deadline.",
-	})
+	}, opts)
 
 	crap.collections.create("inquiries", {
 		name = "Marcus Johnson",
@@ -1063,7 +1064,7 @@ function M.up()
 		message = "Series A startup looking for complete brand identity. We're launching in 3 months and need a professional brand that stands out in the SaaS space.",
 		status = "proposal",
 		assigned_to = admin.id,
-	})
+	}, opts)
 
 	crap.collections.create("inquiries", {
 		name = "Sophie Williams",
@@ -1074,7 +1075,7 @@ function M.up()
 		budget_range = "5k_15k",
 		message = "Non-profit looking for UX audit of our donation platform. We're seeing high drop-off rates during checkout.",
 		status = "new",
-	})
+	}, opts)
 
 	crap.collections.create("inquiries", {
 		name = "Tom Bradley",
@@ -1083,7 +1084,7 @@ function M.up()
 		message = "Looking for someone to design a logo for my food truck. Love your style!",
 		status = "contacted",
 		internal_notes = "Budget too low for our minimum engagement. Referred to freelancer network.",
-	})
+	}, opts)
 
 	crap.collections.create("inquiries", {
 		name = "Yuki Tanaka",
@@ -1094,7 +1095,7 @@ function M.up()
 		message = "We need to rebuild our e-commerce platform for the Japanese market. Looking for a team experienced with internationalization and high-traffic applications.",
 		status = "new",
 		metadata = '{"utm_source":"google","utm_medium":"cpc","utm_campaign":"web-dev-2026","referrer":"https://google.com"}',
-	})
+	}, opts)
 
 	-- ========================
 	-- GLOBALS
@@ -1113,7 +1114,7 @@ function M.up()
 			linkedin = "https://linkedin.com/company/crap-studio",
 			instagram = "https://instagram.com/crapstudio",
 		},
-	})
+	}, opts)
 
 	crap.globals.update("navigation", {
 		main_nav = {
@@ -1126,12 +1127,12 @@ function M.up()
 			{ label = "About", url = "/about" },
 			{ label = "Contact", url = "/contact" },
 		},
-	})
+	}, opts)
 
 	crap.globals.update("footer", {
 		copyright_text = "Crap Studio. All rights reserved.",
 		show_social_links = true,
-	})
+	}, opts)
 
 	crap.log.info("Crap Studio seed complete: 6 users, 5 clients, 6 categories, 12 tags, 5 services, 10 projects, 20 posts, 4 pages, 5 events, 8 testimonials, 5 inquiries, 3 globals")
 end
@@ -1152,11 +1153,13 @@ function M.down()
 		"users",
 	}
 
+	local opts = { overrideAccess = true }
+
 	for _, collection in ipairs(collections) do
-		local result = crap.collections.find(collection, { limit = 1000 })
+		local result = crap.collections.find(collection, { limit = 1000, overrideAccess = true })
 		if result and result.documents then
 			for _, doc in ipairs(result.documents) do
-				crap.collections.delete(collection, doc.id)
+				crap.collections.delete(collection, doc.id, opts)
 			end
 		end
 	end

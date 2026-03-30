@@ -20,14 +20,16 @@ return function(context)
 		return nil
 	end
 
-	-- Verify HMAC
+	-- Verify HMAC using double-HMAC pattern for constant-time comparison
 	local expected = crap.crypto.hmac("sha256", secret, user_id)
-	if expected ~= signature then
+	local verify_expected = crap.crypto.hmac("sha256", secret, expected)
+	local verify_actual = crap.crypto.hmac("sha256", secret, signature)
+	if verify_expected ~= verify_actual then
 		return nil
 	end
 
 	-- Look up user
-	local user = crap.collections.find_by_id(context.collection, user_id)
+	local user = crap.collections.find_by_id(context.collection, user_id, { overrideAccess = true })
 	if not user then
 		return nil
 	end
