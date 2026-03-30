@@ -45,7 +45,9 @@ pub fn upload_router(state: AdminState) -> Router<AdminState> {
 ///
 /// Returns `Some(token)` for a valid `Bearer <token>` header, `None` otherwise.
 fn extract_bearer_token(auth_header: &str) -> Option<&str> {
-    auth_header.strip_prefix("Bearer ")
+    auth_header
+        .strip_prefix("Bearer ")
+        .filter(|s| !s.is_empty())
 }
 
 /// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
@@ -764,7 +766,7 @@ mod tests {
 
     #[test]
     fn bearer_token_empty_value() {
-        assert_eq!(extract_bearer_token("Bearer "), Some(""));
+        assert_eq!(extract_bearer_token("Bearer "), None);
     }
 
     #[test]

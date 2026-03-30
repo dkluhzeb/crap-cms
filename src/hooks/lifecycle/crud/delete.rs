@@ -166,8 +166,14 @@ pub(super) fn register_delete(
                     )));
                 }
             } else {
-                query::delete(conn, &collection, &id)
+                let deleted = query::delete(conn, &collection, &id)
                     .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+                if !deleted {
+                    return Err(RuntimeError(format!(
+                        "Document '{}' not found in '{}'",
+                        id, collection
+                    )));
+                }
             }
 
             // Sync FTS index (remove from FTS for both hard and soft delete)
@@ -817,11 +823,17 @@ pub(super) fn register_delete_many(
                 }
 
                 if soft_delete {
-                    query::soft_delete(conn, &collection, &doc.id)
+                    let deleted = query::soft_delete(conn, &collection, &doc.id)
                         .map_err(|e| RuntimeError(format!("soft_delete error: {}", e)))?;
+                    if !deleted {
+                        continue; // already deleted by another operation
+                    }
                 } else {
-                    query::delete(conn, &collection, &doc.id)
+                    let deleted = query::delete(conn, &collection, &doc.id)
                         .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+                    if !deleted {
+                        continue; // already deleted by another operation
+                    }
                 }
 
                 if conn.supports_fts() {

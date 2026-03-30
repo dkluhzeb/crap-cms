@@ -562,14 +562,14 @@ pub(super) async fn delete_action_impl(
             tracing::error!("Delete error: {}", e);
 
             if json_response {
-                return json_error_response(&e.to_string());
+                return json_error_response("Failed to delete item");
             }
         }
         Err(e) => {
             tracing::error!("Delete task error: {}", e);
 
             if json_response {
-                return json_error_response(&e.to_string());
+                return json_error_response("Failed to delete item");
             }
         }
     }

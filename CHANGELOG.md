@@ -184,6 +184,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Length validation counted bytes instead of characters** — `min_length`
+  and `max_length` field validation used `s.len()` (byte count) instead of
+  `s.chars().count()` (character count). Multibyte UTF-8 strings were
+  overcounted: "café" (4 chars, 5 bytes) would fail `max_length = 4`, and
+  CJK text like "你好世界" (4 chars, 12 bytes) would fail `min_length = 5`.
+
+- **Email validation accepted invalid dot patterns** — `is_valid_email_format`
+  accepted leading dots (`.user@example.com`), trailing dots
+  (`user.@example.com`), consecutive dots (`user..name@example.com`), and
+  the same patterns in domain parts. Now rejects all per RFC 5321.
+
+- **Empty Bearer token treated as valid** — `extract_bearer_token("Bearer ")`
+  returned `Some("")` instead of `None`, which would pass to JWT validation
+  and produce a confusing error. Now filters empty tokens.
+
+- **FTS sync dropped existing index on validation failure** — `sync_fts_table`
+  dropped the existing FTS table before validating field names. If validation
+  failed (e.g., invalid identifier), the existing working index was destroyed
+  with no replacement. Validation now runs before the drop.
+
+- **Lua `delete` silently succeeded on missing documents** — The Lua CRUD
+  `crap.collections.delete()` did not check the return value of
+  `query::delete`, so deleting a non-existent document appeared to succeed.
+  Now returns a "not found" error. `delete_many` now skips already-deleted
+  documents gracefully instead of failing.
+
+- **Delete error response leaked internal details** — The admin delete
+  handler returned `e.to_string()` in JSON error responses, potentially
+  exposing database paths, schema details, or internal error messages.
+  Now returns a generic "Failed to delete item" message and logs the full
+  error server-side.
+
+- **Stale job error message showed wrong timeout value** — The
+  `recover_stale_jobs` error message logged the stale detection threshold
+  (2x timeout, min 300s) as `timeout=<threshold>s` instead of the actual
+  configured job timeout, misleading operators.
+
 - **Empty trash could delete referenced documents** — The "Empty trash"
   action permanently deleted all soft-deleted documents without checking
   `_ref_count`, which could break referential integrity. Now skips

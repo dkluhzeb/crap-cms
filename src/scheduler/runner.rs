@@ -1,6 +1,6 @@
 //! Job execution, cron scheduling, stale recovery, cron normalization, and soft-delete purge.
 
-use std::{cmp::max, str::FromStr, time::Instant};
+use std::{str::FromStr, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 
@@ -179,12 +179,11 @@ pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &SharedRegistry) ->
             .get(job.slug.as_str())
             .map(|d| d.timeout)
             .unwrap_or(60);
-        let threshold = max(timeout * 2, 300);
 
         // Any job that was running when we started is stale
         let error = format!(
             "stale: server restarted (was running, timeout={}s)",
-            threshold
+            timeout
         );
         job_query::mark_stale(conn, &job.id, &error)?;
         tracing::info!("Marked stale job {} ({})", job.id, job.slug);
@@ -505,7 +504,7 @@ mod tests {
                 .unwrap()
                 .contains("stale: server restarted")
         );
-        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=300s"));
+        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=120s"));
     }
 
     #[test]
@@ -527,8 +526,7 @@ mod tests {
 
         let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
         assert_eq!(jobs.len(), 1);
-        // threshold = max(3600 * 2, 300) = 7200
-        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=7200s"));
+        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=3600s"));
     }
 
     #[test]
@@ -547,8 +545,7 @@ mod tests {
 
         let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
         assert_eq!(jobs.len(), 1);
-        // threshold = max(60 * 2, 300) = 300
-        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=300s"));
+        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=60s"));
     }
 
     #[test]

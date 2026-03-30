@@ -56,15 +56,8 @@ pub fn sync_fts_table(
     let fts_table = fts_table_name(slug);
     let fts_fields = get_fts_columns(def, locale_config)?;
 
-    // Always drop existing FTS table first
-    conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", fts_table))
-        .with_context(|| format!("Failed to drop FTS table {}", fts_table))?;
-
-    if fts_fields.is_empty() {
-        return Ok(());
-    }
-
-    // Validate field names (defense against injection — they come from Lua config)
+    // Validate field names BEFORE dropping the old table — if validation fails,
+    // the existing FTS index is preserved rather than silently lost.
     for f in &fts_fields {
         if !crate::db::query::is_valid_identifier(f) {
             bail!(
@@ -72,6 +65,14 @@ pub fn sync_fts_table(
                 f
             );
         }
+    }
+
+    // Always drop existing FTS table first
+    conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", fts_table))
+        .with_context(|| format!("Failed to drop FTS table {}", fts_table))?;
+
+    if fts_fields.is_empty() {
+        return Ok(());
     }
 
     // Create FTS5 virtual table
