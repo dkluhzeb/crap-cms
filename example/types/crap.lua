@@ -813,12 +813,24 @@ function crap.hooks.list(event) end
 --- @class crap.richtext
 crap.richtext = {}
 
+--- Attribute type for custom richtext node attributes.
+--- @alias crap.NodeAttrType "text"|"number"|"select"|"checkbox"|"textarea"
+
+--- A single attribute on a custom richtext node.
+--- @class crap.NodeAttr
+--- @field name     string              Attribute name.
+--- @field type     crap.NodeAttrType   Input type in admin editor.
+--- @field label?   string              Display label (defaults to name).
+--- @field required? boolean            Whether the attribute is required (default: false).
+--- @field default?  any                Default value.
+--- @field options?  crap.SelectOption[] Options for select-type attributes.
+
 --- Spec for registering a custom richtext node.
 --- @class crap.RichtextNodeSpec
---- @field label?           string               Display label (defaults to name).
---- @field inline?          boolean              Whether the node is inline (default: false = block).
---- @field attrs?           crap.FieldDefinition[] Attribute definitions (scalar types only: text, number, textarea, select, radio, checkbox, date, email, json, code). Use `crap.fields.*` factory functions.
---- @field searchable_attrs? string[]            Attr names to include in FTS search index.
+--- @field label?           string          Display label (defaults to name).
+--- @field inline?          boolean         Whether the node is inline (default: false = block).
+--- @field attrs?           crap.NodeAttr[] Attribute definitions.
+--- @field searchable_attrs? string[]       Attr names to include in FTS search index.
 --- @field render?          fun(attrs: table): string  Server-side render function.
 
 --- Register a custom ProseMirror node type.
@@ -850,23 +862,6 @@ function crap.log.warn(msg) end
 --- Log an error-level message.
 --- @param msg string  Log message.
 function crap.log.error(msg) end
-
-
--- ── crap.json ────────────────────────────────────────────────
-
---- JSON encode/decode.
---- @class crap.json
-crap.json = {}
-
---- Encode a Lua value as a JSON string.
---- @param value any  Lua value to encode.
---- @return string json  JSON string.
-function crap.json.encode(value) end
-
---- Decode a JSON string into a Lua value.
---- @param str string  JSON string.
---- @return any value  Decoded Lua value.
-function crap.json.decode(str) end
 
 
 -- ── crap.util ────────────────────────────────────────────────

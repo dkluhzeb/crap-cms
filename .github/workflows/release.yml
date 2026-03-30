@@ -125,6 +125,16 @@ jobs:
       - name: Archive example project
         run: tar -czf artifacts/example.tar.gz example/
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum \
+            crap-cms-linux-x86_64/crap-cms-linux-x86_64 \
+            crap-cms-linux-aarch64/crap-cms-linux-aarch64 \
+            crap-cms-windows-x86_64.exe/crap-cms-windows-x86_64.exe \
+            example.tar.gz \
+            | sed 's|[^ ]*/||' > SHA256SUMS
+
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -135,7 +145,8 @@ jobs:
             artifacts/crap-cms-linux-x86_64/crap-cms-linux-x86_64 \
             artifacts/crap-cms-linux-aarch64/crap-cms-linux-aarch64 \
             artifacts/crap-cms-windows-x86_64.exe/crap-cms-windows-x86_64.exe \
-            artifacts/example.tar.gz
+            artifacts/example.tar.gz \
+            artifacts/SHA256SUMS
 
   docs:
     name: Deploy docs

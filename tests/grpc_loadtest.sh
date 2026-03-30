@@ -37,8 +37,8 @@ GRPC_ADDR="${GRPC_ADDR:-localhost:50051}"
 DURATION="${DURATION:-10}"
 CONCURRENCY_LEVELS="1 10 50"
 SCENARIOS=""
-EMAIL="${EMAIL:-admin@example.com}"
-PASSWORD="${PASSWORD:-secret123}"
+EMAIL="${EMAIL:-admin@crap.studio}"
+PASSWORD="${PASSWORD:-admin123}"
 
 # Parse args
 while [[ $# -gt 0 ]]; do

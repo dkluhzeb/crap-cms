@@ -243,16 +243,11 @@ async fn run(cli: Cli) -> Result<()> {
     // _CRAP_DETACHED is set by detach() on the child process.
     let is_detached_child = std::env::var("_CRAP_DETACHED").is_ok();
 
-    let default_filter = match &cli.command {
-        Command::Serve { .. } => "crap_cms=debug,info",
-        _ => "crap_cms=error",
-    };
-
     let config_flag = cli.config;
 
     // For serve: load config before tracing init so we can set up file logging.
     // Config will be loaded again inside serve::run() — this is intentional and cheap.
-    let serve_logging = if is_serve {
+    let (serve_logging, dev_mode) = if is_serve {
         let config_dir = commands::resolve_config_dir(config_flag.clone())?;
         let mut config = CrapConfig::load(&config_dir)?;
 
@@ -261,9 +256,16 @@ async fn run(cli: Cli) -> Result<()> {
             config.logging.file = true;
         }
 
-        Some((config_dir, config.logging))
+        let dev = config.admin.dev_mode;
+        (Some((config_dir, config.logging)), dev)
     } else {
-        None
+        (None, false)
+    };
+
+    let default_filter = match &cli.command {
+        Command::Serve { .. } if dev_mode => "crap_cms=debug,info",
+        Command::Serve { .. } => "crap_cms=info",
+        _ => "crap_cms=error",
     };
 
     let _guard = init_logging(use_json, default_filter, serve_logging.as_ref());

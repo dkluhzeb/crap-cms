@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.4] — Unreleased
+
+### Fixed
+
+- **Debug logs shown in production** — The default stdout log filter
+  for `serve` was `crap_cms=debug,info`, flooding production logs with
+  debug output. Now defaults to `crap_cms=info` for production and
+  `crap_cms=debug,info` only when `dev_mode = true`. File logging
+  retains debug level for diagnostics. Override with `RUST_LOG` env
+  var when needed.
+
+- **SHA256 checksums missing from releases** — The release workflow
+  now generates a `SHA256SUMS` file and uploads it alongside the
+  binaries, enabling the install script to verify downloads
+  automatically.
+
 ## [0.1.0-alpha.3] — 2026-03-30
 
 ### Added
@@ -1363,6 +1379,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   (cascade deletes, audit logging, external sync) were silently
   skipped. Now runs both hooks per document, matching the behavior of
   single delete and `DeleteMany`.
+
+- **Windows build broken by Unix-only signal code** — `send_signal`,
+  `is_process_running`, `stop`, `restart`, `status`, and
+  `check_existing_pid` were not gated behind `#[cfg(unix)]`. The
+  Windows CI build failed with unresolved `SIGKILL`/`SIGTERM` errors.
+  All Unix-only functions and their call sites are now properly gated.
+  On Windows, `--stop`/`--restart`/`--status` return a clear
+  "not supported on this platform" error.
 
 ### Changed
 
