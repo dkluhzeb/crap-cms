@@ -280,13 +280,22 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let config = commands::resolve_config_dir(config_flag)?;
             if stop {
+                #[cfg(unix)]
                 return commands::serve::stop(&config);
+                #[cfg(not(unix))]
+                anyhow::bail!("--stop is not supported on this platform");
             }
             if status {
+                #[cfg(unix)]
                 return commands::serve::status(&config);
+                #[cfg(not(unix))]
+                anyhow::bail!("--status is not supported on this platform");
             }
             if restart {
+                #[cfg(unix)]
                 return commands::serve::restart(&config, only, no_scheduler);
+                #[cfg(not(unix))]
+                anyhow::bail!("--restart is not supported on this platform");
             }
             if detach {
                 return commands::serve::detach(&config, only, no_scheduler);

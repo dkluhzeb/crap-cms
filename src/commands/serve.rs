@@ -10,8 +10,10 @@ use std::{
     sync::Arc,
 };
 #[cfg(unix)]
+use tokio::select;
+#[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::{select, try_join};
+use tokio::try_join;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -97,6 +99,7 @@ fn remove_pid_file(config_dir: &Path) {
 }
 
 /// Check if a PID file exists and warn if the process is still running.
+#[cfg(unix)]
 fn check_existing_pid(config_dir: &Path) {
     let path = pid_file_path(config_dir);
 
@@ -123,6 +126,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
     validate_config_dir(&config_dir)?;
+    #[cfg(unix)]
     check_existing_pid(&config_dir);
 
     let mut cmd = process::Command::new(&exe);
@@ -158,6 +162,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
 }
 
 /// Read the PID from the PID file. Returns `None` if no file or not parseable.
+#[cfg(unix)]
 fn read_pid(config_dir: &Path) -> Option<u32> {
     let path = pid_file_path(config_dir);
 
@@ -167,6 +172,7 @@ fn read_pid(config_dir: &Path) -> Option<u32> {
 }
 
 /// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
+#[cfg(unix)]
 pub fn stop(config_dir: &Path) -> Result<()> {
     validate_config_dir(config_dir)?;
 
@@ -210,6 +216,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 }
 
 /// Restart a detached instance: stop the current one, then start a new one.
+#[cfg(unix)]
 pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     validate_config_dir(config_dir)?;
 
@@ -229,6 +236,7 @@ pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -
 }
 
 /// Show the status of a detached instance.
+#[cfg(unix)]
 pub fn status(config_dir: &Path) -> Result<()> {
     validate_config_dir(config_dir)?;
 
@@ -308,6 +316,7 @@ fn show_uptime(stat: &str) {
 }
 
 /// Format seconds into a human-readable duration string.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn format_duration(secs: u64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;
@@ -473,6 +482,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     validate_config_dir(&config_dir)?;
 
     // PID file management
+    #[cfg(unix)]
     check_existing_pid(&config_dir);
     write_pid_file(&config_dir, process::id())?;
 
@@ -764,6 +774,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn check_existing_pid_no_file_no_warning() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Should not panic
@@ -771,6 +782,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn check_existing_pid_stale_pid_no_panic() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Write a PID that almost certainly doesn't exist
@@ -841,12 +853,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn read_pid_no_file_returns_none() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(read_pid(tmp.path()).is_none());
     }
 
     #[test]
+    #[cfg(unix)]
     fn read_pid_valid_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         write_pid_file(tmp.path(), 42).unwrap();
@@ -854,6 +868,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn read_pid_garbage_returns_none() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = pid_file_path(tmp.path());
@@ -863,16 +878,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn is_process_running_current_pid() {
         assert!(is_process_running(process::id()));
     }
 
     #[test]
+    #[cfg(unix)]
     fn is_process_running_bogus_pid() {
         assert!(!is_process_running(999_999_999));
     }
 
     #[test]
+    #[cfg(unix)]
     fn is_process_running_u32_max_returns_false() {
         // Regression: u32::MAX (4294967295) exceeds i32::MAX and previously
         // could wrap to a negative PID via `as i32`, potentially matching
