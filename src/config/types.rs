@@ -2,7 +2,10 @@
 
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use super::{
     auth::AuthConfig,
@@ -10,7 +13,7 @@ use super::{
     env::substitute_in_value,
     features::{
         AccessConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig, LocaleConfig,
-        McpConfig, PaginationConfig, UploadConfig,
+        LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
@@ -51,6 +54,8 @@ pub struct CrapConfig {
     pub pagination: PaginationConfig,
     /// MCP (Model Context Protocol) settings.
     pub mcp: McpConfig,
+    /// File-based logging settings.
+    pub logging: LoggingConfig,
 }
 
 impl CrapConfig {
@@ -64,7 +69,7 @@ impl CrapConfig {
         let config_path = config_dir.join("crap.toml");
 
         if config_path.exists() {
-            let contents = std::fs::read_to_string(&config_path)
+            let contents = fs::read_to_string(&config_path)
                 .with_context(|| format!("Failed to read {}", config_path.display()))?;
             // Parse TOML first (strips comments), then substitute env vars only in string values.
             // This avoids errors from `${VAR}` patterns in comments.
@@ -78,6 +83,7 @@ impl CrapConfig {
                 .locale
                 .validate()
                 .context("Invalid locale configuration")?;
+            config.validate().context("Invalid configuration")?;
             Ok(config)
         } else {
             tracing::info!("No crap.toml found, using defaults");
@@ -117,9 +123,114 @@ impl CrapConfig {
             );
         }
 
+        // Fatal: port 0 is not a valid listen port
+        if self.server.admin_port == 0 || self.server.grpc_port == 0 {
+            bail!("Server ports must be > 0");
+        }
+
+        // Fatal: ports must be distinct
+        if self.server.admin_port == self.server.grpc_port {
+            bail!("admin_port and grpc_port must be different");
+        }
+
+        // Fatal: broadcast channel capacity must be > 0 (tokio panics on 0)
+        if self.live.enabled && self.live.channel_capacity == 0 {
+            bail!("live.channel_capacity must be > 0 when live events are enabled");
+        }
+
+        // Fatal: pagination limits must be positive
+        if self.pagination.default_limit <= 0 {
+            bail!("pagination.default_limit must be > 0");
+        }
+        if self.pagination.max_limit <= 0 {
+            bail!("pagination.max_limit must be > 0");
+        }
+        if self.pagination.default_limit > self.pagination.max_limit {
+            bail!(
+                "pagination.default_limit ({}) must be <= pagination.max_limit ({})",
+                self.pagination.default_limit,
+                self.pagination.max_limit
+            );
+        }
+
+        // Fatal: negative depth values make no sense
+        if self.depth.default_depth < 0 {
+            bail!("depth.default_depth must be >= 0");
+        }
+        if self.depth.max_depth < 0 {
+            bail!("depth.max_depth must be >= 0");
+        }
+
         // Warning: max_depth = 0 means no population will ever work
         if self.depth.max_depth == 0 {
             tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
+        }
+
+        // Warning: default_depth exceeds max_depth
+        if self.depth.default_depth > self.depth.max_depth {
+            tracing::warn!(
+                "depth.default_depth ({}) exceeds depth.max_depth ({}) — requests will be capped",
+                self.depth.default_depth,
+                self.depth.max_depth
+            );
+        }
+
+        // Fatal: MCP HTTP without API key is unauthenticated full CRUD access
+        if self.mcp.enabled && self.mcp.http && self.mcp.api_key.is_empty() {
+            bail!(
+                "mcp.http is enabled without an API key — \
+                 set mcp.api_key in crap.toml to secure the MCP HTTP endpoint"
+            );
+        }
+
+        // Fatal: SMTP port 0 when host is configured
+        if !self.email.smtp_host.is_empty() && self.email.smtp_port == 0 {
+            bail!("email.smtp_port must be > 0 when smtp_host is configured");
+        }
+
+        // Fatal: zero timeouts are nonsensical
+        if self.server.request_timeout == Some(0) {
+            bail!("server.request_timeout must be > 0 (or omitted to disable)");
+        }
+        if self.server.grpc_timeout == Some(0) {
+            bail!("server.grpc_timeout must be > 0 (or omitted to disable)");
+        }
+
+        // Fatal: rate limit window must be positive when rate limiting is enabled
+        if self.server.grpc_rate_limit_requests > 0 && self.server.grpc_rate_limit_window == 0 {
+            bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
+        }
+
+        // Fatal: empty log path
+        if self.logging.file && self.logging.path.is_empty() {
+            bail!("logging.path must not be empty when file logging is enabled");
+        }
+
+        // Warning: max_files = 0 means all old logs are deleted on every startup
+        if self.logging.file && self.logging.max_files == 0 {
+            tracing::warn!(
+                "logging.max_files = 0 — all rotated log files will be deleted on startup"
+            );
+        }
+
+        // Fatal: zero scheduler intervals cause busy loops
+        if self.jobs.poll_interval == 0 {
+            bail!("jobs.poll_interval must be > 0");
+        }
+        if self.jobs.cron_interval == 0 {
+            bail!("jobs.cron_interval must be > 0");
+        }
+        if self.jobs.heartbeat_interval == 0 {
+            bail!("jobs.heartbeat_interval must be > 0");
+        }
+
+        // Fatal: password min_length > max_length
+        if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
+            bail!(
+                "auth.password.min_length ({}) must be <= auth.password.max_length ({})",
+                self.auth.password_policy.min_length,
+                self.auth.password_policy.max_length
+            );
         }
 
         Ok(())
@@ -174,6 +285,18 @@ impl CrapConfig {
             config_dir.join(p)
         }
     }
+
+    /// Resolve the log directory path relative to the config directory.
+    #[must_use]
+    pub fn log_dir(&self, config_dir: &Path) -> PathBuf {
+        let p = Path::new(&self.logging.path);
+
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            config_dir.join(p)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -219,6 +342,48 @@ mod tests {
         config.database.path = "/absolute/path.db".to_string();
         let dir = Path::new("/my/config");
         assert_eq!(config.db_path(dir), Path::new("/absolute/path.db"));
+    }
+
+    #[test]
+    fn log_dir_relative() {
+        let config = CrapConfig::default();
+        let dir = Path::new("/my/config");
+        assert_eq!(config.log_dir(dir), Path::new("/my/config/data/logs"));
+    }
+
+    #[test]
+    fn log_dir_absolute() {
+        let mut config = CrapConfig::default();
+        config.logging.path = "/var/log/crap-cms".to_string();
+        let dir = Path::new("/my/config");
+        assert_eq!(config.log_dir(dir), Path::new("/var/log/crap-cms"));
+    }
+
+    #[test]
+    fn validate_logging_empty_path_errors() {
+        let mut config = CrapConfig::default();
+        config.logging.file = true;
+        config.logging.path = String::new();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("logging.path"));
+    }
+
+    #[test]
+    fn validate_logging_max_files_zero_warns_but_passes() {
+        let mut config = CrapConfig::default();
+        config.logging.file = true;
+        config.logging.max_files = 0;
+        // Should warn but not error
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_logging_disabled_empty_path_passes() {
+        let mut config = CrapConfig::default();
+        config.logging.file = false;
+        config.logging.path = String::new();
+        // Validation only applies when file logging is enabled
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -311,6 +476,30 @@ dev_mode = false
     }
 
     #[test]
+    fn validate_poll_interval_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.jobs.poll_interval = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("poll_interval"));
+    }
+
+    #[test]
+    fn validate_cron_interval_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.jobs.cron_interval = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("cron_interval"));
+    }
+
+    #[test]
+    fn validate_heartbeat_interval_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.jobs.heartbeat_interval = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("heartbeat_interval"));
+    }
+
+    #[test]
     fn validate_short_auth_secret_warns_but_passes() {
         let mut config = CrapConfig::default();
         config.auth.secret = crate::core::JwtSecret::new("short");
@@ -321,6 +510,39 @@ dev_mode = false
     fn validate_max_depth_zero_warns_but_passes() {
         let mut config = CrapConfig::default();
         config.depth.max_depth = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_admin_port_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.server.admin_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ports must be > 0"));
+    }
+
+    #[test]
+    fn validate_grpc_port_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ports must be > 0"));
+    }
+
+    #[test]
+    fn validate_same_ports_errors() {
+        let mut config = CrapConfig::default();
+        config.server.admin_port = 5000;
+        config.server.grpc_port = 5000;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("must be different"));
+    }
+
+    #[test]
+    fn validate_distinct_nonzero_ports_passes() {
+        let mut config = CrapConfig::default();
+        config.server.admin_port = 3000;
+        config.server.grpc_port = 50051;
         assert!(config.validate().is_ok());
     }
 
@@ -403,5 +625,170 @@ dev_mode = false
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.crap_version.is_none());
+    }
+
+    #[test]
+    fn validate_mcp_http_without_api_key_errors() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = true;
+        // api_key is empty by default
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("mcp.api_key"),
+            "Expected mcp.api_key error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_mcp_http_with_api_key_passes() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = true;
+        config.mcp.api_key = crate::config::McpApiKey::from("secret-key-123");
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_disabled_no_api_key_passes() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = false;
+        config.mcp.http = true;
+        // Should not error — MCP is disabled entirely
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_stdio_no_api_key_passes() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = false;
+        // stdio transport doesn't need API key — process-level access controls it
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_smtp_port_zero() {
+        let mut config = CrapConfig::default();
+        config.email.smtp_host = "smtp.example.com".to_string();
+        config.email.smtp_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("smtp_port"));
+    }
+
+    #[test]
+    fn validate_smtp_port_zero_ok_when_host_empty() {
+        let mut config = CrapConfig::default();
+        config.email.smtp_host = String::new();
+        config.email.smtp_port = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_request_timeout_zero() {
+        let mut config = CrapConfig::default();
+        config.server.request_timeout = Some(0);
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("request_timeout"));
+    }
+
+    #[test]
+    fn validate_rejects_grpc_timeout_zero() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_timeout = Some(0);
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("grpc_timeout"));
+    }
+
+    #[test]
+    fn validate_timeout_none_passes() {
+        let mut config = CrapConfig::default();
+        config.server.request_timeout = None;
+        config.server.grpc_timeout = None;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_grpc_rate_limit_window_zero() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_rate_limit_requests = 100;
+        config.server.grpc_rate_limit_window = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("grpc_rate_limit_window"));
+    }
+
+    #[test]
+    fn validate_grpc_rate_limit_window_zero_ok_when_disabled() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_rate_limit_requests = 0;
+        config.server.grpc_rate_limit_window = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_channel_capacity_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.live.channel_capacity = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("channel_capacity"));
+    }
+
+    #[test]
+    fn validate_channel_capacity_zero_ok_when_live_disabled() {
+        let mut config = CrapConfig::default();
+        config.live.enabled = false;
+        config.live.channel_capacity = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_pagination_default_limit_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.default_limit = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_limit"));
+    }
+
+    #[test]
+    fn validate_pagination_default_limit_negative_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.default_limit = -5;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_limit"));
+    }
+
+    #[test]
+    fn validate_pagination_max_limit_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.max_limit = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_limit"));
+    }
+
+    #[test]
+    fn validate_pagination_default_exceeds_max_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.default_limit = 100;
+        config.pagination.max_limit = 50;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_limit"));
+        assert!(err.to_string().contains("max_limit"));
+    }
+
+    #[test]
+    fn validate_depth_negative_default_errors() {
+        let mut config = CrapConfig::default();
+        config.depth.default_depth = -1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_depth"));
+    }
+
+    #[test]
+    fn validate_depth_negative_max_errors() {
+        let mut config = CrapConfig::default();
+        config.depth.max_depth = -1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_depth"));
     }
 }

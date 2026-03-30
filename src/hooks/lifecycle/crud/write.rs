@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mlua::Lua;
+use mlua::{Error::RuntimeError, Lua, Table};
 use serde_json::Value;
 
 use crate::{
@@ -55,9 +55,9 @@ fn handle_unpublish(
     ctx: &UnpublishCtx,
 ) -> mlua::Result<mlua::Table> {
     let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)
-        .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?
+        .map_err(|e| RuntimeError(format!("find error: {}", e)))?
         .ok_or_else(|| {
-            mlua::Error::RuntimeError(format!(
+            RuntimeError(format!(
                 "Document {} not found in {}",
                 ctx.id, ctx.collection
             ))
@@ -76,38 +76,48 @@ fn handle_unpublish(
     if hooks_enabled {
         let before_ctx = HookContext::builder(ctx.collection, "update")
             .data(existing_doc.fields.clone())
-            .draft(false)
+            .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)
             .ui_locale(ctx.hook_ui_locale)
             .build();
         run_hooks_inner(lua, &ctx.def.hooks, HookEvent::BeforeChange, before_ctx)
-            .map_err(|e| mlua::Error::RuntimeError(format!("before_change hook error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("before_change hook error: {}", e)))?;
     }
 
     service::persist_unpublish(conn, ctx.collection, ctx.id, ctx.def)
-        .map_err(|e| mlua::Error::RuntimeError(format!("unpublish error: {}", e)))?;
+        .map_err(|e| RuntimeError(format!("unpublish error: {}", e)))?;
+
+    // Re-read the document after unpublish so hooks see the updated state
+    let updated_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)
+        .map_err(|e| RuntimeError(format!("find error after unpublish: {}", e)))?
+        .ok_or_else(|| {
+            RuntimeError(format!(
+                "Document {} not found after unpublish in {}",
+                ctx.id, ctx.collection
+            ))
+        })?;
 
     if hooks_enabled {
         let after_ctx = HookContext::builder(ctx.collection, "update")
-            .data(existing_doc.fields.clone())
-            .draft(false)
+            .data(updated_doc.fields.clone())
+            .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)
             .ui_locale(ctx.hook_ui_locale)
             .build();
         run_hooks_inner(lua, &ctx.def.hooks, HookEvent::AfterChange, after_ctx)
-            .map_err(|e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("after_change hook error: {}", e)))?;
     }
 
-    document_to_lua_table(lua, &existing_doc)
+    document_to_lua_table(lua, &updated_doc)
 }
 
 /// Register `crap.collections.create(collection, data, opts?)`.
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_create(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
@@ -133,7 +143,7 @@ pub(super) fn register_create(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()
@@ -143,10 +153,10 @@ pub(super) fn register_create(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_collection(&collection).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Collection '{}' not found", collection))
-                })?
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_collection(&collection)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
             };
 
             let mut data = lua_table_to_hashmap(&data_table)?;
@@ -171,10 +181,10 @@ pub(super) fn register_create(
                     None,
                     None,
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
 
                 if matches!(result, AccessResult::Denied) {
-                    return Err(mlua::Error::RuntimeError("Create access denied".into()));
+                    return Err(RuntimeError("Create access denied".into()));
                 }
             }
 
@@ -245,9 +255,7 @@ pub(super) fn register_create(
                     &collection,
                     "create",
                 )
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("before_validate field hook error: {}", e))
-                })?;
+                .map_err(|e| RuntimeError(format!("before_validate field hook error: {}", e)))?;
 
                 // Collection-level before_validate
                 let hook_ctx = HookContext::builder(collection.clone(), "create")
@@ -258,20 +266,23 @@ pub(super) fn register_create(
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeValidate, hook_ctx)
-                    .map_err(|e| {
-                        mlua::Error::RuntimeError(format!("before_validate hook error: {}", e))
-                    })?;
+                    .map_err(|e| RuntimeError(format!("before_validate hook error: {}", e)))?;
                 hook_data = ctx.data;
             }
 
             // Validation (always runs unless hooks=false)
             if run_hooks {
+                let r = reg
+                    .read()
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                 let val_ctx = ValidationCtx::builder(conn, &collection)
                     .draft(is_draft)
                     .locale_ctx(locale_ctx.as_ref())
+                    .registry(&r)
+                    .soft_delete(def.soft_delete)
                     .build();
                 validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("validation error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("validation error: {}", e)))?;
             }
 
             if hooks_enabled {
@@ -284,9 +295,7 @@ pub(super) fn register_create(
                     &collection,
                     "create",
                 )
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("before_change field hook error: {}", e))
-                })?;
+                .map_err(|e| RuntimeError(format!("before_change field hook error: {}", e)))?;
 
                 // Collection-level before_change
                 let hook_ctx = HookContext::builder(collection.clone(), "create")
@@ -297,9 +306,7 @@ pub(super) fn register_create(
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx)
-                    .map_err(|e| {
-                        mlua::Error::RuntimeError(format!("before_change hook error: {}", e))
-                    })?;
+                    .map_err(|e| RuntimeError(format!("before_change hook error: {}", e)))?;
                 hook_data = ctx.data;
             }
 
@@ -312,6 +319,7 @@ pub(super) fn register_create(
             let persist_opts = PersistOptions::builder()
                 .password(password.as_deref())
                 .locale_ctx(locale_ctx.as_ref())
+                .locale_config(&lc)
                 .draft(is_draft)
                 .build();
             let doc = service::persist_create(
@@ -322,11 +330,13 @@ pub(super) fn register_create(
                 &hook_data,
                 &persist_opts,
             )
-            .map_err(|e| mlua::Error::RuntimeError(format!("create error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("create error: {}", e)))?;
 
             // After-change hooks
             if hooks_enabled {
                 let mut after_data = doc.fields.clone();
+                after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
+
                 run_field_hooks_inner(
                     lua,
                     &def.fields,
@@ -335,20 +345,17 @@ pub(super) fn register_create(
                     &collection,
                     "create",
                 )
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("after_change field hook error: {}", e))
-                })?;
+                .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
 
                 let after_ctx = HookContext::builder(collection.clone(), "create")
-                    .data(doc.fields.clone())
+                    .data(after_data)
                     .draft(is_draft)
                     .locale(locale_str.clone())
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
-                run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
-                    |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
-                )?;
+                run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx)
+                    .map_err(|e| RuntimeError(format!("after_change hook error: {}", e)))?;
             }
 
             // Hydrate join-table fields before returning
@@ -361,7 +368,7 @@ pub(super) fn register_create(
                 None,
                 locale_ctx.as_ref(),
             )
-            .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("hydrate error: {}", e)))?;
 
             document_to_lua_table(lua, &doc)
         },
@@ -374,20 +381,14 @@ pub(super) fn register_create(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_update(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let reg = registry;
     let lc = locale_config.clone();
     let update_fn = lua.create_function(
-        move |lua,
-              (collection, id, data_table, opts): (
-            String,
-            String,
-            mlua::Table,
-            Option<mlua::Table>,
-        )| {
+        move |lua, (collection, id, data_table, opts): (String, String, Table, Option<Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             let conn = unsafe { &*conn_ptr };
 
@@ -406,7 +407,7 @@ pub(super) fn register_update(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()
@@ -416,10 +417,10 @@ pub(super) fn register_update(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_collection(&collection).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Collection '{}' not found", collection))
-                })?
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_collection(&collection)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
             };
 
             let mut data = lua_table_to_hashmap(&data_table)?;
@@ -450,10 +451,10 @@ pub(super) fn register_update(
                     Some(&id),
                     None,
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
 
                 if matches!(result, AccessResult::Denied) {
-                    return Err(mlua::Error::RuntimeError("Update access denied".into()));
+                    return Err(RuntimeError("Update access denied".into()));
                 }
             }
 
@@ -536,9 +537,7 @@ pub(super) fn register_update(
                     &collection,
                     "update",
                 )
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("before_validate field hook error: {}", e))
-                })?;
+                .map_err(|e| RuntimeError(format!("before_validate field hook error: {}", e)))?;
 
                 let hook_ctx = HookContext::builder(collection.clone(), "update")
                     .data(hook_data.clone())
@@ -548,20 +547,23 @@ pub(super) fn register_update(
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeValidate, hook_ctx)
-                    .map_err(|e| {
-                        mlua::Error::RuntimeError(format!("before_validate hook error: {}", e))
-                    })?;
+                    .map_err(|e| RuntimeError(format!("before_validate hook error: {}", e)))?;
                 hook_data = ctx.data;
             }
 
             if run_hooks {
+                let r = reg
+                    .read()
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                 let val_ctx = ValidationCtx::builder(conn, &collection)
                     .exclude_id(Some(&id))
                     .draft(is_draft)
                     .locale_ctx(locale_ctx.as_ref())
+                    .registry(&r)
+                    .soft_delete(def.soft_delete)
                     .build();
                 validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("validation error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("validation error: {}", e)))?;
             }
 
             if hooks_enabled {
@@ -573,9 +575,7 @@ pub(super) fn register_update(
                     &collection,
                     "update",
                 )
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("before_change field hook error: {}", e))
-                })?;
+                .map_err(|e| RuntimeError(format!("before_change field hook error: {}", e)))?;
 
                 let hook_ctx = HookContext::builder(collection.clone(), "update")
                     .data(hook_data.clone())
@@ -585,9 +585,7 @@ pub(super) fn register_update(
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx)
-                    .map_err(|e| {
-                        mlua::Error::RuntimeError(format!("before_change hook error: {}", e))
-                    })?;
+                    .map_err(|e| RuntimeError(format!("before_change hook error: {}", e)))?;
                 hook_data = ctx.data;
             }
 
@@ -605,19 +603,30 @@ pub(super) fn register_update(
                     &hook_data,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("draft version error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("draft version error: {}", e)))?;
 
                 if hooks_enabled {
+                    let mut after_data = existing_doc.fields.clone();
+
+                    run_field_hooks_inner(
+                        lua,
+                        &def.fields,
+                        &FieldHookEvent::AfterChange,
+                        &mut after_data,
+                        &collection,
+                        "update",
+                    )
+                    .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
+
                     let after_ctx = HookContext::builder(collection.clone(), "update")
-                        .data(existing_doc.fields.clone())
+                        .data(after_data)
                         .draft(is_draft)
                         .locale(locale_str.clone())
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
-                    run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
-                        |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
-                    )?;
+                    run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx)
+                        .map_err(|e| RuntimeError(format!("after_change hook error: {}", e)))?;
                 }
 
                 let mut existing_doc = existing_doc;
@@ -629,7 +638,7 @@ pub(super) fn register_update(
                     None,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("hydrate error: {}", e)))?;
 
                 document_to_lua_table(lua, &existing_doc)
             } else {
@@ -643,12 +652,15 @@ pub(super) fn register_update(
                     &service::PersistOptions::builder()
                         .password(password.as_deref())
                         .locale_ctx(locale_ctx.as_ref())
+                        .locale_config(&lc)
                         .build(),
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("update error: {}", e)))?;
 
                 if hooks_enabled {
                     let mut after_data = doc.fields.clone();
+                    after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
+
                     run_field_hooks_inner(
                         lua,
                         &def.fields,
@@ -657,20 +669,17 @@ pub(super) fn register_update(
                         &collection,
                         "update",
                     )
-                    .map_err(|e| {
-                        mlua::Error::RuntimeError(format!("after_change field hook error: {}", e))
-                    })?;
+                    .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
 
                     let after_ctx = HookContext::builder(collection.clone(), "update")
-                        .data(doc.fields.clone())
+                        .data(after_data)
                         .draft(is_draft)
                         .locale(locale_str.clone())
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
-                    run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
-                        |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
-                    )?;
+                    run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx)
+                        .map_err(|e| RuntimeError(format!("after_change hook error: {}", e)))?;
                 }
 
                 let mut doc = doc;
@@ -682,7 +691,7 @@ pub(super) fn register_update(
                     None,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("hydrate error: {}", e)))?;
 
                 document_to_lua_table(lua, &doc)
             }

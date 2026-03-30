@@ -10,6 +10,8 @@ Crap CMS provides opt-in access control at both collection and field levels. Acc
 
 If no access control is configured, everything is allowed. This is fully backward compatible with existing setups.
 
+To enforce a "secure by default" posture, set `default_deny = true` in `[access]` in `crap.toml`. With this setting, collections and globals without explicit access functions **deny all operations** instead of allowing them. Every collection must then explicitly declare its access rules.
+
 ## Three Levels
 
 1. **Admin panel-level** — `admin.access` in `crap.toml`. A Lua function that gates access to the entire admin UI, checked after login. See [Admin UI](../admin-ui/overview.md#access).
@@ -38,3 +40,12 @@ end
 ## CRUD Access in Access Functions
 
 Access functions run with transaction context — they can call `crap.collections.find()` etc. to make decisions based on data in other collections.
+
+> **Note:** Lua CRUD functions enforce access control by default (`overrideAccess = false`). If your access function calls CRUD internally, pass `overrideAccess = true` to avoid recursive access checks:
+>
+> ```lua
+> function M.check(ctx)
+>     local count = crap.collections.count("items", { overrideAccess = true })
+>     return count < 100  -- allow if under limit
+> end
+> ```

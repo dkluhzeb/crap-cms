@@ -7,7 +7,15 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
     match condition {
         Value::Array(arr) => arr.iter().all(|c| evaluate_condition_table(c, data)),
         Value::Object(obj) => {
-            let field_name = obj.get("field").and_then(|v| v.as_str()).unwrap_or("");
+            let field_name = match obj.get("field").and_then(|v| v.as_str()) {
+                Some(f) if !f.is_empty() => f,
+                _ => {
+                    tracing::warn!(
+                        "Display condition missing or empty 'field' key — defaulting to show"
+                    );
+                    return true;
+                }
+            };
             let field_val = data.get(field_name).unwrap_or(&Value::Null);
 
             if let Some(eq) = obj.get("equals") {
@@ -36,19 +44,24 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
             {
                 return !condition_is_truthy(field_val);
             }
-            true // unknown operator -> show
+            tracing::warn!(
+                "Unknown display condition operator for field '{}' — defaulting to show",
+                field_name
+            );
+            true
         }
         _ => true,
     }
 }
 
 /// Check if a JSON value is "truthy" for display condition evaluation.
+/// Follows standard truthiness: 0 and 0.0 are falsy, all other numbers are truthy.
 pub(crate) fn condition_is_truthy(val: &Value) -> bool {
     match val {
         Value::Null => false,
         Value::Bool(b) => *b,
         Value::String(s) => !s.is_empty(),
-        Value::Number(_) => true,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
     }
@@ -78,9 +91,11 @@ mod tests {
 
     #[test]
     fn test_condition_is_truthy_number() {
-        assert!(condition_is_truthy(&json!(0)));
+        assert!(!condition_is_truthy(&json!(0)));
+        assert!(!condition_is_truthy(&json!(0.0)));
         assert!(condition_is_truthy(&json!(42)));
         assert!(condition_is_truthy(&json!(-1)));
+        assert!(condition_is_truthy(&json!(0.5)));
     }
 
     #[test]
@@ -173,6 +188,30 @@ mod tests {
         let data = json!({"status": "published"});
         let cond = json!({"field": "nonexistent", "equals": "something"});
         assert!(!evaluate_condition_table(&cond, &data));
+    }
+
+    /// Regression: a condition with missing "field" key must show the field
+    /// (default to visible) and not silently match against an empty-string lookup.
+    #[test]
+    fn test_condition_missing_field_key_shows() {
+        let data = json!({"status": "published"});
+        // No "field" key at all
+        let cond = json!({"equals": "something"});
+        assert!(
+            evaluate_condition_table(&cond, &data),
+            "Missing 'field' key should default to show"
+        );
+    }
+
+    /// Regression: a condition with an empty-string "field" key must default to show.
+    #[test]
+    fn test_condition_empty_field_key_shows() {
+        let data = json!({"status": "published"});
+        let cond = json!({"field": "", "equals": "something"});
+        assert!(
+            evaluate_condition_table(&cond, &data),
+            "Empty 'field' key should default to show"
+        );
     }
 
     #[test]

@@ -53,52 +53,116 @@ pub(super) fn extract_snapshot_data(
     fields: &[FieldDefinition],
     locales_enabled: bool,
 ) -> HashMap<String, String> {
-    let mut data: HashMap<String, String> = HashMap::new();
-    for field in fields {
-        if field.field_type == FieldType::Group {
-            let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
-            for sub in &field.fields {
-                let is_localized = (field.localized || sub.localized) && locales_enabled;
+    extract_snapshot_recursive(obj, fields, locales_enabled, "", false)
+}
 
+/// Inner recursive extraction with prefix support.
+/// `prefix` accumulates Group prefixes (`"seo__"`), while layout wrappers pass through.
+fn extract_snapshot_recursive(
+    obj: &Map<String, Value>,
+    fields: &[FieldDefinition],
+    locales_enabled: bool,
+    prefix: &str,
+    inherited_localized: bool,
+) -> HashMap<String, String> {
+    let mut data: HashMap<String, String> = HashMap::new();
+
+    for field in fields {
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = if prefix.is_empty() {
+                    field.name.to_string()
+                } else {
+                    format!("{}{}", prefix, field.name)
+                };
+                let nested_prefix = format!("{}__", new_prefix);
+
+                // Recurse into Group sub-fields with accumulated prefix.
+                // This correctly handles layout wrappers (Row/Tabs) inside Groups.
+                data.extend(extract_snapshot_recursive(
+                    obj,
+                    &field.fields,
+                    locales_enabled,
+                    &nested_prefix,
+                    inherited_localized || field.localized,
+                ));
+
+                // Also try nested object format (e.g., `seo: { title: ... }`)
+                if let Some(nested_obj) = obj.get(&field.name).and_then(|v| v.as_object()) {
+                    let nested_data = extract_snapshot_recursive(
+                        nested_obj,
+                        &field.fields,
+                        locales_enabled,
+                        &nested_prefix,
+                        inherited_localized || field.localized,
+                    );
+
+                    // Only insert values not already found via flat keys
+                    for (k, v) in nested_data {
+                        data.entry(k).or_insert(v);
+                    }
+                }
+            }
+
+            FieldType::Row | FieldType::Collapsible => {
+                data.extend(extract_snapshot_recursive(
+                    obj,
+                    &field.fields,
+                    locales_enabled,
+                    prefix,
+                    inherited_localized,
+                ));
+            }
+
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    data.extend(extract_snapshot_recursive(
+                        obj,
+                        &tab.fields,
+                        locales_enabled,
+                        prefix,
+                        inherited_localized,
+                    ));
+                }
+            }
+
+            _ => {
+                if !field.has_parent_column() {
+                    continue;
+                }
+
+                let is_localized = (inherited_localized || field.localized) && locales_enabled;
                 if is_localized {
                     continue;
                 }
-                let key = format!("{}__{}", field.name, sub.name);
-                // Try flat key first, then nested path
-                let val = obj
-                    .get(&key)
-                    .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
 
-                if let Some(s) = snapshot_val_to_string(val) {
-                    data.insert(key, s);
+                let key = format!("{}{}", prefix, field.name);
+
+                // Try the full key first, then just the field name (for nested obj format).
+                // Only insert when we actually find a value in the object — missing fields
+                // are handled by the nested-object pass in the Group handler.
+                if let Some(val) = obj.get(&key).or_else(|| obj.get(&field.name))
+                    && let Some(s) = snapshot_val_to_string(Some(val))
+                {
+                    data.insert(key.clone(), s);
+                }
+
+                // Timezone companion column for date fields
+                if field.field_type == FieldType::Date && field.timezone {
+                    let tz_key = format!("{}_tz", key);
+
+                    if let Some(tz_val) = obj
+                        .get(&tz_key)
+                        .or_else(|| obj.get(&format!("{}_tz", field.name)))
+                        && let Some(s) = snapshot_val_to_string(Some(tz_val))
+                    {
+                        data.insert(tz_key, s);
+                    }
                 }
             }
-            continue;
-        }
-        // Row/Collapsible fields promote sub-fields as top-level columns (no prefix).
-        // Recurse to handle nested layout wrappers (e.g., Row inside Tabs).
-        if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
-            data.extend(extract_snapshot_data(obj, &field.fields, locales_enabled));
-            continue;
-        }
-        // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
-        // Recurse to handle nested layout wrappers.
-        if field.field_type == FieldType::Tabs {
-            for tab in &field.tabs {
-                data.extend(extract_snapshot_data(obj, &tab.fields, locales_enabled));
-            }
-            continue;
-        }
-        if !field.has_parent_column() {
-            continue;
-        }
-        if field.localized && locales_enabled {
-            continue;
-        }
-        if let Some(s) = snapshot_val_to_string(obj.get(&field.name)) {
-            data.insert(field.name.clone(), s);
         }
     }
+
     data
 }
 
@@ -361,6 +425,93 @@ mod tests {
         assert!(
             join_data.contains_key("related"),
             "has-many inside Collapsible must be in join data"
+        );
+    }
+
+    // ── Timezone companion column tests ──────────────────────────────
+
+    #[test]
+    fn extract_snapshot_data_includes_tz_companion() {
+        // Regression: extract_snapshot_data must extract _tz companion columns
+        // for Date fields with timezone: true, so version restore works.
+        let fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date_tz": "America/New_York"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("start_date"),
+            Some(&"2024-06-15T14:00:00.000Z".to_string()),
+            "Date value should be extracted"
+        );
+        assert_eq!(
+            data.get("start_date_tz"),
+            Some(&"America/New_York".to_string()),
+            "Timezone companion should be extracted"
+        );
+    }
+
+    #[test]
+    fn extract_snapshot_data_date_without_tz_no_companion() {
+        // Date field without timezone: true should NOT extract a _tz column.
+        let fields = vec![FieldDefinition::builder("event_date", FieldType::Date).build()];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "event_date": "2024-06-15T14:00:00.000Z"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("event_date"),
+            Some(&"2024-06-15T14:00:00.000Z".to_string())
+        );
+        assert!(
+            !data.contains_key("event_date_tz"),
+            "No _tz column should be extracted for non-timezone date"
+        );
+    }
+
+    #[test]
+    fn extract_snapshot_data_group_date_tz_companion() {
+        // Date field with timezone inside a Group: the _tz companion should
+        // be extracted with the group prefix.
+        let fields = vec![
+            FieldDefinition::builder("schedule", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("start", FieldType::Date)
+                        .timezone(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let obj: Map<String, Value> = serde_json::from_value(json!({
+            "schedule__start": "2024-06-15T07:00:00.000Z",
+            "schedule__start_tz": "Europe/Berlin"
+        }))
+        .unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+
+        assert_eq!(
+            data.get("schedule__start"),
+            Some(&"2024-06-15T07:00:00.000Z".to_string())
+        );
+        assert_eq!(
+            data.get("schedule__start_tz"),
+            Some(&"Europe/Berlin".to_string()),
+            "Group _tz companion should be extracted with prefix"
         );
     }
 }

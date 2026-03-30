@@ -59,9 +59,10 @@ pub fn fts_search(
         return Ok(Vec::new());
     }
 
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "SELECT id FROM {} WHERE {} MATCH ?1 ORDER BY rank LIMIT ?2",
-        fts_table, fts_table
+        "SELECT id FROM {} WHERE {} MATCH {} ORDER BY rank LIMIT {}",
+        fts_table, fts_table, p1, p2
     );
 
     let rows = conn
@@ -90,6 +91,7 @@ pub fn fts_where_clause(
     conn: &dyn DbConnection,
     slug: &str,
     search: &str,
+    param_index: usize,
 ) -> Option<(String, String)> {
     let sanitized = sanitize_fts_query(search);
 
@@ -104,9 +106,10 @@ pub fn fts_where_clause(
         return None;
     }
 
+    let placeholder = conn.placeholder(param_index);
     let clause = format!(
-        "id IN (SELECT id FROM {} WHERE {} MATCH ?)",
-        fts_table, fts_table
+        "id IN (SELECT id FROM {} WHERE {} MATCH {})",
+        fts_table, fts_table, placeholder
     );
     Some((clause, sanitized))
 }
@@ -252,7 +255,7 @@ mod tests {
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
-        let result = fts_where_clause(&conn, "posts", "Hello");
+        let result = fts_where_clause(&conn, "posts", "Hello", 1);
         assert!(result.is_some());
         let (clause, query) = result.unwrap();
         assert!(clause.contains("_fts_posts"));
@@ -262,7 +265,7 @@ mod tests {
     #[test]
     fn where_clause_no_fts_table() {
         let (_dir, conn) = setup_db();
-        assert!(fts_where_clause(&conn, "posts", "Hello").is_none());
+        assert!(fts_where_clause(&conn, "posts", "Hello", 1).is_none());
     }
 
     #[test]
@@ -270,7 +273,7 @@ mod tests {
         let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
-        assert!(fts_where_clause(&conn, "posts", "").is_none());
+        assert!(fts_where_clause(&conn, "posts", "", 1).is_none());
     }
 
     #[test]
@@ -283,7 +286,7 @@ mod tests {
         let def = simple_def(vec![text_field("title"), text_field("body")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
-        let (clause, query) = fts_where_clause(&conn, "posts", "Rust").unwrap();
+        let (clause, query) = fts_where_clause(&conn, "posts", "Rust", 1).unwrap();
 
         let sql = format!(
             "SELECT id FROM posts WHERE status IS NULL AND {} ORDER BY id",

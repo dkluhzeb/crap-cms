@@ -17,7 +17,10 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `upload` | boolean or table | `nil` | Upload config (see [Uploads](../uploads/overview.md)) |
 | `access` | table | `{}` | Access control function refs |
 | `versions` | boolean or table | `nil` | Versioning and drafts config (see [Versions & Drafts](versions.md)) |
+| `soft_delete` | boolean | `false` | Enable soft deletes (see [Soft Deletes](soft-deletes.md)) |
+| `soft_delete_retention` | string | `nil` | Auto-purge retention period (e.g., `"30d"`). Requires `soft_delete = true`. |
 | `live` | boolean or string | `nil` | Live update broadcasting (see [Live Updates](../live-updates/overview.md)) |
+| `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` for MCP tool descriptions. |
 | `indexes` | IndexDefinition[] | `{}` | Compound indexes (see [Indexes](#indexes) below) |
 
 ## `admin`
@@ -37,11 +40,12 @@ All hook values are arrays of string references in `module.function` format.
 |----------|------|-------------|
 | `before_validate` | string[] | Runs before field validation. Has CRUD access. |
 | `before_change` | string[] | Runs after validation, before write. Has CRUD access. |
-| `after_change` | string[] | Runs after create/update. No CRUD access (fire-and-forget). |
+| `after_change` | string[] | Runs after create/update (inside transaction). Has CRUD access. Errors roll back. |
 | `before_read` | string[] | Runs before returning read results. No CRUD access. |
 | `after_read` | string[] | Runs after read, before response. No CRUD access. |
 | `before_delete` | string[] | Runs before delete. Has CRUD access. |
-| `after_delete` | string[] | Runs after delete. No CRUD access (fire-and-forget). |
+| `after_delete` | string[] | Runs after delete (inside transaction). Has CRUD access. Errors roll back. |
+| `before_broadcast` | string[] | Runs after commit, before broadcast. No CRUD access. See [Live Updates](../live-updates/hooks.md). |
 
 See [Hooks](../hooks/overview.md) for full details.
 
@@ -176,23 +180,20 @@ crap.collections.define("posts", {
         list_searchable_fields = { "title", "slug", "content" },
     },
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             hooks = {
                 before_validate = { "hooks.posts.trim_title" },
             },
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             required = true,
             unique = true,
-        },
-        {
+        }),
+        crap.fields.select({
             name = "status",
-            type = "select",
             required = true,
             default_value = "draft",
             options = {
@@ -200,13 +201,12 @@ crap.collections.define("posts", {
                 { label = "Published", value = "published" },
                 { label = "Archived", value = "archived" },
             },
-        },
-        { name = "content", type = "richtext" },
-        {
+        }),
+        crap.fields.richtext({ name = "content" }),
+        crap.fields.relationship({
             name = "tags",
-            type = "relationship",
             relationship = { collection = "tags", has_many = true },
-        },
+        }),
     },
     hooks = {
         before_change = { "hooks.posts.auto_slug" },

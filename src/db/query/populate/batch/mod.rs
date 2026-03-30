@@ -142,7 +142,7 @@ pub fn populate_relationships_batch_cached(
             && select.is_none_or(|sel| sel.iter().any(|s| s == &f.name))
     });
 
-    if has_join_fields {
+    if has_join_fields && depth > 0 {
         for doc in docs.iter_mut() {
             let mut doc_visited = visited.clone();
             for field in &def.fields {

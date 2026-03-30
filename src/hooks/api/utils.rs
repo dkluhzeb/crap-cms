@@ -1,10 +1,13 @@
-//! `crap.util` namespace — slugify, nanoid, JSON encode/decode, date helpers,
-//! and pure Lua table/string utilities loaded after the namespace is set.
+//! `crap.util` and `crap.json` namespaces — slugify, nanoid, JSON encode/decode,
+//! date helpers, and pure Lua table/string utilities loaded after the namespace is set.
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use mlua::{Function, Lua, Table};
+use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value as LuaValue};
+use nanoid::nanoid;
 use serde_json::Value;
+
+use super::{json_to_lua, lua_to_json};
 
 /// Pure Lua table and string helpers, loaded onto `crap.util` after the table is set.
 const LUA_UTIL_HELPERS: &str = r#"
@@ -143,41 +146,48 @@ function util.truncate(str, max_len, suffix)
 end
 "#;
 
-/// Register `crap.util` — slugify, nanoid, JSON, date helpers.
+/// Register `crap.util` and `crap.json` — slugify, nanoid, JSON, date helpers.
 pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
     let util_table = lua.create_table()?;
 
     let slugify_fn = lua.create_function(|_, s: String| Ok(slugify(&s)))?;
     util_table.set("slugify", slugify_fn)?;
 
-    let nanoid_fn = lua.create_function(|_, ()| Ok(nanoid::nanoid!()))?;
+    let nanoid_fn = lua.create_function(|_, ()| Ok(nanoid!()))?;
     util_table.set("nanoid", nanoid_fn)?;
 
-    let json_encode_fn: Function = lua.create_function(|lua, value: mlua::Value| {
-        let json_value = super::lua_to_json(lua, &value)?;
-        serde_json::to_string(&json_value)
-            .map_err(|e| mlua::Error::RuntimeError(format!("JSON encode error: {}", e)))
-    })?;
-    util_table.set("json_encode", json_encode_fn)?;
+    let json_encode_fn: Function = lua.create_function(|lua, value: LuaValue| {
+        let json_value = lua_to_json(lua, &value)?;
 
-    let json_decode_fn = lua.create_function(|lua, s: String| {
-        let value: Value = serde_json::from_str(&s)
-            .map_err(|e| mlua::Error::RuntimeError(format!("JSON decode error: {}", e)))?;
-        super::json_to_lua(lua, &value)
+        serde_json::to_string(&json_value)
+            .map_err(|e| RuntimeError(format!("JSON encode error: {}", e)))
     })?;
-    util_table.set("json_decode", json_decode_fn)?;
+    util_table.set("json_encode", json_encode_fn.clone())?;
+
+    let json_decode_fn: Function = lua.create_function(|lua, s: String| {
+        let value: Value = serde_json::from_str(&s)
+            .map_err(|e| RuntimeError(format!("JSON decode error: {}", e)))?;
+        json_to_lua(lua, &value)
+    })?;
+    util_table.set("json_decode", json_decode_fn.clone())?;
+
+    // Also register crap.json.encode / crap.json.decode as a dedicated namespace
+    let json_table = lua.create_table()?;
+    json_table.set("encode", json_encode_fn)?;
+    json_table.set("decode", json_decode_fn)?;
+    crap.set("json", json_table)?;
 
     // Date helpers (Rust, using chrono)
     {
         let date_now_fn =
-            lua.create_function(|_, ()| -> mlua::Result<String> { Ok(Utc::now().to_rfc3339()) })?;
+            lua.create_function(|_, ()| -> LuaResult<String> { Ok(Utc::now().to_rfc3339()) })?;
         util_table.set("date_now", date_now_fn)?;
 
         let date_timestamp_fn =
-            lua.create_function(|_, ()| -> mlua::Result<i64> { Ok(Utc::now().timestamp()) })?;
+            lua.create_function(|_, ()| -> LuaResult<i64> { Ok(Utc::now().timestamp()) })?;
         util_table.set("date_timestamp", date_timestamp_fn)?;
 
-        let date_parse_fn = lua.create_function(|_, s: String| -> mlua::Result<i64> {
+        let date_parse_fn = lua.create_function(|_, s: String| -> LuaResult<i64> {
             // Try RFC 3339 first
             if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
                 return Ok(dt.timestamp());
@@ -196,27 +206,24 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
                     .and_utc()
                     .timestamp());
             }
-            Err(mlua::Error::RuntimeError(format!(
-                "could not parse date: {}",
-                s
-            )))
+            Err(RuntimeError(format!("could not parse date: {}", s)))
         })?;
         util_table.set("date_parse", date_parse_fn)?;
 
         let date_format_fn =
-            lua.create_function(|_, (ts, fmt): (i64, String)| -> mlua::Result<String> {
+            lua.create_function(|_, (ts, fmt): (i64, String)| -> LuaResult<String> {
                 let dt = DateTime::from_timestamp(ts, 0)
-                    .ok_or_else(|| mlua::Error::RuntimeError("invalid timestamp".into()))?;
+                    .ok_or_else(|| RuntimeError("invalid timestamp".into()))?;
                 Ok(dt.format(&fmt).to_string())
             })?;
         util_table.set("date_format", date_format_fn)?;
 
-        let date_add_fn = lua
-            .create_function(|_, (ts, secs): (i64, i64)| -> mlua::Result<i64> { Ok(ts + secs) })?;
+        let date_add_fn =
+            lua.create_function(|_, (ts, secs): (i64, i64)| -> LuaResult<i64> { Ok(ts + secs) })?;
         util_table.set("date_add", date_add_fn)?;
 
         let date_diff_fn =
-            lua.create_function(|_, (a, b): (i64, i64)| -> mlua::Result<i64> { Ok(a - b) })?;
+            lua.create_function(|_, (a, b): (i64, i64)| -> LuaResult<i64> { Ok(a - b) })?;
         util_table.set("date_diff", date_diff_fn)?;
     }
 
@@ -284,5 +291,64 @@ mod tests {
             slugify("Caf\u{00e9} Latt\u{00e9}"),
             "caf\u{00e9}-latt\u{00e9}"
         );
+    }
+
+    fn setup_lua() -> Lua {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        register_util(&lua, &crap).unwrap();
+        lua.globals().set("crap", crap).unwrap();
+        load_lua_helpers(&lua).unwrap();
+        lua
+    }
+
+    #[test]
+    fn json_namespace_encode() {
+        let lua = setup_lua();
+        let result: String = lua
+            .load(r#"return crap.json.encode({ name = "test", count = 42 })"#)
+            .eval()
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["name"], "test");
+        assert_eq!(parsed["count"], 42);
+    }
+
+    #[test]
+    fn json_namespace_decode() {
+        let lua = setup_lua();
+        let result: String = lua
+            .load(r#"local t = crap.json.decode('{"hello":"world"}'); return t.hello"#)
+            .eval()
+            .unwrap();
+        assert_eq!(result, "world");
+    }
+
+    #[test]
+    fn json_namespace_roundtrip() {
+        let lua = setup_lua();
+        let result: String = lua
+            .load(
+                r#"
+                local original = { items = { "a", "b" }, nested = { x = 1 } }
+                local encoded = crap.json.encode(original)
+                local decoded = crap.json.decode(encoded)
+                return decoded.items[1] .. decoded.items[2] .. tostring(decoded.nested.x)
+            "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(result, "ab1");
+    }
+
+    #[test]
+    fn json_util_aliases_still_work() {
+        let lua = setup_lua();
+        let result: String = lua
+            .load(r#"return crap.util.json_encode({ ok = true })"#)
+            .eval()
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
     }
 }

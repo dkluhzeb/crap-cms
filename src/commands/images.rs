@@ -3,6 +3,7 @@
 use anyhow::{Context as _, Result, anyhow, bail};
 use std::path::Path;
 
+use super::ImagesAction;
 use crate::{
     cli::{self, Table},
     config::{CrapConfig, parse_duration_string},
@@ -14,7 +15,7 @@ use crate::{
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
     match action {
-        super::ImagesAction::List { status, limit } => {
+        ImagesAction::List { status, limit } => {
             let config_dir = config_dir
                 .canonicalize()
                 .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -47,12 +48,12 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
                 } else {
                     e.status.clone()
                 };
-                let id_display = &e.id[..e.id.len().min(22)];
-                let doc_display = &e.document_id[..e.document_id.len().min(10)];
+                let id_display: String = e.id.chars().take(22).collect();
+                let doc_display: String = e.document_id.chars().take(10).collect();
                 table.row(vec![
-                    id_display,
+                    &id_display,
                     &e.collection,
-                    doc_display,
+                    &doc_display,
                     &e.format,
                     created,
                     &status_str,
@@ -61,9 +62,10 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
 
             table.print();
             table.footer(&format!("{} entry/entries", entries.len()));
+
             Ok(())
         }
-        super::ImagesAction::Stats => {
+        ImagesAction::Stats => {
             let config_dir = config_dir
                 .canonicalize()
                 .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -89,7 +91,7 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
 
             Ok(())
         }
-        super::ImagesAction::Retry { id, all, confirm } => {
+        ImagesAction::Retry { id, all, confirm } => {
             let config_dir = config_dir
                 .canonicalize()
                 .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -118,7 +120,7 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
 
             Ok(())
         }
-        super::ImagesAction::Purge { older_than } => {
+        ImagesAction::Purge { older_than } => {
             let config_dir = config_dir
                 .canonicalize()
                 .unwrap_or_else(|_| config_dir.to_path_buf());

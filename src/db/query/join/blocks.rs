@@ -22,7 +22,7 @@ pub fn set_block_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
+                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
             &[
@@ -34,7 +34,7 @@ pub fn set_block_rows(
     } else {
         let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
             &[DbValue::Text(parent_id.to_string())],
         )
         .with_context(|| format!("Failed to clear blocks table {}", table_name))?;
@@ -54,7 +54,7 @@ pub fn set_block_rows(
             conn.placeholder(6),
         );
         let sql = format!(
-            "INSERT INTO {} (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})",
+            "INSERT INTO \"{}\" (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})",
             table_name
         );
         for (order, row) in rows.iter().enumerate() {
@@ -62,7 +62,9 @@ pub fn set_block_rows(
             let block_type = row
                 .get("_block_type")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
+                })?
                 .to_string();
             let mut data_map = match row.as_object() {
                 Some(m) => m.clone(),
@@ -92,7 +94,7 @@ pub fn set_block_rows(
             conn.placeholder(5),
         );
         let sql = format!(
-            "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
+            "INSERT INTO \"{}\" (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
             table_name
         );
         for (order, row) in rows.iter().enumerate() {
@@ -100,7 +102,9 @@ pub fn set_block_rows(
             let block_type = row
                 .get("_block_type")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
+                })?
                 .to_string();
             let mut data_map = match row.as_object() {
                 Some(m) => m.clone(),
@@ -138,7 +142,7 @@ pub fn find_block_rows(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT id, _block_type, data FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                "SELECT id, _block_type, data FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
                 table_name
             ),
             vec![
@@ -150,7 +154,7 @@ pub fn find_block_rows(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT id, _block_type, data FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                "SELECT id, _block_type, data FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
                 table_name
             ),
             vec![DbValue::Text(parent_id.to_string())],
@@ -288,6 +292,41 @@ mod tests {
         let de = find_block_rows(&conn, "posts", "content", "p1", Some("de")).unwrap();
         assert_eq!(de.len(), 1);
         assert_eq!(de[0]["body"], "Hallo");
+    }
+
+    #[test]
+    fn set_block_rows_missing_block_type_errors() {
+        let (_dir, conn) = setup_blocks_db();
+        let blocks = vec![json!({"text": "no block type here"})];
+        let result = set_block_rows(&conn, "posts", "content", "p1", &blocks, None);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("missing '_block_type'"),
+            "Error should mention missing _block_type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn set_block_rows_missing_block_type_errors_with_locale() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts_content (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                _block_type TEXT,
+                data TEXT,
+                _locale TEXT
+            );",
+        );
+        let blocks = vec![json!({"text": "no block type"})];
+        let result = set_block_rows(&conn, "posts", "content", "p1", &blocks, Some("en"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("missing '_block_type'"),
+            "Error should mention missing _block_type, got: {msg}"
+        );
     }
 
     #[test]

@@ -10,8 +10,8 @@ use crate::core::JwtSecret;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AuthConfig {
-    /// JWT secret. If empty, a random secret is generated at startup (tokens
-    /// won't survive restarts).
+    /// JWT secret. If empty, a random secret is generated on first startup and
+    /// persisted to `data/.jwt_secret`. Set explicitly for multi-instance deployments.
     pub secret: JwtSecret,
     /// Default token expiry in seconds (can be overridden per-collection).
     /// Accepts integer seconds or human-readable string ("2h", "7200").
@@ -33,6 +33,9 @@ pub struct AuthConfig {
     /// Accepts integer seconds or human-readable string ("15m", "900").
     #[serde(with = "serde_duration")]
     pub forgot_password_window_seconds: u64,
+    /// Max failed login attempts per IP before lockout. Default: 20.
+    /// Higher than per-email to tolerate shared IPs (offices, NAT).
+    pub max_ip_login_attempts: u32,
     /// Password strength requirements.
     #[serde(default)]
     pub password_policy: PasswordPolicy,
@@ -44,6 +47,7 @@ impl Default for AuthConfig {
             secret: JwtSecret::new(""),
             token_expiry: 7200,
             max_login_attempts: 5,
+            max_ip_login_attempts: 20,
             login_lockout_seconds: 300,
             reset_token_expiry: 3600,
             max_forgot_password_attempts: 3,
@@ -58,7 +62,7 @@ impl Default for AuthConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PasswordPolicy {
-    /// Minimum password length. Default: 8.
+    /// Minimum password length. Default: 8. Recommended: 12+ for modern security.
     pub min_length: usize,
     /// Maximum password length. Default: 128. Prevents DoS via Argon2 on huge inputs.
     pub max_length: usize,
@@ -89,11 +93,13 @@ impl PasswordPolicy {
     /// Validate a password against this policy. Returns `Ok(())` if the password
     /// meets all requirements, or `Err` with a human-readable message.
     pub fn validate(&self, password: &str) -> Result<()> {
-        if password.len() < self.min_length {
+        if password.chars().count() < self.min_length {
             bail!("Password must be at least {} characters", self.min_length);
         }
+        // Max length uses byte length intentionally: Argon2 hashes the raw bytes,
+        // so limiting bytes prevents DoS via large multi-byte payloads.
         if password.len() > self.max_length {
-            bail!("Password must be at most {} characters", self.max_length);
+            bail!("Password must be at most {} bytes", self.max_length);
         }
         if self.require_uppercase && !password.chars().any(|c| c.is_ascii_uppercase()) {
             bail!("Password must contain at least one uppercase letter");
@@ -120,6 +126,7 @@ mod tests {
         let auth = AuthConfig::default();
         assert!(auth.secret.is_empty());
         assert_eq!(auth.token_expiry, 7200);
+        assert_eq!(auth.max_ip_login_attempts, 20);
         assert_eq!(auth.reset_token_expiry, 3600);
     }
 
@@ -172,6 +179,27 @@ mod tests {
         };
         assert!(policy.validate("12345678").is_ok());
         assert!(policy.validate("12345678901").is_err());
+    }
+
+    /// Regression: max_length error message said "characters" but the check uses byte length.
+    #[test]
+    fn password_policy_max_length_error_says_bytes() {
+        let policy = PasswordPolicy {
+            max_length: 10,
+            ..Default::default()
+        };
+        let err = policy.validate("12345678901").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bytes"),
+            "error message should say 'bytes', got: {}",
+            msg
+        );
+        assert!(
+            !msg.contains("characters"),
+            "error message should not say 'characters', got: {}",
+            msg
+        );
     }
 
     #[test]

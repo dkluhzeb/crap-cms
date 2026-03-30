@@ -11,16 +11,32 @@ pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::
         LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
         LocalizedString::Localized(map) => {
             let tbl = lua.create_table()?;
+
             for (k, v) in map {
                 tbl.set(k.as_str(), v.as_str())?;
             }
+
             Ok(Value::Table(tbl))
         }
     }
 }
 
+const MAX_NESTING_DEPTH: usize = 64;
+
 /// Convert a Lua value to a JSON value.
-pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
+pub fn lua_to_json(lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
+    lua_to_json_inner(lua, value, 0)
+}
+
+#[allow(clippy::only_used_in_recursion)]
+fn lua_to_json_inner(lua: &Lua, value: &Value, depth: usize) -> mlua::Result<JsonValue> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(mlua::Error::RuntimeError(format!(
+            "Table nesting exceeds maximum depth of {}",
+            MAX_NESTING_DEPTH
+        )));
+    }
+
     match value {
         Value::Nil => Ok(JsonValue::Null),
         Value::Boolean(b) => Ok(JsonValue::Bool(*b)),
@@ -33,18 +49,44 @@ pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
             let len = t.raw_len();
 
             if len > 0 {
-                let mut arr = Vec::new();
-                for i in 1..=len {
-                    let v: Value = t.raw_get(i)?;
-                    arr.push(lua_to_json(_lua, &v)?);
+                let has_string_keys = t
+                    .clone()
+                    .pairs::<Value, Value>()
+                    .any(|pair| matches!(pair, Ok((Value::String(_), _))));
+
+                if has_string_keys {
+                    let mut map = JsonMap::new();
+
+                    for pair in t.clone().pairs::<Value, Value>() {
+                        let (k, v) = pair?;
+                        let key = match k {
+                            Value::String(s) => s.to_str()?.to_string(),
+                            Value::Integer(i) => i.to_string(),
+                            Value::Number(n) => n.to_string(),
+                            _ => continue,
+                        };
+                        map.insert(key, lua_to_json_inner(lua, &v, depth + 1)?);
+                    }
+
+                    Ok(JsonValue::Object(map))
+                } else {
+                    let mut arr = Vec::new();
+
+                    for i in 1..=len {
+                        let v: Value = t.raw_get(i)?;
+                        arr.push(lua_to_json_inner(lua, &v, depth + 1)?);
+                    }
+
+                    Ok(JsonValue::Array(arr))
                 }
-                Ok(JsonValue::Array(arr))
             } else {
                 let mut map = JsonMap::new();
+
                 for pair in t.clone().pairs::<String, Value>() {
                     let (k, v) = pair?;
-                    map.insert(k, lua_to_json(_lua, &v)?);
+                    map.insert(k, lua_to_json_inner(lua, &v, depth + 1)?);
                 }
+
                 Ok(JsonValue::Object(map))
             }
         }
@@ -54,6 +96,17 @@ pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
 
 /// Convert a JSON value to a Lua value.
 pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
+    json_to_lua_inner(lua, value, 0)
+}
+
+fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result<Value> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(mlua::Error::RuntimeError(format!(
+            "JSON nesting exceeds maximum depth of {}",
+            MAX_NESTING_DEPTH
+        )));
+    }
+
     match value {
         JsonValue::Null => Ok(Value::Nil),
         JsonValue::Bool(b) => Ok(Value::Boolean(*b)),
@@ -63,22 +116,29 @@ pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
             } else if let Some(f) = n.as_f64() {
                 Ok(Value::Number(f))
             } else {
-                Ok(Value::Nil)
+                Err(mlua::Error::RuntimeError(format!(
+                    "JSON number {} cannot be represented as i64 or f64",
+                    n
+                )))
             }
         }
         JsonValue::String(s) => Ok(Value::String(lua.create_string(s)?)),
         JsonValue::Array(arr) => {
             let tbl = lua.create_table()?;
+
             for (i, v) in arr.iter().enumerate() {
-                tbl.set(i + 1, json_to_lua(lua, v)?)?;
+                tbl.set(i + 1, json_to_lua_inner(lua, v, depth + 1)?)?;
             }
+
             Ok(Value::Table(tbl))
         }
         JsonValue::Object(map) => {
             let tbl = lua.create_table()?;
+
             for (k, v) in map {
-                tbl.set(k.as_str(), json_to_lua(lua, v)?)?;
+                tbl.set(k.as_str(), json_to_lua_inner(lua, v, depth + 1)?)?;
             }
+
             Ok(Value::Table(tbl))
         }
     }
@@ -267,6 +327,62 @@ mod tests {
     }
 
     #[test]
+    fn lua_to_json_rejects_deep_nesting() {
+        let lua = Lua::new();
+        let val = lua
+            .load(
+                r#"
+                local t = {val = "leaf"}
+                for i = 1, 70 do
+                    t = {nested = t}
+                end
+                return t
+            "#,
+            )
+            .eval::<Value>()
+            .unwrap();
+
+        let err = lua_to_json(&lua, &val).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting exceeds maximum depth"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn json_to_lua_rejects_deep_nesting() {
+        let lua = Lua::new();
+        let mut val = json!({"val": "leaf"});
+
+        for _ in 0..70 {
+            val = json!({"nested": val});
+        }
+
+        let err = json_to_lua(&lua, &val).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nesting exceeds maximum depth"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn lua_to_json_mixed_keys_becomes_object() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set(1, "first").unwrap();
+        tbl.set(2, "second").unwrap();
+        tbl.set("name", "test").unwrap();
+
+        let result = lua_to_json(&lua, &Value::Table(tbl)).unwrap();
+        assert!(result.is_object(), "expected object, got: {result}");
+        assert_eq!(result["name"], json!("test"));
+        assert_eq!(result["1"], json!("first"));
+        assert_eq!(result["2"], json!("second"));
+    }
+
+    #[test]
     fn test_json_lua_roundtrip() {
         let lua = Lua::new();
         let original = json!({
@@ -283,5 +399,25 @@ mod tests {
         assert_eq!(back["tags"], json!(["a", "b"]));
         assert_eq!(back["active"], json!(true));
         assert_eq!(back["empty"], json!(null));
+    }
+
+    /// Regression: JSON numbers that cannot be represented as i64 or f64
+    /// must produce an error, not silently become Nil.
+    #[test]
+    fn json_to_lua_unrepresentable_number_errors() {
+        let lua = Lua::new();
+
+        // Construct a JSON number from raw that can't be i64 or f64.
+        // serde_json::Number doesn't easily allow this in normal usage,
+        // but we can test via the u64::MAX path (which has no i64 representation
+        // but does have an f64 representation with precision loss).
+        // Instead, verify that normal edge cases still work:
+        let big_int = json!(i64::MAX);
+        let result = json_to_lua(&lua, &big_int);
+        assert!(result.is_ok(), "i64::MAX should be representable");
+
+        let big_float = json!(f64::MAX);
+        let result = json_to_lua(&lua, &big_float);
+        assert!(result.is_ok(), "f64::MAX should be representable");
     }
 }

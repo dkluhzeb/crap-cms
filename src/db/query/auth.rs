@@ -17,7 +17,7 @@ pub fn find_by_email(
     let column_names = get_column_names(def);
 
     let sql = format!(
-        "SELECT {} FROM {} WHERE email = {}",
+        "SELECT {} FROM \"{}\" WHERE email = {}",
         column_names.join(", "),
         slug,
         conn.placeholder(1)
@@ -36,7 +36,7 @@ pub fn get_password_hash(
     id: &str,
 ) -> Result<Option<HashedPassword>> {
     let sql = format!(
-        "SELECT _password_hash FROM {} WHERE id = {}",
+        "SELECT _password_hash FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -60,7 +60,7 @@ pub fn update_password(
     let hash = hash_password(password)?;
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "UPDATE {} SET _password_hash = {} WHERE id = {}",
+        "UPDATE \"{}\" SET _password_hash = {}, _session_version = COALESCE(_session_version, 0) + 1 WHERE id = {}",
         slug, p1, p2
     );
     conn.execute(
@@ -77,7 +77,7 @@ pub fn update_password(
 /// Check whether a user has a password set (non-NULL `_password_hash`).
 pub fn has_password(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT (_password_hash IS NOT NULL) AS has_pw FROM {} WHERE id = {}",
+        "SELECT (_password_hash IS NOT NULL) AS has_pw FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -103,7 +103,7 @@ pub fn set_reset_token(
         conn.placeholder(3),
     );
     let sql = format!(
-        "UPDATE {} SET _reset_token = {}, _reset_token_exp = {} WHERE id = {}",
+        "UPDATE \"{}\" SET _reset_token = {}, _reset_token_exp = {} WHERE id = {}",
         slug, p1, p2, p3
     );
     conn.execute(
@@ -128,7 +128,7 @@ pub fn find_by_reset_token(
     let column_names = get_column_names(def);
     let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {}, _reset_token_exp FROM {} WHERE _reset_token = {}",
+        "SELECT {}, _reset_token_exp FROM \"{}\" WHERE _reset_token = {}",
         cols,
         slug,
         conn.placeholder(1)
@@ -149,7 +149,7 @@ pub fn find_by_reset_token(
 /// Clear the reset token for a user (after successful reset or expiry).
 pub fn clear_reset_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = {}",
+        "UPDATE \"{}\" SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -174,7 +174,7 @@ pub fn set_verification_token(
         conn.placeholder(3),
     );
     let sql = format!(
-        "UPDATE {} SET _verification_token = {}, _verification_token_exp = {} WHERE id = {}",
+        "UPDATE \"{}\" SET _verification_token = {}, _verification_token_exp = {} WHERE id = {}",
         slug, p1, p2, p3
     );
     conn.execute(
@@ -204,7 +204,7 @@ pub fn find_by_verification_token(
     let column_names = get_column_names(def);
     let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {}, _verification_token_exp FROM {} WHERE _verification_token = {}",
+        "SELECT {}, _verification_token_exp FROM \"{}\" WHERE _verification_token = {}",
         cols,
         slug,
         conn.placeholder(1)
@@ -214,25 +214,35 @@ pub fn find_by_verification_token(
         Some(row) => {
             let doc = row_to_document(conn, &row)?;
             let exp = row
-                .get_named("_verification_token_exp")
-                .and_then(|v| {
-                    if let DbValue::Integer(i) = v {
-                        Some(*i)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
+                .get_i64("_verification_token_exp")
+                .context("Failed to read _verification_token_exp")?;
             Ok(Some((doc, exp)))
         }
         None => Ok(None),
     }
 }
 
+/// Clear the verification token for a user (after expiry). Does NOT change `_verified` status.
+pub fn clear_verification_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
+    let sql = format!(
+        "UPDATE \"{}\" SET _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    conn.execute(&sql, &[DbValue::Text(user_id.to_string())])
+        .with_context(|| {
+            format!(
+                "Failed to clear verification token for {} in {}",
+                user_id, slug
+            )
+        })?;
+    Ok(())
+}
+
 /// Mark a user as verified (set _verified = 1, clear token and expiry).
 pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
+        "UPDATE \"{}\" SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -244,7 +254,7 @@ pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Resu
 /// Mark a user as unverified (set _verified = 0). Does NOT touch token fields.
 pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verified = 0 WHERE id = {}",
+        "UPDATE \"{}\" SET _verified = 0 WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -275,6 +285,7 @@ pub fn set_user_settings(
     settings_json: &str,
 ) -> Result<()> {
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    // ON CONFLICT ... DO UPDATE (UPSERT) is valid for both SQLite (>= 3.24) and PostgreSQL (>= 9.5).
     let sql = format!(
         "INSERT INTO _crap_user_settings (user_id, settings) VALUES ({}, {})
          ON CONFLICT(user_id) DO UPDATE SET settings = excluded.settings",
@@ -291,12 +302,25 @@ pub fn set_user_settings(
     Ok(())
 }
 
+/// Check whether a user exists in the given collection.
+pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
+    let sql = format!(
+        "SELECT 1 FROM \"{}\" WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+
+    Ok(conn
+        .query_one(&sql, &[DbValue::Text(id.to_string())])?
+        .is_some())
+}
+
 // ── Lock/unlock functions ─────────────────────────────────────────────────
 
 /// Lock a user account (prevent login).
 pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _locked = 1 WHERE id = {}",
+        "UPDATE \"{}\" SET _locked = 1 WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -308,7 +332,7 @@ pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
 /// Unlock a user account (allow login).
 pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _locked = 0 WHERE id = {}",
+        "UPDATE \"{}\" SET _locked = 0 WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -317,10 +341,24 @@ pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> 
     Ok(())
 }
 
+/// Get the session version for a user. Returns 0 if no version set (NULL or missing).
+pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<u64> {
+    let sql = format!(
+        "SELECT COALESCE(_session_version, 0) AS sv FROM \"{}\" WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+
+    match conn.query_one(&sql, &[DbValue::Text(id.to_string())])? {
+        Some(row) => Ok(row.get_i64("sv")? as u64),
+        None => Ok(0),
+    }
+}
+
 /// Check if a user account is locked.
 pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT _locked FROM {} WHERE id = {}",
+        "SELECT _locked FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -333,7 +371,7 @@ pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> 
 /// Check if a user is verified.
 pub fn is_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT _verified FROM {} WHERE id = {}",
+        "SELECT _verified FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -383,6 +421,7 @@ mod tests {
                 _reset_token_exp INTEGER,
                 _locked INTEGER DEFAULT 0,
                 _settings TEXT,
+                _session_version INTEGER DEFAULT 0,
                 _verification_token TEXT,
                 _verification_token_exp INTEGER,
                 _verified INTEGER DEFAULT 0,
@@ -577,6 +616,35 @@ mod tests {
 
     // ── lock/unlock tests ─────────────────────────────────────────────────
 
+    // ── user_exists tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn user_exists_true_for_existing() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        assert!(user_exists(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn user_exists_false_for_missing() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        assert!(!user_exists(&conn, "users", "nonexistent").unwrap());
+    }
+
+    /// Regression test: is_locked returns Ok(false) for non-existent users,
+    /// which means a deleted user would appear as "not locked". The session
+    /// refresh handler must check user_exists separately.
+    #[test]
+    fn is_locked_false_for_deleted_user_proves_need_for_existence_check() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        assert!(!is_locked(&conn, "users", "deleted-user-id").unwrap());
+        assert!(!user_exists(&conn, "users", "deleted-user-id").unwrap());
+    }
+
+    // ── lock/unlock tests ─────────────────────────────────────────────────
+
     #[test]
     fn is_locked_default_false() {
         let (_dir, conn) = setup_conn();
@@ -655,6 +723,32 @@ mod tests {
         // Unverify — should not re-create a token
         mark_unverified(&conn, "users", "user1").unwrap();
         assert!(!is_verified(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn clear_verification_token_removes_token_but_not_verified_status() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        let def = auth_def();
+
+        // Set a verification token
+        set_verification_token(&conn, "users", "user1", "verify-clear", 9999999999).unwrap();
+        let found = find_by_verification_token(&conn, "users", &def, "verify-clear").unwrap();
+        assert!(found.is_some(), "Token should exist before clearing");
+
+        // Clear the token
+        clear_verification_token(&conn, "users", "user1").unwrap();
+        let found = find_by_verification_token(&conn, "users", &def, "verify-clear").unwrap();
+        assert!(
+            found.is_none(),
+            "Token should be gone after clear_verification_token"
+        );
+
+        // User should still NOT be verified (clear_verification_token doesn't change _verified)
+        assert!(
+            !is_verified(&conn, "users", "user1").unwrap(),
+            "clear_verification_token should not mark user as verified"
+        );
     }
 
     #[test]
@@ -786,5 +880,72 @@ mod tests {
         setup_user_settings_table(&conn);
         let result = get_user_settings(&conn, "nonexistent").unwrap();
         assert!(result.is_none(), "Non-existent user should return None");
+    }
+
+    // ── session version tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn get_session_version_default_zero() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        let version = get_session_version(&conn, "users", "user1").unwrap();
+        assert_eq!(version, 0, "Default session version should be 0");
+    }
+
+    #[test]
+    fn get_session_version_nonexistent_user() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        let version = get_session_version(&conn, "users", "nonexistent").unwrap();
+        assert_eq!(version, 0, "Non-existent user should return 0");
+    }
+
+    #[test]
+    fn update_password_increments_session_version() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+
+        assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 0);
+
+        update_password(&conn, "users", "user1", "pass1").unwrap();
+        assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 1);
+
+        update_password(&conn, "users", "user1", "pass2").unwrap();
+        assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 2);
+    }
+
+    #[test]
+    fn update_password_increments_from_null_session_version() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+
+        // Set _session_version to NULL to simulate pre-migration rows
+        conn.execute(
+            "UPDATE users SET _session_version = NULL WHERE id = 'user1'",
+            &[],
+        )
+        .unwrap();
+
+        update_password(&conn, "users", "user1", "newpass").unwrap();
+        assert_eq!(
+            get_session_version(&conn, "users", "user1").unwrap(),
+            1,
+            "COALESCE should treat NULL as 0 then increment to 1"
+        );
+    }
+
+    #[test]
+    fn get_session_version_null_returns_zero() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+
+        conn.execute(
+            "UPDATE users SET _session_version = NULL WHERE id = 'user1'",
+            &[],
+        )
+        .unwrap();
+
+        let version = get_session_version(&conn, "users", "user1").unwrap();
+        assert_eq!(version, 0, "NULL _session_version should return 0");
     }
 }

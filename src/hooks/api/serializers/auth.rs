@@ -27,12 +27,15 @@ pub(super) fn collection_auth_to_lua(
             if auth.disable_local {
                 auth_tbl.set("disable_local", true)?;
             }
+
             if auth.verify_email {
                 auth_tbl.set("verify_email", true)?;
             }
+
             if !auth.forgot_password {
                 auth_tbl.set("forgot_password", false)?;
             }
+
             if !auth.strategies.is_empty() {
                 let strats = lua.create_table()?;
                 for (i, s) in auth.strategies.iter().enumerate() {

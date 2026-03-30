@@ -1,6 +1,6 @@
 //! Database connection trait — object-safe abstraction over backend-specific connections.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -37,6 +37,12 @@ pub trait DbConnection {
     /// PostgreSQL: `"NOW()"`
     fn now_expr(&self) -> &'static str;
 
+    /// Return a SQL expression for `max(a, b)` as a scalar (not aggregate).
+    ///
+    /// SQLite: `"MAX(a, b)"` (SQLite's `MAX` with 2+ args is scalar)
+    /// PostgreSQL: `"GREATEST(a, b)"`
+    fn greatest_expr(&self, a: &str, b: &str) -> String;
+
     /// Return the backend identifier.
     ///
     /// Used to gate backend-specific features (FTS5, `sqlite_master`,
@@ -50,6 +56,9 @@ pub trait DbConnection {
 
     /// Get the set of column names for a table.
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>>;
+
+    /// Get a mapping of column name to column type for a table.
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>>;
 
     /// Get index names for a table matching a name prefix.
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>>;
@@ -222,6 +231,10 @@ impl DbConnection for BoxedConnection {
         self.inner.now_expr()
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        self.inner.greatest_expr(a, b)
+    }
+
     fn kind(&self) -> &'static str {
         self.inner.kind()
     }
@@ -232,6 +245,10 @@ impl DbConnection for BoxedConnection {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         self.inner.get_table_columns(table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        self.inner.get_table_column_types(table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -340,6 +357,10 @@ impl DbConnection for BoxedTransaction<'_> {
         self.inner.now_expr()
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        self.inner.greatest_expr(a, b)
+    }
+
     fn kind(&self) -> &'static str {
         self.inner.kind()
     }
@@ -350,6 +371,10 @@ impl DbConnection for BoxedTransaction<'_> {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         self.inner.get_table_columns(table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        self.inner.get_table_column_types(table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {

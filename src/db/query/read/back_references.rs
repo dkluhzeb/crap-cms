@@ -161,7 +161,12 @@ fn scan_fields(
                     }
                 } else {
                     // Has-many: junction table
-                    let junction = format!("{}_{}", parent_table, field.name);
+                    let col = if prefix.is_empty() {
+                        field.name.clone()
+                    } else {
+                        format!("{}__{}", prefix, field.name)
+                    };
+                    let junction = format!("{}_{}", parent_table, col);
                     let ids = query_has_many(
                         scan.conn,
                         &junction,
@@ -183,11 +188,27 @@ fn scan_fields(
                 }
             }
             FieldType::Array => {
-                let array_table = format!("{}_{}", parent_table, field.name);
+                let array_table = format!(
+                    "{}_{}",
+                    parent_table,
+                    if prefix.is_empty() {
+                        field.name.clone()
+                    } else {
+                        format!("{}__{}", prefix, field.name)
+                    }
+                );
                 scan_array_sub_fields(scan, &field.fields, &array_table, &field.name, results);
             }
             FieldType::Blocks => {
-                let blocks_table = format!("{}_{}", parent_table, field.name);
+                let blocks_table = format!(
+                    "{}_{}",
+                    parent_table,
+                    if prefix.is_empty() {
+                        field.name.clone()
+                    } else {
+                        format!("{}__{}", prefix, field.name)
+                    }
+                );
                 scan_blocks(scan, &field.blocks, &blocks_table, &field.name, results);
             }
             _ => {}
@@ -238,6 +259,7 @@ fn query_has_one(
             &[DbValue::Text(match_value)],
             scan.owner_slug,
             scan.target_id,
+            scan.target_collection,
             scan.is_global,
         )
     } else if is_polymorphic {
@@ -250,6 +272,7 @@ fn query_has_one(
             &[DbValue::Text(match_value)],
             scan.owner_slug,
             scan.target_id,
+            scan.target_collection,
             scan.is_global,
         )
     } else {
@@ -261,6 +284,7 @@ fn query_has_one(
             &[DbValue::Text(scan.target_id.to_string())],
             scan.owner_slug,
             scan.target_id,
+            scan.target_collection,
             scan.is_global,
         )
     }
@@ -468,6 +492,7 @@ fn query_ids(
     params: &[DbValue],
     owner_slug: &str,
     target_id: &str,
+    target_collection: &str,
     is_global: bool,
 ) -> Vec<String> {
     match conn.query_all(sql, params) {
@@ -481,7 +506,7 @@ fn query_ids(
                 }
             })
             // Skip self-references (same collection, same ID)
-            .filter(|id| is_global || id != target_id || owner_slug != target_id)
+            .filter(|id| is_global || id != target_id || owner_slug != target_collection)
             .collect(),
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
@@ -935,6 +960,44 @@ mod tests {
         assert!(slugs.contains(&"pages"));
     }
 
+    // ── Self-referencing collection ─────────────────────────────────────
+
+    /// Regression: when a collection has a self-referencing relationship
+    /// (e.g. posts -> posts) and a document references itself, the
+    /// back-references for that document must NOT include itself.
+    #[test]
+    fn self_reference_excluded_from_back_references() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("related_post", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("posts", false))
+                .build(),
+        ];
+
+        let (_tmp, pool, registry) = setup_db(&[posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        // p1 references itself, p2 references p1
+        insert_doc_with_field(&conn, "posts", "p1", "related_post", "p1");
+        insert_doc_with_field(&conn, "posts", "p2", "related_post", "p1");
+
+        let refs = find_back_references(&conn, &registry, "posts", "p1", &no_locale());
+
+        // Only p2 should appear as a back-reference, not p1 (self)
+        assert_eq!(refs.len(), 1, "should have exactly one back-ref group");
+        assert_eq!(refs[0].owner_slug, "posts");
+        assert!(
+            !refs[0].document_ids.contains(&"p1".to_string()),
+            "self-reference p1 should be filtered out, got: {:?}",
+            refs[0].document_ids
+        );
+        assert!(
+            refs[0].document_ids.contains(&"p2".to_string()),
+            "p2 should be in back-references"
+        );
+        assert_eq!(refs[0].count, 1);
+    }
+
     // ── Unrelated collection not included ─────────────────────────────
 
     #[test]
@@ -953,5 +1016,92 @@ mod tests {
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
         assert!(refs.is_empty());
+    }
+
+    // ── Group-nested has-many uses correct junction table name ────────
+
+    /// Regression: has-many relationship inside a Group must use the
+    /// group-prefixed junction table name (e.g. `posts_meta__tags`),
+    /// not just `posts_tags`.
+    #[test]
+    fn group_nested_has_many_uses_prefixed_junction_table() {
+        let tags = CollectionDefinition::new("tags");
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("tags", FieldType::Relationship)
+                        .relationship(RelationshipConfig::new("tags", true))
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let (_tmp, pool, registry) = setup_db(&[tags, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "tags", "t1");
+        insert_doc(&conn, "posts", "p1");
+
+        // The migration creates `posts_meta__tags` (group-prefixed), not `posts_tags`.
+        conn.execute(
+            "INSERT INTO posts_meta__tags (parent_id, related_id, _order) VALUES (?1, ?2, 0)",
+            &[DbValue::Text("p1".into()), DbValue::Text("t1".into())],
+        )
+        .unwrap();
+
+        let refs = find_back_references(&conn, &registry, "tags", "t1", &no_locale());
+        assert_eq!(
+            refs.len(),
+            1,
+            "should find back-ref through group-nested has-many"
+        );
+        assert_eq!(refs[0].owner_slug, "posts");
+        assert_eq!(refs[0].count, 1);
+    }
+
+    // ── Group-nested array uses correct junction table name ──────────
+
+    /// Regression: Array field inside a Group must use the group-prefixed
+    /// junction table name (e.g. `posts_meta__items`), not `posts_items`.
+    #[test]
+    fn group_nested_array_uses_prefixed_junction_table() {
+        let media = CollectionDefinition::new("media");
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("items", FieldType::Array)
+                        .fields(vec![
+                            FieldDefinition::builder("image", FieldType::Upload)
+                                .relationship(RelationshipConfig::new("media", false))
+                                .build(),
+                        ])
+                        .build(),
+                ])
+                .build(),
+        ];
+
+        let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+        insert_doc(&conn, "posts", "p1");
+
+        // The migration creates `posts_meta__items` (group-prefixed).
+        conn.execute(
+            "INSERT INTO posts_meta__items (parent_id, image, _order) VALUES (?1, ?2, 0)",
+            &[DbValue::Text("p1".into()), DbValue::Text("m1".into())],
+        )
+        .unwrap();
+
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        assert_eq!(
+            refs.len(),
+            1,
+            "should find back-ref through group-nested array"
+        );
+        assert_eq!(refs[0].owner_slug, "posts");
+        assert_eq!(refs[0].count, 1);
     }
 }

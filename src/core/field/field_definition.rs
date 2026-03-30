@@ -38,17 +38,6 @@ pub struct FieldHooks {
     pub after_read: Vec<String>,
 }
 
-impl FieldHooks {
-    /// Returns true if no hooks are defined for this field.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.before_validate.is_empty()
-            && self.before_change.is_empty()
-            && self.after_change.is_empty()
-            && self.after_read.is_empty()
-    }
-}
-
 /// Complete definition of a single field within a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDefinition {
@@ -133,6 +122,13 @@ pub struct FieldDefinition {
     /// Maximum date value (date fields). ISO format: "2025-12-31". Validated server-side + HTML max attr.
     #[serde(default)]
     pub max_date: Option<String>,
+    /// Whether to store an IANA timezone alongside the date value.
+    /// Only meaningful for dayOnly and dayAndTime picker appearances.
+    #[serde(default)]
+    pub timezone: bool,
+    /// Default IANA timezone for the admin UI dropdown (e.g., "America/New_York").
+    #[serde(default)]
+    pub default_timezone: Option<String>,
     /// Configuration for join (virtual reverse-relationship) fields.
     #[serde(default)]
     pub join: Option<JoinConfig>,
@@ -168,6 +164,8 @@ impl Default for FieldDefinition {
             has_many: false,
             min_date: None,
             max_date: None,
+            timezone: false,
+            default_timezone: None,
             join: None,
         }
     }
@@ -210,6 +208,7 @@ impl FieldDefinition {
 /// Used to auto-generate human-readable labels from field and collection names.
 pub fn to_title_case(s: &str) -> String {
     s.split('_')
+        .filter(|w| !w.is_empty())
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
@@ -517,6 +516,6 @@ mod tests {
 
     #[test]
     fn to_title_case_double_underscore() {
-        assert_eq!(to_title_case("seo__title"), "Seo  Title");
+        assert_eq!(to_title_case("seo__title"), "Seo Title");
     }
 }

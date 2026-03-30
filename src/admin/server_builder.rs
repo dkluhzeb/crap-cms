@@ -4,7 +4,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     config::CrapConfig,
-    core::{JwtSecret, Registry, event::EventBus},
+    core::{JwtSecret, Registry, event::EventBus, rate_limit::LoginRateLimiter},
     db::DbPool,
     hooks::HookRunner,
 };
@@ -20,6 +20,10 @@ pub struct AdminStartParamsBuilder {
     hook_runner: Option<HookRunner>,
     jwt_secret: Option<JwtSecret>,
     event_bus: Option<EventBus>,
+    login_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_login_limiter: Option<Arc<LoginRateLimiter>>,
+    forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
 }
 
 impl AdminStartParamsBuilder {
@@ -32,6 +36,10 @@ impl AdminStartParamsBuilder {
             hook_runner: None,
             jwt_secret: None,
             event_bus: None,
+            login_limiter: None,
+            ip_login_limiter: None,
+            forgot_password_limiter: None,
+            ip_forgot_password_limiter: None,
         }
     }
 
@@ -70,6 +78,26 @@ impl AdminStartParamsBuilder {
         self
     }
 
+    pub fn login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.login_limiter = Some(limiter);
+        self
+    }
+
+    pub fn ip_login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_login_limiter = Some(limiter);
+        self
+    }
+
+    pub fn forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.forgot_password_limiter = Some(limiter);
+        self
+    }
+
+    pub fn ip_forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_forgot_password_limiter = Some(limiter);
+        self
+    }
+
     pub fn build(self) -> AdminStartParams {
         AdminStartParams {
             config: self.config.expect("config is required"),
@@ -79,6 +107,14 @@ impl AdminStartParamsBuilder {
             hook_runner: self.hook_runner.expect("hook_runner is required"),
             jwt_secret: self.jwt_secret.expect("jwt_secret is required"),
             event_bus: self.event_bus,
+            login_limiter: self.login_limiter.expect("login_limiter is required"),
+            ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
+            forgot_password_limiter: self
+                .forgot_password_limiter
+                .expect("forgot_password_limiter is required"),
+            ip_forgot_password_limiter: self
+                .ip_forgot_password_limiter
+                .expect("ip_forgot_password_limiter is required"),
         }
     }
 }

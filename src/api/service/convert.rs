@@ -40,7 +40,10 @@ pub(super) fn json_to_prost_value(v: &Value) -> prost_types::Value {
         },
         Value::Number(n) => prost_types::Value {
             kind: Some(prost_types::value::Kind::NumberValue(
-                n.as_f64().unwrap_or(0.0),
+                n.as_f64().unwrap_or_else(|| {
+                    tracing::warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
+                    0.0
+                }),
             )),
         },
         Value::String(s) => prost_types::Value {
@@ -99,9 +102,15 @@ pub(super) fn prost_value_to_json(v: &prost_types::Value) -> Value {
     match &v.kind {
         Some(prost_types::value::Kind::NullValue(_)) => Value::Null,
         Some(prost_types::value::Kind::BoolValue(b)) => Value::Bool(*b),
-        Some(prost_types::value::Kind::NumberValue(n)) => Number::from_f64(*n)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
+        Some(prost_types::value::Kind::NumberValue(n)) => {
+            Number::from_f64(*n).map(Value::Number).unwrap_or_else(|| {
+                tracing::warn!(
+                    "Non-finite float {} in gRPC response, converting to null",
+                    n
+                );
+                Value::Null
+            })
+        }
         Some(prost_types::value::Kind::StringValue(s)) => Value::String(s.clone()),
         Some(prost_types::value::Kind::ListValue(list)) => {
             Value::Array(list.values.iter().map(prost_value_to_json).collect())
@@ -198,6 +207,14 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                                 op: FilterOp::Equals(s.clone()),
                             });
                         }
+                        Value::Number(_) | Value::Bool(_) => {
+                            let s = value_to_string(v)
+                                .map_err(|e| format!("or field '{}': {}", f, e))?;
+                            group.push(Filter {
+                                field: f.clone(),
+                                op: FilterOp::Equals(s),
+                            });
+                        }
                         Value::Object(ops) => {
                             for (op_name, op_value) in ops {
                                 let op = parse_filter_op(op_name, op_value)
@@ -210,7 +227,7 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                         }
                         _ => {
                             return Err(format!(
-                                "or field '{}': value must be string or operator object",
+                                "or field '{}': value must be string, number, boolean, or operator object",
                                 f
                             ));
                         }
@@ -229,6 +246,13 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                     op: FilterOp::Equals(s.clone()),
                 }));
             }
+            Value::Number(_) | Value::Bool(_) => {
+                let s = value_to_string(value).map_err(|e| format!("field '{}': {}", field, e))?;
+                clauses.push(FilterClause::Single(Filter {
+                    field: field.clone(),
+                    op: FilterOp::Equals(s),
+                }));
+            }
             Value::Object(ops) => {
                 for (op_name, op_value) in ops {
                     let op = parse_filter_op(op_name, op_value)
@@ -241,7 +265,7 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
             }
             _ => {
                 return Err(format!(
-                    "field '{}': value must be string or operator object",
+                    "field '{}': value must be string, number, boolean, or operator object",
                     field
                 ));
             }
@@ -685,13 +709,54 @@ mod tests {
 
     #[test]
     fn parse_where_json_invalid_value_type() {
-        let result = parse_where_json(r#"{"field": 42}"#);
+        let result = parse_where_json(r#"{"field": [1, 2]}"#);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
-                .contains("value must be string or operator object")
+                .contains("value must be string, number, boolean, or operator object")
         );
+    }
+
+    /// Regression: numeric and boolean shorthand values were rejected.
+    /// `{"active": true}` and `{"count": 42}` should work as equals filters.
+    #[test]
+    fn parse_where_json_numeric_and_boolean_shorthand() {
+        let clauses = parse_where_json(r#"{"active": true}"#).unwrap();
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            FilterClause::Single(f) => {
+                assert_eq!(f.field, "active");
+                assert!(matches!(&f.op, FilterOp::Equals(v) if v == "true"));
+            }
+            _ => panic!("Expected single filter"),
+        }
+
+        let clauses = parse_where_json(r#"{"count": 42}"#).unwrap();
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            FilterClause::Single(f) => {
+                assert_eq!(f.field, "count");
+                assert!(matches!(&f.op, FilterOp::Equals(v) if v == "42"));
+            }
+            _ => panic!("Expected single filter"),
+        }
+    }
+
+    /// Regression: numeric/boolean shorthand values should also work inside `or` groups.
+    #[test]
+    fn parse_where_json_or_with_numeric_boolean() {
+        let input = r#"{"or": [{"active": true}, {"count": 0}]}"#;
+        let clauses = parse_where_json(input).unwrap();
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            FilterClause::Or(groups) => {
+                assert_eq!(groups.len(), 2);
+                assert!(matches!(&groups[0][0].op, FilterOp::Equals(v) if v == "true"));
+                assert!(matches!(&groups[1][0].op, FilterOp::Equals(v) if v == "0"));
+            }
+            _ => panic!("Expected Or filter"),
+        }
     }
 
     // ── parse_filter_op ────────────────────────────────────────────────────

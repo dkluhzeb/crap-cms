@@ -34,11 +34,12 @@ This allows keeping secrets out of config files and varying configuration across
 
 ## Duration Values
 
-Most time-related fields accept **both** an integer (seconds) and a human-readable string:
+Most time-related fields accept an integer (seconds), a human-readable string with a suffix, or a bare number string:
 
 ```toml
-# These are equivalent:
+# These are all equivalent:
 token_expiry = 7200
+token_expiry = "7200"
 token_expiry = "2h"
 
 # Supported suffixes: s (seconds), m (minutes), h (hours), d (days)
@@ -47,7 +48,7 @@ login_lockout_seconds = "5m"
 auto_purge = "7d"
 ```
 
-Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`.
+Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `grpc_timeout`.
 
 ## File Size Values
 
@@ -65,7 +66,24 @@ max_file_size = "100KB"
 max_file_size = "1GB"
 ```
 
-Fields that support this: `max_file_size` (global and per-collection).
+Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`, `grpc_max_message_size`.
+
+## Configuration Validation
+
+`crap.toml` is validated at startup. Fatal validation errors prevent the server from starting with a descriptive error message. Non-fatal issues log warnings.
+
+**Fatal errors:**
+- `database.pool_max_size = 0`
+- `database.connection_timeout = 0`
+- `hooks.vm_pool_size = 0`
+- `server.admin_port` or `server.grpc_port` is `0`
+- `server.admin_port == server.grpc_port` (ports must be distinct)
+- `auth.password_policy.min_length > auth.password_policy.max_length`
+
+**Warnings (server starts but logs a warning):**
+- `jobs.max_concurrent = 0` — no jobs will execute
+- `auth.secret` is set but shorter than 32 characters
+- `depth.max_depth = 0` — all population requests capped to 0
 
 ## Full Reference
 
@@ -77,10 +95,16 @@ Fields that support this: `max_file_size` (global and per-collection).
 admin_port = 3000       # Admin UI port
 grpc_port = 50051       # gRPC API port
 host = "0.0.0.0"        # Bind address
+# public_url = "https://cms.example.com"  # Public-facing base URL for generated links
+# h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
+# trust_proxy = false   # Trust X-Forwarded-For (enable behind reverse proxy)
 # compression = "off"   # "off" (default), "gzip", "br", "all"
-# grpc_reflection = true         # Enable gRPC server reflection (default: true)
-# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled)
+# grpc_reflection = false        # Enable gRPC server reflection (default: false)
+# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
+# grpc_max_message_size = "16MB" # Max gRPC message size (default 16MB)
+# request_timeout = "30s"        # Admin HTTP request timeout (none by default)
+# grpc_timeout = "30s"           # gRPC request timeout (none by default)
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
@@ -93,10 +117,22 @@ dev_mode = false         # Reload templates per-request (enable in development)
 require_auth = true      # Block admin when no auth collection exists (default: true)
 # access = "access.admin_panel"  # Lua function: which users can access the admin UI
 
+# [admin.csp]                    # Content-Security-Policy (enabled by default)
+# enabled = true
+# script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com"]
+# style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
+# font_src = ["'self'", "https://fonts.gstatic.com"]
+# img_src = ["'self'", "data:"]
+# connect_src = ["'self'"]
+# frame_ancestors = ["'none'"]
+# form_action = ["'self'"]
+# base_uri = ["'self'"]
+
 [auth]
 secret = ""              # JWT signing key. Empty = auto-generated and persisted to data/.jwt_secret
 token_expiry = "2h"      # Default token expiry (accepts integer seconds or "2h", "30m", etc.)
-max_login_attempts = 5   # Failed attempts before temporary lockout
+max_login_attempts = 5   # Failed attempts per email before temporary lockout
+max_ip_login_attempts = 20  # Failed attempts per IP before lockout (higher for shared IPs)
 login_lockout_seconds = "5m"  # Lockout duration after max attempts
 reset_token_expiry = "1h"    # Password reset token expiry
 max_forgot_password_attempts = 3   # Forgot-password requests per email before rate limiting
@@ -136,6 +172,7 @@ from_name = "Crap CMS"  # Sender display name
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
+# max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
                          # Default: max(available_parallelism, 4), capped at 32
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
@@ -146,6 +183,8 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 channel_capacity = 1024  # Broadcast channel buffer size
+# max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
+# max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
 
 [locale]
 default_locale = "en"    # Default locale code
@@ -169,8 +208,16 @@ allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (defa
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 allowed_headers = ["Content-Type", "Authorization"]
 exposed_headers = []     # Response headers exposed to the browser
-max_age_seconds = "1h"   # How long browsers cache preflight results
+max_age = "1h"   # How long browsers cache preflight results
 allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] origins
+
+[mcp]
+# enabled = false         # Enable MCP server
+# http = false            # Mount POST /mcp on admin server
+# config_tools = false    # Enable config read/write tools
+# api_key = ""            # API key for HTTP transport
+# include_collections = [] # Only expose these collections
+# exclude_collections = [] # Hide these collections
 ```
 
 ## Section Details
@@ -182,10 +229,16 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `admin_port` | integer | `3000` | Port for the Axum admin UI |
 | `grpc_port` | integer | `50051` | Port for the Tonic gRPC API |
 | `host` | string | `"0.0.0.0"` | Bind address for both servers |
+| `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
+| `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
-| `grpc_reflection` | boolean | `true` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disable in production to hide the API surface from unauthenticated probing. |
-| `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
+| `grpc_reflection` | boolean | `false` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disabled by default to hide the API surface from unauthenticated probing. |
+| `public_url` | string | — | Public-facing base URL (e.g., `"https://cms.example.com"`). Used for password reset emails and other generated links. If not set, defaults to `http://{host}:{admin_port}`. |
+| `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). **Recommended to enable in production** (e.g., `100`). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
+| `grpc_max_message_size` | integer/string | `16777216` (`"16MB"`) | Maximum gRPC message size in bytes (applies to both send and receive). Tonic's built-in default is 4MB, which can be exceeded by large `Find` responses with deep population. Accepts bytes or file size string (`"16MB"`, `"32MB"`). |
+| `request_timeout` | integer/string | — (none) | Admin HTTP request timeout. When set, requests exceeding this duration return `408 Request Timeout`. SSE streams are exempt (handled by shutdown). Accepts seconds or human-readable (`"30s"`, `"5m"`). |
+| `grpc_timeout` | integer/string | — (none) | gRPC request timeout. When set, RPCs exceeding this duration return `DEADLINE_EXCEEDED`. Applies to all RPCs including Subscribe streams. Accepts seconds or human-readable (`"30s"`, `"5m"`). |
 
 ### `[database]`
 
@@ -203,6 +256,36 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `dev_mode` | boolean | `false` | When true, templates are reloaded from disk on every request. The scaffold sets this to `true` for new projects. Set to `false` in production for cached templates. |
 | `require_auth` | boolean | `true` | When true and no auth collection exists, the admin panel shows a "Setup Required" page (HTTP 503) instead of being open. Set to `false` for fully open dev mode without authentication. |
 | `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). |
+| `default_timezone` | string | `""` | Default IANA timezone for date fields with `timezone = true` that don't specify their own `default_timezone`. Pre-selects the timezone in the admin dropdown. Example: `"America/New_York"`. |
+| `csp` | table | *(see below)* | Content-Security-Policy header configuration. See `[admin.csp]`. |
+
+### `[admin.csp]`
+
+Content-Security-Policy header configuration for the admin UI. Each field is a list of CSP sources for the corresponding directive. Theme developers can extend these lists to allow external resources (CDNs, custom fonts, analytics, etc.).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable the CSP header. Set to `false` to disable entirely. |
+| `default_src` | string[] | `["'self'"]` | Fallback for any directive not explicitly set. |
+| `script_src` | string[] | `["'self'", "'unsafe-inline'", "https://unpkg.com"]` | Allowed script sources. Includes `'unsafe-inline'` for theme bootstrap and CSRF injection scripts. |
+| `style_src` | string[] | `["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]` | Allowed stylesheet sources. Includes `'unsafe-inline'` for Web Component Shadow DOM styles. |
+| `font_src` | string[] | `["'self'", "https://fonts.gstatic.com"]` | Allowed font sources. Includes Google Fonts for Material Symbols icons. |
+| `img_src` | string[] | `["'self'", "data:"]` | Allowed image sources. Includes `data:` for inline SVGs. |
+| `connect_src` | string[] | `["'self'"]` | Allowed targets for `fetch`, XHR, and WebSocket connections. |
+| `frame_ancestors` | string[] | `["'none'"]` | Who can embed this page in a frame. `'none'` prevents clickjacking. |
+| `form_action` | string[] | `["'self'"]` | Allowed form submission targets. |
+| `base_uri` | string[] | `["'self'"]` | Allowed URLs for `<base>` tags. |
+
+**Example: allowing a custom CDN and analytics:**
+
+```toml
+[admin.csp]
+script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.example.com", "https://analytics.example.com"]
+style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.example.com"]
+font_src = ["'self'", "https://fonts.gstatic.com", "https://cdn.example.com"]
+img_src = ["'self'", "data:", "https://cdn.example.com"]
+connect_src = ["'self'", "https://analytics.example.com"]
+```
 
 ### `[auth]`
 
@@ -210,11 +293,12 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 |-------|------|---------|-------------|
 | `secret` | string | `""` (empty) | JWT signing secret. If empty, a random secret is auto-generated and **persisted to `data/.jwt_secret`** so tokens survive restarts. Set explicitly if you prefer to manage the secret yourself. |
 | `token_expiry` | integer/string | `7200` (`"2h"`) | Default JWT token lifetime. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`). Can be overridden per auth collection. |
-| `max_login_attempts` | integer | `5` | Maximum failed login attempts before temporary lockout. Tracked per email address. |
-| `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` is reached. Accepts seconds or human-readable. |
+| `max_login_attempts` | integer | `5` | Maximum failed login attempts per email before temporary lockout. |
+| `max_ip_login_attempts` | integer | `20` | Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests. |
+| `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` or `max_ip_login_attempts` is reached. Accepts seconds or human-readable. |
 | `reset_token_expiry` | integer/string | `3600` (`"1h"`) | Password reset token expiry. The "Forgot password" email link expires after this duration. Accepts seconds or human-readable. |
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
-| `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Accepts seconds or human-readable. |
+| `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable. |
 
 ### `[auth.password_policy]`
 
@@ -222,8 +306,8 @@ Password strength requirements applied to all password-setting paths (create, up
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `min_length` | integer | `8` | Minimum password length. |
-| `max_length` | integer | `128` | Maximum password length. Prevents DoS via Argon2 on huge inputs. |
+| `min_length` | integer | `8` | Minimum password length in Unicode characters (codepoints). Multi-byte characters (accented letters, CJK, emoji) each count as 1. Must be ≤ `max_length` or the server refuses to start. |
+| `max_length` | integer | `128` | Maximum password length in bytes. Prevents DoS via Argon2 on huge inputs. Uses byte count (not characters) to bound hashing cost. |
 | `require_uppercase` | boolean | `false` | Require at least one uppercase letter (A-Z). |
 | `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
 | `require_digit` | boolean | `false` | Require at least one digit (0-9). |
@@ -285,6 +369,8 @@ When configured, email enables password reset ("Forgot password?" link on login)
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
+| `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
+| `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
 
 See [Live Updates](../live-updates/overview.md) for full documentation.
 
@@ -304,7 +390,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `poll_interval` | integer/string | `1` (`"1s"`) | How often to poll for pending jobs. Accepts seconds or human-readable. |
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
 | `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
-| `auto_purge` | integer/string | `"7d"` | Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (`"7d"`, `"24h"`, `"30m"`, `"3600"`). Absent = 7 days default. |
+| `auto_purge` | integer/string | `"7d"` | Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (`"7d"`, `"24h"`, `"30m"`, `"3600"`). Set to `""` (empty string) to disable auto-purge. Absent = 7 days default. |
 | `image_queue_batch_size` | integer | `10` | Number of pending image format conversions to claim per scheduler poll cycle. Increase for higher throughput on capable hardware. |
 
 ### `[access]`
@@ -323,7 +409,7 @@ Enable this to enforce a "secure by default" posture — every collection must e
 | `allowed_methods` | string[] | `["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]` | HTTP methods allowed in CORS preflight. |
 | `allowed_headers` | string[] | `["Content-Type", "Authorization"]` | Request headers allowed in CORS requests. |
 | `exposed_headers` | string[] | `[]` (empty) | Response headers the browser is allowed to access. |
-| `max_age_seconds` | integer/string | `3600` (`"1h"`) | How long browsers may cache preflight results. Accepts seconds or human-readable. |
+| `max_age` | integer/string | `3600` (`"1h"`) | How long browsers may cache preflight results. Accepts seconds or human-readable. |
 | `allow_credentials` | boolean | `false` | Allow credentials (cookies, `Authorization` header). **Cannot be used with `allowed_origins = ["*"]`** — if both are set, credentials are ignored with a warning. |
 
 When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC API (Tonic) servers. CORS runs before CSRF middleware, so preflight `OPTIONS` requests get CORS headers without triggering CSRF validation.
@@ -335,11 +421,24 @@ When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC AP
 | `enabled` | boolean | `false` | Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports. |
 | `http` | boolean | `false` | Mount `POST /mcp` on the admin server for HTTP-based MCP access. |
 | `config_tools` | boolean | `false` | Enable config generation tools (`read_config_file`, `write_config_file`, `list_config_files`). Opt-in because they allow filesystem writes. |
-| `api_key` | string | `""` (empty) | API key for HTTP transport. When set, requests must include `Authorization: Bearer <key>`. Empty = no auth. |
-| `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. |
-| `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. |
+| `api_key` | string | `""` (empty) | API key for HTTP transport. **Required** when `http = true` — the server will refuse to start without one. Requests must include `Authorization: Bearer <key>`. |
+| `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. Enforced at both tool listing and execution time. |
+| `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. Enforced at both tool listing and execution time. |
 
 See [MCP Overview](../mcp/overview.md) for usage details.
+
+### `[logging]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `file` | boolean | `false` | Enable file-based logging. When `false` (default), logs go to stdout only. **Auto-enabled** when running with `--detach` (where stdout is unavailable). |
+| `path` | string | `"data/logs"` | Log directory path. Relative paths are resolved from the config directory. Use an absolute path to log elsewhere. |
+| `rotation` | string | `"daily"` | Log rotation strategy: `"daily"` (one file per day), `"hourly"` (one file per hour), or `"never"` (single file, no rotation). |
+| `max_files` | integer | `30` | Maximum rotated log files to keep. Old files are pruned on startup. |
+
+File logging writes to rotating files in the configured directory. Each project has its own log directory, so multiple instances on the same machine are naturally isolated.
+
+Use `crap-cms logs` to view log output, `crap-cms logs -f` to follow in real time, and `crap-cms logs clear` to remove old rotated files. See the [CLI Reference](../cli/flags.md) for details.
 
 When locales are configured, any field with `localized = true` in its Lua definition gets one column per locale (`title__en`, `title__de`) instead of a single `title` column. The API accepts a `locale` parameter on Find, FindByID, Create, Update, GetGlobal, and UpdateGlobal to control which locale to read/write. The admin UI shows a locale selector in the edit sidebar.
 
@@ -384,6 +483,12 @@ smtp_user = "noreply@example.com"
 smtp_pass = "your-smtp-password"
 from_address = "noreply@example.com"
 from_name = "My App"
+
+[logging]
+file = true
+# path = "data/logs"
+# rotation = "daily"
+# max_files = 30
 
 [hooks]
 on_init = ["hooks.seed.run"]

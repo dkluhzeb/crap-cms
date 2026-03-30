@@ -30,6 +30,22 @@ Each option is a table with:
 | `label` | string | Display text in the admin UI |
 | `value` | string | Stored value in the database |
 
+## Multi-Value (`has_many`)
+
+Allow selecting multiple options. Values are stored as a JSON array in a TEXT column.
+
+```lua
+crap.fields.select({
+    name = "categories",
+    has_many = true,
+    options = {
+        { label = "News", value = "news" },
+        { label = "Tech", value = "tech" },
+        { label = "Sports", value = "sports" },
+    },
+})
+```
+
 ## Admin Rendering
 
-Renders as a `<select>` dropdown.
+Renders as a `<select>` dropdown. When `has_many = true`, renders as a multi-select.

@@ -9,7 +9,9 @@ use crate::{
     core::field::{FieldDefinition, FieldType},
 };
 
-use super::super::{MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id};
+use super::super::{
+    MAX_FIELD_DEPTH, collect_node_attr_errors, count_errors_in_fields, safe_template_id,
+};
 use super::build_select_options;
 
 /// Resolve the full form name for a field, accounting for layout transparency.
@@ -372,27 +374,31 @@ pub fn build_single_field_context(
 
             ctx["picker_appearance"] = json!(appearance);
 
+            let tz_key = format!("{}_tz", full_name);
+            let tz_value = values.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+
+            // If a timezone is stored, convert UTC back to local time for display
+            let tz_value = tz_value.trim();
+            let display_value = if !tz_value.is_empty() && !value.is_empty() {
+                crate::db::query::helpers::utc_to_local(&value, tz_value)
+                    .unwrap_or_else(|| value.clone())
+            } else {
+                value.clone()
+            };
+
             match appearance {
                 "dayOnly" => {
-                    let date_val = if value.len() >= 10 {
-                        &value[..10]
-                    } else {
-                        &value
-                    };
-
+                    let date_val = display_value.get(..10).unwrap_or(&display_value);
                     ctx["date_only_value"] = json!(date_val);
                 }
                 "dayAndTime" => {
-                    let dt_val = if value.len() >= 16 {
-                        &value[..16]
-                    } else {
-                        &value
-                    };
-
+                    let dt_val = display_value.get(..16).unwrap_or(&display_value);
                     ctx["datetime_local_value"] = json!(dt_val);
                 }
                 _ => {}
             }
+
+            super::super::add_timezone_context(&mut ctx, field, tz_value, "");
         }
         FieldType::Upload => {
             if let Some(ref rc) = field.relationship {
@@ -431,6 +437,13 @@ pub fn build_single_field_context(
             // Store node names — full defs resolved in enrich_field_contexts
             if !field.admin.nodes.is_empty() {
                 ctx["_node_names"] = json!(field.admin.nodes);
+            }
+
+            // Attach node attr validation errors (e.g. content[cta#0].text)
+            if ctx.get("error").is_none_or(|v| v.is_null())
+                && let Some(node_err) = collect_node_attr_errors(errors, &full_name)
+            {
+                ctx["error"] = json!(node_err);
             }
         }
         FieldType::Blocks => {
@@ -499,4 +512,71 @@ pub fn build_single_field_context(
     }
 
     ctx
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::core::field::{FieldDefinition, FieldType};
+
+    use super::build_single_field_context;
+
+    fn group_field(name: &str, localized: bool, children: Vec<FieldDefinition>) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Group,
+            localized,
+            fields: children,
+            ..Default::default()
+        }
+    }
+
+    fn text_field(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn non_localized_group_in_non_default_locale_locks_children() {
+        let field = group_field("meta", false, vec![text_field("title")]);
+        let values = HashMap::new();
+        let errors = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &values, &errors, "", true, 0);
+
+        // The group itself should be locale-locked
+        assert_eq!(ctx["locale_locked"], true);
+
+        // Children should inherit locale lock (non_default_locale=true, group not localized)
+        let sub = &ctx["sub_fields"][0];
+        assert_eq!(
+            sub["locale_locked"], true,
+            "child of non-localized group must be locale_locked in non-default locale"
+        );
+        assert_eq!(sub["readonly"], true);
+    }
+
+    #[test]
+    fn localized_group_in_non_default_locale_unlocks_children() {
+        let field = group_field("meta", true, vec![text_field("title")]);
+        let values = HashMap::new();
+        let errors = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &values, &errors, "", true, 0);
+
+        // The localized group itself should NOT be locale-locked
+        assert_eq!(ctx["locale_locked"], false);
+
+        // Children should be editable (non_default_locale reset to false for localized group)
+        let sub = &ctx["sub_fields"][0];
+        assert_eq!(
+            sub["locale_locked"], false,
+            "child of localized group must NOT be locale_locked"
+        );
+        assert_eq!(sub["readonly"], false);
+    }
 }

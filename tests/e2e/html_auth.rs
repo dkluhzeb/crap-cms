@@ -42,6 +42,10 @@ async fn login_failure_shows_error() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", format!("crap_csrf={}", TEST_CSRF))
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(
                     "collection=users&email=wrong@test.com&password=wrongpassword",
                 ))

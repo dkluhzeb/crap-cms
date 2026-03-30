@@ -1,3 +1,5 @@
+use serde_json::json;
+
 use super::super::{MAX_FIELD_DEPTH, safe_template_id};
 use super::*;
 
@@ -354,10 +356,10 @@ fn build_field_contexts_nested_array_in_array() {
 #[test]
 fn split_sidebar_fields_separates_by_position() {
     let fields = vec![
-        serde_json::json!({"name": "title", "field_type": "text"}),
-        serde_json::json!({"name": "slug", "field_type": "text", "position": "sidebar"}),
-        serde_json::json!({"name": "body", "field_type": "richtext"}),
-        serde_json::json!({"name": "status", "field_type": "select", "position": "sidebar"}),
+        json!({"name": "title", "field_type": "text"}),
+        json!({"name": "slug", "field_type": "text", "position": "sidebar"}),
+        json!({"name": "body", "field_type": "richtext"}),
+        json!({"name": "status", "field_type": "select", "position": "sidebar"}),
     ];
     let (main, sidebar) = super::super::split_sidebar_fields(fields);
     assert_eq!(main.len(), 2);
@@ -371,8 +373,8 @@ fn split_sidebar_fields_separates_by_position() {
 #[test]
 fn split_sidebar_fields_no_sidebar() {
     let fields = vec![
-        serde_json::json!({"name": "title", "field_type": "text"}),
-        serde_json::json!({"name": "body", "field_type": "richtext"}),
+        json!({"name": "title", "field_type": "text"}),
+        json!({"name": "body", "field_type": "richtext"}),
     ];
     let (main, sidebar) = super::super::split_sidebar_fields(fields);
     assert_eq!(main.len(), 2);
@@ -382,8 +384,8 @@ fn split_sidebar_fields_no_sidebar() {
 #[test]
 fn split_sidebar_fields_all_sidebar() {
     let fields = vec![
-        serde_json::json!({"name": "a", "position": "sidebar"}),
-        serde_json::json!({"name": "b", "position": "sidebar"}),
+        json!({"name": "a", "position": "sidebar"}),
+        json!({"name": "b", "position": "sidebar"}),
     ];
     let (main, sidebar) = super::super::split_sidebar_fields(fields);
     assert!(main.is_empty());
@@ -836,7 +838,7 @@ fn build_field_contexts_date_short_value_day_and_time() {
 #[test]
 fn apply_extras_checkbox_checked() {
     let sf = make_field("active", FieldType::Checkbox);
-    let mut ctx = serde_json::json!({"name": "group__active"});
+    let mut ctx = json!({"name": "group__active"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
     apply_field_type_extras(&sf, "true", &mut ctx, &extras);
@@ -846,7 +848,7 @@ fn apply_extras_checkbox_checked() {
 #[test]
 fn apply_extras_checkbox_unchecked() {
     let sf = make_field("active", FieldType::Checkbox);
-    let mut ctx = serde_json::json!({"name": "group__active"});
+    let mut ctx = json!({"name": "group__active"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
     apply_field_type_extras(&sf, "0", &mut ctx, &extras);
@@ -860,7 +862,7 @@ fn apply_extras_select() {
         SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
         SelectOption::new(LocalizedString::Plain("Green".to_string()), "green"),
     ];
-    let mut ctx = serde_json::json!({"name": "group__color"});
+    let mut ctx = json!({"name": "group__color"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__color").build();
     apply_field_type_extras(&sf, "green", &mut ctx, &extras);
@@ -872,7 +874,7 @@ fn apply_extras_select() {
 #[test]
 fn apply_extras_date_day_only() {
     let sf = make_field("d", FieldType::Date);
-    let mut ctx = serde_json::json!({"name": "group__d"});
+    let mut ctx = json!({"name": "group__d"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
     apply_field_type_extras(&sf, "2026-01-15T12:00:00Z", &mut ctx, &extras);
@@ -884,7 +886,7 @@ fn apply_extras_date_day_only() {
 fn apply_extras_date_day_and_time() {
     let mut sf = make_field("d", FieldType::Date);
     sf.picker_appearance = Some("dayAndTime".to_string());
-    let mut ctx = serde_json::json!({"name": "group__d"});
+    let mut ctx = json!({"name": "group__d"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
     apply_field_type_extras(&sf, "2026-01-15T09:30:00Z", &mut ctx, &extras);
@@ -895,7 +897,7 @@ fn apply_extras_date_day_and_time() {
 #[test]
 fn apply_extras_date_short_values() {
     let sf = make_field("d", FieldType::Date);
-    let mut ctx = serde_json::json!({"name": "g__d"});
+    let mut ctx = json!({"name": "g__d"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "g__d").build();
     apply_field_type_extras(&sf, "short", &mut ctx, &extras);
@@ -903,7 +905,7 @@ fn apply_extras_date_short_values() {
 
     let mut sf2 = make_field("d2", FieldType::Date);
     sf2.picker_appearance = Some("dayAndTime".to_string());
-    let mut ctx2 = serde_json::json!({"name": "g__d2"});
+    let mut ctx2 = json!({"name": "g__d2"});
     let (vals2, errs2) = (HashMap::new(), HashMap::new());
     let extras2 = FieldRecursionCtx::builder(&vals2, &errs2, "g__d2").build();
     apply_field_type_extras(&sf2, "short", &mut ctx2, &extras2);
@@ -915,7 +917,7 @@ fn apply_extras_relationship() {
     use crate::core::field::RelationshipConfig;
     let mut sf = make_field("author", FieldType::Relationship);
     sf.relationship = Some(RelationshipConfig::new("users", true));
-    let mut ctx = serde_json::json!({"name": "group__author"});
+    let mut ctx = json!({"name": "group__author"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__author").build();
     apply_field_type_extras(&sf, "", &mut ctx, &extras);
@@ -928,7 +930,7 @@ fn apply_extras_upload() {
     use crate::core::field::RelationshipConfig;
     let mut sf = make_field("image", FieldType::Upload);
     sf.relationship = Some(RelationshipConfig::new("media", false));
-    let mut ctx = serde_json::json!({"name": "group__image"});
+    let mut ctx = json!({"name": "group__image"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__image").build();
     apply_field_type_extras(&sf, "", &mut ctx, &extras);
@@ -945,7 +947,7 @@ fn apply_extras_array_in_group() {
     arr.admin.collapsed = true;
     arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
     arr.admin.label_field = Some("name".to_string());
-    let mut ctx = serde_json::json!({"name": "group__tags"});
+    let mut ctx = json!({"name": "group__tags"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__tags").build();
     apply_field_type_extras(&arr, "", &mut ctx, &extras);
@@ -963,7 +965,7 @@ fn apply_extras_group_in_group() {
     let mut inner = make_field("meta", FieldType::Group);
     inner.fields = vec![make_field("author", FieldType::Text)];
     inner.admin.collapsed = true;
-    let mut ctx = serde_json::json!({"name": "outer__meta"});
+    let mut ctx = json!({"name": "outer__meta"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "outer__meta").build();
     apply_field_type_extras(&inner, "", &mut ctx, &extras);
@@ -983,7 +985,7 @@ fn apply_extras_blocks_in_group() {
     blk.max_rows = Some(5);
     blk.admin.collapsed = true;
     blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
-    let mut ctx = serde_json::json!({"name": "group__sections"});
+    let mut ctx = json!({"name": "group__sections"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__sections").build();
     apply_field_type_extras(&blk, "", &mut ctx, &extras);
@@ -1001,7 +1003,7 @@ fn apply_extras_blocks_in_group() {
 fn apply_extras_max_depth_stops_recursion() {
     let mut arr = make_field("deep", FieldType::Array);
     arr.fields = vec![make_field("leaf", FieldType::Text)];
-    let mut ctx = serde_json::json!({"name": "group__deep"});
+    let mut ctx = json!({"name": "group__deep"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__deep")
         .depth(MAX_FIELD_DEPTH)
@@ -1014,7 +1016,7 @@ fn apply_extras_max_depth_stops_recursion() {
 #[test]
 fn apply_extras_unknown_type_is_noop() {
     let sf = make_field("body", FieldType::Richtext);
-    let mut ctx = serde_json::json!({"name": "group__body", "field_type": "richtext"});
+    let mut ctx = json!({"name": "group__body", "field_type": "richtext"});
     let (vals, errs) = (HashMap::new(), HashMap::new());
     let extras = FieldRecursionCtx::builder(&vals, &errs, "group__body").build();
     apply_field_type_extras(&sf, "hello", &mut ctx, &extras);
@@ -1033,8 +1035,8 @@ fn count_errors_empty_fields() {
 #[test]
 fn count_errors_no_errors() {
     let fields = vec![
-        serde_json::json!({"name": "title", "value": "hello"}),
-        serde_json::json!({"name": "body", "value": "world"}),
+        json!({"name": "title", "value": "hello"}),
+        json!({"name": "body", "value": "world"}),
     ];
     assert_eq!(super::super::count_errors_in_fields(&fields), 0);
 }
@@ -1042,16 +1044,16 @@ fn count_errors_no_errors() {
 #[test]
 fn count_errors_direct_errors() {
     let fields = vec![
-        serde_json::json!({"name": "title", "error": "Required"}),
-        serde_json::json!({"name": "body", "value": "ok"}),
-        serde_json::json!({"name": "email", "error": "Invalid email"}),
+        json!({"name": "title", "error": "Required"}),
+        json!({"name": "body", "value": "ok"}),
+        json!({"name": "email", "error": "Invalid email"}),
     ];
     assert_eq!(super::super::count_errors_in_fields(&fields), 2);
 }
 
 #[test]
 fn count_errors_nested_in_sub_fields() {
-    let fields = vec![serde_json::json!({
+    let fields = vec![json!({
         "name": "group1",
         "sub_fields": [
             {"name": "nested1", "error": "Too short"},
@@ -1063,7 +1065,7 @@ fn count_errors_nested_in_sub_fields() {
 
 #[test]
 fn count_errors_nested_in_tabs() {
-    let fields = vec![serde_json::json!({
+    let fields = vec![json!({
         "name": "settings",
         "tabs": [
             {
@@ -1086,7 +1088,7 @@ fn count_errors_nested_in_tabs() {
 
 #[test]
 fn count_errors_nested_in_array_rows() {
-    let fields = vec![serde_json::json!({
+    let fields = vec![json!({
         "name": "items",
         "rows": [
             {
@@ -1108,7 +1110,7 @@ fn count_errors_nested_in_array_rows() {
 
 #[test]
 fn count_errors_null_error_not_counted() {
-    let fields = vec![serde_json::json!({"name": "title", "error": null})];
+    let fields = vec![json!({"name": "title", "error": null})];
     assert_eq!(super::super::count_errors_in_fields(&fields), 0);
 }
 
@@ -1185,4 +1187,48 @@ fn max_depth_prevents_infinite_recursion() {
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0]["field_type"], "array");
+}
+
+// --- richtext node attr error display ---
+
+#[test]
+fn build_richtext_field_shows_node_attr_errors() {
+    let field = make_field("content", FieldType::Richtext);
+    let fields = vec![field];
+    let values = HashMap::new();
+    let mut errors = HashMap::new();
+    errors.insert(
+        "content[cta#0].text".to_string(),
+        "Text is required".to_string(),
+    );
+
+    let result = build_field_contexts(&fields, &values, &errors, false, false);
+    assert_eq!(result[0]["field_type"], "richtext");
+    assert_eq!(result[0]["error"], "Text is required");
+}
+
+#[test]
+fn build_richtext_field_direct_error_takes_priority() {
+    let field = make_field("content", FieldType::Richtext);
+    let fields = vec![field];
+    let values = HashMap::new();
+    let mut errors = HashMap::new();
+    // Direct field error and node attr error both present
+    errors.insert("content".to_string(), "Field is required".to_string());
+    errors.insert(
+        "content[cta#0].text".to_string(),
+        "Text is required".to_string(),
+    );
+
+    let result = build_field_contexts(&fields, &values, &errors, false, false);
+    // Direct error should take priority
+    assert_eq!(result[0]["error"], "Field is required");
+}
+
+#[test]
+fn build_richtext_field_no_errors_no_error_key() {
+    let field = make_field("content", FieldType::Richtext);
+    let fields = vec![field];
+    let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+    assert!(result[0].get("error").is_none() || result[0]["error"].is_null());
 }

@@ -48,5 +48,18 @@
   {{#if error}}class="form__input--error"{{/if}}
 />
 {{/if}}
+{{#if timezone_enabled}}
+<div class="form__timezone">
+  <select name="{{name}}_tz" id="field-{{name}}-tz" class="form__select form__timezone-select"
+    {{#if locale_locked}}disabled{{/if}}>
+    <option value="">—</option>
+    {{#each timezone_options}}
+    <option value="{{this.value}}" {{#if (eq this.value ../timezone_value)}}selected{{/if}}>
+      {{this.label}}
+    </option>
+    {{/each}}
+  </select>
+</div>
+{{/if}}
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{t description}}</p>{{/if}}

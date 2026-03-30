@@ -26,18 +26,17 @@ crap.collections.define("posts", {
         list_searchable_fields = { "title", "slug" },
     },
     fields = {
-        { name = "title", type = "text", required = true },
-        { name = "slug", type = "text", required = true, unique = true },
-        {
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.text({ name = "slug", required = true, unique = true }),
+        crap.fields.select({
             name = "status",
-            type = "select",
             default_value = "draft",
             options = {
                 { label = "Draft", value = "draft" },
                 { label = "Published", value = "published" },
             },
-        },
-        { name = "content", type = "richtext" },
+        }),
+        crap.fields.richtext({ name = "content" }),
     },
     hooks = {
         before_change = { "hooks.posts.auto_slug" },

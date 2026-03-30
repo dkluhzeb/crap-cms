@@ -57,14 +57,14 @@ fn build_subquery_sql(
             }
             let cond = build_op_condition(conn, col, op, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE parent_id = {}.id AND {})",
+                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {})",
                 join_table, parent_table, cond
             ))
         }
         SubqueryCondition::BlockType => {
             let cond = build_op_condition(conn, "_block_type", op, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE parent_id = {}.id AND {})",
+                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {})",
                 join_table, parent_table, cond
             ))
         }
@@ -72,13 +72,13 @@ fn build_subquery_sql(
             each_joins,
             extract_expr,
         } => {
-            let mut from_parts = vec![join_table.to_string()];
+            let mut from_parts = vec![format!("\"{}\"", join_table)];
             for (source, alias) in each_joins {
                 from_parts.push(conn.json_each_source(source, alias));
             }
             let cond = build_op_condition(conn, extract_expr, op, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE {}.parent_id = {}.id AND {})",
+                "EXISTS (SELECT 1 FROM {} WHERE \"{}\".parent_id = \"{}\".id AND {})",
                 from_parts.join(", "),
                 join_table,
                 parent_table,
@@ -155,34 +155,36 @@ pub fn resolve_filters(
     filters: &[FilterClause],
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
-) -> Vec<FilterClause> {
+) -> Result<Vec<FilterClause>> {
     filters
         .iter()
         .map(|clause| match clause {
             FilterClause::Single(f) => {
-                let resolved = resolve_filter_column(&f.field, def, locale_ctx);
-                FilterClause::Single(Filter {
+                let resolved = resolve_filter_column(&f.field, def, locale_ctx)?;
+                Ok(FilterClause::Single(Filter {
                     field: resolved,
                     op: f.op.clone(),
-                })
+                }))
             }
-            FilterClause::Or(groups) => FilterClause::Or(
-                groups
+            FilterClause::Or(groups) => {
+                let resolved_groups: Result<Vec<Vec<Filter>>> = groups
                     .iter()
                     .map(|group| {
                         group
                             .iter()
                             .map(|f| {
-                                let resolved = resolve_filter_column(&f.field, def, locale_ctx);
-                                Filter {
+                                let resolved = resolve_filter_column(&f.field, def, locale_ctx)?;
+                                Ok(Filter {
                                     field: resolved,
                                     op: f.op.clone(),
-                                }
+                                })
                             })
                             .collect()
                     })
-                    .collect(),
-            ),
+                    .collect();
+
+                Ok(FilterClause::Or(resolved_groups?))
+            }
         })
         .collect()
 }
@@ -201,17 +203,18 @@ pub fn resolve_filter_column(
     field_name: &str,
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
-) -> String {
+) -> Result<String> {
     if let Some(ctx) = locale_ctx
         && ctx.config.is_enabled()
     {
         for field in &def.fields {
             if let Some(locale) = check_field_locale(field, field_name, ctx) {
-                return format!("{}__{}", field_name, sanitize_locale(locale));
+                return Ok(format!("{}__{}", field_name, sanitize_locale(locale)?));
             }
         }
     }
-    field_name.to_string()
+
+    Ok(field_name.to_string())
 }
 
 fn get_locale(ctx: &LocaleContext) -> &str {
@@ -446,7 +449,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE status = ?1 AND EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?2)"
+            " WHERE status = ?1 AND EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?2)"
         );
         assert_eq!(params.len(), 2);
     }
@@ -472,7 +475,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?2))"
+            " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?2))"
         );
         assert_eq!(params.len(), 2);
     }
@@ -494,7 +497,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -511,7 +514,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content WHERE parent_id = posts.id AND _block_type = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE parent_id = \"posts\".id AND _block_type = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -534,7 +537,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content WHERE posts_content.parent_id = posts.id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
         );
         assert_eq!(params.len(), 1);
     }
@@ -560,7 +563,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content, json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE posts_content.parent_id = posts.id AND json_extract(j0.value, '$.text') = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_content\", json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(j0.value, '$.text') = ?1)"
         );
     }
 
@@ -576,7 +579,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -593,7 +596,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id IN (?1, ?2))"
+            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id IN (?1, ?2))"
         );
         assert_eq!(params.len(), 2);
     }
@@ -607,7 +610,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title");
     }
 
@@ -618,7 +621,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title__de");
     }
 
@@ -633,7 +636,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("meta__description", &def, Some(&ctx));
+        let result = resolve_filter_column("meta__description", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "meta__description__de");
     }
 
@@ -644,7 +647,7 @@ mod tests {
             mode: LocaleMode::Default,
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title__en");
     }
 
@@ -657,14 +660,14 @@ mod tests {
             mode: LocaleMode::Default,
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("meta__title", &def, Some(&ctx));
+        let result = resolve_filter_column("meta__title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "meta__title__en");
     }
 
     #[test]
     fn resolve_column_no_locale_ctx() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
-        let result = resolve_filter_column("title", &def, None);
+        let result = resolve_filter_column("title", &def, None).unwrap();
         assert_eq!(result, "title");
     }
 
@@ -681,7 +684,7 @@ mod tests {
             config: locale_config_en_de(),
         };
         // Filtering by "slug" should resolve to "slug__de" because it's localized inside a Row
-        let result = resolve_filter_column("slug", &def, Some(&ctx));
+        let result = resolve_filter_column("slug", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "slug__de");
     }
 
@@ -697,7 +700,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("slug", &def, Some(&ctx));
+        let result = resolve_filter_column("slug", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "slug");
     }
 
@@ -713,7 +716,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("summary", &def, Some(&ctx));
+        let result = resolve_filter_column("summary", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "summary__de");
     }
 
@@ -731,7 +734,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("description", &def, Some(&ctx));
+        let result = resolve_filter_column("description", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "description__de");
     }
 
@@ -749,7 +752,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("description", &def, Some(&ctx));
+        let result = resolve_filter_column("description", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "description");
     }
 
@@ -765,7 +768,7 @@ mod tests {
                 fallback: false,
             },
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title");
     }
 
@@ -782,7 +785,7 @@ mod tests {
             field: "status".into(),
             op: FilterOp::Equals("active".into()),
         })];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "status"),
             other => panic!("Expected Single, got {:?}", other),
@@ -806,7 +809,7 @@ mod tests {
                 op: FilterOp::Equals("B".into()),
             }],
         ])];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Or(groups) => {
                 assert_eq!(groups[0][0].field, "title__de");
@@ -827,7 +830,7 @@ mod tests {
             field: "title".into(),
             op: FilterOp::Equals("Hallo".into()),
         })];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "title__de"),
             other => panic!("Expected Single, got {:?}", other),

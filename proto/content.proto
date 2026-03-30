@@ -44,8 +44,8 @@ service ContentAPI {
   rpc Find (FindRequest) returns (FindResponse);
 
   // FindByID fetches a single document by its nanoid. Fires before_read /
-  // after_read hooks. Returns an empty document field when no document matches
-  // (NOT_FOUND is NOT returned for a missing document; check response.document).
+  // after_read hooks. Returns a NOT_FOUND (code 5) gRPC status error when no
+  // document matches the given ID.
   //
   // Auth: optional. Access functions are evaluated when a token is present.
   //
@@ -103,6 +103,18 @@ service ContentAPI {
   //   UNAVAILABLE       — transient DB error; retry
   rpc Delete (DeleteRequest) returns (DeleteResponse);
 
+  // Restore un-deletes a soft-deleted document, moving it out of trash.
+  // Only works on collections with `soft_delete = true`.
+  //
+  // Auth: optional. Trash access functions are evaluated when a token is present.
+  //
+  // Errors:
+  //   NOT_FOUND            — collection or document not found
+  //   PERMISSION_DENIED    — trash access denied
+  //   FAILED_PRECONDITION  — collection does not have soft_delete enabled
+  //   UNAVAILABLE          — transient DB error; retry
+  rpc Restore (RestoreRequest) returns (RestoreResponse);
+
   // GetGlobal retrieves the single document for a global definition. Globals
   // have no collection CRUD; there is exactly one document per global slug.
   // Fires before_read / after_read hooks.
@@ -140,17 +152,16 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND          — collection slug not registered
   //   INVALID_ARGUMENT   — collection is not an auth collection
-  //   UNAUTHENTICATED    — invalid email or password
-  //   PERMISSION_DENIED  — account is locked, or email unverified (when
-  //                        verify_email=true in the collection auth config)
+  //   UNAUTHENTICATED    — invalid email or password (also returned for locked
+  //                        or unverified accounts to prevent state enumeration)
   //   RESOURCE_EXHAUSTED — rate limit exceeded; try again later
   rpc Login (LoginRequest) returns (LoginResponse);
 
   // Me validates a JWT token and returns the associated user document.
   // Use this to verify a token is still valid and to fetch the current user.
   //
-  // The token is passed in the request body (not in metadata). This is the
-  // only auth RPC that uses request-body token passing instead of metadata.
+  // The token is read from the `authorization` metadata header first;
+  // if absent, falls back to the `token` field in the request body.
   //
   // Auth: the token in MeRequest.token is the auth credential.
   //
@@ -231,7 +242,8 @@ service ContentAPI {
 
   // UpdateMany bulk-updates all documents matching the where filter.
   // All matching documents are updated in a single transaction (all-or-nothing).
-  // Does NOT fire per-document hooks — use individual Update calls if hooks are needed.
+  // Fires per-document before_change / after_change hooks by default.
+  // Set hooks=false to skip hooks for performance on large batch operations.
   //
   // Access is checked twice: read access to find matching docs, then update
   // access per document (all must pass, or the whole operation is denied).
@@ -247,7 +259,8 @@ service ContentAPI {
 
   // DeleteMany bulk-deletes all documents matching the where filter.
   // All deletions run in a single transaction (all-or-nothing).
-  // Does NOT fire per-document delete hooks or remove uploaded files.
+  // Fires per-document before_delete / after_delete hooks by default.
+  // Set hooks=false to skip hooks for performance on large batch operations.
   //
   // Access is checked twice: read access to find matching docs, then delete
   // access per document (all must pass, or the whole operation is denied).
@@ -394,7 +407,7 @@ message FindRequest {
 
   // Maximum number of documents to return per page.
   // Clamped to server-configured max_limit (default 1000).
-  // Defaults to server-configured default_limit (default 10).
+  // Defaults to server-configured default_limit (default 20).
   optional int64 limit = 4;
 
   // 1-indexed page number for page-based pagination.
@@ -513,11 +526,10 @@ message FindByIDRequest {
   optional bool draft = 6;
 }
 
-// FindByIDResponse wraps the returned document. The document field is absent
-// (not set) when no document exists for the given ID — a 404 is NOT returned.
-// Check document presence before accessing its fields.
+// FindByIDResponse wraps the returned document. When no document exists for
+// the given ID, the server returns a NOT_FOUND (code 5) gRPC status error.
 message FindByIDResponse {
-  // The matching document, or absent if no document with that ID exists.
+  // The matching document.
   optional Document document = 1;
 }
 
@@ -576,7 +588,34 @@ message UpdateResponse {
 }
 
 // DeleteRequest removes a document by ID.
+// For collections with `soft_delete = true`, this moves the document to trash
+// unless `force_hard_delete` is set. Requires `access.trash` for soft delete
+// or `access.delete` for permanent deletion.
 message DeleteRequest {
+  // The collection slug.
+  string collection = 1;
+
+  // The document's nanoid ID.
+  string id = 2;
+
+  // When true, permanently delete even if the collection has soft_delete enabled.
+  // Requires `access.delete` permission (not just `access.trash`).
+  bool force_hard_delete = 3;
+}
+
+// DeleteResponse confirms the deletion.
+message DeleteResponse {
+  // True if the document was successfully deleted (or soft-deleted).
+  bool success = 1;
+
+  // True if the document was soft-deleted (moved to trash) rather than permanently deleted.
+  bool soft_deleted = 2;
+}
+
+// RestoreRequest restores a soft-deleted document from trash.
+// Only works on collections with `soft_delete = true`.
+// Requires `access.trash` permission (falls back to `access.update`).
+message RestoreRequest {
   // The collection slug.
   string collection = 1;
 
@@ -584,10 +623,10 @@ message DeleteRequest {
   string id = 2;
 }
 
-// DeleteResponse confirms the deletion.
-message DeleteResponse {
-  // True if the document was successfully deleted.
-  bool success = 1;
+// RestoreResponse confirms the restoration.
+message RestoreResponse {
+  // The restored document.
+  Document document = 1;
 }
 
 // GetGlobalRequest retrieves the singleton document for a global.
@@ -742,7 +781,6 @@ message CountResponse {
 }
 
 // UpdateManyRequest bulk-updates all documents matching a filter.
-// No per-document write hooks are fired; this is a direct SQL update.
 message UpdateManyRequest {
   // The collection slug.
   string collection = 1;
@@ -759,6 +797,10 @@ message UpdateManyRequest {
 
   // When true, saves changes as drafts. Defaults to false.
   optional bool draft = 5;
+
+  // Run per-document lifecycle hooks (before_change, after_change).
+  // Default: true (hooks run). Set to false to skip for performance.
+  optional bool hooks = 6;
 }
 
 // UpdateManyResponse reports the number of documents modified.
@@ -768,7 +810,6 @@ message UpdateManyResponse {
 }
 
 // DeleteManyRequest bulk-deletes all documents matching a filter.
-// No per-document delete hooks are fired; uploaded files are NOT removed.
 message DeleteManyRequest {
   // The collection slug.
   string collection = 1;
@@ -776,12 +817,26 @@ message DeleteManyRequest {
   // Optional JSON filter clause. Same syntax as FindRequest.where.
   // When omitted, all documents in the collection are deleted.
   optional string where = 2;
+
+  // Run per-document lifecycle hooks (before_delete, after_delete).
+  // Default: true (hooks run). Set to false to skip for performance.
+  optional bool hooks = 3;
+
+  // When true, permanently delete even if the collection has soft_delete enabled.
+  // Requires `access.delete` permission (not just `access.trash`).
+  bool force_hard_delete = 4;
 }
 
 // DeleteManyResponse reports the number of documents deleted.
 message DeleteManyResponse {
-  // Number of documents deleted in this operation.
+  // Number of documents permanently deleted in this operation.
   int64 deleted = 1;
+
+  // Number of documents soft-deleted (moved to trash) in this operation.
+  int64 soft_deleted = 2;
+
+  // Number of documents skipped because they are still referenced by other documents.
+  int64 skipped = 3;
 }
 
 // Document represents a single CMS document as returned by the API.
@@ -898,8 +953,8 @@ message FieldInfo {
 
   // The field type string as defined in Lua.
   // Common values: text, textarea, richtext, number, email, checkbox, select,
-  //   multiselect, date, relationship, array, group, blocks, tabs, json,
-  //   point, upload, code, color.
+  //   radio, date, relationship, array, group, blocks, tabs, json,
+  //   upload, code, row, collapsible, join.
   string type = 2;
 
   // True if the field is required (non-empty validation enforced).
@@ -1152,7 +1207,7 @@ message GetJobRunResponse {
   // Total allowed attempts (retries + 1).
   uint32 max_attempts = 8;
 
-  // How this run was initiated: "grpc", "scheduler", or "admin".
+  // How this run was initiated: "grpc", "cron", or "admin".
   optional string scheduled_by = 9;
 
   // ISO-8601 UTC timestamp when the job run was created.

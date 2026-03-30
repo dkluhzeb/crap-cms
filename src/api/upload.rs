@@ -5,7 +5,7 @@
 //! - `PATCH  /api/upload/{slug}/{id}`  — replace file on existing document
 //! - `DELETE /api/upload/{slug}/{id}`  — delete upload document + files
 
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
 
 use axum::{
     Router,
@@ -33,7 +33,6 @@ use crate::{
 };
 
 /// Build the upload API router with all routes.
-#[cfg(not(tarpaulin_include))]
 pub fn upload_router(state: AdminState) -> Router<AdminState> {
     Router::new()
         .route("/upload/{slug}", post(create_upload))
@@ -42,10 +41,20 @@ pub fn upload_router(state: AdminState) -> Router<AdminState> {
         .with_state(state)
 }
 
+/// Extract Bearer token string from an Authorization header value.
+///
+/// Returns `Some(token)` for a valid `Bearer <token>` header, `None` otherwise.
+fn extract_bearer_token(auth_header: &str) -> Option<&str> {
+    auth_header
+        .strip_prefix("Bearer ")
+        .filter(|s| !s.is_empty())
+}
+
 /// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
 ///
 /// Returns `Ok(None)` when no Authorization header is present (anonymous),
-/// `Ok(Some(user))` for a valid token, or `Err(401)` for an invalid/expired token.
+/// `Ok(Some(user))` for a valid token, or `Err(401)` for an invalid/expired token
+/// or a non-Bearer scheme.
 #[cfg(not(tarpaulin_include))]
 fn extract_bearer_user(
     state: &AdminState,
@@ -63,9 +72,14 @@ fn extract_bearer_user(
         },
         None => return Ok(None),
     };
-    let token = match auth_header.strip_prefix("Bearer ") {
+    let token = match extract_bearer_token(auth_header) {
         Some(t) => t,
-        None => return Ok(None),
+        None => {
+            return Err(Box::new(json_error(
+                StatusCode::UNAUTHORIZED,
+                "Authorization header must use Bearer scheme",
+            )));
+        }
     };
     let claims = auth::validate_token(token, state.jwt_secret.as_ref()).map_err(|_| {
         Box::new(json_error(
@@ -83,23 +97,32 @@ fn extract_bearer_user(
 }
 
 /// Return a JSON error response.
-#[cfg(not(tarpaulin_include))]
 fn json_error(status: StatusCode, message: &str) -> Response {
     let body = json!({ "error": message });
     (
         status,
-        [(header::CONTENT_TYPE, "application/json")],
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
         body.to_string(),
     )
         .into_response()
 }
 
+/// Classify a delete error message into the appropriate HTTP status code.
+fn classify_delete_error(msg: &str) -> StatusCode {
+    if msg.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if msg.contains("Cannot delete") || msg.contains("referenced by") {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 /// Return a JSON success response with the given status and body.
-#[cfg(not(tarpaulin_include))]
 fn json_ok(status: StatusCode, body: &Value) -> Response {
     (
         status,
-        [(header::CONTENT_TYPE, "application/json")],
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
         body.to_string(),
     )
         .into_response()
@@ -152,7 +175,9 @@ async fn create_upload(
                 .hook_runner
                 .check_access(def.access.create.as_deref(), user_doc, None, None, &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("tx commit failed: {e}");
+        }
 
         result
     };
@@ -200,7 +225,7 @@ async fn create_upload(
     let config_dir = state.config_dir.clone();
     let slug_for_upload = slug.clone();
     let global_max = state.config.upload.max_file_size;
-    let processed = match tokio::task::spawn_blocking(move || {
+    let (processed, mut guard) = match tokio::task::spawn_blocking(move || {
         upload::process_upload(
             file,
             &upload_config,
@@ -222,7 +247,6 @@ async fn create_upload(
     };
 
     let queued_conversions = processed.queued_conversions.clone();
-    let created_files = processed.created_files.clone();
 
     inject_upload_metadata(&mut form_data, &processed);
 
@@ -236,7 +260,9 @@ async fn create_upload(
                     .hook_runner
                     .check_field_write_access(&def.fields, user_doc, "create", &tx);
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
 
             for name in &denied {
                 form_data.remove(name);
@@ -282,6 +308,8 @@ async fn create_upload(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            guard.commit();
+
             // Enqueue deferred image conversions if any
             if !queued_conversions.is_empty()
                 && let Ok(conn) = state.pool.get()
@@ -309,17 +337,11 @@ async fn create_upload(
             let body = json!({ "document": doc });
             json_ok(StatusCode::CREATED, &body)
         }
-        Ok(Err(e)) => {
-            cleanup_files(&created_files);
-            json_error(StatusCode::BAD_REQUEST, &e.to_string())
-        }
-        Err(e) => {
-            cleanup_files(&created_files);
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Task error: {}", e),
-            )
-        }
+        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Task error: {}", e),
+        ),
     }
 }
 
@@ -372,7 +394,9 @@ async fn update_upload(
             &tx,
         );
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("tx commit failed: {e}");
+        }
         result
     };
 
@@ -402,18 +426,19 @@ async fn update_upload(
 
     // Load old document to get file paths for cleanup
     let mut old_doc_fields: Option<HashMap<String, Value>> = None;
+    let locale_ctx = crate::db::LocaleContext::from_locale_string(None, &state.config.locale);
 
     if let Some(ref f) = file
         && !f.data.is_empty()
         && let Ok(conn) = state.pool.get()
-        && let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, None)
+        && let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, locale_ctx.as_ref())
     {
         old_doc_fields = Some(old_doc.fields.clone());
     }
 
     // Process upload if a new file was provided — runs on blocking thread
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<PathBuf> = Vec::new();
+    let mut upload_guard: Option<upload::CleanupGuard> = None;
 
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
@@ -426,9 +451,9 @@ async fn update_upload(
         })
         .await
         {
-            Ok(Ok(processed)) => {
+            Ok(Ok((processed, guard))) => {
                 queued_conversions = processed.queued_conversions.clone();
-                created_files = processed.created_files.clone();
+                upload_guard = Some(guard);
                 inject_upload_metadata(&mut form_data, &processed);
             }
             Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
@@ -451,7 +476,9 @@ async fn update_upload(
                     .hook_runner
                     .check_field_write_access(&def.fields, user_doc, "update", &tx);
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
             for name in &denied {
                 form_data.remove(name);
             }
@@ -496,6 +523,10 @@ async fn update_upload(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            if let Some(mut g) = upload_guard {
+                g.commit();
+            }
+
             // Clean up old files on success
             if let Some(old_fields) = old_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &old_fields);
@@ -528,26 +559,11 @@ async fn update_upload(
 
             json_ok(StatusCode::OK, &body)
         }
-        Ok(Err(e)) => {
-            cleanup_files(&created_files);
-
-            json_error(StatusCode::BAD_REQUEST, &e.to_string())
-        }
-        Err(e) => {
-            cleanup_files(&created_files);
-
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Task error: {}", e),
-            )
-        }
-    }
-}
-
-/// Delete a list of files, ignoring errors (best-effort orphan cleanup).
-fn cleanup_files(files: &[PathBuf]) {
-    for path in files {
-        let _ = fs::remove_file(path);
+        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Task error: {}", e),
+        ),
     }
 }
 
@@ -602,7 +618,9 @@ async fn delete_upload(
         );
 
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("tx commit failed: {e}");
+        }
 
         result
     };
@@ -646,6 +664,7 @@ async fn delete_upload(
     let id_owned = id.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let config_dir = state.config_dir.clone();
+    let locale_config = state.config.locale.clone();
     let result = tokio::task::spawn_blocking(move || {
         service::delete_document(
             &pool,
@@ -655,6 +674,7 @@ async fn delete_upload(
             &def_clone,
             user_doc_owned.as_ref(),
             Some(&config_dir),
+            Some(&locale_config),
         )
     })
     .await;
@@ -678,13 +698,127 @@ async fn delete_upload(
 
             json_ok(StatusCode::OK, &json!({ "success": true }))
         }
-        Ok(Err(e)) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Delete error: {}", e),
-        ),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let status = classify_delete_error(&msg);
+            json_error(status, &format!("Delete error: {}", msg))
+        }
         Err(e) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Task error: {}", e),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::body::to_bytes;
+
+    // ── json_error tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn json_error_returns_correct_status() {
+        let resp = json_error(StatusCode::BAD_REQUEST, "something broke");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn json_error_body_contains_message() {
+        let resp = json_error(StatusCode::NOT_FOUND, "not here");
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "not here");
+    }
+
+    #[tokio::test]
+    async fn json_error_content_type() {
+        let resp = json_error(StatusCode::INTERNAL_SERVER_ERROR, "oops");
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json; charset=utf-8"
+        );
+    }
+
+    // ── json_ok tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn json_ok_returns_correct_status() {
+        let body = json!({ "success": true });
+        let resp = json_ok(StatusCode::CREATED, &body);
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn json_ok_body_matches() {
+        let body_val = json!({ "document": { "id": "abc" } });
+        let resp = json_ok(StatusCode::OK, &body_val);
+        let body = to_bytes(resp.into_body(), 4096).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["document"]["id"], "abc");
+    }
+
+    // ── extract_bearer_token tests ────────────────────────────────────
+
+    #[test]
+    fn bearer_token_valid() {
+        assert_eq!(extract_bearer_token("Bearer abc123"), Some("abc123"));
+    }
+
+    #[test]
+    fn bearer_token_wrong_prefix() {
+        assert_eq!(extract_bearer_token("Basic abc123"), None);
+    }
+
+    #[test]
+    fn bearer_token_empty_value() {
+        assert_eq!(extract_bearer_token("Bearer "), None);
+    }
+
+    #[test]
+    fn bearer_token_lowercase() {
+        assert_eq!(extract_bearer_token("bearer abc123"), None);
+    }
+
+    #[test]
+    fn bearer_token_no_space() {
+        assert_eq!(extract_bearer_token("Bearerabc123"), None);
+    }
+
+    // ── classify_delete_error tests ──────────────────────────────
+
+    #[test]
+    fn delete_error_not_found() {
+        assert_eq!(
+            classify_delete_error("Document not found in collection"),
+            StatusCode::NOT_FOUND,
+        );
+    }
+
+    #[test]
+    fn delete_error_referenced() {
+        assert_eq!(
+            classify_delete_error(
+                "Cannot delete: this document is referenced by 3 other document(s)"
+            ),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    #[test]
+    fn delete_error_referenced_by_keyword() {
+        assert_eq!(
+            classify_delete_error("Still referenced by other documents"),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    #[test]
+    fn delete_error_generic() {
+        assert_eq!(
+            classify_delete_error("Database write failed"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
     }
 }

@@ -19,6 +19,7 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::db::{DbConnection, DbValue, migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -136,8 +137,14 @@ fn setup_service(
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -414,18 +421,21 @@ async fn verify_email_not_enabled() {
 
 #[tokio::test]
 async fn forgot_password_non_auth_collection() {
+    // ForgotPassword returns success even for non-auth collections to avoid
+    // leaking collection configuration details to potential attackers.
     let ts = setup_service(vec![make_posts_def()], vec![]);
 
-    let err = ts
+    let resp = ts
         .service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "posts".to_string(),
             email: "a@b.com".to_string(),
         }))
         .await
-        .unwrap_err();
+        .unwrap()
+        .into_inner();
 
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(resp.success);
 }
 
 #[tokio::test]
@@ -448,23 +458,25 @@ async fn forgot_password_always_returns_success() {
 
 #[tokio::test]
 async fn forgot_password_not_enabled() {
-    // Create a users def with forgot_password explicitly disabled
+    // ForgotPassword returns success even when forgot_password is disabled to
+    // avoid leaking collection configuration details to potential attackers.
     let mut def = make_users_def();
     if let Some(ref mut auth) = def.auth {
         auth.forgot_password = false;
     }
     let ts = setup_service(vec![def], vec![]);
 
-    let err = ts
+    let resp = ts
         .service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "a@b.com".to_string(),
         }))
         .await
-        .unwrap_err();
+        .unwrap()
+        .into_inner();
 
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(resp.success);
 }
 
 // ── Subscribe Tests ───────────────────────────────────────────────────────
@@ -761,10 +773,12 @@ async fn login_blocked_when_unverified() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // Unified error: locked/unverified accounts return the same generic error
+    // as wrong-password to prevent attackers from confirming password correctness.
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
     assert!(
-        err.message().to_lowercase().contains("verif"),
-        "Error should mention verification, got: {}",
+        err.message().to_lowercase().contains("invalid"),
+        "Should return generic 'Invalid email or password', got: {}",
         err.message()
     );
 }
@@ -1015,6 +1029,12 @@ async fn login_locked_account() {
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert!(err.message().to_lowercase().contains("locked"));
+    // Unified error: locked accounts return the same generic error as wrong-password
+    // to prevent attackers from confirming password correctness.
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(
+        err.message().to_lowercase().contains("invalid"),
+        "Should return generic 'Invalid email or password', got: {}",
+        err.message()
+    );
 }

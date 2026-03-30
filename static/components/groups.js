@@ -9,6 +9,9 @@
 
 class CrapCollapsible extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     this.addEventListener('click', (e) => {
       const btn = /** @type {HTMLElement} */ (e.target).closest('[data-action="toggle-group"]');
       if (!btn) return;

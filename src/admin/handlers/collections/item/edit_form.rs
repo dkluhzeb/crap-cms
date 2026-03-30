@@ -77,6 +77,8 @@ pub async fn edit_form(
         None
     };
     let has_drafts = def.has_drafts();
+    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
     let read_result = task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "find_by_id", HashMap::new())?;
@@ -105,8 +107,8 @@ pub async fn edit_form(
             fields: &fields,
             collection: &slug_owned,
             operation: "find_by_id",
-            user: None,
-            ui_locale: None,
+            user: user_doc.as_ref(),
+            ui_locale: user_ui_locale.as_deref(),
         };
         let doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
 
@@ -227,6 +229,7 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionEdit, "edit_name")
         .page_title_name(def.singular_name())
@@ -250,10 +253,22 @@ pub async fn edit_form(
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::current(doc_title),
+            Breadcrumb::current(doc_title.clone()),
         ])
         .merge(locale_data)
         .build();
+
+    data["document_title"] = json!(doc_title);
+
+    // Add reference count for delete protection UI
+    let ref_count = state
+        .pool
+        .get()
+        .ok()
+        .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
+        .flatten()
+        .unwrap_or(0);
+    data["ref_count"] = json!(ref_count);
 
     // Add upload context for upload collections
     if def.is_upload_collection() {

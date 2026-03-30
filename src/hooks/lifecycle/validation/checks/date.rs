@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
+use chrono_tz::Tz;
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use std::collections::HashMap;
 
 /// Validate date format and date bounds (min_date / max_date).
 pub(crate) fn check_date_field(
@@ -25,7 +28,7 @@ pub(crate) fn check_date_field(
         }
         // Date bounds validation (ISO dates sort lexicographically)
         if let Some(ref min_date) = field.min_date {
-            let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+            let date_part = s.get(..10).unwrap_or(s.as_str());
 
             if date_part < min_date.as_str() {
                 errors.push(FieldError::with_key(
@@ -40,7 +43,7 @@ pub(crate) fn check_date_field(
             }
         }
         if let Some(ref max_date) = field.max_date {
-            let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+            let date_part = s.get(..10).unwrap_or(s.as_str());
 
             if date_part > max_date.as_str() {
                 errors.push(FieldError::with_key(
@@ -61,8 +64,6 @@ pub(crate) fn check_date_field(
 /// Accepts: YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS, full ISO 8601/RFC 3339,
 /// HH:MM (time only), HH:MM:SS, YYYY-MM (month only).
 pub(crate) fn is_valid_date_format(value: &str) -> bool {
-    use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
-
     // Time only: HH:MM or HH:MM:SS
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         let parts: Vec<&str> = value.split(':').collect();
@@ -105,6 +106,12 @@ pub(crate) fn is_valid_date_format(value: &str) -> bool {
     }
 
     false
+}
+
+/// Validate that the timezone string is a valid IANA timezone.
+#[allow(dead_code)]
+pub fn validate_timezone(tz: &str) -> bool {
+    tz.parse::<Tz>().is_ok()
 }
 
 #[cfg(test)]
@@ -179,6 +186,23 @@ mod tests {
     fn test_invalid_date_format_time_like_but_non_digit() {
         assert!(!is_valid_date_format("ab:cd"));
         assert!(!is_valid_date_format("1a:30"));
+    }
+
+    // --- validate_timezone tests ---
+
+    #[test]
+    fn test_validate_timezone_valid() {
+        assert!(validate_timezone("UTC"));
+        assert!(validate_timezone("America/New_York"));
+        assert!(validate_timezone("Europe/London"));
+        assert!(validate_timezone("Asia/Tokyo"));
+    }
+
+    #[test]
+    fn test_validate_timezone_invalid() {
+        assert!(!validate_timezone("Invalid/Zone"));
+        assert!(!validate_timezone(""));
+        assert!(!validate_timezone("NotATimezone"));
     }
 
     // --- validate_fields_inner integration tests ---
@@ -349,6 +373,38 @@ mod tests {
             result.unwrap_err().errors[0]
                 .message
                 .contains("on or after")
+        );
+    }
+
+    /// Regression test: date string slicing with multi-byte UTF-8 must not panic.
+    /// Previously used `&s[..10]` which panics on non-ASCII; now uses `.get(..10)`.
+    #[test]
+    fn test_validate_date_bounds_multibyte_does_not_panic() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("d", FieldType::Date)
+                .min_date("2024-01-01")
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        // Multi-byte string that would panic with &s[..10] byte slicing
+        data.insert(
+            "d".to_string(),
+            json!("\u{00e9}\u{00e9}\u{00e9}\u{00e9}\u{00e9}"),
+        );
+        // Should not panic — just produce a validation error
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "Invalid date should produce an error, not panic"
         );
     }
 

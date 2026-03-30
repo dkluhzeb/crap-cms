@@ -13,6 +13,7 @@ Crap CMS provides built-in authentication via auth-enabled collections. Any coll
 - **CSRF protection** — admin UI forms and HTMX requests are protected with double-submit cookie tokens.
 - **Secure cookies** — the `crap_session` cookie includes the `Secure` flag in production (when `dev_mode = false`).
 - **`_password_hash`** — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.
+- **`_locked`** — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See [Auth Collections](auth-collections.md#account-locking).
 - **Custom strategies** — pluggable auth via Lua functions (API keys, LDAP, SSO).
 - **Password reset** — token-based forgot/reset password flow via admin UI and gRPC. Requires email configuration.
 - **Email verification** — optional per-collection. When enabled, users must verify their email before logging in.
@@ -34,11 +35,11 @@ Auth middleware activates when at least one auth collection exists **or** when `
 crap.collections.define("users", {
     auth = true,
     fields = {
-        { name = "name", type = "text", required = true },
-        { name = "role", type = "select", options = {
+        crap.fields.text({ name = "name", required = true }),
+        crap.fields.select({ name = "role", options = {
             { label = "Admin", value = "admin" },
             { label = "Editor", value = "editor" },
-        }},
+        }}),
     },
 })
 ```
@@ -84,7 +85,7 @@ crap.collections.define("users", {
 When email is configured, a "Forgot password?" link appears on the admin login page. The flow:
 
 1. User clicks "Forgot password?" and enters their email
-2. Server generates a single-use reset token (nanoid, stored in DB with 1-hour expiry). Login rate limiting applies — too many failed attempts will temporarily lock out the email.
+2. Server generates a single-use reset token (nanoid, stored in DB with 1-hour expiry). Forgot-password rate limiting applies — after `max_forgot_password_attempts` requests within `forgot_password_window_seconds`, further requests are silently accepted without sending email.
 3. Reset email is sent with a link to `/admin/reset-password?token=xxx`
 4. User sets a new password via the form
 5. Token is consumed (single-use) and user is redirected to login
@@ -104,5 +105,7 @@ When `verify_email: true` is set on an auth collection:
 5. Clicking the verification link marks the user as verified (if token hasn't expired)
 
 Available via gRPC as `VerifyEmail` RPC.
+
+The verification endpoint is rate-limited by IP (using the forgot-password rate limiter). Only actual token validation failures (invalid or expired tokens) count toward the rate limit — transient system errors do not penalize the user's IP.
 
 **Note:** Email verification requires SMTP to be configured. If SMTP is not configured, verification emails won't be sent (logged as warnings) and unverified users will be unable to log in.

@@ -1,13 +1,13 @@
 //! Parsing functions for field admin configuration.
 
-use mlua::Table;
+use mlua::{Result as LuaResult, Table};
 
 use crate::core::FieldAdmin;
 
 use super::helpers::*;
 
 /// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
-pub(super) fn parse_field_admin(admin_tbl: &Table) -> mlua::Result<FieldAdmin> {
+pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     let (labels_singular, labels_plural) = if let Ok(labels_tbl) = get_table(admin_tbl, "labels") {
         (
             get_localized_string(&labels_tbl, "singular"),

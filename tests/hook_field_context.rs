@@ -10,6 +10,7 @@ use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{
     AfterReadCtx, FieldHookEvent, FieldWriteCtx, HookContext, HookEvent, HookRunner, ValidationCtx,
 };
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -180,7 +181,7 @@ fn before_broadcast_no_hooks_passes_through() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Broadcast Test"));
+    data.insert("title".to_string(), json!("Broadcast Test"));
 
     let result = runner.run_before_broadcast(&def.hooks, "articles", "create", data);
     assert!(result.is_ok());
@@ -206,7 +207,7 @@ fn before_broadcast_transforms_data() {
     };
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Original"));
+    data.insert("title".to_string(), json!("Original"));
 
     let result = runner
         .run_before_broadcast(&hooks, "articles", "create", data)
@@ -253,7 +254,7 @@ fn validate_required_field_errors() {
 
     // Build data WITHOUT the required "title" field
     let mut data = HashMap::new();
-    data.insert("body".to_string(), serde_json::json!("Body without title"));
+    data.insert("body".to_string(), json!("Body without title"));
 
     let ctx = crap_cms::hooks::lifecycle::HookContext {
         collection: "articles".to_string(),
@@ -467,7 +468,7 @@ fn run_after_write_runs_field_after_change_hooks() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test Article"));
+    data.insert("title".to_string(), json!("Test Article"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -503,8 +504,8 @@ fn run_after_write_with_non_after_change_event() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
-    data.insert("id".to_string(), serde_json::json!("test-id"));
+    data.insert("title".to_string(), json!("Test"));
+    data.insert("id".to_string(), json!("test-id"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -536,7 +537,7 @@ fn run_field_hooks_without_conn() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("test title"));
+    data.insert("title".to_string(), json!("test title"));
 
     // run_field_hooks for AfterRead doesn't require CRUD access
     let result = runner.run_field_hooks(
@@ -565,7 +566,7 @@ fn hook_context_passes_locale_and_draft() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -600,13 +601,10 @@ fn hook_context_table_flows_through() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
 
     let mut context = HashMap::new();
-    context.insert(
-        "before_marker".to_string(),
-        serde_json::json!("set-by-test"),
-    );
+    context.insert("before_marker".to_string(), json!("set-by-test"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -642,7 +640,7 @@ fn field_before_validate_hook_trims_title() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  spaced title  "));
+    data.insert("title".to_string(), json!("  spaced title  "));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -696,7 +694,7 @@ fn multiple_field_hooks_run_in_sequence() {
     // Test that both run in the right order when called separately
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  hello  "));
+    data.insert("title".to_string(), json!("  hello  "));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -739,7 +737,7 @@ fn run_before_write_with_user_context() {
     drop(reg);
 
     let mut user_fields = HashMap::new();
-    user_fields.insert("role".to_string(), serde_json::json!("admin"));
+    user_fields.insert("role".to_string(), json!("admin"));
     let user = Document {
         id: "user-1".into(),
         fields: user_fields,
@@ -748,8 +746,8 @@ fn run_before_write_with_user_context() {
     };
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Admin Article"));
-    data.insert("body".to_string(), serde_json::json!("Content"));
+    data.insert("title".to_string(), json!("Admin Article"));
+    data.insert("body".to_string(), json!("Content"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -835,7 +833,7 @@ fn registered_before_broadcast_suppresses_event() {
 
     let hooks = Hooks::default();
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
     let result = runner
         .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("run_before_broadcast");
@@ -876,7 +874,7 @@ fn registered_before_broadcast_transforms_data() {
 
     let hooks = Hooks::default();
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
     let result = runner
         .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("run_before_broadcast");
@@ -887,5 +885,168 @@ fn registered_before_broadcast_transforms_data() {
             .get("_registered_marker")
             .and_then(|v| v.as_str()),
         Some("yes"),
+    );
+}
+
+// ── Regression: field hook modifications visible to collection after_change ──
+
+#[test]
+fn field_after_change_modifications_flow_to_collection_hook() {
+    // Regression test for bug where collection-level after_change hook received
+    // doc.fields.clone() (original data) instead of after_data (field-hook-modified).
+    // The field-level after_change_marker appends "_after_changed" to the title.
+    // The collection-level after_change stores the title it received in a global.
+    let (_tmp, pool, _registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+            _G._last_after_change_title = nil
+            local doc = crap.collections.create("articles", {
+                title = "FlowTest",
+                body = "body",
+            })
+            return _G._last_after_change_title or "NOT_SET"
+            "#,
+            &conn,
+            None,
+        )
+        .expect("eval failed");
+
+    // The field hook appends "_after_changed", so the collection hook should see it
+    assert_eq!(
+        result, "FlowTest_after_changed",
+        "Collection-level after_change hook should see field-hook-modified title"
+    );
+}
+
+#[test]
+fn field_after_change_modifications_flow_on_update() {
+    // Same regression test but for the update path.
+    let (_tmp, pool, _registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+            local doc = crap.collections.create("articles", {
+                title = "UpdateFlowOriginal",
+                body = "body",
+            }, { hooks = false })
+
+            _G._last_after_change_title = nil
+            crap.collections.update("articles", doc.id, {
+                title = "UpdateFlowNew",
+            })
+            return _G._last_after_change_title or "NOT_SET"
+            "#,
+            &conn,
+            None,
+        )
+        .expect("eval failed");
+
+    assert_eq!(
+        result, "UpdateFlowNew_after_changed",
+        "Collection-level after_change hook should see field-hook-modified title on update"
+    );
+}
+
+// ── 6N. Nested field hooks (group/row sub-fields) ────────────────────────────
+
+/// Regression: field hooks on sub-fields inside Group/Row must execute.
+/// The Group "seo" contains "title" with a trim_value before_change hook,
+/// and the data key is "seo__title".
+#[test]
+fn nested_group_field_hooks_execute() {
+    let (_tmp, pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("nested_hooks").unwrap().clone();
+    drop(reg);
+
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    // before_change hook on seo.title should trim whitespace from seo__title
+    let mut data = HashMap::new();
+    data.insert("seo__title".to_string(), json!("  padded title  "));
+
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            FieldHookEvent::BeforeChange,
+            &mut data,
+            "nested_hooks",
+            "create",
+            &FieldWriteCtx::builder(&tx).build(),
+        )
+        .expect("field hooks failed");
+
+    assert_eq!(
+        data.get("seo__title").and_then(|v| v.as_str()),
+        Some("padded title"),
+        "Group sub-field before_change hook should trim whitespace"
+    );
+}
+
+/// Regression: field hooks on sub-fields inside Row must execute.
+/// Row is a transparent layout container — sub-fields use no prefix.
+#[test]
+fn nested_row_field_hooks_execute() {
+    let (_tmp, pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("nested_hooks").unwrap().clone();
+    drop(reg);
+
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    // before_change hook on sidebar (inside Row) should trim whitespace
+    let mut data = HashMap::new();
+    data.insert("sidebar".to_string(), json!("  sidebar text  "));
+
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            FieldHookEvent::BeforeChange,
+            &mut data,
+            "nested_hooks",
+            "create",
+            &FieldWriteCtx::builder(&tx).build(),
+        )
+        .expect("field hooks failed");
+
+    assert_eq!(
+        data.get("sidebar").and_then(|v| v.as_str()),
+        Some("sidebar text"),
+        "Row sub-field before_change hook should trim whitespace"
+    );
+}
+
+/// Regression: after_read field hooks on Group sub-fields must execute.
+#[test]
+fn nested_group_after_read_hooks_execute() {
+    let (_tmp, _pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("nested_hooks").unwrap().clone();
+    drop(reg);
+
+    let mut data = HashMap::new();
+    data.insert("seo__title".to_string(), json!("hello world"));
+
+    runner
+        .run_field_hooks(
+            &def.fields,
+            FieldHookEvent::AfterRead,
+            &mut data,
+            "nested_hooks",
+            "find",
+        )
+        .expect("field hooks failed");
+
+    assert_eq!(
+        data.get("seo__title").and_then(|v| v.as_str()),
+        Some("HELLO WORLD"),
+        "Group sub-field after_read hook should uppercase value"
     );
 }

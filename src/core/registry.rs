@@ -6,8 +6,8 @@ use std::{
 };
 
 use crate::core::{
-    CollectionDefinition, Slug, collection::GlobalDefinition, job::JobDefinition,
-    richtext::RichtextNodeDef,
+    CollectionDefinition, FieldDefinition, FieldType, Slug, collection::GlobalDefinition,
+    job::JobDefinition, richtext::RichtextNodeDef,
 };
 
 /// Holds all collection, global, and job definitions loaded at startup.
@@ -47,7 +47,68 @@ impl Registry {
     /// Register a collection definition, keyed by slug. Overwrites any existing definition.
     pub fn register_collection(&mut self, def: CollectionDefinition) {
         tracing::debug!("Registering collection '{}'", def.slug);
+        Self::warn_invalid_field_refs(&def);
         self.collections.insert(def.slug.clone(), def);
+    }
+
+    /// Log warnings for admin config fields that reference nonexistent field names.
+    fn warn_invalid_field_refs(def: &CollectionDefinition) {
+        let slug = &def.slug;
+
+        if let Some(title) = def.title_field()
+            && !Self::field_exists_recursive(title, &def.fields)
+        {
+            tracing::warn!(
+                "Collection '{}': use_as_title references '{}' which is not a field",
+                slug,
+                title
+            );
+        }
+
+        if let Some(ref sort) = def.admin.default_sort {
+            let col = sort.strip_prefix('-').unwrap_or(sort);
+            if !matches!(
+                col,
+                "id" | "created_at" | "updated_at" | "_status" | "_deleted_at"
+            ) && !Self::field_exists_recursive(col, &def.fields)
+            {
+                tracing::warn!(
+                    "Collection '{}': default_sort references '{}' which is not a field",
+                    slug,
+                    col
+                );
+            }
+        }
+
+        for name in &def.admin.list_searchable_fields {
+            if !Self::field_exists_recursive(name, &def.fields) {
+                tracing::warn!(
+                    "Collection '{}': list_searchable_fields references '{}' which is not a field",
+                    slug,
+                    name
+                );
+            }
+        }
+    }
+
+    /// Check if a field name exists, recursing into layout wrappers.
+    fn field_exists_recursive(name: &str, fields: &[FieldDefinition]) -> bool {
+        fields.iter().any(|f| {
+            if f.name == name {
+                return true;
+            }
+
+            match f.field_type {
+                FieldType::Row | FieldType::Collapsible => {
+                    Self::field_exists_recursive(name, &f.fields)
+                }
+                FieldType::Tabs => f
+                    .tabs
+                    .iter()
+                    .any(|tab| Self::field_exists_recursive(name, &tab.fields)),
+                _ => false,
+            }
+        })
     }
 
     /// Register a global definition, keyed by slug. Overwrites any existing definition.
@@ -103,7 +164,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
+    use crate::core::{FieldDefinition, FieldType, richtext::RichtextNodeDef};
 
     fn make_collection(slug: &str) -> CollectionDefinition {
         CollectionDefinition::new(slug)
@@ -164,8 +225,7 @@ mod tests {
             RichtextNodeDef::builder("cta", "Call to Action")
                 .inline(false)
                 .attrs(vec![
-                    NodeAttr::builder("text", "Button Text")
-                        .attr_type(NodeAttrType::Text)
+                    FieldDefinition::builder("text", FieldType::Text)
                         .required(true)
                         .build(),
                 ])
@@ -193,5 +253,41 @@ mod tests {
         assert!(snap.get_global("settings").is_some());
         assert_eq!(snap.collections.len(), 1);
         assert_eq!(snap.globals.len(), 1);
+    }
+
+    #[test]
+    fn field_exists_recursive_finds_field_in_tabs() {
+        use crate::core::field::FieldTab;
+
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Main",
+                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                )])
+                .build(),
+        ];
+
+        assert!(
+            Registry::field_exists_recursive("title", &fields),
+            "Should find field inside Tabs"
+        );
+        assert!(
+            !Registry::field_exists_recursive("nonexistent", &fields),
+            "Should not find nonexistent field"
+        );
+    }
+
+    #[test]
+    fn field_exists_recursive_finds_field_in_row() {
+        let fields = vec![
+            FieldDefinition::builder("row", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("name", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
+
+        assert!(Registry::field_exists_recursive("name", &fields));
     }
 }

@@ -19,9 +19,15 @@ function M.before_change(ctx)
     return ctx
 end
 
---- after_change: fire-and-forget hook (no CRUD access).
+--- after_change: capture the data for testing that field-hook modifications
+--- are visible to collection-level hooks.
 function M.after_change(ctx)
     crap.log.info("after_change fired for " .. (ctx.collection or "unknown"))
+    -- Store the title we received so tests can verify field-hook mods are visible.
+    -- The field-level after_change_marker hook appends "_after_changed" to the title.
+    if ctx.data and ctx.data.title then
+        _G._last_after_change_title = ctx.data.title
+    end
 end
 
 --- after_read: add a marker to verify the hook ran.

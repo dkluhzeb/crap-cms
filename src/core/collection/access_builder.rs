@@ -6,6 +6,7 @@ pub struct AccessBuilder {
     create: Option<String>,
     update: Option<String>,
     delete: Option<String>,
+    trash: Option<String>,
 }
 
 impl AccessBuilder {
@@ -15,6 +16,7 @@ impl AccessBuilder {
             create: None,
             update: None,
             delete: None,
+            trash: None,
         }
     }
 
@@ -38,12 +40,18 @@ impl AccessBuilder {
         self
     }
 
+    pub fn trash(mut self, trash: Option<String>) -> Self {
+        self.trash = trash;
+        self
+    }
+
     pub fn build(self) -> Access {
         Access {
             read: self.read,
             create: self.create,
             update: self.update,
             delete: self.delete,
+            trash: self.trash,
         }
     }
 }

@@ -182,8 +182,8 @@ fn print_file_tree(files: &[(String, &[u8])]) {
     // Group files by directory
     let mut dirs: BTreeMap<String, Vec<(&str, usize)>> = BTreeMap::new();
     for (path, content) in files {
-        let (dir, name) = match path.rfind('/') {
-            Some(i) => (&path[..i], &path[i + 1..]),
+        let (dir, name) = match path.rsplit_once('/') {
+            Some((dir, name)) => (dir, name),
             None => ("", path.as_str()),
         };
         dirs.entry(dir.to_string())

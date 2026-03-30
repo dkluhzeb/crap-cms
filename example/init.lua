@@ -10,19 +10,39 @@ crap.richtext.register_node("cta", {
 	label = "Call to Action",
 	inline = false,
 	attrs = {
-		{ name = "text", type = "text", label = "Button Text", required = true },
-		{ name = "url", type = "text", label = "URL", required = true },
-		{ name = "style", type = "select", label = "Style", options = {
+		crap.fields.text({
+			name = "text",
+			required = true,
+			min_length = 2,
+			max_length = 80,
+			admin = { label = "Button Text", description = "The visible text on the button" },
+		}),
+		crap.fields.text({
+			name = "url",
+			required = true,
+			admin = { label = "URL", placeholder = "https://..." },
+		}),
+		crap.fields.select({ name = "style", admin = { label = "Style" }, options = {
 			{ label = "Primary", value = "primary" },
 			{ label = "Secondary", value = "secondary" },
 			{ label = "Outline", value = "outline" },
-		}},
+		}}),
+		crap.fields.number({
+			name = "padding",
+			min = 0,
+			max = 100,
+			admin = { label = "Padding", step = "1", width = "50%", description = "Vertical padding in pixels" },
+		}),
 	},
 	searchable_attrs = { "text" },
 	render = function(attrs)
+		local style = ""
+		if attrs.padding and attrs.padding ~= "" then
+			style = string.format(' style="padding: %spx 0"', attrs.padding)
+		end
 		return string.format(
-			'<a href="%s" class="btn btn--%s">%s</a>',
-			attrs.url, attrs.style or "primary", attrs.text
+			'<a href="%s" class="btn btn--%s"%s>%s</a>',
+			attrs.url, attrs.style or "primary", style, attrs.text
 		)
 	end,
 })
@@ -32,8 +52,8 @@ crap.richtext.register_node("mention", {
 	label = "Mention",
 	inline = true,
 	attrs = {
-		{ name = "name", type = "text", label = "Name", required = true },
-		{ name = "user_id", type = "text", label = "User ID" },
+		crap.fields.text({ name = "name", required = true, admin = { label = "Name" } }),
+		crap.fields.text({ name = "user_id", admin = { label = "User ID" } }),
 	},
 	searchable_attrs = { "name" },
 	render = function(attrs)

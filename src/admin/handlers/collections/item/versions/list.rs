@@ -7,7 +7,10 @@ use crate::{
             redirect_response, render_or_error, server_error, version_to_json,
         },
     },
-    core::auth::{AuthUser, Claims},
+    core::{
+        Document,
+        auth::{AuthUser, Claims},
+    },
     db::{
         ops, query,
         query::{AccessResult, LocaleContext},
@@ -83,7 +86,7 @@ pub async fn list_versions_page(
     let per_page = params
         .per_page
         .unwrap_or(state.config.pagination.default_limit)
-        .min(state.config.pagination.max_limit);
+        .clamp(1, state.config.pagination.max_limit);
     let offset = (page - 1) * per_page;
 
     let conn = match state.pool.get() {
@@ -103,6 +106,7 @@ pub async fn list_versions_page(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionVersions, "version_history_for")
         .page_title_name(doc_title.clone())
@@ -114,15 +118,14 @@ pub async fn list_versions_page(
             "restore_url_prefix",
             json!(format!("/admin/collections/{}/{}", slug, id)),
         )
-        .pagination(
-            page,
-            per_page,
-            total,
+        .with_pagination(
+            &query::PaginationResult::builder(&[] as &[Document], total, per_page)
+                .page(page, offset),
             format!(
                 "/admin/collections/{}/{}/versions?page={}",
                 slug,
                 id,
-                page - 1
+                page.saturating_sub(1).max(1)
             ),
             format!(
                 "/admin/collections/{}/{}/versions?page={}",

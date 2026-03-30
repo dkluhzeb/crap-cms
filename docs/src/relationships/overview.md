@@ -7,13 +7,12 @@ Relationship fields reference documents in other collections. Crap CMS supports 
 A single reference stored as a `TEXT` column containing the related document's ID.
 
 ```lua
-{
+crap.fields.relationship({
     name = "author",
-    type = "relationship",
     relationship = {
         collection = "users",
     },
-}
+})
 ```
 
 At `depth=0` (default for `Find`):
@@ -41,14 +40,13 @@ At `depth=1`:
 Multiple references stored in a junction table (`{collection}_{field}`).
 
 ```lua
-{
+crap.fields.relationship({
     name = "tags",
-    type = "relationship",
     relationship = {
         collection = "tags",
         has_many = true,
     },
-}
+})
 ```
 
 At `depth=0`:

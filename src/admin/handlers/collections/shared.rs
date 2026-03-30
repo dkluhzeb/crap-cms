@@ -11,7 +11,7 @@ use crate::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
                 get_user_doc, html_with_toast, htmx_redirect, redirect_response,
-                split_sidebar_fields, strip_write_denied_string_fields,
+                split_sidebar_fields, strip_write_denied_string_fields, toast_only_error,
                 translate_validation_errors,
             },
         },
@@ -22,8 +22,8 @@ use crate::{
         event::{EventOperation, EventTarget},
         field::FieldDefinition,
         upload::{
-            UploadedFile, delete_upload_files, enqueue_conversions, inject_upload_metadata,
-            process_upload,
+            CleanupGuard, UploadedFile, delete_upload_files, enqueue_conversions,
+            inject_upload_metadata, process_upload,
         },
         validate::ValidationError,
     },
@@ -38,15 +38,8 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use serde_json::{Map, Value, json};
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
 use tokio::task;
-
-/// Delete a list of files, ignoring errors (best-effort orphan cleanup).
-pub(super) fn cleanup_created_files(files: &[PathBuf]) {
-    for path in files {
-        let _ = fs::remove_file(path);
-    }
-}
 
 /// Render the upload error page (create form with toast).
 pub(super) fn render_upload_error(
@@ -206,7 +199,7 @@ pub(super) async fn do_update(
     // For upload collections, if a new file was uploaded, process it and delete old files
     let mut old_doc_fields: Option<HashMap<String, Value>> = None;
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<PathBuf> = Vec::new();
+    let mut upload_guard: Option<CleanupGuard> = None;
 
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
@@ -228,9 +221,9 @@ pub(super) async fn do_update(
         .await;
 
         match upload_result {
-            Ok(Ok(processed)) => {
+            Ok(Ok((processed, guard))) => {
                 queued_conversions = processed.queued_conversions.clone();
-                created_files = processed.created_files.clone();
+                upload_guard = Some(guard);
                 inject_upload_metadata(&mut form_data, &processed);
             }
             Ok(Err(e)) => {
@@ -284,8 +277,7 @@ pub(super) async fn do_update(
         && !pw.is_empty()
         && let Err(e) = state.config.auth.password_policy.validate(pw)
     {
-        return html_with_toast(state, "collections/edit_form", &json!({}), &e.to_string())
-            .into_response();
+        return toast_only_error(&e.to_string()).into_response();
     }
 
     // Convert comma-separated multi-select values to JSON arrays
@@ -360,6 +352,10 @@ pub(super) async fn do_update(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            if let Some(mut g) = upload_guard {
+                g.commit();
+            }
+
             // If a new file was uploaded and old files exist, clean up old files
             if let Some(old_fields) = old_doc_fields {
                 delete_upload_files(&state.config_dir, &old_fields);
@@ -446,13 +442,11 @@ pub(super) async fn do_update(
 
                 html_with_toast(state, "collections/edit", &data, toast_msg).into_response()
             } else {
-                cleanup_created_files(&created_files);
                 tracing::error!("Update error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/{}", slug, id))
             }
         }
         Err(e) => {
-            cleanup_created_files(&created_files);
             tracing::error!("Update task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/{}", slug, id))
         }
@@ -464,36 +458,73 @@ pub(super) async fn delete_action_impl(
     slug: &str,
     id: &str,
     auth_user: &Option<Extension<AuthUser>>,
+    force_hard_delete: bool,
+    json_response: bool,
 ) -> axum::response::Response {
     let def = match state.registry.get_collection(slug) {
         Some(d) => d.clone(),
-        None => return Redirect::to("/admin/collections").into_response(),
+        None => {
+            if json_response {
+                return json_error_response("Collection not found");
+            }
+            return Redirect::to("/admin/collections").into_response();
+        }
     };
 
-    // Check delete access
-    match check_access_or_forbid(
-        state,
-        def.access.delete.as_deref(),
-        auth_user,
-        Some(id),
-        None,
-    ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(state, "You don't have permission to delete this item")
-                .into_response();
+    // Permission check depends on the type of deletion:
+    // - Soft delete (trash): check access.trash, falling back to access.update
+    // - Permanent delete: check access.delete (explicit permission required)
+    if def.soft_delete && !force_hard_delete {
+        // Soft delete / move to trash
+        let trash_access = def.access.resolve_trash();
+
+        match check_access_or_forbid(state, trash_access, auth_user, Some(id), None) {
+            Ok(AccessResult::Denied) => {
+                let msg = "You don't have permission to trash this item";
+                if json_response {
+                    return json_error_response(msg);
+                }
+                return forbidden(state, msg).into_response();
+            }
+            Err(resp) => return *resp,
+            _ => {}
         }
-        Err(resp) => return *resp,
-        _ => {}
+    } else {
+        // Permanent deletion (no soft_delete, or force_hard_delete)
+        match check_access_or_forbid(
+            state,
+            def.access.delete.as_deref(),
+            auth_user,
+            Some(id),
+            None,
+        ) {
+            Ok(AccessResult::Denied) => {
+                let msg = "You don't have permission to permanently delete this item";
+                if json_response {
+                    return json_error_response(msg);
+                }
+                return forbidden(state, msg).into_response();
+            }
+            Err(resp) => return *resp,
+            _ => {}
+        }
     }
 
     // Before hooks + delete + upload cleanup in a single transaction
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
-    let def_clone = def.clone();
+    let mut def_clone = def.clone();
     let slug_owned = slug.to_string();
     let id_owned = id.to_string();
     let user_doc = get_user_doc(auth_user).cloned();
     let config_dir = state.config_dir.clone();
+
+    // When force_hard_delete is requested, temporarily override soft_delete
+    if force_hard_delete {
+        def_clone.soft_delete = false;
+    }
+
+    let locale_config = state.config.locale.clone();
 
     let result = task::spawn_blocking(move || {
         service::delete_document(
@@ -504,6 +535,7 @@ pub(super) async fn delete_action_impl(
             &def_clone,
             user_doc.as_ref(),
             Some(&config_dir),
+            Some(&locale_config),
         )
     })
     .await;
@@ -520,16 +552,42 @@ pub(super) async fn delete_action_impl(
                     .edited_by(get_event_user(auth_user))
                     .build(),
             );
+
+            if json_response {
+                return json_ok_response();
+            }
         }
         Ok(Err(e)) => {
             tracing::error!("Delete error: {}", e);
+
+            if json_response {
+                return json_error_response("Failed to delete item");
+            }
         }
         Err(e) => {
             tracing::error!("Delete task error: {}", e);
+
+            if json_response {
+                return json_error_response("Failed to delete item");
+            }
         }
     }
 
     htmx_redirect(&format!("/admin/collections/{}", slug))
+}
+
+/// Build a JSON `{"ok": true}` success response.
+fn json_ok_response() -> Response {
+    axum::response::Json(json!({"ok": true})).into_response()
+}
+
+/// Build a JSON `{"error": "..."}` error response with 400 status.
+fn json_error_response(msg: &str) -> Response {
+    (
+        axum::http::StatusCode::BAD_REQUEST,
+        axum::response::Json(json!({"error": msg})),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -615,5 +673,42 @@ mod tests {
         let form_data = HashMap::new();
         let result = collect_upload_hidden_fields(&fields, &form_data);
         assert_eq!(result.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn json_ok_response_returns_200() {
+        let resp = json_ok_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[test]
+    fn json_error_response_returns_400() {
+        let resp = json_error_response("something went wrong");
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn trash_access_falls_back_to_update() {
+        use crate::core::collection::Access;
+
+        // When trash is set, it takes priority
+        let access = Access {
+            trash: Some("access.trash_fn".to_string()),
+            update: Some("access.update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("access.trash_fn"));
+
+        // When trash is None, falls back to update
+        let access = Access {
+            trash: None,
+            update: Some("access.update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("access.update_fn"));
+
+        // When both are None, resolved is None
+        let access = Access::default();
+        assert!(access.resolve_trash().is_none());
     }
 }

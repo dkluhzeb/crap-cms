@@ -27,9 +27,11 @@ end
 When auth collections are configured and no `access` function is set, any authenticated user can access the admin.
 
 **Security features:**
+- **Content-Security-Policy** header with configurable per-directive source lists (see `[admin.csp]`)
 - CSRF protection on all forms and HTMX requests (double-submit cookie pattern)
 - `Secure` flag on session cookies in production (`dev_mode = false`)
 - Rate limiting on login (configurable max attempts and lockout duration)
+- `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy` headers
 
 ## Technology
 
@@ -43,16 +45,36 @@ When auth collections are configured and no `access` function is set, any authen
 
 | Route | Description |
 |-------|-------------|
+| `/health` | Liveness check (public) |
+| `/ready` | Readiness check (public) |
 | `/admin` | Dashboard |
 | `/admin/login` | Login page (public) |
 | `/admin/logout` | Logout (public) |
-| `/admin/collections/{slug}` | Collection list view |
+| `/admin/forgot-password` | Forgot password page (public) |
+| `/admin/reset-password` | Reset password page (public) |
+| `/admin/verify-email` | Email verification (public) |
+| `/admin/collections` | Collection list |
+| `/admin/collections/{slug}` | Collection items list |
 | `/admin/collections/{slug}/create` | Create form |
 | `/admin/collections/{slug}/{id}` | Edit form |
-| `/admin/collections/{slug}/{id}/versions/{version_id}/restore` | Restore a previous version |
+| `/admin/collections/{slug}/{id}/delete` | Delete confirmation |
+| `/admin/collections/{slug}/{id}/versions` | Version history |
+| `/admin/collections/{slug}/{id}/versions/{version_id}/restore` | Restore a version |
+| `/admin/collections/{slug}/validate` | Inline validation (POST) |
+| `/admin/collections/{slug}/evaluate-conditions` | Display condition evaluation (POST) |
 | `/admin/globals/{slug}` | Global edit form |
+| `/admin/globals/{slug}/validate` | Global inline validation (POST) |
+| `/admin/globals/{slug}/versions` | Global version history |
+| `/admin/globals/{slug}/versions/{version_id}/restore` | Restore global version |
+| `/admin/events` | SSE live update stream |
+| `/admin/api/search/{slug}` | Relationship search endpoint |
+| `/admin/api/session-refresh` | Session token refresh (POST) |
+| `/admin/api/locale` | Save locale preference (POST) |
+| `/admin/api/user-settings/{slug}` | Save user settings (POST) |
+| `/api/upload/{slug}` | File upload endpoint (POST) |
+| `/mcp` | MCP HTTP endpoint (POST, if enabled) |
 | `/static/*` | Static assets (public) |
-| `/uploads/*` | Uploaded files |
+| `/uploads/{collection_slug}/{filename}` | Uploaded files |
 
 ## Versioning & Drafts Workflow
 

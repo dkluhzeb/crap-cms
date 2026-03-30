@@ -178,6 +178,18 @@ impl FieldDefinitionBuilder {
         self
     }
 
+    /// Set whether to store an IANA timezone alongside the date value.
+    pub fn timezone(mut self, v: bool) -> Self {
+        self.inner.timezone = v;
+        self
+    }
+
+    /// Set the default IANA timezone for the admin UI dropdown.
+    pub fn default_timezone(mut self, v: impl Into<String>) -> Self {
+        self.inner.default_timezone = Some(v.into());
+        self
+    }
+
     /// Set the join configuration for virtual reverse-relationship fields.
     pub fn join(mut self, v: JoinConfig) -> Self {
         self.inner.join = Some(v);

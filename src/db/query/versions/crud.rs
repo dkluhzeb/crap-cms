@@ -16,7 +16,7 @@ pub fn create_version(
     status: &str,
     snapshot: &Value,
 ) -> Result<VersionSnapshot> {
-    let table = format!("_versions_{}", slug);
+    let table = format!("\"_versions_{}\"", slug);
     let id = nanoid::nanoid!();
 
     // Get the next version number
@@ -82,7 +82,7 @@ pub fn find_latest_version(
     slug: &str,
     parent_id: &str,
 ) -> Result<Option<VersionSnapshot>> {
-    let table = format!("_versions_{}", slug);
+    let table = format!("\"_versions_{}\"", slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
@@ -103,7 +103,10 @@ pub fn find_latest_version(
                     .version(version)
                     .status(status)
                     .latest(latest)
-                    .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                    .snapshot(
+                        serde_json::from_str(&snapshot_str)
+                            .context("Failed to parse version snapshot JSON")?,
+                    )
                     .build(),
             ))
         }
@@ -113,7 +116,7 @@ pub fn find_latest_version(
 
 /// Count total versions for a parent document.
 pub fn count_versions(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> Result<i64> {
-    let table = format!("_versions_{}", slug);
+    let table = format!("\"_versions_{}\"", slug);
     let p1 = conn.placeholder(1);
     let row = conn
         .query_one(
@@ -132,17 +135,36 @@ pub fn list_versions(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<VersionSnapshot>> {
-    let table = format!("_versions_{}", slug);
-    let limit_clause = limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
-    let offset_clause = offset.map(|o| format!(" OFFSET {}", o)).unwrap_or_default();
+    let table = format!("\"_versions_{}\"", slug);
     let p1 = conn.placeholder(1);
+    let mut params: Vec<DbValue> = vec![DbValue::Text(parent_id.to_string())];
+    let mut idx = 2;
+
+    let limit_clause = match limit {
+        Some(l) => {
+            let p = conn.placeholder(idx);
+            params.push(DbValue::Integer(l));
+            idx += 1;
+            format!(" LIMIT {p}")
+        }
+        None => String::new(),
+    };
+    let offset_clause = match offset {
+        Some(o) => {
+            let p = conn.placeholder(idx);
+            params.push(DbValue::Integer(o));
+            format!(" OFFSET {p}")
+        }
+        None => String::new(),
+    };
+
     let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
              FROM {} WHERE _parent = {p1} ORDER BY _version DESC{}{}",
         table, limit_clause, offset_clause
     );
 
-    let rows = conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())])?;
+    let rows = conn.query_all(&sql, &params)?;
     let mut versions = Vec::new();
     for row in rows {
         let snapshot_str = row.get_string("snapshot")?;
@@ -156,7 +178,10 @@ pub fn list_versions(
                 .version(version)
                 .status(status)
                 .latest(latest)
-                .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                .snapshot(
+                    serde_json::from_str(&snapshot_str)
+                        .context("Failed to parse version snapshot JSON")?,
+                )
                 .build(),
         );
     }
@@ -169,7 +194,7 @@ pub fn find_version_by_id(
     slug: &str,
     version_id: &str,
 ) -> Result<Option<VersionSnapshot>> {
-    let table = format!("_versions_{}", slug);
+    let table = format!("\"_versions_{}\"", slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
@@ -190,7 +215,10 @@ pub fn find_version_by_id(
                     .version(version)
                     .status(status)
                     .latest(latest)
-                    .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                    .snapshot(
+                        serde_json::from_str(&snapshot_str)
+                            .context("Failed to parse version snapshot JSON")?,
+                    )
                     .build(),
             ))
         }
@@ -208,7 +236,7 @@ pub fn prune_versions(
     if max_versions == 0 {
         return Ok(()); // unlimited
     }
-    let table = format!("_versions_{}", slug);
+    let table = format!("\"_versions_{}\"", slug);
     // Delete all versions beyond the cap, keeping the newest ones
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
@@ -237,7 +265,7 @@ pub fn set_document_status(
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
         &format!(
-            "UPDATE {} SET _status = {p1}, updated_at = {} WHERE id = {p2}",
+            "UPDATE \"{}\" SET _status = {p1}, updated_at = {} WHERE id = {p2}",
             slug,
             conn.now_expr()
         ),
@@ -258,7 +286,7 @@ pub fn get_document_status(
 ) -> Result<Option<String>> {
     let p1 = conn.placeholder(1);
     match conn.query_one(
-        &format!("SELECT _status FROM {} WHERE id = {p1}", slug),
+        &format!("SELECT _status FROM \"{}\" WHERE id = {p1}", slug),
         &[DbValue::Text(id.to_string())],
     )? {
         Some(row) => Ok(row.get_opt_string("_status")?),
@@ -419,6 +447,29 @@ mod tests {
         let (_dir, conn) = setup_versions_db();
         let status = get_document_status(&conn, "posts", "nonexistent").unwrap();
         assert!(status.is_none());
+    }
+
+    #[test]
+    fn malformed_snapshot_json_returns_error() {
+        let (_dir, conn) = setup_versions_db();
+
+        // Insert a version row with corrupt snapshot JSON directly
+        conn.execute_batch(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
+             VALUES ('bad1', 'p1', 1, 'published', 1, '{not valid json!')",
+        )
+        .unwrap();
+
+        let result = find_latest_version(&conn, "posts", "p1");
+        assert!(
+            result.is_err(),
+            "Malformed snapshot JSON should return an error"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Failed to parse version snapshot JSON"),
+            "Error should mention snapshot parsing, got: {msg}"
+        );
     }
 
     #[test]

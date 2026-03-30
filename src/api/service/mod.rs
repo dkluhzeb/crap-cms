@@ -33,7 +33,9 @@ pub struct ContentServiceDeps {
     pub email_renderer: Arc<EmailRenderer>,
     pub event_bus: Option<EventBus>,
     pub login_limiter: Arc<LoginRateLimiter>,
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
 }
 
 impl ContentServiceDeps {

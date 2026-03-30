@@ -4,9 +4,11 @@ use anyhow::Result;
 
 use crate::db::{DbConnection, DbValue};
 
-/// Set related IDs for a has-many relationship junction table.
-/// Deletes all existing rows for the parent and inserts new ones with _order.
-/// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
+/// Set the related IDs for a has-many relationship junction table.
+/// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
+///
+/// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
+/// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
 pub fn set_related_ids(
     conn: &dyn DbConnection,
     collection: &str,
@@ -21,7 +23,7 @@ pub fn set_related_ids(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
+                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
             &[
@@ -32,7 +34,7 @@ pub fn set_related_ids(
     } else {
         let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
             &[DbValue::Text(parent_id.to_string())],
         )?;
     }
@@ -45,7 +47,7 @@ pub fn set_related_ids(
             conn.placeholder(4),
         );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4})",
+            "INSERT INTO \"{}\" (parent_id, related_id, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4})",
             table_name
         );
         for (i, id) in ids.iter().enumerate() {
@@ -66,7 +68,7 @@ pub fn set_related_ids(
             conn.placeholder(3),
         );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, _order) VALUES ({p1}, {p2}, {p3})",
+            "INSERT INTO \"{}\" (parent_id, related_id, _order) VALUES ({p1}, {p2}, {p3})",
             table_name
         );
         for (i, id) in ids.iter().enumerate() {
@@ -98,7 +100,7 @@ pub fn find_related_ids(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT related_id FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                "SELECT related_id FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
                 table_name
             ),
             vec![
@@ -110,7 +112,7 @@ pub fn find_related_ids(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT related_id FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                "SELECT related_id FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
                 table_name
             ),
             vec![DbValue::Text(parent_id.to_string())],
@@ -133,7 +135,10 @@ pub fn find_related_ids(
 
 /// Set related items for a polymorphic has-many relationship junction table.
 /// Each item is a `(related_collection, related_id)` pair.
-/// Deletes all existing rows for the parent and inserts new ones with _order.
+/// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
+///
+/// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
+/// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
 pub fn set_polymorphic_related(
     conn: &dyn DbConnection,
     collection: &str,
@@ -148,7 +153,7 @@ pub fn set_polymorphic_related(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
+                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
             &[
@@ -164,7 +169,7 @@ pub fn set_polymorphic_related(
             conn.placeholder(5),
         );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, related_collection, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
+            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
             table_name
         );
         for (i, (rel_col, rel_id)) in items.iter().enumerate() {
@@ -182,7 +187,7 @@ pub fn set_polymorphic_related(
     } else {
         let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
             &[DbValue::Text(parent_id.to_string())],
         )?;
         let (p1, p2, p3, p4) = (
@@ -192,7 +197,7 @@ pub fn set_polymorphic_related(
             conn.placeholder(4),
         );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, related_collection, _order) VALUES ({p1}, {p2}, {p3}, {p4})",
+            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order) VALUES ({p1}, {p2}, {p3}, {p4})",
             table_name
         );
         for (i, (rel_col, rel_id)) in items.iter().enumerate() {
@@ -225,7 +230,7 @@ pub fn find_polymorphic_related(
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (
             format!(
-                "SELECT related_collection, related_id FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                "SELECT related_collection, related_id FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
                 table_name
             ),
             vec![
@@ -237,7 +242,7 @@ pub fn find_polymorphic_related(
         let p1 = conn.placeholder(1);
         (
             format!(
-                "SELECT related_collection, related_id FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                "SELECT related_collection, related_id FROM \"{}\" WHERE parent_id = {p1} ORDER BY _order",
                 table_name
             ),
             vec![DbValue::Text(parent_id.to_string())],

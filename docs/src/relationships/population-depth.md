@@ -34,14 +34,13 @@ max_depth = 10       # Hard cap for all requests (default: 10)
 Cap the depth for a specific relationship field, regardless of the request-level depth:
 
 ```lua
-{
+crap.fields.relationship({
     name = "author",
-    type = "relationship",
     relationship = {
         collection = "users",
         max_depth = 1,  -- never populate deeper than 1, even if depth=5
     },
-}
+})
 ```
 
 ## Usage

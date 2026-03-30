@@ -5,6 +5,7 @@ use dialoguer::{Confirm, Input, Password, Select};
 use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
+use super::{UserAction, load_config_and_sync};
 use crate::{
     cli::{self, Table, crap_theme},
     config::{CrapConfig, PasswordPolicy},
@@ -15,16 +16,17 @@ use crate::{
 /// Dispatch user management subcommands.
 /// Untestable: dispatches to interactive CLI functions that require stdin/dialoguer.
 #[cfg(not(tarpaulin_include))]
-pub fn run(config_dir: &Path, action: super::UserAction) -> Result<()> {
+pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
     match action {
-        super::UserAction::Create {
+        UserAction::Create {
             collection,
             email,
             password,
             fields,
         } => {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_create(
                 &pool,
                 &registry,
@@ -35,67 +37,75 @@ pub fn run(config_dir: &Path, action: super::UserAction) -> Result<()> {
                 &cfg.auth.password_policy,
             )
         }
-        super::UserAction::List { collection } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+        UserAction::List { collection } => {
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_list(&pool, &registry, &collection)
         }
-        super::UserAction::Info {
+        UserAction::Info {
             collection,
             email,
             id,
         } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_info(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Delete {
+        UserAction::Delete {
             collection,
             email,
             id,
             confirm,
         } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_delete(&pool, &registry, &collection, email, id, confirm)
         }
-        super::UserAction::Lock {
+        UserAction::Lock {
             collection,
             email,
             id,
         } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_lock(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Unlock {
+        UserAction::Unlock {
             collection,
             email,
             id,
         } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_unlock(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Verify {
+        UserAction::Verify {
             collection,
             email,
             id,
         } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_verify(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Unverify {
+        UserAction::Unverify {
             collection,
             email,
             id,
         } => {
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_unverify(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::ChangePassword {
+        UserAction::ChangePassword {
             collection,
             email,
             id,
             password,
         } => {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
-            let (pool, registry) = super::load_config_and_sync(config_dir)?;
+            let (pool, registry) = load_config_and_sync(config_dir)?;
+
             user_change_password(
                 &pool,
                 &registry,
@@ -135,6 +145,7 @@ fn resolve_user(
     }
 
     let def = def.clone();
+
     drop(reg);
 
     let conn = pool.get().context("Failed to get database connection")?;
@@ -142,10 +153,12 @@ fn resolve_user(
     if let Some(email) = email {
         let doc = query::find_by_email(&conn, collection, &def, &email)?
             .ok_or_else(|| anyhow!("No user found with email '{}' in '{}'", email, collection))?;
+
         Ok((def, doc))
     } else if let Some(id) = id {
         let doc = query::find_by_id(&conn, collection, &def, &id, None)?
             .ok_or_else(|| anyhow!("No user found with id '{}' in '{}'", id, collection))?;
+
         Ok((def, doc))
     } else {
         // Interactive: select from existing users
@@ -155,6 +168,7 @@ fn resolve_user(
         if users.is_empty() {
             bail!("No users in '{}'", collection);
         }
+
         let labels: Vec<String> = users
             .iter()
             .map(|u| {
@@ -173,11 +187,13 @@ fn resolve_user(
 
             return Ok((def, doc));
         }
+
         let selection = Select::with_theme(&crap_theme())
             .with_prompt("Select user")
             .items(&labels)
             .interact()
             .context("Failed to read user selection")?;
+
         Ok((
             def,
             users
@@ -216,6 +232,7 @@ pub fn user_create(
     }
 
     let def = def.clone();
+
     drop(reg);
 
     // Get email — from flag or interactive prompt
@@ -269,7 +286,9 @@ pub fn user_create(
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
+
             data.insert(field.name.clone(), val);
+
             continue;
         }
         // Required field with a default — use it automatically
@@ -278,14 +297,18 @@ pub fn user_create(
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
+
             let entered: String = Input::with_theme(&crap_theme())
                 .with_prompt(format!("{} (required)", field.name))
                 .default(val)
                 .interact_text()
                 .with_context(|| format!("Failed to read {}", field.name))?;
+
             data.insert(field.name.clone(), entered);
+
             continue;
         }
+
         // Required field, no default — must prompt
         let entered: String = Input::with_theme(&crap_theme())
             .with_prompt(format!("{} (required)", field.name))
@@ -295,6 +318,7 @@ pub fn user_create(
         if entered.is_empty() {
             bail!("{} is required", field.name);
         }
+
         data.insert(field.name.clone(), entered);
     }
 
@@ -334,7 +358,9 @@ pub fn user_list(pool: &DbPool, registry: &SharedRegistry, collection: &str) -> 
     }
 
     let def = def.clone();
+
     let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
+
     drop(reg);
 
     let conn = pool.get().context("Failed to get database connection")?;
@@ -367,6 +393,7 @@ pub fn user_list(pool: &DbPool, registry: &SharedRegistry, collection: &str) -> 
         if verify_email {
             let verified = query::is_verified(&conn, collection, &user.id).unwrap_or(false);
             let verified_str = if verified { "yes" } else { "no" };
+
             table.row(vec![&user.id, email, locked_str, verified_str]);
         } else {
             table.row(vec![&user.id, email, locked_str]);
@@ -413,8 +440,10 @@ pub fn user_info(
 
     if verify_email {
         let verified = query::is_verified(&conn, collection, &doc.id).unwrap_or(false);
+
         cli::kv_status("Verified", if verified { "yes" } else { "no" }, verified);
     }
+
     cli::kv_status("Password", if has_pw { "set" } else { "not set" }, has_pw);
 
     // Timestamps
@@ -423,11 +452,13 @@ pub fn user_info(
         .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
+
     let updated = doc
         .fields
         .get("updated_at")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
+
     cli::header("Timestamps");
     cli::kv("Created", created);
     cli::kv("Updated", updated);
@@ -442,12 +473,14 @@ pub fn user_info(
 
     if !extra.is_empty() {
         cli::header("Fields");
+
         for (key, val) in &extra {
             let display = match val {
                 Value::String(s) => s.clone(),
                 Value::Null => "-".to_string(),
                 other => other.to_string(),
             };
+
             cli::kv(key, &display);
         }
     }
@@ -491,8 +524,26 @@ pub fn user_delete(
         }
     }
 
-    let conn = pool.get().context("Failed to get database connection")?;
-    query::delete(&conn, collection, &doc.id).context("Failed to delete user")?;
+    let mut conn = pool.get().context("Failed to get database connection")?;
+    let reg = registry
+        .read()
+        .map_err(|_| anyhow!("Failed to read registry"))?;
+    let def = reg
+        .get_collection(collection)
+        .ok_or_else(|| anyhow!("Collection '{}' not found in registry", collection))?;
+    let lc = crate::config::LocaleConfig::default();
+
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start transaction")?;
+
+    // Decrement ref counts on documents this user references
+    query::ref_count::before_hard_delete(&tx, collection, &doc.id, &def.fields, &lc)
+        .context("Failed to adjust ref counts")?;
+
+    query::delete(&tx, collection, &doc.id).context("Failed to delete user")?;
+
+    tx.commit().context("Failed to commit delete transaction")?;
 
     cli::success(&format!(
         "Deleted user {} ({}) from '{}'",
@@ -522,6 +573,7 @@ pub fn user_lock(
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+
     cli::success(&format!(
         "Locked user {} ({}) in '{}'",
         doc.id, user_email, collection
@@ -550,6 +602,7 @@ pub fn user_unlock(
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+
     cli::success(&format!(
         "Unlocked user {} ({}) in '{}'",
         doc.id, user_email, collection
@@ -585,6 +638,7 @@ pub fn user_verify(
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+
     cli::success(&format!(
         "Verified user {} ({}) in '{}'",
         doc.id, user_email, collection
@@ -620,6 +674,7 @@ pub fn user_unverify(
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+
     cli::success(&format!(
         "Unverified user {} ({}) in '{}'",
         doc.id, user_email, collection
@@ -666,6 +721,7 @@ pub fn user_change_password(
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+
     cli::success(&format!(
         "Password changed for user {} ({}) in '{}'",
         doc.id, user_email, collection

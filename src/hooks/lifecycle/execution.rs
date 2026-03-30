@@ -1,19 +1,20 @@
 //! Standalone hook execution functions (inner implementations and helpers).
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use mlua::{Lua, Value};
+use mlua::{Function as LuaFunction, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
     core::{
-        Document, FieldDefinition, collection::Hooks, document::DocumentBuilder, field::FieldHooks,
+        Document, FieldDefinition, FieldType, collection::Hooks, document::DocumentBuilder,
+        field::FieldHooks,
     },
     hooks::{
         api,
         lifecycle::{
-            DisplayConditionResult, FieldHookEvent, HookEvent, context::HookContext,
-            evaluate_condition_table,
+            DisplayConditionResult, FieldHookEvent, HookEvent, UiLocaleContext, UserContext,
+            context::HookContext, converters::document_to_lua_table, evaluate_condition_table,
         },
     },
 };
@@ -32,7 +33,7 @@ pub struct AfterReadCtx<'a> {
 /// Runs field-level after_read hooks, then collection-level, then global registered.
 /// On error: logs warning, returns original doc unmodified.
 pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Document) -> Document {
-    let has_field_hooks = ctx.fields.iter().any(|f| !f.hooks.after_read.is_empty());
+    let has_field_hooks = has_any_field_hook(ctx.fields, &FieldHookEvent::AfterRead);
 
     let has_collection_hooks = !ctx.hooks.after_read.is_empty();
     let has_registered = has_registered_hooks(lua, "after_read");
@@ -62,7 +63,11 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
             ctx.operation,
         )
     {
-        tracing::warn!("field after_read hook error for {}: {}", ctx.collection, e);
+        tracing::error!(
+            "field after_read hook error for {}: {:#}",
+            ctx.collection,
+            e
+        );
 
         return doc;
     }
@@ -104,7 +109,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
                 .build()
         }
         Err(e) => {
-            tracing::warn!("after_read hook error for {}: {}", ctx.collection, e);
+            tracing::error!("after_read hook error for {}: {:#}", ctx.collection, e);
             doc
         }
     }
@@ -153,7 +158,7 @@ pub(crate) fn get_hook_refs<'a>(hooks: &'a Hooks, event: &HookEvent) -> &'a [Str
 
 /// Check if any globally registered hooks exist for the given event.
 pub(crate) fn has_registered_hooks(lua: &Lua, event: &str) -> bool {
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return false,
     };
@@ -181,31 +186,40 @@ pub(crate) fn call_display_condition_with_lua(
                 visible,
             })
         }
-        _ => None, // error or nil → show field (safe default)
+        Ok(Value::Nil) => None, // nil → no condition, show field normally
+        Err(e) => {
+            tracing::warn!(
+                "Display condition '{}' failed: {} — hiding field (fail closed)",
+                func_ref,
+                e
+            );
+            Some(DisplayConditionResult::Bool(false))
+        }
+        Ok(other) => {
+            tracing::warn!(
+                "Display condition '{}' returned unexpected type {:?} — hiding field (fail closed)",
+                func_ref,
+                other.type_name()
+            );
+            Some(DisplayConditionResult::Bool(false))
+        }
     }
 }
 
-/// Check if any fields have hooks registered for the given field-level event.
+/// Check if any fields (including nested sub-fields) have hooks registered
+/// for the given field-level event.
 pub(crate) fn has_field_hooks_for_event(
     fields: &[FieldDefinition],
     event: &FieldHookEvent,
 ) -> bool {
-    fields.iter().any(|f| {
-        let hooks = &f.hooks;
-        match event {
-            FieldHookEvent::BeforeValidate => !hooks.before_validate.is_empty(),
-            FieldHookEvent::BeforeChange => !hooks.before_change.is_empty(),
-            FieldHookEvent::AfterChange => !hooks.after_change.is_empty(),
-            FieldHookEvent::AfterRead => !hooks.after_read.is_empty(),
-        }
-    })
+    has_any_field_hook(fields, event)
 }
 
 /// Scan a Lua VM's `_crap_event_hooks` table and return the set of event names
 /// that have at least one registered handler. Called once during HookRunner::new().
 pub(crate) fn scan_registered_events(lua: &Lua) -> HashSet<String> {
     let mut events = HashSet::new();
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return events,
     };
@@ -233,22 +247,28 @@ pub(crate) fn call_before_broadcast_hook(
     match result {
         Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
-            let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+            let mut ctx = context;
 
-            if let Ok(data_tbl) = data_result {
+            if let Ok(data_tbl) = tbl.get::<Table>("data") {
                 let mut new_data = HashMap::new();
                 for pair in data_tbl.pairs::<String, Value>() {
                     let (k, v) = pair?;
                     new_data.insert(k, api::lua_to_json(lua, &v)?);
                 }
-                let mut ctx = context;
                 ctx.data = new_data;
-                Ok(Some(ctx))
-            } else {
-                Ok(Some(context))
             }
+
+            ctx.read_context_back(lua, &tbl);
+            Ok(Some(ctx))
         }
-        _ => Ok(Some(context)),
+        other => {
+            tracing::warn!(
+                "before_broadcast hook '{}' returned {} instead of table/false/nil — ignoring",
+                hook_ref,
+                other.type_name()
+            );
+            Ok(Some(context))
+        }
     }
 }
 
@@ -258,12 +278,12 @@ pub(crate) fn call_registered_before_broadcast(
     lua: &Lua,
     mut context: HookContext,
 ) -> Result<Option<HookContext>> {
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return Ok(Some(context)),
     };
 
-    let list: mlua::Table = match event_hooks.get::<Value>("before_broadcast") {
+    let list: Table = match event_hooks.get::<Value>("before_broadcast") {
         Ok(Value::Table(t)) => t,
         _ => return Ok(Some(context)),
     };
@@ -275,7 +295,7 @@ pub(crate) fn call_registered_before_broadcast(
     }
 
     for i in 1..=len {
-        let func: mlua::Function = list.raw_get(i).with_context(|| {
+        let func: LuaFunction = list.raw_get(i).with_context(|| {
             format!(
                 "registered before_broadcast hook at index {} is not a function",
                 i
@@ -289,9 +309,7 @@ pub(crate) fn call_registered_before_broadcast(
         match result {
             Value::Boolean(false) | Value::Nil => return Ok(None),
             Value::Table(tbl) => {
-                let data_result: mlua::Result<mlua::Table> = tbl.get("data");
-
-                if let Ok(data_tbl) = data_result {
+                if let Ok(data_tbl) = tbl.get::<Table>("data") {
                     let mut new_data = HashMap::new();
                     for pair in data_tbl.pairs::<String, Value>() {
                         let (k, v) = pair?;
@@ -299,8 +317,15 @@ pub(crate) fn call_registered_before_broadcast(
                     }
                     context.data = new_data;
                 }
+                context.read_context_back(lua, &tbl);
             }
-            _ => {}
+            other => {
+                tracing::warn!(
+                    "Registered before_broadcast hook #{} returned {} instead of table/false/nil — ignoring",
+                    i,
+                    other.type_name()
+                );
+            }
         }
     }
 
@@ -315,12 +340,12 @@ pub(crate) fn call_registered_hooks(
     event: &HookEvent,
     mut context: HookContext,
 ) -> Result<HookContext> {
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return Ok(context),
     };
 
-    let list: mlua::Table = match event_hooks.get::<Value>(event.as_str()) {
+    let list: Table = match event_hooks.get::<Value>(event.as_str()) {
         Ok(Value::Table(t)) => t,
         _ => return Ok(context),
     };
@@ -332,7 +357,7 @@ pub(crate) fn call_registered_hooks(
     }
 
     for i in 1..=len {
-        let func: mlua::Function = list
+        let func: LuaFunction = list
             .raw_get(i)
             .with_context(|| format!("registered hook at index {} is not a function", i))?;
 
@@ -347,8 +372,8 @@ pub(crate) fn call_registered_hooks(
 
         let result: Value = func.call(ctx_table)?;
 
-        if let Value::Table(tbl) = result {
-            let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+        if let Value::Table(tbl) = &result {
+            let data_result: LuaResult<Table> = tbl.get("data");
 
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
@@ -358,7 +383,15 @@ pub(crate) fn call_registered_hooks(
                 }
                 context.data = new_data;
             }
-            context.read_context_back(lua, &tbl);
+            context.read_context_back(lua, tbl);
+        } else if !matches!(result, Value::Nil) {
+            tracing::warn!(
+                "Registered {} hook #{} for {} returned {} instead of a table — ignoring",
+                event.as_str(),
+                i,
+                context.collection,
+                result.type_name()
+            );
         }
     }
 
@@ -375,45 +408,142 @@ pub(crate) fn run_field_hooks_inner(
     collection: &str,
     operation: &str,
 ) -> Result<()> {
+    run_field_hooks_recursive(lua, fields, event, data, collection, operation, "")
+}
+
+/// Recursive field-hook execution with prefix support for nested structures.
+/// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through transparently.
+fn run_field_hooks_recursive(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    event: &FieldHookEvent,
+    data: &mut HashMap<String, JsonValue>,
+    collection: &str,
+    operation: &str,
+    prefix: &str,
+) -> Result<()> {
     for field in fields {
-        let hook_refs = get_field_hook_refs(&field.hooks, event);
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = if prefix.is_empty() {
+                    field.name.clone()
+                } else {
+                    format!("{}__{}", prefix, field.name)
+                };
+                run_field_hooks_recursive(
+                    lua,
+                    &field.fields,
+                    event,
+                    data,
+                    collection,
+                    operation,
+                    &new_prefix,
+                )?;
+            }
 
-        if hook_refs.is_empty() {
-            continue;
-        }
+            FieldType::Row | FieldType::Collapsible => {
+                run_field_hooks_recursive(
+                    lua,
+                    &field.fields,
+                    event,
+                    data,
+                    collection,
+                    operation,
+                    prefix,
+                )?;
+            }
 
-        let was_present = data.contains_key(&field.name);
-        let value = data.get(&field.name).cloned().unwrap_or(JsonValue::Null);
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    run_field_hooks_recursive(
+                        lua,
+                        &tab.fields,
+                        event,
+                        data,
+                        collection,
+                        operation,
+                        prefix,
+                    )?;
+                }
+            }
 
-        let mut current = value;
-        for hook_ref in hook_refs {
-            tracing::debug!(
-                "Running field hook: {} for {}.{}",
-                hook_ref,
-                collection,
-                field.name
-            );
-            current = call_field_hook_ref(
-                lua,
-                hook_ref,
-                current,
-                &field.name,
-                collection,
-                operation,
-                data,
-            )?;
-        }
-
-        // Only write back if the field was already in the data, or the hook
-        // produced a non-null value (e.g. auto_slug generating a slug on create).
-        // Without this, absent fields on partial updates get coerced to Null,
-        // which breaks the "skip required check for absent fields" logic.
-        if was_present || !current.is_null() {
-            data.insert(field.name.clone(), current);
+            _ => {
+                run_single_field_hook(lua, field, event, data, collection, operation, prefix)?;
+            }
         }
     }
 
     Ok(())
+}
+
+/// Run hooks for a single (non-container) field, using the prefixed data key.
+fn run_single_field_hook(
+    lua: &Lua,
+    field: &FieldDefinition,
+    event: &FieldHookEvent,
+    data: &mut HashMap<String, JsonValue>,
+    collection: &str,
+    operation: &str,
+    prefix: &str,
+) -> Result<()> {
+    let hook_refs = get_field_hook_refs(&field.hooks, event);
+
+    if hook_refs.is_empty() {
+        return Ok(());
+    }
+
+    let data_key = if prefix.is_empty() {
+        field.name.clone()
+    } else {
+        format!("{}__{}", prefix, field.name)
+    };
+
+    let was_present = data.contains_key(&data_key);
+    let value = data.get(&data_key).cloned().unwrap_or(JsonValue::Null);
+
+    let mut current = value;
+    for hook_ref in hook_refs {
+        tracing::debug!(
+            "Running field hook: {} for {}.{}",
+            hook_ref,
+            collection,
+            data_key
+        );
+        current = call_field_hook_ref(
+            lua, hook_ref, current, &data_key, collection, operation, data,
+        )?;
+    }
+
+    // Only write back if the field was already in the data, or the hook
+    // produced a non-null value (e.g. auto_slug generating a slug on create).
+    // Without this, absent fields on partial updates get coerced to Null,
+    // which breaks the "skip required check for absent fields" logic.
+    if was_present || !current.is_null() {
+        data.insert(data_key, current);
+    }
+
+    Ok(())
+}
+
+/// Recursively check if any field (including nested Group/Row/Collapsible/Tabs
+/// children) has hooks registered for the given event.
+fn has_any_field_hook(fields: &[FieldDefinition], event: &FieldHookEvent) -> bool {
+    fields.iter().any(|f| {
+        if !get_field_hook_refs(&f.hooks, event).is_empty() {
+            return true;
+        }
+
+        match f.field_type {
+            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+                has_any_field_hook(&f.fields, event)
+            }
+            FieldType::Tabs => f
+                .tabs
+                .iter()
+                .any(|tab| has_any_field_hook(&tab.fields, event)),
+            _ => false,
+        }
+    })
 }
 
 /// Get the list of field hook references for a given event.
@@ -456,6 +586,19 @@ pub(crate) fn call_field_hook_ref(
     }
     ctx_table.set("data", data_table)?;
 
+    // Inject user and ui_locale from TxContext if available
+    if let Some(user_ctx) = lua.app_data_ref::<UserContext>()
+        && let Some(ref user) = user_ctx.0
+    {
+        let user_table = document_to_lua_table(lua, user)?;
+        ctx_table.set("user", user_table)?;
+    }
+    if let Some(locale_ctx) = lua.app_data_ref::<UiLocaleContext>()
+        && let Some(ref locale) = locale_ctx.0
+    {
+        ctx_table.set("ui_locale", locale.as_str())?;
+    }
+
     // Call: new_value = hook(value, context)
     let result: Value = func.call((lua_value, ctx_table))?;
 
@@ -468,8 +611,8 @@ pub(crate) fn call_field_hook_ref(
 ///
 /// Tries file-per-hook first: `require("hooks.posts.auto_slug")` → function.
 /// Falls back to module pattern: `require("hooks.posts")["auto_slug"]`.
-pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::Function> {
-    let require: mlua::Function = lua.globals().get("require")?;
+pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<LuaFunction> {
+    let require: LuaFunction = lua.globals().get("require")?;
 
     // Try file-per-hook: require("hooks.posts.auto_slug") → function
     if let Ok(Value::Function(f)) = require.call::<Value>(hook_ref) {
@@ -485,10 +628,10 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::F
     let module_path = parts[..parts.len() - 1].join(".");
     let func_name = parts[parts.len() - 1];
 
-    let module: mlua::Table = require
+    let module: Table = require
         .call(module_path.clone())
         .with_context(|| format!("Failed to require module '{}'", module_path))?;
-    let func: mlua::Function = module.get(func_name).with_context(|| {
+    let func: LuaFunction = module.get(func_name).with_context(|| {
         format!(
             "Function '{}' not found in module '{}'",
             func_name, module_path
@@ -516,7 +659,7 @@ pub(crate) fn call_hook_ref(
     match result {
         Value::Table(tbl) => {
             let mut new_ctx = context;
-            let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+            let data_result: LuaResult<Table> = tbl.get("data");
 
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
@@ -529,7 +672,16 @@ pub(crate) fn call_hook_ref(
             new_ctx.read_context_back(lua, &tbl);
             Ok(new_ctx)
         }
-        _ => Ok(context),
+        Value::Nil => Ok(context),
+        other => {
+            tracing::warn!(
+                "Hook '{}' for {} returned {} instead of a table — ignoring return value",
+                hook_ref,
+                context.collection,
+                other.type_name()
+            );
+            Ok(context)
+        }
     }
 }
 
@@ -821,5 +973,128 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, json!("posts:title:create"));
+    }
+
+    // ── call_display_condition_with_lua tests ────────────────────
+
+    #[test]
+    fn display_condition_returns_bool_true() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.show"] = function() return true end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.show", &json!({}));
+        assert!(matches!(result, Some(DisplayConditionResult::Bool(true))));
+    }
+
+    #[test]
+    fn display_condition_returns_bool_false() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.hide"] = function() return false end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.hide", &json!({}));
+        assert!(matches!(result, Some(DisplayConditionResult::Bool(false))));
+    }
+
+    #[test]
+    fn display_condition_returns_nil_shows_field() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.nil_ret"] = function() return nil end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.nil_ret", &json!({}));
+        assert!(result.is_none(), "nil should show field (None)");
+    }
+
+    /// Regression: display condition errors must fail closed (hide field),
+    /// not fail open (show field). Showing a field on error could expose
+    /// access-controlled content.
+    #[test]
+    fn display_condition_error_hides_field() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.boom"] = function() error("broken") end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.boom", &json!({}));
+        assert!(
+            matches!(result, Some(DisplayConditionResult::Bool(false))),
+            "error must hide field (fail closed), got {:?}",
+            result
+        );
+    }
+
+    /// Regression: display condition returning unexpected type must fail closed.
+    #[test]
+    fn display_condition_unexpected_type_hides_field() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.num"] = function() return 42 end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.num", &json!({}));
+        assert!(
+            matches!(result, Some(DisplayConditionResult::Bool(false))),
+            "unexpected type must hide field (fail closed), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn display_condition_unresolvable_ref_shows_field() {
+        let lua = mlua::Lua::new();
+        let result = call_display_condition_with_lua(&lua, "hooks.nonexistent", &json!({}));
+        assert!(result.is_none(), "unresolvable reference should show field");
+    }
+
+    /// Regression: has_any_field_hook must find hooks inside Group/Row/Tabs.
+    #[test]
+    fn has_any_field_hook_finds_nested_hooks() {
+        use crate::core::FieldTab;
+
+        let mut inner = FieldDefinition::builder("inner", FieldType::Text).build();
+        inner.hooks.before_change = vec!["hooks.my_hook".to_string()];
+
+        // Hook on a sub-field inside a Group
+        let group = FieldDefinition::builder("group", FieldType::Group)
+            .fields(vec![inner.clone()])
+            .build();
+        assert!(
+            has_any_field_hook(&[group], &FieldHookEvent::BeforeChange),
+            "should find hook inside Group"
+        );
+
+        // Hook on a sub-field inside a Row
+        let row = FieldDefinition::builder("row", FieldType::Row)
+            .fields(vec![inner.clone()])
+            .build();
+        assert!(
+            has_any_field_hook(&[row], &FieldHookEvent::BeforeChange),
+            "should find hook inside Row"
+        );
+
+        // Hook on a sub-field inside Tabs
+        let tab_field = FieldDefinition::builder("tabs", FieldType::Tabs)
+            .tabs(vec![FieldTab {
+                label: "Tab1".to_string(),
+                description: None,
+                fields: vec![inner],
+            }])
+            .build();
+        assert!(
+            has_any_field_hook(&[tab_field], &FieldHookEvent::BeforeChange),
+            "should find hook inside Tabs"
+        );
+
+        // No hook → false
+        let plain = FieldDefinition::builder("plain", FieldType::Text).build();
+        assert!(
+            !has_any_field_hook(&[plain], &FieldHookEvent::BeforeChange),
+            "should not find hook on plain field without hooks"
+        );
     }
 }

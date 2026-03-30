@@ -5,6 +5,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
 use crap_cms::db::{migrate, pool, query};
+use serde_json::json;
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
@@ -264,8 +265,8 @@ fn set_and_find_block_rows() {
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let blocks = vec![
-        serde_json::json!({"_block_type": "paragraph", "text": "Hello world"}),
-        serde_json::json!({"_block_type": "image", "url": "/img/test.png"}),
+        json!({"_block_type": "paragraph", "text": "Hello world"}),
+        json!({"_block_type": "image", "url": "/img/test.png"}),
     ];
     query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks, None)
         .expect("Set block rows failed");
@@ -304,10 +305,10 @@ fn set_block_rows_replaces_existing() {
     data.insert("title".to_string(), "Test".to_string());
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
-    let blocks1 = vec![serde_json::json!({"_block_type": "paragraph", "text": "Old"})];
+    let blocks1 = vec![json!({"_block_type": "paragraph", "text": "Old"})];
     query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks1, None).expect("Set failed");
 
-    let blocks2 = vec![serde_json::json!({"_block_type": "image", "url": "/new.png"})];
+    let blocks2 = vec![json!({"_block_type": "image", "url": "/new.png"})];
     query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks2, None).expect("Set failed");
     tx.commit().expect("Commit");
 
@@ -374,7 +375,7 @@ fn hydrate_document_populates_join_data() {
         None,
     )
     .expect("Set array failed");
-    let blocks = vec![serde_json::json!({"_block_type": "paragraph", "text": "Hi"})];
+    let blocks = vec![json!({"_block_type": "paragraph", "text": "Hi"})];
     query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks, None)
         .expect("Set blocks failed");
     tx.commit().expect("Commit");
@@ -426,17 +427,17 @@ fn save_join_table_data_from_hashmap() {
 
     // Prepare join table data as JSON values
     let mut jt_data: HashMap<String, serde_json::Value> = HashMap::new();
-    jt_data.insert("tags".to_string(), serde_json::json!(["tag-a", "tag-b"]));
+    jt_data.insert("tags".to_string(), json!(["tag-a", "tag-b"]));
     jt_data.insert(
         "links".to_string(),
-        serde_json::json!([
+        json!([
             {"url": "https://a.com", "label": "A"},
             {"url": "https://b.com", "label": "B"},
         ]),
     );
     jt_data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "Content block"},
         ]),
     );
@@ -479,17 +480,17 @@ fn save_join_table_data_partial_update() {
 
     // First: set tags and links
     let mut jt_data: HashMap<String, serde_json::Value> = HashMap::new();
-    jt_data.insert("tags".to_string(), serde_json::json!(["tag-1", "tag-2"]));
+    jt_data.insert("tags".to_string(), json!(["tag-1", "tag-2"]));
     jt_data.insert(
         "links".to_string(),
-        serde_json::json!([{"url": "https://a.com", "label": "A"}]),
+        json!([{"url": "https://a.com", "label": "A"}]),
     );
     query::save_join_table_data(&tx, "articles", &def.fields, &doc.id, &jt_data, None)
         .expect("Save failed");
 
     // Second: only update tags (links should be unchanged)
     let mut jt_data2: HashMap<String, serde_json::Value> = HashMap::new();
-    jt_data2.insert("tags".to_string(), serde_json::json!(["tag-3"]));
+    jt_data2.insert("tags".to_string(), json!(["tag-3"]));
     query::save_join_table_data(&tx, "articles", &def.fields, &doc.id, &jt_data2, None)
         .expect("Save failed");
     tx.commit().expect("Commit");

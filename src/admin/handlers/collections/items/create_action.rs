@@ -16,15 +16,13 @@ use crate::{
                 forms::{
                     extract_join_data_from_form, parse_multipart_form, transform_select_has_many,
                 },
-                shared::{
-                    cleanup_created_files, collect_upload_hidden_fields, render_upload_error,
-                },
+                shared::{collect_upload_hidden_fields, render_upload_error},
             },
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
-                get_user_doc, html_with_toast, htmx_redirect, redirect_response,
-                split_sidebar_fields, strip_write_denied_string_fields,
+                get_user_doc, html_with_toast, htmx_redirect_with_created, redirect_response,
+                split_sidebar_fields, strip_write_denied_string_fields, toast_only_error,
                 translate_validation_errors,
             },
         },
@@ -87,7 +85,7 @@ pub async fn create_action(
 
     // Process upload if file present — runs on blocking thread
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut upload_guard: Option<upload::CleanupGuard> = None;
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
     {
@@ -100,9 +98,9 @@ pub async fn create_action(
         .await;
 
         match upload_result {
-            Ok(Ok(processed)) => {
+            Ok(Ok((processed, guard))) => {
                 queued_conversions = processed.queued_conversions.clone();
-                created_files = processed.created_files.clone();
+                upload_guard = Some(guard);
 
                 upload::inject_upload_metadata(&mut form_data, &processed);
             }
@@ -131,12 +129,17 @@ pub async fn create_action(
         None
     };
 
-    // Validate password against policy (create requires a password for auth collections)
+    // Create requires a non-empty password for auth collections
+    if def.is_auth_collection() && password.as_deref().unwrap_or("").is_empty() {
+        return toast_only_error("Password is required");
+    }
+
+    // Validate password against policy
     if let Some(ref pw) = password
         && !pw.is_empty()
         && let Err(e) = state.config.auth.password_policy.validate(pw)
     {
-        return html_with_toast(&state, "collections/edit_form", &json!({}), &e.to_string());
+        return toast_only_error(&e.to_string());
     }
 
     // Convert comma-separated multi-select values to JSON arrays
@@ -186,6 +189,10 @@ pub async fn create_action(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            if let Some(mut g) = upload_guard {
+                g.commit();
+            }
+
             // Enqueue deferred image conversions if any
             if !queued_conversions.is_empty()
                 && let Ok(conn) = state.pool.get()
@@ -223,7 +230,13 @@ pub async fn create_action(
                 );
             }
 
-            htmx_redirect(&format!("/admin/collections/{}", slug))
+            let label = def
+                .title_field()
+                .and_then(|f| doc.fields.get(f))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&doc.id);
+
+            htmx_redirect_with_created(&format!("/admin/collections/{}", slug), &doc.id, label)
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
@@ -265,6 +278,7 @@ pub async fn create_action(
 
                 let mut data = ContextBuilder::new(&state, None)
                     .locale_from_auth(&auth_user)
+                    .filter_nav_by_access(&state, &auth_user)
                     .page(PageType::CollectionCreate, "create_name")
                     .page_title_name(def.singular_name())
                     .collection_def(&def)
@@ -282,13 +296,11 @@ pub async fn create_action(
 
                 html_with_toast(&state, "collections/edit", &data, toast_msg)
             } else {
-                cleanup_created_files(&created_files);
                 tracing::error!("Create error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/create", slug))
             }
         }
         Err(e) => {
-            cleanup_created_files(&created_files);
             tracing::error!("Create task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/create", slug))
         }

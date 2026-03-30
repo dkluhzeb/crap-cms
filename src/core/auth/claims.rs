@@ -12,6 +12,14 @@ pub struct Claims {
     pub email: String,
     /// Expiration time (Unix timestamp).
     pub exp: u64,
+    /// Issued-at time (Unix timestamp). Optional for backward compatibility with
+    /// tokens issued before this field was added.
+    #[serde(default)]
+    pub iat: Option<u64>,
+    /// Session version counter — incremented on password change. Tokens with an older
+    /// version are rejected during validation.
+    #[serde(default)]
+    pub session_version: u64,
 }
 
 impl Claims {

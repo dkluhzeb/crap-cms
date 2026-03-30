@@ -22,8 +22,14 @@ import { t } from './i18n.js';
 
 class CrapValidateForm extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     /** @type {boolean} */
     this._validated = false;
+
+    /** @type {boolean} */
+    this._validating = false;
 
     /** @type {string} */
     this._validateUrl = this.getAttribute('validate-url') || '';
@@ -56,26 +62,26 @@ class CrapValidateForm extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._connected = false;
     if (this._onBeforeRequest) {
       document.body.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+      this._onBeforeRequest = null;
     }
   }
 
   /**
-   * Run validation via the JSON endpoint, then re-trigger submit if valid.
-   * @param {HTMLFormElement} form
+   * Run validation via the JSON endpoint and return the error map.
+   * Returns `{}` when valid, an error map on invalid, or `null` on network error.
+   * @returns {Promise<Record<string, string>|null>}
    */
-  async _runValidation(form) {
+  async getValidationErrors() {
     const url = this._validateUrl;
-    if (!url) {
-      // No validate URL — let form submit normally
-      this._validated = true;
-      this._retrigger(form);
-      return;
-    }
+    if (!url) return {};
 
-    // Collect form data (minus file inputs)
-    const data = this._collectFormData(form);
+    const form = this.querySelector('#edit-form');
+    if (!form) return {};
+
+    const data = this._collectFormData(/** @type {HTMLFormElement} */ (form));
     const csrf = this._getCsrf();
 
     /** @type {Record<string, string>} */
@@ -89,25 +95,46 @@ class CrapValidateForm extends HTMLElement {
         body: JSON.stringify(data),
       });
 
-      if (!res.ok) {
-        window.CrapToast?.show(t('validation.server_error'), 'error');
+      if (!res.ok) return null;
+
+      const result = await res.json();
+      return result.valid ? {} : (result.errors || {});
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Run validation via the JSON endpoint, then re-trigger submit if valid.
+   * @param {HTMLFormElement} form
+   */
+  async _runValidation(form) {
+    if (this._validating) return;
+    this._validating = true;
+
+    try {
+      if (!this._validateUrl) {
+        this._validated = true;
+        this._retrigger(form);
         return;
       }
 
-      const result = await res.json();
+      const errors = await this.getValidationErrors();
 
-      if (result.valid) {
-        // Clear any previous errors
+      if (errors === null) {
+        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('validation.server_error'), type: 'error' } }));
+        return;
+      }
+
+      if (Object.keys(errors).length === 0) {
         this._clearErrors();
-
-        // Mark as validated and re-trigger the real submit
         this._validated = true;
         this._retrigger(form);
       } else {
-        this._showErrors(result.errors || {});
+        this._showErrors(errors);
       }
-    } catch (err) {
-      window.CrapToast?.show(t('validation.server_error'), 'error');
+    } finally {
+      this._validating = false;
     }
   }
 
@@ -140,7 +167,13 @@ class CrapValidateForm extends HTMLElement {
         continue;
       }
 
-      data[key] = value;
+      if (key in data) {
+        data[key] = Array.isArray(data[key])
+          ? [...data[key], value]
+          : [data[key], value];
+      } else {
+        data[key] = value;
+      }
     }
 
     return { data, draft, locale };
@@ -148,14 +181,59 @@ class CrapValidateForm extends HTMLElement {
 
   /**
    * Show validation errors inline next to their fields and as a toast.
+   * Node attr errors (e.g. `content[cta#0].text`) are aggregated onto the
+   * parent richtext field wrapper (`content`).
    * @param {Record<string, string>} errors
    */
   _showErrors(errors) {
     this._clearErrors();
 
-    let errorCount = 0;
+    // Aggregate node attr errors onto their parent field.
+    // Keys like "content[cta#0].text" → parent "content",
+    // "items[0][body][cta#1].url" → parent "items[0][body]".
+    /** @type {Record<string, string[]>} */
+    const nodeAttrErrors = {};
+    /** @type {Record<string, string>} */
+    const directErrors = {};
 
     for (const [field, message] of Object.entries(errors)) {
+      const nodeAttrParent = this._resolveNodeAttrParent(field);
+      if (nodeAttrParent) {
+        (nodeAttrErrors[nodeAttrParent] ??= []).push(message);
+      } else {
+        directErrors[field] = message;
+      }
+    }
+
+    // Pass structured per-node errors to richtext components
+    for (const [parent, msgs] of Object.entries(nodeAttrErrors)) {
+      const wrapper = this.querySelector(`[data-field-name="${parent}"]`);
+      if (!wrapper) continue;
+      const richtextEl = wrapper.querySelector('crap-richtext');
+      if (richtextEl && typeof richtextEl.markNodeErrors === 'function') {
+        /** @type {Record<string, string[]>} */
+        const perNode = {};
+        for (const [key, message] of Object.entries(errors)) {
+          // Match keys like "content[cta#0].text" where parent is "content"
+          const m = key.match(new RegExp(`^${parent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\[([^\\]]*#[^\\]]*)\\]\\.`));
+          if (m) {
+            (perNode[m[1]] ??= []).push(message);
+          }
+        }
+        richtextEl.markNodeErrors(perNode);
+      }
+    }
+
+    // Merge aggregated node attr errors (only if no direct error for that field)
+    for (const [parent, msgs] of Object.entries(nodeAttrErrors)) {
+      if (!directErrors[parent]) {
+        directErrors[parent] = msgs.join('; ');
+      }
+    }
+
+    let errorCount = 0;
+
+    for (const [field, message] of Object.entries(directErrors)) {
       const wrapper = this.querySelector(`[data-field-name="${field}"]`);
       if (!wrapper) continue;
 
@@ -166,6 +244,7 @@ class CrapValidateForm extends HTMLElement {
       const errorEl = document.createElement('p');
       errorEl.className = 'form__error';
       errorEl.setAttribute('data-validate-error', '');
+      errorEl.setAttribute('role', 'alert');
       errorEl.textContent = message;
       wrapper.appendChild(errorEl);
       errorCount++;
@@ -193,8 +272,21 @@ class CrapValidateForm extends HTMLElement {
     }
 
     if (errorCount > 0) {
-      window.CrapToast?.show(t('validation.error_summary'), 'error');
+      document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('validation.error_summary'), type: 'error' } }));
     }
+  }
+
+  /**
+   * Check if an error key is a richtext node attr error and return the parent
+   * field name. Node attr keys contain `#` inside a bracket segment, e.g.
+   * `content[cta#0].text` → `content`, `items[0][body][cta#1].url` → `items[0][body]`.
+   * @param {string} key
+   * @returns {string|null} parent field name, or null if not a node attr key
+   */
+  _resolveNodeAttrParent(key) {
+    // Find the bracket segment containing "#" (e.g. [cta#0])
+    const match = key.match(/^(.+?)\[[^\]]*#[^\]]*\]/);
+    return match ? match[1] : null;
   }
 
   /**
@@ -210,6 +302,13 @@ class CrapValidateForm extends HTMLElement {
     for (const row of errorRows) {
       row.classList.remove('form__array-row--has-errors');
       row.removeAttribute('data-validate-row-error');
+    }
+    // Clear richtext node error highlighting
+    const richtextEls = this.querySelectorAll('crap-richtext');
+    for (const el of richtextEls) {
+      if (typeof el.clearNodeErrors === 'function') {
+        el.clearNodeErrors();
+      }
     }
   }
 
@@ -232,7 +331,8 @@ class CrapValidateForm extends HTMLElement {
    */
   _getCsrf() {
     const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-    return m ? m[1] : null;
+    if (!m) return null;
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
   }
 }
 

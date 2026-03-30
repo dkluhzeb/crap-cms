@@ -1,7 +1,7 @@
 //! Lua table serializers for FieldDefinition.
 //! Produces round-trip compatible tables that can be passed back to parse_fields().
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Result as LuaResult, Table};
 use serde_json::Value as JsonValue;
 
 use crate::core::{
@@ -12,7 +12,7 @@ use crate::core::{
 use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
 
 /// Convert a FieldDefinition to a full Lua table compatible with parse_fields().
-pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Result<Table> {
+pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
@@ -53,6 +53,13 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Resul
         tbl.set("picker_appearance", pa.as_str())?;
     }
 
+    if f.timezone {
+        tbl.set("timezone", true)?;
+    }
+    if let Some(ref dtz) = f.default_timezone {
+        tbl.set("default_timezone", dtz.as_str())?;
+    }
+
     // has_many for scalar fields (text, number, select — not relationship/upload which use RelationshipConfig)
     if f.has_many && f.relationship.is_none() {
         tbl.set("has_many", true)?;
@@ -61,6 +68,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Resul
     // options (select fields)
     if !f.options.is_empty() {
         let opts = lua.create_table()?;
+
         for (i, opt) in f.options.iter().enumerate() {
             let o = lua.create_table()?;
             o.set("label", localized_string_to_lua(lua, &opt.label)?)?;
@@ -165,7 +173,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Resul
 }
 
 /// Convert a `FieldHooks` to a Lua table. Returns `None` if no hooks are set.
-fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> mlua::Result<Option<Table>> {
+fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> LuaResult<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
     let pairs: &[(&str, &[String])] = &[
@@ -174,6 +182,7 @@ fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> mlua::Result<Option<Tabl
         ("after_change", &hooks.after_change),
         ("after_read", &hooks.after_read),
     ];
+
     for (key, list) in pairs {
         if !list.is_empty() {
             let arr = lua.create_table()?;
@@ -184,11 +193,12 @@ fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> mlua::Result<Option<Tabl
             has_any = true;
         }
     }
+
     Ok(if has_any { Some(tbl) } else { None })
 }
 
 /// Convert a `FieldAccess` to a Lua table. Returns `None` if no access rules are set.
-fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> mlua::Result<Option<Table>> {
+fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> LuaResult<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
 
@@ -204,6 +214,7 @@ fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> mlua::Result<Option<T
         tbl.set("update", s.as_str())?;
         has_any = true;
     }
+
     Ok(if has_any { Some(tbl) } else { None })
 }
 
@@ -542,6 +553,52 @@ mod tests {
         let tbl = field_config_to_lua(&lua, &f).unwrap();
         assert!(tbl.get::<bool>("localized").unwrap());
         assert_eq!(tbl.get::<String>("picker_appearance").unwrap(), "drawer");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_timezone_roundtrip() {
+        let lua = mlua::Lua::new();
+        let f = FieldDefinition::builder("start_date", FieldType::Date)
+            .timezone(true)
+            .default_timezone("America/New_York")
+            .picker_appearance("dayAndTime")
+            .build();
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+
+        assert!(tbl.get::<bool>("timezone").unwrap());
+        assert_eq!(
+            tbl.get::<String>("default_timezone").unwrap(),
+            "America/New_York"
+        );
+
+        // Verify it survives re-parse (simulates plugin round-trip)
+        let fields_tbl = lua.create_table().unwrap();
+        fields_tbl.set(1, tbl).unwrap();
+        let parsed = crate::hooks::api::parse::fields::parse_fields(&fields_tbl).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(
+            parsed[0].timezone,
+            "timezone must survive serialization round-trip"
+        );
+        assert_eq!(
+            parsed[0].default_timezone.as_deref(),
+            Some("America/New_York")
+        );
+    }
+
+    #[test]
+    fn test_field_config_to_lua_no_timezone_omitted() {
+        let lua = mlua::Lua::new();
+        let f = FieldDefinition::builder("created_at", FieldType::Date).build();
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+
+        // timezone should not be present when false
+        assert!(tbl.get::<Option<bool>>("timezone").unwrap().is_none());
+        assert!(
+            tbl.get::<Option<String>>("default_timezone")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

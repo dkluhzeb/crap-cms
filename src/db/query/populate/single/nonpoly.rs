@@ -5,7 +5,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
+use crate::db::query::populate::{
+    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+    locale_cache_key,
+};
 use crate::{
     core::{CollectionDefinition, Document, upload},
     db::query::read::{find_by_id, find_by_ids},
@@ -50,7 +53,8 @@ pub(super) fn populate_nonpoly_has_many(
             populated.push(Value::String(id.clone()));
             continue;
         }
-        let hm_cache_key = (rel_collection.to_string(), id.clone());
+        let locale_key = locale_cache_key(ctx.locale_ctx);
+        let hm_cache_key = (rel_collection.to_string(), id.clone(), locale_key);
 
         if let Some(cached) = ctx.cache.get(&hm_cache_key) {
             populated.push(document_to_json(cached.value(), rel_collection));
@@ -78,7 +82,9 @@ pub(super) fn populate_nonpoly_has_many(
                         },
                         ctx.cache,
                     )?;
-                    ctx.cache.insert(hm_cache_key, related_doc.clone());
+                    if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                        ctx.cache.insert(hm_cache_key, related_doc.clone());
+                    }
                     populated.push(document_to_json(&related_doc, rel_collection));
                 }
                 None => {
@@ -110,7 +116,8 @@ pub(super) fn populate_nonpoly_has_one(
         return Ok(());
     }
 
-    let ho_cache_key = (rel_collection.to_string(), id.clone());
+    let locale_key = locale_cache_key(ctx.locale_ctx);
+    let ho_cache_key = (rel_collection.to_string(), id.clone(), locale_key);
 
     if let Some(cached) = ctx.cache.get(&ho_cache_key) {
         doc.fields.insert(
@@ -141,7 +148,9 @@ pub(super) fn populate_nonpoly_has_one(
             },
             ctx.cache,
         )?;
-        ctx.cache.insert(ho_cache_key, related_doc.clone());
+        if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+            ctx.cache.insert(ho_cache_key, related_doc.clone());
+        }
         doc.fields.insert(
             field_name.to_string(),
             document_to_json(&related_doc, rel_collection),
@@ -434,7 +443,10 @@ mod tests {
         cached_author
             .fields
             .insert("name".to_string(), json!("CachedAlice"));
-        cache.insert(("authors".to_string(), "a1".to_string()), cached_author);
+        cache.insert(
+            ("authors".to_string(), "a1".to_string(), None),
+            cached_author,
+        );
 
         let mut doc = Document::new("p1".to_string());
         doc.fields.insert("author".to_string(), json!("a1"));
@@ -496,7 +508,10 @@ mod tests {
         cached_cat
             .fields
             .insert("name".to_string(), json!("CachedTech"));
-        cache.insert(("categories".to_string(), "c1".to_string()), cached_cat);
+        cache.insert(
+            ("categories".to_string(), "c1".to_string(), None),
+            cached_cat,
+        );
 
         let mut doc = Document::new("p1".to_string());
         doc.fields.insert("tags".to_string(), json!(["c1"]));

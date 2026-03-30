@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use crate::{
     core::{Document, collection::GlobalDefinition},
     db::{DbPool, query},
-    hooks::{HookContext, HookRunner, ValidationCtx},
+    hooks::{HookContext, HookEvent, HookRunner, ValidationCtx},
     service::{AfterChangeInput, WriteInput, WriteResult, build_hook_data, run_after_change_hooks},
 };
 
@@ -61,6 +61,18 @@ pub fn update_global_document(
         )?;
         existing_doc
     } else {
+        let locale_cfg = input
+            .locale_ctx
+            .map(|lctx| lctx.config.clone())
+            .unwrap_or_default();
+        let old_refs = query::ref_count::snapshot_outgoing_refs(
+            &tx,
+            &global_table,
+            "default",
+            &def.fields,
+            &locale_cfg,
+        )?;
+
         let doc = query::update_global(&tx, slug, def, &final_data, input.locale_ctx)?;
         query::save_join_table_data(
             &tx,
@@ -69,6 +81,15 @@ pub fn update_global_document(
             "default",
             &final_ctx.data,
             input.locale_ctx,
+        )?;
+
+        query::ref_count::after_update(
+            &tx,
+            &global_table,
+            "default",
+            &def.fields,
+            &locale_cfg,
+            old_refs,
         )?;
 
         if def.has_versions() {
@@ -99,4 +120,53 @@ pub fn update_global_document(
 
     tx.commit().context("Commit transaction")?;
     Ok((doc, ctx))
+}
+
+/// Unpublish a global document within a single transaction: before-hooks → unpublish → after-hooks.
+#[cfg(not(tarpaulin_include))]
+pub fn unpublish_global_document(
+    pool: &DbPool,
+    runner: &HookRunner,
+    slug: &str,
+    def: &GlobalDefinition,
+    user: Option<&Document>,
+) -> Result<Document> {
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
+
+    let global_table = format!("_global_{}", slug);
+    let doc = query::get_global(&tx, slug, def, None)?;
+
+    let hook_ctx = HookContext::builder(slug, "update")
+        .data(doc.fields.clone())
+        .draft(true)
+        .locale(None::<String>)
+        .user(user)
+        .build();
+    let final_ctx =
+        runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx)?;
+
+    super::unpublish_with_snapshot(
+        &tx,
+        &global_table,
+        "default",
+        &def.fields,
+        def.versions.as_ref(),
+        &doc,
+    )?;
+
+    run_after_change_hooks(
+        runner,
+        &def.hooks,
+        &def.fields,
+        &doc,
+        AfterChangeInput::builder(slug, "update")
+            .req_context(final_ctx.context)
+            .user(user)
+            .build(),
+        &tx,
+    )?;
+
+    tx.commit().context("Commit transaction")?;
+    Ok(doc)
 }

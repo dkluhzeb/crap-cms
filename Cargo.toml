@@ -1,6 +1,6 @@
 [package]
 name = "crap-cms"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition = "2024"
 default-run = "crap-cms"
 description = "Headless CMS in Rust with Lua hooks, gRPC API, and HTMX admin UI"
@@ -65,7 +65,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 webp = "0.3"
 
 # HTTP client (blocking — used in Lua spawn_blocking context)
-ureq = "3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Crypto
 ring = "0.17"
@@ -76,8 +76,12 @@ aes-gcm = "0.10"
 # Cron scheduling
 cron = "0.12"
 
-# Tower (rate limiting layer for gRPC)
-tower = { version = "0.5", features = ["util"] }
+# HTTP/2 cleartext (h2c) support
+hyper = { version = "1", features = ["server", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "http2", "server-auto"] }
+
+# Tower (rate limiting, timeouts)
+tower = { version = "0.5", features = ["util", "timeout"] }
 
 # URL parsing
 url = "2"
@@ -90,9 +94,13 @@ chrono = { version = "0.4", features = ["serde"] }
 mime_guess = "2"
 anyhow = "1"
 
+# Process management (Unix signals)
+libc = "0.2"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 form_urlencoded = "1.2.2"
 regex = "1.12.3"
 dashmap = "6.1.0"
@@ -100,6 +108,7 @@ subtle = "2.6.1"
 infer = "0.19.0"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tonic-health = "0.14.5"
+chrono-tz = "0.10"
 
 [features]
 browser-tests = ["dep:chromiumoxide"]

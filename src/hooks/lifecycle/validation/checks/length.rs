@@ -16,7 +16,7 @@ pub(crate) fn check_length_bounds(
         return;
     }
     if let Some(Value::String(s)) = value {
-        let len = s.len();
+        let len = s.chars().count();
 
         if let Some(min_len) = field.min_length
             && len < min_len
@@ -150,6 +150,51 @@ mod tests {
             &ValidationCtx::builder(&conn, "test").build(),
         );
         assert!(result.is_ok());
+    }
+
+    /// Regression: length validation must count characters, not bytes.
+    /// Multibyte UTF-8 characters (emoji, CJK, accented) were overcounted.
+    #[test]
+    fn test_validate_length_counts_chars_not_bytes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+
+        // "café" = 4 chars but 5 bytes (é is 2 bytes)
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .max_length(4)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("café"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_ok(), "café is 4 chars — should pass max_length=4");
+
+        // "你好世界" = 4 chars but 12 bytes
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .min_length(4)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("你好世界"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_ok(),
+            "你好世界 is 4 chars — should pass min_length=4"
+        );
     }
 
     #[test]

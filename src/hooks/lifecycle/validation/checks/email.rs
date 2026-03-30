@@ -27,7 +27,9 @@ pub(crate) fn check_email_format(
 }
 
 /// Check if a string looks like a valid email address.
-/// Simple check: has exactly one @, non-empty local and domain parts, domain has a dot.
+///
+/// Validates: exactly one @, non-empty local/domain, domain has a dot,
+/// no whitespace, no leading/trailing/consecutive dots in local part.
 pub(crate) fn is_valid_email_format(value: &str) -> bool {
     let parts: Vec<&str> = value.splitn(2, '@').collect();
 
@@ -36,11 +38,18 @@ pub(crate) fn is_valid_email_format(value: &str) -> bool {
     }
     let local = parts[0];
     let domain = parts[1];
+
     !local.is_empty()
         && !domain.is_empty()
         && domain.contains('.')
         && !local.contains(char::is_whitespace)
         && !domain.contains(char::is_whitespace)
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains("..")
 }
 
 #[cfg(test)]
@@ -154,5 +163,27 @@ mod tests {
     #[test]
     fn test_email_format_whitespace_in_domain() {
         assert!(!is_valid_email_format("user@do main.com"));
+    }
+
+    #[test]
+    fn test_email_format_rejects_leading_dot_in_local() {
+        assert!(!is_valid_email_format(".user@example.com"));
+    }
+
+    #[test]
+    fn test_email_format_rejects_trailing_dot_in_local() {
+        assert!(!is_valid_email_format("user.@example.com"));
+    }
+
+    #[test]
+    fn test_email_format_rejects_consecutive_dots_in_local() {
+        assert!(!is_valid_email_format("user..name@example.com"));
+    }
+
+    #[test]
+    fn test_email_format_rejects_invalid_domain_dots() {
+        assert!(!is_valid_email_format("user@.example.com"));
+        assert!(!is_valid_email_format("user@example.com."));
+        assert!(!is_valid_email_format("user@example..com"));
     }
 }

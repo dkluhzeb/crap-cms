@@ -7,17 +7,17 @@ use mlua::Value;
 use serde_json::Value as JsonValue;
 
 use crate::{
-    core::{Document, FieldDefinition, document::DocumentBuilder},
+    core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
     db::AccessResult,
     hooks::{
         HookRunner, api,
         lifecycle::{
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
-                check_field_write_access_with_lua,
+                check_field_write_access_with_lua, has_any_field_access,
             },
             execution::resolve_hook_function,
-            types::{TxContext, UserContext},
+            types::TxContextGuard,
         },
     },
 };
@@ -35,55 +35,48 @@ impl HookRunner {
     ) -> Result<Option<Document>> {
         let lua = self.pool.acquire()?;
 
-        // Inject connection for CRUD access
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
+        // Inject connection for CRUD access — guard ensures cleanup on all exit paths
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
 
-        let result = (|| -> Result<Option<Document>> {
-            let func = resolve_hook_function(&lua, authenticate_ref)?;
+        let func = resolve_hook_function(&lua, authenticate_ref)?;
 
-            // Build context table: { headers = {...}, collection = "..." }
-            let ctx_table = lua.create_table()?;
-            let headers_table = lua.create_table()?;
-            for (k, v) in headers {
-                headers_table.set(k.as_str(), v.as_str())?;
-            }
-            ctx_table.set("headers", headers_table)?;
-            ctx_table.set("collection", collection)?;
+        // Build context table: { headers = {...}, collection = "..." }
+        let ctx_table = lua.create_table()?;
+        let headers_table = lua.create_table()?;
+        for (k, v) in headers {
+            headers_table.set(k.as_str(), v.as_str())?;
+        }
+        ctx_table.set("headers", headers_table)?;
+        ctx_table.set("collection", collection)?;
 
-            let result: Value = func.call(ctx_table)?;
+        let result: Value = func.call(ctx_table)?;
 
-            match result {
-                Value::Table(tbl) => {
-                    // Strategy returned a user table — convert to Document
-                    let id: String = tbl.get("id")?;
-                    let mut fields = HashMap::new();
-                    for pair in tbl.pairs::<String, Value>() {
-                        let (k, v) = pair?;
+        match result {
+            Value::Table(tbl) => {
+                // Strategy returned a user table — convert to Document
+                let id: String = tbl.get("id")?;
+                let mut fields = HashMap::new();
+                for pair in tbl.pairs::<String, Value>() {
+                    let (k, v) = pair?;
 
-                        if k == "id" || k == "created_at" || k == "updated_at" {
-                            continue;
-                        }
-                        fields.insert(k, api::lua_to_json(&lua, &v)?);
+                    if k == "id" || k == "created_at" || k == "updated_at" {
+                        continue;
                     }
-                    let created_at: Option<String> = tbl.get("created_at").ok();
-                    let updated_at: Option<String> = tbl.get("updated_at").ok();
-                    Ok(Some(
-                        DocumentBuilder::new(id)
-                            .fields(fields)
-                            .created_at(created_at)
-                            .updated_at(updated_at)
-                            .build(),
-                    ))
+                    fields.insert(k, api::lua_to_json(&lua, &v)?);
                 }
-                Value::Nil | Value::Boolean(false) => Ok(None),
-                _ => Ok(None),
+                let created_at: Option<String> = tbl.get("created_at").ok();
+                let updated_at: Option<String> = tbl.get("updated_at").ok();
+                Ok(Some(
+                    DocumentBuilder::new(id)
+                        .fields(fields)
+                        .created_at(created_at)
+                        .updated_at(updated_at)
+                        .build(),
+                ))
             }
-        })();
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+            Value::Nil | Value::Boolean(false) => Ok(None),
+            _ => Ok(None),
+        }
     }
 
     /// Run a collection-level or global-level access check.
@@ -103,46 +96,41 @@ impl HookRunner {
         conn: &dyn crate::db::DbConnection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;
-
-        // Inject connection for CRUD access in access functions
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
-
-        let result = check_access_with_lua(&lua, access_ref, user, id, data);
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        check_access_with_lua(&lua, access_ref, user, id, data)
     }
 
     /// Check field-level read access. Returns a list of field names that should be
     /// stripped from the response (denied fields).
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, all access-controlled fields
+    /// are denied rather than silently allowed.
     pub fn check_field_read_access(
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
         conn: &dyn crate::db::DbConnection,
     ) -> Vec<String> {
-        // Skip VM acquisition if no fields have read access functions
-        if fields.iter().all(|f| f.access.read.is_none()) {
+        // Skip VM acquisition if no fields have read access functions (recursive check)
+        if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
             return Vec::new();
         }
         let lua = match self.pool.acquire() {
             Ok(l) => l,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::error!("Lua VM pool exhausted during field read access check: {e}");
+                return deny_all_access_controlled(fields, |f| f.access.read.as_deref());
+            }
         };
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
-
-        let result = check_field_read_access_with_lua(&lua, fields, user);
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        check_field_read_access_with_lua(&lua, fields, user)
     }
 
     /// Check field-level write access for a given operation ("create" or "update").
     /// Returns a list of field names that should be stripped from the input.
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, all access-controlled fields
+    /// are denied rather than silently allowed.
     pub fn check_field_write_access(
         &self,
         fields: &[FieldDefinition],
@@ -150,27 +138,142 @@ impl HookRunner {
         operation: &str,
         conn: &dyn crate::db::DbConnection,
     ) -> Vec<String> {
-        // Skip VM acquisition if no fields have write access functions for this operation
-        let has_write_access = fields.iter().any(|f| match operation {
-            "create" => f.access.create.is_some(),
-            "update" => f.access.update.is_some(),
-            _ => false,
-        });
-
-        if !has_write_access {
+        // Skip VM acquisition if no fields have write access functions (recursive check)
+        let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
+            "create" => |f| f.access.create.as_deref(),
+            "update" => |f| f.access.update.as_deref(),
+            _ => return Vec::new(),
+        };
+        if !has_any_field_access(fields, extractor) {
             return Vec::new();
         }
         let lua = match self.pool.acquire() {
             Ok(l) => l,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::error!("Lua VM pool exhausted during field write access check: {e}");
+                return deny_all_access_controlled(fields, extractor);
+            }
         };
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        check_field_write_access_with_lua(&lua, fields, user, operation)
+    }
+}
 
-        let result = check_field_write_access_with_lua(&lua, fields, user, operation);
+/// Collect names of all fields that have an access control function configured.
+/// Used as fail-closed fallback when the Lua VM pool is unavailable.
+/// Recurses into Group (with `__` prefix), Row/Collapsible/Tabs (transparent).
+fn deny_all_access_controlled(
+    fields: &[FieldDefinition],
+    extractor: impl Fn(&FieldDefinition) -> Option<&str> + Copy,
+) -> Vec<String> {
+    deny_all_recursive(fields, &extractor, "")
+}
 
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+fn deny_all_recursive(
+    fields: &[FieldDefinition],
+    extractor: &(impl Fn(&FieldDefinition) -> Option<&str> + Copy),
+    prefix: &str,
+) -> Vec<String> {
+    let mut denied = Vec::new();
+
+    for field in fields {
+        let full_name = if prefix.is_empty() {
+            field.name.clone()
+        } else {
+            format!("{}__{}", prefix, field.name)
+        };
+
+        if extractor(field).is_some() {
+            denied.push(full_name.clone());
+        }
+
+        match field.field_type {
+            FieldType::Group => {
+                denied.extend(deny_all_recursive(&field.fields, extractor, &full_name));
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                denied.extend(deny_all_recursive(&field.fields, extractor, prefix));
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    denied.extend(deny_all_recursive(&tab.fields, extractor, prefix));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    denied
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::{FieldAccess, FieldTab};
+
+    fn make_field(name: &str, access: FieldAccess) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .access(access)
+            .build()
+    }
+
+    #[test]
+    fn deny_all_finds_top_level() {
+        let fields = vec![make_field(
+            "secret",
+            FieldAccess {
+                read: Some("hooks.deny".to_string()),
+                ..Default::default()
+            },
+        )];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn deny_all_recurses_into_group_with_prefix() {
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![make_field(
+                    "title",
+                    FieldAccess {
+                        read: Some("hooks.deny".to_string()),
+                        ..Default::default()
+                    },
+                )])
+                .build(),
+        ];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert_eq!(denied, vec!["seo__title"]);
+    }
+
+    #[test]
+    fn deny_all_recurses_into_tabs() {
+        let fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Main",
+                    vec![make_field(
+                        "hidden",
+                        FieldAccess {
+                            read: Some("hooks.deny".to_string()),
+                            ..Default::default()
+                        },
+                    )],
+                )])
+                .build(),
+        ];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert_eq!(denied, vec!["hidden"]);
+    }
+
+    #[test]
+    fn deny_all_empty_when_no_access_configured() {
+        let fields = vec![
+            make_field("title", FieldAccess::default()),
+            make_field("body", FieldAccess::default()),
+        ];
+        let denied = deny_all_access_controlled(&fields, |f| f.access.read.as_deref());
+        assert!(denied.is_empty());
     }
 }

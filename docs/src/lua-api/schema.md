@@ -29,6 +29,7 @@ end
 | `has_auth` | boolean | Whether authentication is enabled. |
 | `has_upload` | boolean | Whether file uploads are enabled. |
 | `has_versions` | boolean | Whether versioning is enabled. |
+| `has_drafts` | boolean | Whether draft/publish workflow is enabled (versioned + drafts). |
 | `fields` | table[] | Array of field definitions (see below). |
 
 ### Field Schema

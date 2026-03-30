@@ -17,10 +17,10 @@ Events are sent with event type `mutation`:
 ```
 event: mutation
 id: 42
-data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123"}
+data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","edited_by":"user_456"}
 ```
 
-The `data` payload is JSON with the same fields as the gRPC `MutationEvent` (excluding the full document `data` for efficiency — admin SSE only sends metadata).
+The `data` payload is JSON with the same fields as the gRPC `MutationEvent` (excluding the full document `data` for efficiency), plus an `edited_by` field containing the user ID of the authenticated user who made the change (or `null` for unauthenticated operations).
 
 ## Admin UI Integration
 
@@ -34,6 +34,12 @@ The SSE connection:
 ## Access Control
 
 Same as gRPC Subscribe: read access is checked at connection time per collection/global. Events for inaccessible collections are filtered out.
+
+> **Note:** Access control is **snapshotted at subscribe time**. If a user's permissions change after they subscribe to the SSE stream (e.g., their role is updated or access rules are modified), they will continue receiving events based on the original permissions until the SSE connection is closed. To force a re-evaluation, the client must reconnect.
+
+## Connection Limits
+
+The maximum number of concurrent SSE connections is controlled by `max_sse_connections` in `[live]` (default: 1000). When the limit is reached, new connections receive `503 Service Unavailable`. Set to `0` for unlimited.
 
 ## Custom Integration
 

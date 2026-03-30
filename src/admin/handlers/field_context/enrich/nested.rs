@@ -2,7 +2,10 @@
 //! enriches nested relationship/upload fields with DB-fetched options.
 
 use crate::{
-    admin::handlers::{field_context::MAX_FIELD_DEPTH, shared::auto_label_from_name},
+    admin::handlers::{
+        field_context::{MAX_FIELD_DEPTH, collect_node_attr_errors},
+        shared::auto_label_from_name,
+    },
     core::{
         Registry,
         field::{FieldDefinition, FieldType},
@@ -93,7 +96,7 @@ pub fn build_enriched_sub_field_context(
         FieldType::Select | FieldType::Radio => {
             field_types::sub_select_radio(&mut sub_ctx, sf, &val)
         }
-        FieldType::Date => field_types::sub_date(&mut sub_ctx, sf, &val),
+        FieldType::Date => field_types::sub_date(&mut sub_ctx, sf, &val, ""),
         FieldType::Relationship => field_types::sub_relationship(&mut sub_ctx, sf),
         FieldType::Upload => field_types::sub_upload(&mut sub_ctx, sf),
         FieldType::Array => {
@@ -126,6 +129,13 @@ pub fn build_enriched_sub_field_context(
 
             if !sf.admin.nodes.is_empty() {
                 sub_ctx["_node_names"] = json!(sf.admin.nodes);
+            }
+
+            // Attach node attr validation errors (e.g. content[0][body][cta#0].text)
+            if sub_ctx.get("error").is_none_or(|v| v.is_null())
+                && let Some(node_err) = collect_node_attr_errors(errors, &indexed_name)
+            {
+                sub_ctx["error"] = json!(node_err);
             }
         }
         FieldType::Text | FieldType::Number if sf.has_many => {

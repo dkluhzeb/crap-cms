@@ -3,8 +3,9 @@ use serde_json::Value;
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
 use std::collections::HashMap;
 
-/// Validate individual values within a has_many text/number JSON array.
-/// Checks count bounds (min_rows/max_rows) and per-element constraints.
+/// Validate individual values within a has_many JSON array.
+/// Checks count bounds (min_rows/max_rows) for all has_many field types
+/// and per-element constraints for Text/Number.
 pub(crate) fn check_has_many_elements(
     field: &FieldDefinition,
     data_key: &str,
@@ -12,47 +13,33 @@ pub(crate) fn check_has_many_elements(
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
-    if (field.field_type != FieldType::Text && field.field_type != FieldType::Number)
-        || !field.has_many
-        || is_empty
-    {
+    if !field.has_many || is_empty {
+        return;
+    }
+
+    // Select/Radio: only check count bounds (per-element option validation is in check_option_valid)
+    if field.field_type == FieldType::Select || field.field_type == FieldType::Radio {
+        if let Some(Value::String(s)) = value
+            && let Ok(values) = serde_json::from_str::<Vec<Value>>(s)
+        {
+            check_count_bounds(field, data_key, values.len(), errors);
+        }
+        return;
+    }
+
+    if field.field_type != FieldType::Text && field.field_type != FieldType::Number {
         return;
     }
     if let Some(Value::String(s)) = value
         && let Ok(values) = serde_json::from_str::<Vec<String>>(s)
     {
-        // Validate count with min_rows/max_rows
-        if let Some(min_rows) = field.min_rows
-            && values.len() < min_rows
-        {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} must have at least {} values", field.name, min_rows),
-                "validation.has_many_min_rows",
-                HashMap::from([
-                    ("field".to_string(), field.name.clone()),
-                    ("min".to_string(), min_rows.to_string()),
-                ]),
-            ));
-        }
-        if let Some(max_rows) = field.max_rows
-            && values.len() > max_rows
-        {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} must have at most {} values", field.name, max_rows),
-                "validation.has_many_max_rows",
-                HashMap::from([
-                    ("field".to_string(), field.name.clone()),
-                    ("max".to_string(), max_rows.to_string()),
-                ]),
-            ));
-        }
+        check_count_bounds(field, data_key, values.len(), errors);
+
         // Validate each value
         for v in &values {
             if field.field_type == FieldType::Text {
                 if let Some(min_len) = field.min_length
-                    && v.len() < min_len
+                    && v.chars().count() < min_len
                 {
                     errors.push(FieldError::with_key(
                         data_key.to_owned(),
@@ -67,10 +54,9 @@ pub(crate) fn check_has_many_elements(
                             ("min".to_string(), min_len.to_string()),
                         ]),
                     ));
-                    break;
                 }
                 if let Some(max_len) = field.max_length
-                    && v.len() > max_len
+                    && v.chars().count() > max_len
                 {
                     errors.push(FieldError::with_key(
                         data_key.to_owned(),
@@ -85,7 +71,6 @@ pub(crate) fn check_has_many_elements(
                             ("max".to_string(), max_len.to_string()),
                         ]),
                     ));
-                    break;
                 }
             } else if field.field_type == FieldType::Number
                 && let Ok(num) = v.parse::<f64>()
@@ -103,7 +88,6 @@ pub(crate) fn check_has_many_elements(
                             ("min".to_string(), min_val.to_string()),
                         ]),
                     ));
-                    break;
                 }
                 if let Some(max_val) = field.max
                     && num > max_val
@@ -118,10 +102,45 @@ pub(crate) fn check_has_many_elements(
                             ("max".to_string(), max_val.to_string()),
                         ]),
                     ));
-                    break;
                 }
             }
         }
+    }
+}
+
+/// Shared min_rows/max_rows validation for all has_many field types.
+fn check_count_bounds(
+    field: &FieldDefinition,
+    data_key: &str,
+    count: usize,
+    errors: &mut Vec<FieldError>,
+) {
+    if let Some(min_rows) = field.min_rows
+        && count < min_rows
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} must have at least {} values", field.name, min_rows),
+            "validation.has_many_min_rows",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("min".to_string(), min_rows.to_string()),
+            ]),
+        ));
+    }
+
+    if let Some(max_rows) = field.max_rows
+        && count > max_rows
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} must have at most {} values", field.name, max_rows),
+            "validation.has_many_max_rows",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("max".to_string(), max_rows.to_string()),
+            ]),
+        ));
     }
 }
 
@@ -525,5 +544,216 @@ mod tests {
                 .message
                 .contains("at most 3 characters")
         );
+    }
+
+    /// Regression: has_many validation must report ALL invalid values, not just the first.
+    /// Previously, `break` after the first error caused subsequent violations to be hidden.
+    #[test]
+    fn test_has_many_reports_all_invalid_values() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+
+        // Three values all below min_length=5
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_length(5)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["ab","cd","ef"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err());
+        let errors = &result.unwrap_err().errors;
+        assert_eq!(
+            errors.len(),
+            3,
+            "All three invalid values should produce errors, got {}",
+            errors.len()
+        );
+    }
+
+    /// Regression: has_many number validation must report ALL out-of-bounds values.
+    #[test]
+    fn test_has_many_number_reports_all_invalid_values() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
+            .unwrap();
+
+        let fields = vec![
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .max(10.0)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("scores".to_string(), json!(r#"["20","30"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err());
+        let errors = &result.unwrap_err().errors;
+        assert_eq!(
+            errors.len(),
+            2,
+            "Both out-of-range values should produce errors, got {}",
+            errors.len()
+        );
+    }
+
+    /// Regression: has_many length validation must count characters, not bytes.
+    /// Multibyte UTF-8 characters (emoji, CJK, accented) were overcounted with `.len()`.
+    #[test]
+    fn test_has_many_text_length_counts_chars_not_bytes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+
+        // "café" = 4 chars but 5 bytes (é is 2 bytes in UTF-8)
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .max_length(4)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["café"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_ok(), "café is 4 chars — should pass max_length=4");
+
+        // "你好" = 2 chars but 6 bytes
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_length(2)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["你好"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_ok(), "你好 is 2 chars — should pass min_length=2");
+    }
+
+    /// Regression: has_many Select must enforce min_rows/max_rows bounds.
+    /// Previously, check_has_many_elements only handled Text/Number, so
+    /// Select/Radio has_many fields silently bypassed row count validation.
+    #[test]
+    fn test_has_many_select_min_rows_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .min_rows(2)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("A".to_string()), "a"),
+                    SelectOption::new(LocalizedString::Plain("B".to_string()), "b"),
+                    SelectOption::new(LocalizedString::Plain("C".to_string()), "c"),
+                ])
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["a"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "has_many select with 1 value should fail min_rows=2"
+        );
+        assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
+    }
+
+    /// Regression: has_many Select must enforce max_rows bounds.
+    #[test]
+    fn test_has_many_select_max_rows_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .max_rows(2)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("A".to_string()), "a"),
+                    SelectOption::new(LocalizedString::Plain("B".to_string()), "b"),
+                    SelectOption::new(LocalizedString::Plain("C".to_string()), "c"),
+                ])
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "has_many select with 3 values should fail max_rows=2"
+        );
+        assert!(result.unwrap_err().errors[0].message.contains("at most 2"));
+    }
+
+    /// Regression: has_many Radio must enforce min_rows bounds.
+    #[test]
+    fn test_has_many_radio_min_rows_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, sizes TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("sizes", FieldType::Radio)
+                .has_many(true)
+                .min_rows(2)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("S".to_string()), "s"),
+                    SelectOption::new(LocalizedString::Plain("M".to_string()), "m"),
+                    SelectOption::new(LocalizedString::Plain("L".to_string()), "l"),
+                ])
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("sizes".to_string(), json!(r#"["s"]"#));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "has_many radio with 1 value should fail min_rows=2"
+        );
+        assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
     }
 }

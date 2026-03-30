@@ -1,7 +1,7 @@
 //! Registration of `crap.globals.get`, `crap.globals.update`, and `crap.jobs.queue` Lua functions.
 
 use anyhow::Result;
-use mlua::{Lua, Value};
+use mlua::{Error::RuntimeError, Lua, Table, Value};
 
 use crate::{
     config::LocaleConfig,
@@ -16,13 +16,13 @@ use super::get_tx_conn;
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_globals_get(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let reg = registry;
     let lc = locale_config.clone();
-    let get_fn = lua.create_function(move |lua, (slug, opts): (String, Option<mlua::Table>)| {
+    let get_fn = lua.create_function(move |lua, (slug, opts): (String, Option<Table>)| {
         let conn_ptr = get_tx_conn(lua)?;
         let conn = unsafe { &*conn_ptr };
 
@@ -34,14 +34,14 @@ pub(super) fn register_globals_get(
         let def = {
             let r = reg
                 .read()
-                .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
             r.get_global(&slug)
                 .cloned()
-                .ok_or_else(|| mlua::Error::RuntimeError(format!("Global '{}' not found", slug)))?
+                .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))?
         };
 
         let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
-            .map_err(|e| mlua::Error::RuntimeError(format!("get_global error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("get_global error: {}", e)))?;
 
         document_to_lua_table(lua, &doc)
     })?;
@@ -53,14 +53,14 @@ pub(super) fn register_globals_get(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_globals_update(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let reg = registry;
     let lc = locale_config.clone();
     let update_fn = lua.create_function(
-        move |lua, (slug, data_table, opts): (String, mlua::Table, Option<mlua::Table>)| {
+        move |lua, (slug, data_table, opts): (String, Table, Option<Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             let conn = unsafe { &*conn_ptr };
 
@@ -72,18 +72,28 @@ pub(super) fn register_globals_update(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_global(&slug).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Global '{}' not found", slug))
-                })?
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_global(&slug)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))?
             };
 
             let data = lua_table_to_hashmap(&data_table)?;
             let join_data = lua_table_to_json_map(lua, &data_table)?;
-            query::update_global(conn, &slug, &def, &data, locale_ctx.as_ref())
-                .map_err(|e| mlua::Error::RuntimeError(format!("update_global error: {}", e)))?;
 
             let global_table = format!("_global_{}", slug);
+            let old_refs = query::ref_count::snapshot_outgoing_refs(
+                conn,
+                &global_table,
+                "default",
+                &def.fields,
+                &lc,
+            )
+            .map_err(|e| RuntimeError(format!("ref count snapshot error: {}", e)))?;
+
+            query::update_global(conn, &slug, &def, &data, locale_ctx.as_ref())
+                .map_err(|e| RuntimeError(format!("update_global error: {}", e)))?;
+
             query::save_join_table_data(
                 conn,
                 &global_table,
@@ -92,11 +102,21 @@ pub(super) fn register_globals_update(
                 &join_data,
                 locale_ctx.as_ref(),
             )
-            .map_err(|e| mlua::Error::RuntimeError(format!("join data error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("join data error: {}", e)))?;
+
+            query::ref_count::after_update(
+                conn,
+                &global_table,
+                "default",
+                &def.fields,
+                &lc,
+                old_refs,
+            )
+            .map_err(|e| RuntimeError(format!("ref count update error: {}", e)))?;
 
             // Re-fetch to hydrate join data in the returned document
             let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
-                .map_err(|e| mlua::Error::RuntimeError(format!("get_global error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("get_global error: {}", e)))?;
 
             document_to_lua_table(lua, &doc)
         },
@@ -109,46 +129,45 @@ pub(super) fn register_globals_update(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_jobs_queue(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
 ) -> Result<()> {
     let reg = registry;
-    let queue_fn =
-        lua.create_function(move |lua, (slug, data): (String, Option<mlua::Table>)| {
-            let conn_ptr = get_tx_conn(lua)?;
-            let conn = unsafe { &*conn_ptr };
+    let queue_fn = lua.create_function(move |lua, (slug, data): (String, Option<Table>)| {
+        let conn_ptr = get_tx_conn(lua)?;
+        let conn = unsafe { &*conn_ptr };
 
-            // Verify job exists in registry
-            let job_def = {
-                let r = reg
-                    .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_job(&slug).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Job '{}' not defined", slug))
-                })?
-            };
+        // Verify job exists in registry
+        let job_def = {
+            let r = reg
+                .read()
+                .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+            r.get_job(&slug)
+                .cloned()
+                .ok_or_else(|| RuntimeError(format!("Job '{}' not defined", slug)))?
+        };
 
-            let data_json = match data {
-                Some(tbl) => {
-                    let json_val = api::lua_to_json(lua, &Value::Table(tbl))?;
-                    serde_json::to_string(&json_val)
-                        .map_err(|e| mlua::Error::RuntimeError(format!("JSON error: {}", e)))?
-                }
-                None => "{}".to_string(),
-            };
+        let data_json = match data {
+            Some(tbl) => {
+                let json_val = api::lua_to_json(lua, &Value::Table(tbl))?;
+                serde_json::to_string(&json_val)
+                    .map_err(|e| RuntimeError(format!("JSON error: {}", e)))?
+            }
+            None => "{}".to_string(),
+        };
 
-            let job_run = query::jobs::insert_job(
-                conn,
-                &slug,
-                &data_json,
-                "hook",
-                job_def.retries + 1,
-                &job_def.queue,
-            )
-            .map_err(|e| mlua::Error::RuntimeError(format!("queue error: {}", e)))?;
+        let job_run = query::jobs::insert_job(
+            conn,
+            &slug,
+            &data_json,
+            "hook",
+            job_def.retries + 1,
+            &job_def.queue,
+        )
+        .map_err(|e| RuntimeError(format!("queue error: {}", e)))?;
 
-            Ok(job_run.id)
-        })?;
+        Ok(job_run.id)
+    })?;
     table.set("queue", queue_fn)?;
     Ok(())
 }

@@ -107,7 +107,7 @@ impl EventBus {
         edited_by: Option<EventUser>,
     ) -> Option<MutationEvent> {
         let event = MutationEvent {
-            sequence: self.sequence.fetch_add(1, Ordering::Relaxed),
+            sequence: self.sequence.fetch_add(1, Ordering::AcqRel),
             timestamp: chrono::Utc::now().to_rfc3339(),
             target,
             operation,
@@ -207,6 +207,42 @@ mod tests {
             )
             .unwrap();
         assert_eq!(e2.sequence, e1.sequence + 1);
+    }
+
+    /// Regression: publishing multiple events must produce monotonically
+    /// increasing sequence numbers (verifies AcqRel ordering).
+    #[test]
+    fn publish_multiple_events_monotonic_sequence() {
+        let bus = EventBus::new(64);
+        let _rx = bus.subscribe();
+
+        let mut sequences = Vec::new();
+        for i in 0..10 {
+            let event = bus
+                .publish(
+                    EventTarget::Collection,
+                    EventOperation::Create,
+                    Slug::new("items"),
+                    DocumentId::new(format!("id{}", i)),
+                    HashMap::new(),
+                    None,
+                )
+                .expect("should publish with subscriber");
+            sequences.push(event.sequence);
+        }
+
+        // Every sequence number must be strictly greater than the previous
+        for window in sequences.windows(2) {
+            assert!(
+                window[1] > window[0],
+                "sequence numbers must be strictly increasing: {} should be > {}",
+                window[1],
+                window[0]
+            );
+        }
+
+        // First sequence should start at 1 (initial AtomicU64 value)
+        assert_eq!(sequences[0], 1);
     }
 
     #[test]

@@ -33,8 +33,8 @@
     </tr>
   </thead>
   <tbody>
-    {{#each items}}
-    {{> collections/items_row collection=../collection}}
+    {{#each docs}}
+    {{> collections/items_row collection=../collection is_trash=../is_trash}}
     {{/each}}
   </tbody>
 </table>

@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use axum::{
     Extension,
     extract::{Form, Path, State},
@@ -27,7 +26,7 @@ use crate::{
         event::{EventOperation, EventTarget},
         validate::ValidationError,
     },
-    db::query::{self, AccessResult, LocaleContext, LocaleMode},
+    db::query::{AccessResult, LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
     service,
 };
@@ -89,25 +88,15 @@ pub async fn update_action(
     let action_owned = action.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        // Handle unpublish: set _status to 'draft' and create a version
+        // Handle unpublish: run lifecycle hooks + set _status to 'draft' + create a version
         if action_owned == "unpublish" && def_owned.has_versions() {
-            let global_table = format!("_global_{}", slug_owned);
-            let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
-            let tx = conn
-                .transaction()
-                .map_err(|e| anyhow!("Start transaction: {}", e))?;
-            let doc = query::get_global(&tx, &slug_owned, &def_owned, locale_ctx.as_ref())?;
-
-            service::unpublish_with_snapshot(
-                &tx,
-                &global_table,
-                "default",
-                &def_owned.fields,
-                def_owned.versions.as_ref(),
-                &doc,
+            let doc = service::unpublish_global_document(
+                &pool,
+                &runner,
+                &slug_owned,
+                &def_owned,
+                user_doc.as_ref(),
             )?;
-
-            tx.commit().map_err(|e| anyhow!("Commit: {}", e))?;
 
             Ok((doc, HashMap::new()))
         } else {
@@ -183,6 +172,7 @@ pub async fn update_action(
 
                 let data = ContextBuilder::new(&state, None)
                     .locale_from_auth(&auth_user)
+                    .filter_nav_by_access(&state, &auth_user)
                     .page(PageType::GlobalEdit, def.display_name())
                     .global_def(&def)
                     .fields(main_fields)

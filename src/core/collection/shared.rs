@@ -69,6 +69,11 @@ pub struct Access {
     /// Lua function for delete access control.
     #[serde(default)]
     pub delete: Option<String>,
+    /// Lua function for trash access control (soft delete + restore).
+    /// Only relevant for collections with `soft_delete = true`.
+    /// When not set, falls back to `access.update`.
+    #[serde(default)]
+    pub trash: Option<String>,
 }
 
 impl Access {
@@ -80,6 +85,12 @@ impl Access {
     /// Create a builder for access control configuration.
     pub fn builder() -> AccessBuilder {
         AccessBuilder::new()
+    }
+
+    /// Resolve the access function for trash operations (soft delete + restore).
+    /// Returns `access.trash` when set, otherwise falls back to `access.update`.
+    pub fn resolve_trash(&self) -> Option<&str> {
+        self.trash.as_deref().or(self.update.as_deref())
     }
 }
 
@@ -188,5 +199,36 @@ impl IndexDefinition {
             fields,
             unique: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_trash_prefers_trash_over_update() {
+        let access = Access {
+            trash: Some("trash_fn".to_string()),
+            update: Some("update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("trash_fn"));
+    }
+
+    #[test]
+    fn resolve_trash_falls_back_to_update() {
+        let access = Access {
+            trash: None,
+            update: Some("update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("update_fn"));
+    }
+
+    #[test]
+    fn resolve_trash_returns_none_when_both_unset() {
+        let access = Access::default();
+        assert!(access.resolve_trash().is_none());
     }
 }

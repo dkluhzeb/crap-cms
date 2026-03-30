@@ -12,18 +12,33 @@ class CrapArrayField extends HTMLElement {
     super();
     /** @type {HTMLElement|null} */
     this._draggedRow = null;
+    /** @type {boolean} */
+    this._connected = false;
   }
 
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
     this.addEventListener('click', this._onClick.bind(this));
     this.addEventListener('dragstart', this._onDragStart.bind(this));
     this.addEventListener('dragend', this._onDragEnd.bind(this));
     this.addEventListener('dragover', this._onDragOver.bind(this));
     this.addEventListener('drop', this._onDrop.bind(this));
     this.addEventListener('crap:request-add-block', /** @param {CustomEvent} e */ (e) => {
+      if (/** @type {HTMLElement} */ (e.target).closest('crap-array-field') !== this) return;
       this._addBlockRow(e.detail.templateId);
     });
     this._initLabelWatchers();
+  }
+
+  disconnectedCallback() {
+    // Do NOT reset _connected — listeners on `this` survive disconnect and must
+    // not be re-added on reconnect (row moves via insertBefore trigger
+    // disconnect→reconnect on nested custom elements, which would duplicate handlers).
+    if (this._draggedRow) {
+      this._draggedRow.classList.remove('form__array-row--dragging');
+      this._draggedRow = null;
+    }
   }
 
   /* ── Click delegation ──────────────────────────────────────── */
@@ -32,6 +47,7 @@ class CrapArrayField extends HTMLElement {
   _onClick(e) {
     const el = /** @type {HTMLElement} */ (e.target).closest('[data-action]');
     if (!el || !this.contains(el)) return;
+    if (el.closest('crap-array-field') !== this) return;
 
     switch (/** @type {HTMLElement} */ (el).dataset.action) {
       case 'toggle-array-row': this._toggleRow(el); break;
@@ -77,24 +93,6 @@ class CrapArrayField extends HTMLElement {
     }
   }
 
-  /**
-   * @param {HTMLElement} row
-   * @param {string} labelFieldName
-   */
-  _setupBlockRowLabelWatcher(row, labelFieldName) {
-    const titleEl = row.querySelector('.form__array-row-title');
-    if (!titleEl) return;
-    for (const input of row.querySelectorAll('input, select, textarea')) {
-      if (/** @type {HTMLInputElement} */ (input).name?.endsWith('[' + labelFieldName + ']')) {
-        input.addEventListener('input', () => {
-          const val = /** @type {HTMLInputElement} */ (input).value;
-          if (val) titleEl.textContent = val;
-        });
-        break;
-      }
-    }
-  }
-
   /* ── Helpers ────────────────────────────────────────────────── */
 
   get _fieldset() {
@@ -107,6 +105,17 @@ class CrapArrayField extends HTMLElement {
   }
 
   /**
+   * Convert a field name to a safe template ID (mirrors Rust safe_template_id).
+   * Replaces `[` with `-` and removes `]`.
+   *
+   * @param {string} name
+   * @returns {string}
+   */
+  _safeName(name) {
+    return name.replace(/\[/g, '-').replace(/\]/g, '');
+  }
+
+  /**
    * @param {Element|DocumentFragment} root
    * @param {number} index
    */
@@ -114,43 +123,120 @@ class CrapArrayField extends HTMLElement {
     root.querySelectorAll('.form__array-row-title').forEach(
       /** @param {HTMLElement} el */ (el) => {
         if (el.textContent?.includes('__INDEX__')) {
-          el.textContent = el.textContent.replace('__INDEX__', String(index));
+          el.textContent = el.textContent.replaceAll('__INDEX__', String(index));
         }
       }
     );
     root.querySelectorAll('input, select, textarea').forEach(
       /** @param {HTMLInputElement} input */ (input) => {
-        if (input.name) input.name = input.name.replace('__INDEX__', String(index));
+        if (input.name) input.name = input.name.replaceAll('__INDEX__', String(index));
       }
     );
     root.querySelectorAll('[data-field-name*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
         const fn = el.getAttribute('data-field-name');
-        if (fn) el.setAttribute('data-field-name', fn.replace('__INDEX__', String(index)));
+        if (fn) el.setAttribute('data-field-name', fn.replaceAll('__INDEX__', String(index)));
       }
     );
     root.querySelectorAll('[id*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
-        el.id = el.id.replace('__INDEX__', String(index));
+        el.id = el.id.replaceAll('__INDEX__', String(index));
+      }
+    );
+    root.querySelectorAll('label[for*="__INDEX__"]').forEach(
+      /** @param {HTMLLabelElement} el */ (el) => {
+        el.setAttribute('for', el.getAttribute('for').replaceAll('__INDEX__', String(index)));
       }
     );
     root.querySelectorAll('[data-template-id*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
         const tid = el.getAttribute('data-template-id');
-        if (tid) el.setAttribute('data-template-id', tid.replace('__INDEX__', String(index)));
+        if (tid) el.setAttribute('data-template-id', tid.replaceAll('__INDEX__', String(index)));
+      }
+    );
+    // Custom element attributes (e.g. <crap-relationship-search field-name="...">)
+    root.querySelectorAll('[field-name*="__INDEX__"]').forEach(
+      /** @param {HTMLElement} el */ (el) => {
+        const fn = el.getAttribute('field-name');
+        if (fn) el.setAttribute('field-name', fn.replaceAll('__INDEX__', String(index)));
       }
     );
   }
 
   /**
+   * Replace parent-level __INDEX__ in nested <template> elements using targeted patterns.
+   * Only replaces occurrences that match the parent field name, preserving child-level placeholders.
+   *
    * @param {Element|DocumentFragment} root
    * @param {number} index
    */
   _replaceIndexInNestedTemplates(root, index) {
+    const fs = this._fieldset;
+    if (!fs) return;
+    const fieldName = fs.getAttribute('data-field-name') || '';
+    if (!fieldName) return;
+
+    const bracketSearch = fieldName + '[__INDEX__]';
+    const bracketReplace = fieldName + '[' + index + ']';
+    const safeName = this._safeName(fieldName);
+    const dashSearch = safeName + '-__INDEX__';
+    const dashReplace = safeName + '-' + index;
+
+    this._replaceTargetedInTemplates(root, bracketSearch, bracketReplace, dashSearch, dashReplace);
+  }
+
+  /**
+   * Recursively apply targeted parent-level index replacement inside nested <template> elements.
+   *
+   * @param {Element|DocumentFragment} root
+   * @param {string} bracketSearch  — e.g. "main_nav[__INDEX__]"
+   * @param {string} bracketReplace — e.g. "main_nav[0]"
+   * @param {string} dashSearch     — e.g. "main_nav-__INDEX__"
+   * @param {string} dashReplace    — e.g. "main_nav-0"
+   */
+  _replaceTargetedInTemplates(root, bracketSearch, bracketReplace, dashSearch, dashReplace) {
     root.querySelectorAll('template').forEach(
       /** @param {HTMLTemplateElement} tmpl */ (tmpl) => {
-        this._replaceIndexInSubtree(tmpl.content, index);
-        this._replaceIndexInNestedTemplates(tmpl.content, index);
+        const c = tmpl.content;
+
+        c.querySelectorAll('input, select, textarea').forEach(
+          /** @param {HTMLInputElement} input */ (input) => {
+            if (input.name) input.name = input.name.replaceAll(bracketSearch, bracketReplace);
+          }
+        );
+
+        c.querySelectorAll('[data-field-name]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            const fn = el.getAttribute('data-field-name');
+            if (fn) el.setAttribute('data-field-name', fn.replaceAll(bracketSearch, bracketReplace));
+          }
+        );
+
+        c.querySelectorAll('[id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            el.id = el.id
+              .replaceAll(bracketSearch, bracketReplace)
+              .replaceAll(dashSearch, dashReplace);
+          }
+        );
+
+        c.querySelectorAll('label[for]').forEach(
+          /** @param {HTMLLabelElement} el */ (el) => {
+            const f = el.getAttribute('for');
+            if (f) el.setAttribute('for', f
+              .replaceAll(bracketSearch, bracketReplace)
+              .replaceAll(dashSearch, dashReplace));
+          }
+        );
+
+        c.querySelectorAll('[data-template-id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            const tid = el.getAttribute('data-template-id');
+            if (tid) el.setAttribute('data-template-id', tid.replaceAll(dashSearch, dashReplace));
+          }
+        );
+
+        this._replaceTargetedInTemplates(c, bracketSearch, bracketReplace, dashSearch, dashReplace);
       }
     );
   }
@@ -201,27 +287,117 @@ class CrapArrayField extends HTMLElement {
     const fieldName = fs.getAttribute('data-field-name') || '';
     const container = fs.querySelector('.form__array-rows');
     if (!container || !fieldName) return;
-    const pattern = new RegExp('(' + this._escapeRegex(fieldName) + '\\[)\\d+(\\])');
+
+    const bracketPattern = new RegExp('(' + this._escapeRegex(fieldName) + '\\[)\\d+(\\])');
+    const idBracketPattern = new RegExp('(field-' + this._escapeRegex(fieldName) + '\\[)\\d+(\\])');
+    const safeName = this._safeName(fieldName);
+    const dashPattern = new RegExp('(' + this._escapeRegex(safeName) + '-)\\d+');
+
     Array.from(container.children).forEach(
       /** @param {Element} child @param {number} idx */
       (child, idx) => {
         child.setAttribute('data-row-index', String(idx));
+
         child.querySelectorAll('input, select, textarea').forEach(
           /** @param {HTMLInputElement} input */ (input) => {
-            if (input.name) input.name = input.name.replace(pattern, `$1${idx}$2`);
+            if (input.name) input.name = input.name.replace(bracketPattern, `$1${idx}$2`);
           }
         );
+
         child.querySelectorAll('[data-field-name]').forEach(
           /** @param {HTMLElement} el */ (el) => {
             const fn = el.getAttribute('data-field-name');
-            if (fn) el.setAttribute('data-field-name', fn.replace(pattern, `$1${idx}$2`));
+            if (fn) el.setAttribute('data-field-name', fn.replace(bracketPattern, `$1${idx}$2`));
           }
         );
+
+        child.querySelectorAll('[id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            el.id = el.id
+              .replace(idBracketPattern, `$1${idx}$2`)
+              .replace(dashPattern, `$1${idx}`);
+          }
+        );
+
+        child.querySelectorAll('label[for]').forEach(
+          /** @param {HTMLLabelElement} el */ (el) => {
+            const f = el.getAttribute('for');
+            if (f) el.setAttribute('for', f
+              .replace(idBracketPattern, `$1${idx}$2`)
+              .replace(dashPattern, `$1${idx}`));
+          }
+        );
+
+        child.querySelectorAll('[data-template-id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            const tid = el.getAttribute('data-template-id');
+            if (tid) el.setAttribute('data-template-id', tid.replace(dashPattern, `$1${idx}`));
+          }
+        );
+
+        this._reindexNestedTemplates(child, bracketPattern, idBracketPattern, dashPattern, idx);
+      }
+    );
+  }
+
+  /**
+   * Reindex nested <template> content after parent row reorder.
+   *
+   * @param {Element|DocumentFragment} root
+   * @param {RegExp} bracketPattern
+   * @param {RegExp} idBracketPattern
+   * @param {RegExp} dashPattern
+   * @param {number} idx
+   */
+  _reindexNestedTemplates(root, bracketPattern, idBracketPattern, dashPattern, idx) {
+    root.querySelectorAll('template').forEach(
+      /** @param {HTMLTemplateElement} tmpl */ (tmpl) => {
+        const c = tmpl.content;
+
+        c.querySelectorAll('input, select, textarea').forEach(
+          /** @param {HTMLInputElement} input */ (input) => {
+            if (input.name) input.name = input.name.replace(bracketPattern, `$1${idx}$2`);
+          }
+        );
+
+        c.querySelectorAll('[data-field-name]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            const fn = el.getAttribute('data-field-name');
+            if (fn) el.setAttribute('data-field-name', fn.replace(bracketPattern, `$1${idx}$2`));
+          }
+        );
+
+        c.querySelectorAll('[id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            el.id = el.id
+              .replace(idBracketPattern, `$1${idx}$2`)
+              .replace(dashPattern, `$1${idx}`);
+          }
+        );
+
+        c.querySelectorAll('label[for]').forEach(
+          /** @param {HTMLLabelElement} el */ (el) => {
+            const f = el.getAttribute('for');
+            if (f) el.setAttribute('for', f
+              .replace(idBracketPattern, `$1${idx}$2`)
+              .replace(dashPattern, `$1${idx}`));
+          }
+        );
+
+        c.querySelectorAll('[data-template-id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            const tid = el.getAttribute('data-template-id');
+            if (tid) el.setAttribute('data-template-id', tid.replace(dashPattern, `$1${idx}`));
+          }
+        );
+
+        this._reindexNestedTemplates(c, bracketPattern, idBracketPattern, dashPattern, idx);
       }
     );
   }
 
   _afterRowChange() {
+    this._reindexRows();
     this._updateRowCount();
     this._toggleEmptyState();
     this._enforceMaxRows();
@@ -286,17 +462,20 @@ class CrapArrayField extends HTMLElement {
     }
 
     const clone = /** @type {HTMLElement} */ (row.cloneNode(true));
+    delete clone.dataset.labelInit;
     row.after(clone);
+
     clone.querySelectorAll('crap-richtext').forEach(
       /** @param {HTMLElement} el */ (el) => {
         if (el.connectedCallback) el.connectedCallback();
       }
     );
-    this._reindexRows();
+
     if (fs) {
       const labelField = fs.getAttribute('data-label-field');
       if (labelField) this._setupRowLabelWatcher(clone, labelField);
     }
+
     this._afterRowChange();
   }
 
@@ -305,7 +484,6 @@ class CrapArrayField extends HTMLElement {
     const row = btn.closest('.form__array-row');
     if (!row) return;
     row.remove();
-    this._reindexRows();
     this._afterRowChange();
   }
 
@@ -340,7 +518,7 @@ class CrapArrayField extends HTMLElement {
       );
       if (fs) {
         const labelField = fs.getAttribute('data-label-field');
-        if (labelField) this._setupRowLabelWatcher(html, fs);
+        if (labelField) this._setupRowLabelWatcher(html, labelField);
       }
     }
     this._afterRowChange();
@@ -383,7 +561,7 @@ class CrapArrayField extends HTMLElement {
       if (fs) {
         const blockLabelField = template.getAttribute('data-label-field');
         if (blockLabelField) {
-          this._setupBlockRowLabelWatcher(html, blockLabelField);
+          this._setupRowLabelWatcher(html, blockLabelField);
         } else {
           const labelField = fs.getAttribute('data-label-field');
           if (labelField) this._setupRowLabelWatcher(html, labelField);
@@ -399,6 +577,7 @@ class CrapArrayField extends HTMLElement {
   _onDragStart(e) {
     const el = /** @type {HTMLElement} */ (e.target).closest('[draggable][data-drag]');
     if (!el) return;
+    if (el.closest('crap-array-field') !== this) return;
     this._draggedRow = el.closest('.form__array-row');
     if (!this._draggedRow) return;
     this._draggedRow.classList.add('form__array-row--dragging');
@@ -419,7 +598,7 @@ class CrapArrayField extends HTMLElement {
   /** @param {DragEvent} e */
   _onDragOver(e) {
     const container = /** @type {HTMLElement} */ (e.target).closest('.form__array-rows');
-    if (!container || !this.contains(container)) return;
+    if (!container || container.closest('.form__array') !== this._fieldset) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (!this._draggedRow) return;
@@ -433,7 +612,7 @@ class CrapArrayField extends HTMLElement {
   /** @param {DragEvent} e */
   _onDrop(e) {
     const container = /** @type {HTMLElement} */ (e.target).closest('.form__array-rows');
-    if (!container || !this.contains(container)) return;
+    if (!container || container.closest('.form__array') !== this._fieldset) return;
     e.preventDefault();
     if (!this._draggedRow) return;
     const afterEl = this._getDragAfterElement(container, e.clientY);
@@ -454,7 +633,7 @@ class CrapArrayField extends HTMLElement {
    * @returns {HTMLElement|null}
    */
   _getDragAfterElement(container, y) {
-    const rows = [...container.querySelectorAll('.form__array-row:not(.form__array-row--dragging)')];
+    const rows = [...container.querySelectorAll(':scope > .form__array-row:not(.form__array-row--dragging)')];
     return rows.reduce((closest, child) => {
       const box = child.getBoundingClientRect();
       const offset = y - box.top - box.height / 2;

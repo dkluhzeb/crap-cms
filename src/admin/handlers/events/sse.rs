@@ -5,6 +5,10 @@ use std::{
     convert::Infallible,
     future::Future,
     pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -24,11 +28,25 @@ use crate::{
     db::AccessResult,
 };
 
+/// RAII guard that decrements the SSE connection counter on drop.
+struct SseConnectionGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for SseConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Stream wrapper that ends when a CancellationToken fires.
+/// Holds an optional SSE connection guard that decrements the counter on drop.
 struct CancellableStream {
     inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
     shutdown: Pin<Box<WaitForCancellationFutureOwned>>,
     done: bool,
+    /// RAII guard — decrements SSE connection counter when the stream is dropped.
+    _guard: Option<SseConnectionGuard>,
 }
 
 impl Stream for CancellableStream {
@@ -47,6 +65,29 @@ impl Stream for CancellableStream {
     }
 }
 
+/// Atomically try to acquire an SSE connection slot.
+///
+/// Returns `true` if a slot was acquired (counter incremented), `false` if the
+/// limit has been reached. When `max == 0`, no limit is enforced (always succeeds).
+/// Uses `compare_exchange_weak` in a loop to avoid the TOCTOU race inherent in
+/// `fetch_add` + check + `fetch_sub`.
+fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
+    loop {
+        let current = counter.load(Ordering::Relaxed);
+
+        if max > 0 && current >= max {
+            return false;
+        }
+
+        if counter
+            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
 /// SSE handler — streams mutation events to authenticated admin users.
 /// Auth user is injected by the admin middleware.
 ///
@@ -57,7 +98,18 @@ impl Stream for CancellableStream {
 pub async fn sse_handler(
     State(state): State<AdminState>,
     auth_user: Option<Extension<AuthUser>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, axum::http::StatusCode> {
+    // Enforce connection limit (race-free via compare_exchange)
+    let max = state.max_sse_connections;
+    if !try_acquire_sse_slot(&state.sse_connections, max) {
+        tracing::warn!("SSE connection limit reached ({}/{}), rejecting", max, max);
+        return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let guard = SseConnectionGuard {
+        counter: state.sse_connections.clone(),
+    };
+
     let event_bus = state.event_bus.clone();
     let shutdown = state.shutdown.clone();
 
@@ -103,7 +155,9 @@ pub async fn sse_handler(
                     }
                 }
                 // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                let _ = tx.commit();
+                if let Err(e) = tx.commit() {
+                    tracing::warn!("tx commit failed: {e}");
+                }
             }
         }
     }
@@ -164,11 +218,49 @@ pub async fn sse_handler(
 
     // End the stream when the server is shutting down, so Axum's
     // graceful shutdown can complete without waiting for SSE clients.
+    // The guard decrements the SSE connection counter when the stream is dropped.
     let stream = CancellableStream {
         inner: stream,
         shutdown: Box::pin(shutdown.cancelled_owned()),
         done: false,
+        _guard: Some(guard),
     };
 
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)))
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sse_slot_acquire_within_limit() {
+        let counter = AtomicUsize::new(0);
+        assert!(try_acquire_sse_slot(&counter, 10));
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn sse_slot_acquire_at_limit() {
+        let counter = AtomicUsize::new(5);
+        assert!(!try_acquire_sse_slot(&counter, 5));
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn sse_slot_acquire_no_limit() {
+        let counter = AtomicUsize::new(1000);
+        assert!(try_acquire_sse_slot(&counter, 0));
+        assert_eq!(counter.load(Ordering::Relaxed), 1001);
+    }
+
+    #[test]
+    fn sse_slot_fills_to_limit() {
+        let counter = AtomicUsize::new(0);
+        for _ in 0..3 {
+            assert!(try_acquire_sse_slot(&counter, 3));
+        }
+        assert!(!try_acquire_sse_slot(&counter, 3));
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
+    }
 }

@@ -38,6 +38,23 @@ The config structure mirrors `crap.toml`:
 | `depth.max_depth` | integer | 10 |
 | `upload.max_file_size` | integer | 52428800 |
 | `hooks.on_init` | string[] | [] |
+| `hooks.max_depth` | integer | 3 |
+| `hooks.vm_pool_size` | integer | (auto) |
+| `hooks.max_instructions` | integer | 10000000 |
+| `hooks.max_memory` | integer | 52428800 |
+| `hooks.allow_private_networks` | boolean | false |
+| `hooks.http_max_response_bytes` | integer | 10485760 |
+| `pagination.default_limit` | integer | 20 |
+| `pagination.max_limit` | integer | 1000 |
+| `pagination.mode` | string | "page" |
+| `locale.default_locale` | string | "en" |
+| `locale.locales` | string[] | [] |
+| `locale.fallback` | boolean | true |
+| `email.smtp_host` | string | "" |
+| `live.enabled` | boolean | true |
+| `access.default_deny` | boolean | false |
+
+All sections from `crap.toml` are available — this table is not exhaustive. The entire `CrapConfig` struct is serialized to Lua.
 
 ## Notes
 

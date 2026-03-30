@@ -84,7 +84,12 @@ Every field type accepts these properties:
 | `description` | string \| table | `nil` | Help text displayed below the input. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `hidden` | boolean | `false` | Hide from admin UI forms |
 | `readonly` | boolean | `false` | Display but don't allow editing |
-| `width` | string | `nil` | Field width: `"full"`, `"half"`, or `"third"` |
+| `width` | string | `nil` | Field width: `"full"` (default), `"half"`, or `"third"` |
+| `position` | string | `"main"` | Form layout position: `"main"` or `"sidebar"` |
+| `condition` | string | `nil` | Lua function ref for conditional visibility (see [Conditions](../hooks/conditions.md)) |
+| `step` | string | `nil` | Step attribute for number inputs (e.g., `"1"`, `"0.01"`, `"any"`) |
+| `rows` | integer | `nil` | Visible rows for textarea fields |
+| `collapsed` | boolean | `true` | Default collapsed state for groups, collapsibles, array/block rows |
 
 ## Layout Wrappers
 

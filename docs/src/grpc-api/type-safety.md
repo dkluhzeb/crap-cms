@@ -18,15 +18,16 @@ But `Struct` means your gRPC client sees `fields` as an untyped map. This page e
     └────────┬────────┘   └───────┬────────────┘
              │                     │
     ┌────────▼────────┐   ┌───────▼────────────┐
-    │  Client codegen │   │  types/generated.lua│
-    │  TS/Go/Python   │   │  (IDE types for     │
-    │  typed wrappers │   │   hooks & init.lua) │
+    │  Client codegen │   │  types/crap.lua     │
+    │  TS/Go/Python   │   │  types/generated.lua│
+    │  typed wrappers │   │  (IDE types for     │
+    │                 │   │   hooks & init.lua) │
     └─────────────────┘   └────────────────────┘
 ```
 
 **Layer 1: Runtime schema discovery** — the `DescribeCollection` RPC returns the full field schema. gRPC clients call it at startup or build time to generate typed wrappers.
 
-**Layer 2: Lua typegen** — the `crap-cms typegen` command writes `types/generated.lua` with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua.
+**Layer 2: Lua typegen** — the `crap-cms typegen` command writes `types/crap.lua` (API surface types) and `types/generated.lua` (per-collection types) with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua.
 
 ## DescribeCollection
 

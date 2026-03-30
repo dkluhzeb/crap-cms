@@ -5,8 +5,11 @@
 //! 2. `CRAP_CONFIG_DIR` env var (handled by clap `env = "..."`)
 //! 3. Walk up from CWD looking for `crap.toml`
 
-use anyhow::{Result, bail};
-use std::path::{Path, PathBuf};
+use anyhow::{Result, anyhow, bail};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 /// Resolve the config directory from an explicit path or by auto-detection.
 ///
@@ -37,8 +40,8 @@ fn validate_config_dir(path: &Path) -> Result<PathBuf> {
 
 /// Walk up from CWD looking for a directory containing `crap.toml`.
 fn find_config_in_ancestors() -> Result<PathBuf> {
-    let cwd = std::env::current_dir().map_err(|e| {
-        anyhow::anyhow!(
+    let cwd = env::current_dir().map_err(|e| {
+        anyhow!(
             "Failed to determine current directory: {}\n\n\
              Use --config <path> or set CRAP_CONFIG_DIR to specify the config directory.",
             e
@@ -68,7 +71,14 @@ fn find_config_in_ancestors() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    /// Tests that change `std::env::current_dir()` must hold this mutex.
+    /// CWD is process-global, so concurrent changes cause flaky failures
+    /// (e.g., another test's tempdir gets cleaned up while CWD points to it).
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn explicit_path_used_directly() {
@@ -98,12 +108,13 @@ mod tests {
 
     #[test]
     fn walk_up_from_subdirectory_finds_parent() {
+        let _guard = CWD_LOCK.lock().unwrap();
+
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
         let subdir = tmp.path().join("collections").join("deep");
         std::fs::create_dir_all(&subdir).unwrap();
 
-        // Temporarily change CWD
         let original_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&subdir).unwrap();
 
@@ -118,6 +129,8 @@ mod tests {
 
     #[test]
     fn walk_up_from_config_dir_itself() {
+        let _guard = CWD_LOCK.lock().unwrap();
+
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
 
@@ -134,6 +147,8 @@ mod tests {
 
     #[test]
     fn fails_when_no_toml_anywhere() {
+        let _guard = CWD_LOCK.lock().unwrap();
+
         let tmp = tempfile::tempdir().unwrap();
         let deep = tmp.path().join("a").join("b").join("c");
         std::fs::create_dir_all(&deep).unwrap();

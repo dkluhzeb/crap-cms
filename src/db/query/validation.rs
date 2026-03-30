@@ -15,12 +15,23 @@ pub fn is_valid_identifier(s: &str) -> bool {
 }
 
 /// Sanitize a locale string for safe use in SQL identifiers (column names, defaults).
-/// Only allows alphanumeric characters, underscores, and dashes.
-pub fn sanitize_locale(locale: &str) -> String {
-    locale
+/// Converts dashes to underscores (e.g. "de-DE" → "de_DE") and strips anything
+/// except alphanumeric + underscore.
+pub fn sanitize_locale(locale: &str) -> Result<String> {
+    let result: String = locale
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-        .collect()
+        .map(|c| if c == '-' { '_' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+
+    if result.is_empty() {
+        bail!(
+            "sanitize_locale produced empty string from input: {:?}",
+            locale
+        );
+    }
+
+    Ok(result)
 }
 
 /// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
@@ -105,7 +116,15 @@ pub fn get_valid_filter_paths(
     let exact = get_valid_filter_columns(def, locale_ctx);
     let mut prefixes = HashSet::new();
 
-    for field in &def.fields {
+    collect_prefix_roots(&def.fields, &mut prefixes);
+
+    (exact, prefixes)
+}
+
+/// Recursively collect Array/Blocks/has-many Relationship field names,
+/// descending into transparent layout wrappers (Row, Collapsible, Tabs).
+fn collect_prefix_roots(fields: &[crate::core::FieldDefinition], prefixes: &mut HashSet<String>) {
+    for field in fields {
         match field.field_type {
             FieldType::Array | FieldType::Blocks => {
                 prefixes.insert(field.name.clone());
@@ -117,11 +136,17 @@ pub fn get_valid_filter_paths(
                     prefixes.insert(field.name.clone());
                 }
             }
+            FieldType::Row | FieldType::Collapsible => {
+                collect_prefix_roots(&field.fields, prefixes);
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    collect_prefix_roots(&tab.fields, prefixes);
+                }
+            }
             _ => {}
         }
     }
-
-    (exact, prefixes)
 }
 
 /// Validate a single filter field name against exact columns or dot-path prefixes.
@@ -196,10 +221,24 @@ mod tests {
 
     #[test]
     fn sanitize_locale_strips_dangerous_chars() {
-        assert_eq!(sanitize_locale("en"), "en");
-        assert_eq!(sanitize_locale("de-DE"), "de-DE");
-        assert_eq!(sanitize_locale("en_US"), "en_US");
-        assert_eq!(sanitize_locale("'; DROP TABLE --"), "DROPTABLE--");
+        assert_eq!(sanitize_locale("en").unwrap(), "en");
+        assert_eq!(sanitize_locale("de-DE").unwrap(), "de_DE");
+        assert_eq!(sanitize_locale("en_US").unwrap(), "en_US");
+        // Dashes map to underscores, everything else non-alphanumeric is stripped
+        assert_eq!(sanitize_locale("'; DROP TABLE --").unwrap(), "DROPTABLE__");
+    }
+
+    #[test]
+    fn sanitize_locale_pathological_input_returns_error() {
+        let result = sanitize_locale("!@#$%^&*()");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn field_name_double_underscore_is_valid_identifier_but_reserved() {
+        // Double underscores pass is_valid_identifier but are reserved for group naming
+        assert!(is_valid_identifier("seo__title"));
+        // The rejection happens at a higher level (field name validation in schema parsing)
     }
 
     #[test]
@@ -215,5 +254,63 @@ mod tests {
         assert!(validate_slug("Posts").is_err());
         assert!(validate_slug("my-slug").is_err());
         assert!(validate_slug("_private").is_err());
+    }
+
+    /// Regression: get_valid_filter_paths did not recurse into layout wrappers,
+    /// so Array/Blocks fields inside Row/Tabs/Collapsible were rejected as invalid.
+    #[test]
+    fn filter_paths_include_array_inside_layout_wrappers() {
+        use crate::core::{
+            CollectionDefinition,
+            field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig},
+        };
+
+        // Array inside a Row
+        let def = CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![
+                                FieldDefinition::builder("name", FieldType::Text).build(),
+                            ])
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build();
+
+        let (_, prefixes) = get_valid_filter_paths(&def, None);
+        assert!(
+            prefixes.contains("items"),
+            "Array inside Row should be a valid filter prefix root"
+        );
+
+        // has-many Relationship inside Tabs
+        let def = CollectionDefinition::builder("test")
+            .fields(vec![
+                FieldDefinition::builder("tabbed", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "main",
+                        vec![
+                            FieldDefinition::builder("tags", FieldType::Relationship)
+                                .relationship(RelationshipConfig {
+                                    collection: "tags".into(),
+                                    has_many: true,
+                                    max_depth: None,
+                                    polymorphic: vec![],
+                                })
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build();
+
+        let (_, prefixes) = get_valid_filter_paths(&def, None);
+        assert!(
+            prefixes.contains("tags"),
+            "has-many Relationship inside Tabs should be a valid filter prefix root"
+        );
     }
 }

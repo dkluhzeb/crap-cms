@@ -19,6 +19,7 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -138,8 +139,14 @@ fn setup_service(
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -200,8 +207,14 @@ fn setup_service_with_locale(
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -797,6 +810,7 @@ async fn update_many_with_filter() {
             data: Some(make_struct(&[("status", "published")])),
             locale: None,
             draft: None,
+            hooks: None,
         }))
         .await
         .unwrap()
@@ -846,6 +860,8 @@ async fn delete_many_with_where() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()

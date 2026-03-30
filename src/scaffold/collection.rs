@@ -1,7 +1,16 @@
 //! `make collection` command — generate collection Lua files.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use std::{fs, path::Path};
+
+/// Escape a string for safe embedding in a Lua double-quoted string literal.
+fn escape_lua_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\0', "\\0")
+}
 
 /// Valid field types for collection definitions.
 pub const VALID_FIELD_TYPES: &[&str] = &[
@@ -284,7 +293,11 @@ pub fn write_field_lua(lua: &mut String, field: &FieldStub, indent: usize) {
     let inner = " ".repeat(indent + 4);
 
     lua.push_str(&format!("{}crap.fields.{}({{\n", pad, field.field_type));
-    lua.push_str(&format!("{}name = \"{}\",\n", inner, field.name));
+    lua.push_str(&format!(
+        "{}name = \"{}\",\n",
+        inner,
+        escape_lua_string(&field.name)
+    ));
 
     if field.required {
         lua.push_str(&format!("{}required = true,\n", inner));
@@ -308,12 +321,12 @@ pub fn write_field_lua(lua: &mut String, field: &FieldStub, indent: usize) {
             lua.push_str(&format!(
                 "{}type = \"{}\",\n",
                 " ".repeat(indent + 12),
-                block.block_type
+                escape_lua_string(&block.block_type)
             ));
             lua.push_str(&format!(
                 "{}label = \"{}\",\n",
                 " ".repeat(indent + 12),
-                block.label
+                escape_lua_string(&block.label)
             ));
             lua.push_str(&format!("{}fields = {{\n", " ".repeat(indent + 12)));
             for sub in &block.fields {
@@ -331,7 +344,7 @@ pub fn write_field_lua(lua: &mut String, field: &FieldStub, indent: usize) {
             lua.push_str(&format!(
                 "{}label = \"{}\",\n",
                 " ".repeat(indent + 12),
-                tab.label
+                escape_lua_string(&tab.label)
             ));
             lua.push_str(&format!("{}fields = {{\n", " ".repeat(indent + 12)));
             for sub in &tab.fields {
@@ -422,6 +435,15 @@ fn parse_field_token(token: &str) -> Result<FieldStub> {
     }
 
     let name = segments[0].to_string();
+
+    // Validate field name is a safe identifier (alphanumeric + underscore only)
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!(
+            "Invalid field name '{}' — must contain only letters, digits, and underscores",
+            name
+        );
+    }
+
     let type_segment = segments[1];
 
     // Check if there's a '(' in the type segment indicating subfields
@@ -510,7 +532,7 @@ fn parse_block_entries(s: &str) -> Result<Vec<BlockStub>> {
         }
         // Format: type|label(fields)
         let pipe_pos = part.find('|').ok_or_else(|| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Block entry '{}' missing '|' separator — expected 'type|label(fields)'",
                 part
             )
@@ -1529,5 +1551,26 @@ mod tests {
         assert!(content.contains("fields = { crap.fields.text({ name = \"item\" }) }"));
         assert!(content.contains("blocks = { { type = \"block_type\""));
         assert!(content.contains("tabs = { { label = \"Tab 1\""));
+    }
+
+    #[test]
+    fn test_parse_fields_rejects_invalid_field_names() {
+        // Lua injection via field name
+        assert!(parse_fields_shorthand(r#"test",evil=true,name="x:text"#).is_err());
+        // Spaces
+        assert!(parse_fields_shorthand("bad name:text").is_err());
+        // Special characters
+        assert!(parse_fields_shorthand("field-name:text").is_err());
+        assert!(parse_fields_shorthand("field.name:text").is_err());
+        assert!(parse_fields_shorthand("field;name:text").is_err());
+    }
+
+    #[test]
+    fn test_escape_lua_string() {
+        assert_eq!(escape_lua_string("hello"), "hello");
+        assert_eq!(escape_lua_string(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(escape_lua_string("line\nnew"), "line\\nnew");
+        assert_eq!(escape_lua_string("back\\slash"), "back\\\\slash");
+        assert_eq!(escape_lua_string("null\0byte"), "null\\0byte");
     }
 }

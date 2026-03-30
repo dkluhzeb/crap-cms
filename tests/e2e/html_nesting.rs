@@ -9,6 +9,7 @@ use crap_cms::db::query::LocaleContext;
 
 use crate::helpers::*;
 use crate::html;
+use serde_json::json;
 
 // ── Definition builders ──────────────────────────────────────────────────
 
@@ -2098,11 +2099,11 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     let en_join_data = std::collections::HashMap::from([
         (
             "content__items".to_string(),
-            serde_json::json!([{"label": "EN One"}, {"label": "EN Two"}]),
+            json!([{"label": "EN One"}, {"label": "EN Two"}]),
         ),
         (
             "content__sections".to_string(),
-            serde_json::json!([{"_block_type": "text", "body": "EN body"}]),
+            json!([{"_block_type": "text", "body": "EN body"}]),
         ),
     ]);
     crap_cms::db::query::save_join_table_data(
@@ -2133,13 +2134,10 @@ async fn localized_group_array_blocks_crud_roundtrip() {
 
     // Save array + block data for DE
     let de_join_data = std::collections::HashMap::from([
-        (
-            "content__items".to_string(),
-            serde_json::json!([{"label": "DE Eins"}]),
-        ),
+        ("content__items".to_string(), json!([{"label": "DE Eins"}])),
         (
             "content__sections".to_string(),
-            serde_json::json!([{"_block_type": "text", "body": "DE Text"}]),
+            json!([{"_block_type": "text", "body": "DE Text"}]),
         ),
     ]);
     crap_cms::db::query::save_join_table_data(
@@ -2392,11 +2390,11 @@ async fn mixed_locale_group_crud_roundtrip() {
     let en_join_data = std::collections::HashMap::from([
         (
             "meta__tags".to_string(),
-            serde_json::json!([{"tag": "rust"}, {"tag": "wasm"}]),
+            json!([{"tag": "rust"}, {"tag": "wasm"}]),
         ),
         (
             "meta__layout".to_string(),
-            serde_json::json!([{"_block_type": "widget", "kind": "sidebar"}]),
+            json!([{"_block_type": "widget", "kind": "sidebar"}]),
         ),
     ]);
     crap_cms::db::query::save_join_table_data(
@@ -2411,10 +2409,8 @@ async fn mixed_locale_group_crud_roundtrip() {
 
     // Save DE tags only (layout is non-localized, shared)
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config);
-    let de_join_data = std::collections::HashMap::from([(
-        "meta__tags".to_string(),
-        serde_json::json!([{"tag": "rost"}]),
-    )]);
+    let de_join_data =
+        std::collections::HashMap::from([("meta__tags".to_string(), json!([{"tag": "rost"}]))]);
     crap_cms::db::query::save_join_table_data(
         &tx,
         "articles",
@@ -2770,7 +2766,7 @@ async fn double_nested_group_array_crud_roundtrip() {
     // Save array rows
     let join_data = std::collections::HashMap::from([(
         "outer__inner__items".to_string(),
-        serde_json::json!([
+        json!([
             {"name": "Item1", "qty": "10"},
             {"name": "Item2", "qty": "20"},
         ]),

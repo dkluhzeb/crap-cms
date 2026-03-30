@@ -181,7 +181,7 @@ When the server receives an upload:
 1. **Validates** the MIME type against the collection's `mime_types` allowlist
 2. **Checks** file size against `max_file_size`
 3. **Sanitizes** the filename (lowercase, hyphens, unique prefix)
-4. **Saves** the original file to `uploads/{collection}/{id}_{filename}`
+4. **Saves** the original file to `uploads/{collection}/{nanoid}_{filename}` (a random 10-character nanoid prefix, not the document ID)
 5. **Resizes** images according to `image_sizes` (if configured)
 6. **Generates** WebP/AVIF variants (if `format_options` configured)
 7. **Runs** before-hooks within a transaction
@@ -220,12 +220,11 @@ Reference upload documents via relationship fields:
 -- collections/posts.lua
 crap.collections.define("posts", {
     fields = {
-        { name = "title", type = "text", required = true },
-        {
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.relationship({
             name = "cover_image",
-            type = "relationship",
             relationship = { collection = "media", has_many = false },
-        },
+        }),
     },
 })
 ```

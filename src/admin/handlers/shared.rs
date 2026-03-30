@@ -19,10 +19,10 @@ use crate::{
     config::LocaleConfig,
     core::{
         AuthUser, Document, FieldAdmin, FieldDefinition, document::VersionSnapshot,
-        event::EventUser, field, validate::ValidationError,
+        event::EventUser, field, richtext::renderer::html_escape, validate::ValidationError,
     },
     db::{AccessResult, DbPool, LocaleContext, query},
-    hooks::HookRunner,
+    hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
 
 // Re-export field context functions from the dedicated module.
@@ -33,8 +33,8 @@ pub(super) use crate::admin::handlers::field_context::{
 
 // Re-export query utilities from the dedicated module.
 pub(crate) use super::query_utils::{
-    build_list_url, extract_where_params, is_column_eligible, parse_where_params, url_decode,
-    validate_sort,
+    build_list_url, build_list_url_with_cursor, extract_where_params, is_column_eligible,
+    parse_where_params, url_decode, validate_sort,
 };
 
 /// Query parameters for paginated collection list views.
@@ -48,6 +48,12 @@ pub struct PaginationParams {
     pub search: Option<String>,
     /// Sort string (e.g. "title" or "-title").
     pub sort: Option<String>,
+    /// Forward cursor for cursor-based pagination.
+    pub after_cursor: Option<String>,
+    /// Backward cursor for cursor-based pagination.
+    pub before_cursor: Option<String>,
+    /// When "1", show the trash view (soft-deleted documents only).
+    pub trash: Option<String>,
 }
 
 /// Extract the editor locale from the `crap_editor_locale` cookie.
@@ -102,9 +108,13 @@ pub(crate) fn check_access_or_forbid(
     id: Option<&str>,
     data: Option<&HashMap<String, Value>>,
 ) -> Result<AccessResult, Box<Response>> {
-    // No access function configured = always allowed (skip pool.get + VM acquire)
+    // No access function configured — check default-deny policy
     if access_ref.is_none() {
-        return Ok(AccessResult::Allowed);
+        return if state.config.access.default_deny {
+            Ok(AccessResult::Denied)
+        } else {
+            Ok(AccessResult::Allowed)
+        };
     }
 
     let user_doc = get_user_doc(auth_user);
@@ -285,7 +295,7 @@ pub(crate) fn compute_denied_read_fields(
     auth_user: &Option<Extension<AuthUser>>,
     fields: &[FieldDefinition],
 ) -> Result<Vec<String>, Box<Response>> {
-    if !fields.iter().any(|f| f.access.read.is_some()) {
+    if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
         return Ok(Vec::new());
     }
 
@@ -306,7 +316,9 @@ pub(crate) fn compute_denied_read_fields(
         .check_field_read_access(fields, user_doc, &tx);
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
-    let _ = tx.commit();
+    if let Err(e) = tx.commit() {
+        tracing::warn!("tx commit failed: {e}");
+    }
 
     Ok(denied)
 }
@@ -320,12 +332,12 @@ pub(crate) fn strip_write_denied_string_fields(
     operation: &str,
     form_data: &mut HashMap<String, String>,
 ) -> Result<(), Box<Response>> {
-    let has_access = fields.iter().any(|f| match operation {
-        "create" => f.access.create.is_some(),
-        "update" => f.access.update.is_some(),
-        _ => false,
-    });
-    if !has_access {
+    let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
+        "create" => |f| f.access.create.as_deref(),
+        "update" => |f| f.access.update.as_deref(),
+        _ => return Ok(()),
+    };
+    if !has_any_field_access(fields, extractor) {
         return Ok(());
     }
 
@@ -346,7 +358,9 @@ pub(crate) fn strip_write_denied_string_fields(
         .check_field_write_access(fields, user_doc, operation, &tx);
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
-    let _ = tx.commit();
+    if let Err(e) = tx.commit() {
+        tracing::warn!("tx commit failed: {e}");
+    }
 
     for name in &denied {
         form_data.remove(name);
@@ -413,7 +427,10 @@ pub(crate) fn forbidden(state: &AdminState, message: &str) -> Response {
 
     let html = match state.render("errors/403", &data) {
         Ok(html) => Html(html),
-        Err(_) => Html(format!("<h1>403 Forbidden</h1><p>{}</p>", message)),
+        Err(_) => Html(format!(
+            "<h1>403 Forbidden</h1><p>{}</p>",
+            html_escape(message)
+        )),
     };
 
     (StatusCode::FORBIDDEN, html).into_response()
@@ -434,6 +451,34 @@ pub(crate) fn htmx_redirect(url: &str) -> Response {
         .header("HX-Redirect", url)
         .body(axum::body::Body::empty())
         .unwrap_or_else(|_| Redirect::to(url).into_response())
+}
+
+/// Like `htmx_redirect`, but also includes `X-Created-Id` and `X-Created-Label`
+/// headers so inline create panels can identify the newly created document.
+/// The label is percent-encoded to safely handle non-ASCII characters in HTTP headers.
+pub(crate) fn htmx_redirect_with_created(url: &str, id: &str, label: &str) -> Response {
+    let encoded_label = percent_encode_header(label);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("HX-Redirect", url)
+        .header("X-Created-Id", id)
+        .header("X-Created-Label", &encoded_label)
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| Redirect::to(url).into_response())
+}
+
+/// Percent-encode a string so it is safe for HTTP header values.
+/// Non-ASCII bytes and control characters are encoded as `%XX`.
+fn percent_encode_header(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_graphic() || b == b' ' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }
 
 /// Render a template and set the X-Crap-Toast header for client-side notifications.
@@ -462,6 +507,22 @@ pub(crate) fn html_with_toast(
     }
 }
 
+/// Return a 422 response with only the toast header — HTMX won't swap the body,
+/// so the user keeps their form data while seeing the error notification.
+pub(crate) fn toast_only_error(msg: &str) -> Response {
+    let json_toast = json!({ "message": msg, "type": "error" }).to_string();
+    let mut resp = Response::builder()
+        .status(StatusCode::UNPROCESSABLE_ENTITY)
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    if let Ok(val) = json_toast.parse() {
+        resp.headers_mut().insert("X-Crap-Toast", val);
+    }
+
+    resp
+}
+
 /// Render a template, falling back to a plain error page on failure.
 pub(crate) fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Response {
     match state.render(template, data) {
@@ -485,7 +546,7 @@ pub(crate) fn not_found(state: &AdminState, message: &str) -> Response {
 
     let html = match state.render("errors/404", &data) {
         Ok(html) => Html(html),
-        Err(_) => Html(format!("<h1>404</h1><p>{}</p>", message)),
+        Err(_) => Html(format!("<h1>404</h1><p>{}</p>", html_escape(message))),
     };
 
     (StatusCode::NOT_FOUND, html).into_response()
@@ -502,7 +563,7 @@ pub(crate) fn server_error(state: &AdminState, message: &str) -> Response {
 
     let html = match state.render("errors/500", &data) {
         Ok(html) => Html(html),
-        Err(_) => Html(format!("<h1>500</h1><p>{}</p>", message)),
+        Err(_) => Html(format!("<h1>500</h1><p>{}</p>", html_escape(message))),
     };
 
     (StatusCode::INTERNAL_SERVER_ERROR, html).into_response()
@@ -536,7 +597,7 @@ mod tests {
 
     #[test]
     fn auto_label_double_underscore() {
-        assert_eq!(auto_label_from_name("seo__title"), "Seo  Title");
+        assert_eq!(auto_label_from_name("seo__title"), "Seo Title");
     }
 
     // --- strip_denied_fields tests ---

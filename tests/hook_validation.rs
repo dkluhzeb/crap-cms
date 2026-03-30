@@ -12,6 +12,7 @@ use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldTyp
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -75,7 +76,7 @@ fn validate_required_present_passes() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Valid Title"));
+    data.insert("title".to_string(), json!("Valid Title"));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -123,7 +124,7 @@ fn validate_required_empty_string_fails() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("")); // empty string
+    data.insert("title".to_string(), json!("")); // empty string
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -152,7 +153,7 @@ fn validate_unique_passes_when_no_conflict() {
 
     // Validate a different title — should pass
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Different Title"));
+    data.insert("title".to_string(), json!("Different Title"));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -181,7 +182,7 @@ fn validate_unique_fails_on_duplicate() {
 
     // Validate same title — should fail
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Duplicate Title"));
+    data.insert("title".to_string(), json!("Duplicate Title"));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -216,7 +217,7 @@ fn validate_unique_excludes_self_on_update() {
 
     // Validate same title with exclude_id = self — should pass (updating own doc)
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("My Title"));
+    data.insert("title".to_string(), json!("My Title"));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -242,8 +243,8 @@ fn custom_validate_function_passes() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Valid"));
-    data.insert("word_count".to_string(), serde_json::json!(42)); // positive
+    data.insert("title".to_string(), json!("Valid"));
+    data.insert("word_count".to_string(), json!(42)); // positive
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -265,8 +266,8 @@ fn custom_validate_function_fails() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Valid"));
-    data.insert("word_count".to_string(), serde_json::json!(-5)); // negative!
+    data.insert("title".to_string(), json!("Valid"));
+    data.insert("word_count".to_string(), json!(-5)); // negative!
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -293,8 +294,8 @@ fn custom_validate_returns_error_message() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Valid"));
-    data.insert("word_count".to_string(), serde_json::json!(-1));
+    data.insert("title".to_string(), json!("Valid"));
+    data.insert("word_count".to_string(), json!(-1));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -334,7 +335,7 @@ fn validate_blocks_required_subfield_fails_when_empty() {
     let mut data = HashMap::new();
     data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             { "_block_type": "text", "title": "", "body": "some content" }
         ]),
     );
@@ -376,7 +377,7 @@ fn validate_blocks_required_subfield_passes_when_present() {
     let mut data = HashMap::new();
     data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             { "_block_type": "text", "title": "Hello World" }
         ]),
     );
@@ -412,7 +413,7 @@ fn validate_blocks_skips_required_for_drafts() {
     let mut data = HashMap::new();
     data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             { "_block_type": "text", "title": "" }
         ]),
     );
@@ -447,7 +448,7 @@ fn validate_array_required_subfield_fails_when_empty() {
     let mut data = HashMap::new();
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "label": "ok" },
             { "label": "" }
         ]),
@@ -493,7 +494,7 @@ fn validate_group_required_subfield_fails() {
     let fields = vec![group_field];
     let mut data = HashMap::new();
     // Group sub-fields are stored as group__subfield at top level
-    data.insert("seo__meta_title".to_string(), serde_json::json!(""));
+    data.insert("seo__meta_title".to_string(), json!(""));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -527,7 +528,7 @@ fn validate_group_required_subfield_passes() {
 
     let fields = vec![group_field];
     let mut data = HashMap::new();
-    data.insert("seo__meta_title".to_string(), serde_json::json!("My Title"));
+    data.insert("seo__meta_title".to_string(), json!("My Title"));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -555,7 +556,7 @@ fn validate_group_skips_for_drafts() {
 
     let fields = vec![group_field];
     let mut data = HashMap::new();
-    data.insert("seo__meta_title".to_string(), serde_json::json!(""));
+    data.insert("seo__meta_title".to_string(), json!(""));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -588,7 +589,7 @@ fn validate_min_rows_fails() {
     let mut data = HashMap::new();
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "label": "only one" }
         ]),
     );
@@ -623,7 +624,7 @@ fn validate_max_rows_fails() {
     let mut data = HashMap::new();
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "label": "one" },
             { "label": "two" }
         ]),
@@ -660,7 +661,7 @@ fn validate_min_max_rows_passes_when_in_range() {
     let mut data = HashMap::new();
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "label": "one" },
             { "label": "two" }
         ]),
@@ -688,7 +689,7 @@ fn validate_min_rows_skips_for_drafts() {
 
     let fields = vec![array_field];
     let mut data = HashMap::new();
-    data.insert("items".to_string(), serde_json::json!([]));
+    data.insert("items".to_string(), json!([]));
 
     let conn = pool.get().expect("DB connection");
     let result = runner.validate_fields(
@@ -714,7 +715,7 @@ fn validate_date_field_valid_formats() {
 
     // YYYY-MM-DD
     let mut data = HashMap::new();
-    data.insert("due_date".to_string(), serde_json::json!("2024-01-15"));
+    data.insert("due_date".to_string(), json!("2024-01-15"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -722,10 +723,7 @@ fn validate_date_field_valid_formats() {
     );
 
     // YYYY-MM-DDTHH:MM
-    data.insert(
-        "due_date".to_string(),
-        serde_json::json!("2024-01-15T14:30"),
-    );
+    data.insert("due_date".to_string(), json!("2024-01-15T14:30"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -733,10 +731,7 @@ fn validate_date_field_valid_formats() {
     );
 
     // YYYY-MM-DDTHH:MM:SS
-    data.insert(
-        "due_date".to_string(),
-        serde_json::json!("2024-01-15T14:30:00"),
-    );
+    data.insert("due_date".to_string(), json!("2024-01-15T14:30:00"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -744,10 +739,7 @@ fn validate_date_field_valid_formats() {
     );
 
     // Full ISO 8601
-    data.insert(
-        "due_date".to_string(),
-        serde_json::json!("2024-01-15T14:30:00+00:00"),
-    );
+    data.insert("due_date".to_string(), json!("2024-01-15T14:30:00+00:00"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -755,7 +747,7 @@ fn validate_date_field_valid_formats() {
     );
 
     // Time only: HH:MM
-    data.insert("due_date".to_string(), serde_json::json!("14:30"));
+    data.insert("due_date".to_string(), json!("14:30"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -763,7 +755,7 @@ fn validate_date_field_valid_formats() {
     );
 
     // Time only: HH:MM:SS
-    data.insert("due_date".to_string(), serde_json::json!("14:30:00"));
+    data.insert("due_date".to_string(), json!("14:30:00"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -771,7 +763,7 @@ fn validate_date_field_valid_formats() {
     );
 
     // Month only: YYYY-MM
-    data.insert("due_date".to_string(), serde_json::json!("2024-01"));
+    data.insert("due_date".to_string(), json!("2024-01"));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -789,7 +781,7 @@ fn validate_date_field_invalid_format() {
     let conn = pool.get().expect("DB connection");
 
     let mut data = HashMap::new();
-    data.insert("due_date".to_string(), serde_json::json!("not-a-date"));
+    data.insert("due_date".to_string(), json!("not-a-date"));
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
     assert!(result.is_err());
@@ -812,7 +804,7 @@ fn validate_date_empty_is_ok() {
 
     // Empty string should not trigger date format validation (is_empty = true)
     let mut data = HashMap::new();
-    data.insert("due_date".to_string(), serde_json::json!(""));
+    data.insert("due_date".to_string(), json!(""));
     assert!(
         runner
             .validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build())
@@ -844,7 +836,7 @@ fn validate_date_subfield_in_array_rows() {
     let mut data = HashMap::new();
     data.insert(
         "events".to_string(),
-        serde_json::json!([
+        json!([
             { "event_date": "2024-01-15" },
             { "event_date": "bad-date" }
         ]),
@@ -880,7 +872,7 @@ fn validate_custom_function_in_array_subfield() {
     let mut data = HashMap::new();
     data.insert(
         "scores".to_string(),
-        serde_json::json!([
+        json!([
             { "value": 10 },
             { "value": -5 }
         ]),
@@ -920,7 +912,7 @@ fn validate_nested_array_in_array_rows() {
     let mut data = HashMap::new();
     data.insert(
         "outer".to_string(),
-        serde_json::json!([
+        json!([
             {
                 "inner": [
                     { "value": "ok" },
@@ -967,7 +959,7 @@ fn validate_nested_blocks_in_array_rows() {
     let mut data = HashMap::new();
     data.insert(
         "sections".to_string(),
-        serde_json::json!([
+        json!([
             {
                 "content": [
                     { "_block_type": "text", "body": "" }
@@ -1013,7 +1005,7 @@ fn validate_group_in_array_row_required_subfield() {
     // Group sub-fields in array rows use nested object format
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "meta": { "author": "" } }
         ]),
     );
@@ -1050,7 +1042,7 @@ fn validate_group_date_subfield_in_array_row() {
     let mut data = HashMap::new();
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "meta": { "published_at": "bad-date" } }
         ]),
     );
@@ -1090,7 +1082,7 @@ fn validate_group_custom_validate_in_array_row() {
     let mut data = HashMap::new();
     data.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             { "meta": { "score": -10 } }
         ]),
     );
@@ -1125,7 +1117,7 @@ fn validate_required_field_on_update_skips_when_absent() {
     // On update (exclude_id set), if the required field is absent from data
     // (partial update), it should pass — we're keeping the existing value
     let mut data = HashMap::new();
-    data.insert("body".to_string(), serde_json::json!("updated body only"));
+    data.insert("body".to_string(), json!("updated body only"));
     // title is NOT in data
 
     let conn = pool.get().expect("DB connection");
@@ -1177,7 +1169,7 @@ fn custom_validate_returns_false_generic_message() {
     ];
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("any value"));
+    data.insert("title".to_string(), json!("any value"));
 
     let conn = pool.get().expect("DB connection");
     let result =
@@ -1210,22 +1202,24 @@ fn validate_required_array_must_have_items() {
 
     // Empty array should fail
     let mut data = HashMap::new();
-    data.insert("tags".to_string(), serde_json::json!([]));
+    data.insert("tags".to_string(), json!([]));
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
     assert!(result.is_err(), "Empty required array should fail");
 
     // Non-empty array should pass
-    data.insert("tags".to_string(), serde_json::json!([{"label": "rust"}]));
+    data.insert("tags".to_string(), json!([{"label": "rust"}]));
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
     assert!(result.is_ok(), "Non-empty required array should pass");
 }
 
-// ── 6AB. Blocks: missing block_type continues gracefully ─────────────────────
+// ── 6AB. Blocks: unknown block_type is rejected ─────────────────────────────
 
+/// Regression: blocks with an unrecognized `_block_type` must be rejected so
+/// that arbitrary data cannot bypass field validation.
 #[test]
-fn validate_blocks_unknown_block_type_skips() {
+fn validate_blocks_unknown_block_type_rejected() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
@@ -1241,10 +1235,9 @@ fn validate_blocks_unknown_block_type_skips() {
 
     let fields = vec![blocks_field];
     let mut data = HashMap::new();
-    // Use an unknown block type — validation should skip it gracefully
     data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             { "_block_type": "unknown_type", "body": "" }
         ]),
     );
@@ -1252,9 +1245,12 @@ fn validate_blocks_unknown_block_type_skips() {
     let conn = pool.get().expect("DB connection");
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
+    assert!(result.is_err(), "Unknown block type must be rejected");
+    let err = result.unwrap_err();
     assert!(
-        result.is_ok(),
-        "Unknown block type should be skipped, not error"
+        err.errors[0].message.contains("unknown block type"),
+        "error should mention unknown block type: {}",
+        err.errors[0].message,
     );
 }
 
@@ -1275,7 +1271,7 @@ fn validate_checkbox_subfield_in_array_never_fails_required() {
     let fields = vec![array_field];
     let mut data = HashMap::new();
     // Checkbox absent/empty should NOT fail required check
-    data.insert("items".to_string(), serde_json::json!([{}]));
+    data.insert("items".to_string(), json!([{}]));
 
     let conn = pool.get().expect("DB connection");
     let result =
@@ -1306,7 +1302,7 @@ fn validate_checkbox_group_subfield_in_array_never_fails_required() {
 
     let fields = vec![array_field];
     let mut data = HashMap::new();
-    data.insert("items".to_string(), serde_json::json!([{}]));
+    data.insert("items".to_string(), json!([{}]));
 
     let conn = pool.get().expect("DB connection");
     let result =
@@ -1319,8 +1315,10 @@ fn validate_checkbox_group_subfield_in_array_never_fails_required() {
 
 // ── 6AE. Validate: Blocks row that is not an object ──────────────────────────
 
+/// Regression: non-object rows in a blocks field must be rejected so that
+/// primitives cannot bypass sub-field validation.
 #[test]
-fn validate_blocks_non_object_row_skips() {
+fn validate_blocks_non_object_row_rejected() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
@@ -1336,13 +1334,18 @@ fn validate_blocks_non_object_row_skips() {
 
     let fields = vec![blocks_field];
     let mut data = HashMap::new();
-    // Non-object row (string) should be skipped gracefully
-    data.insert("content".to_string(), serde_json::json!(["not-an-object"]));
+    data.insert("content".to_string(), json!(["not-an-object"]));
 
     let conn = pool.get().expect("DB connection");
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
-    assert!(result.is_ok(), "Non-object block rows should be skipped");
+    assert!(result.is_err(), "Non-object block rows must be rejected");
+    let err = result.unwrap_err();
+    assert!(
+        err.errors[0].message.contains("must be an object"),
+        "error should mention object requirement: {}",
+        err.errors[0].message,
+    );
 }
 
 // ── Deep nesting validation (Array → container → container → leaf) ──────────
@@ -1379,7 +1382,7 @@ fn validate_row_inside_tabs_inside_array_via_hook_runner() {
     let mut data = HashMap::new();
     data.insert(
         "team_members".to_string(),
-        serde_json::json!([{"first_name": "", "last_name": ""}]),
+        json!([{"first_name": "", "last_name": ""}]),
     );
 
     let conn = pool.get().expect("DB connection");
@@ -1422,10 +1425,7 @@ fn validate_group_inside_tabs_inside_array_via_hook_runner() {
     ];
 
     let mut data = HashMap::new();
-    data.insert(
-        "items".to_string(),
-        serde_json::json!([{"meta": {"title": ""}}]),
-    );
+    data.insert("items".to_string(), json!([{"meta": {"title": ""}}]));
 
     let conn = pool.get().expect("DB connection");
     let result =

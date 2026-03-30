@@ -12,6 +12,7 @@ use crap_cms::core::auth;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
+use serde_json::json;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1126,7 +1127,7 @@ fn import_basic() {
     let reg = registry.read().unwrap();
     let def = reg.get_collection("posts").unwrap();
 
-    let import_json = serde_json::json!({
+    let import_json = json!({
         "collections": {
             "posts": [
                 {"id": "import-1", "title": "Imported Post 1", "status": "published"},
@@ -1187,7 +1188,7 @@ fn import_collection_filter() {
     let (_tmp, pool, registry) = full_setup();
     let reg = registry.read().unwrap();
 
-    let import_json = serde_json::json!({
+    let import_json = json!({
         "collections": {
             "posts": [
                 {"id": "p1", "title": "Post 1"},
@@ -1308,7 +1309,7 @@ fn import_unknown_collection_fails() {
     let (_tmp, _pool, registry) = full_setup();
     let reg = registry.read().unwrap();
 
-    let import_json = serde_json::json!({
+    let import_json = json!({
         "collections": {
             "nonexistent": [
                 {"id": "x1", "title": "X"}

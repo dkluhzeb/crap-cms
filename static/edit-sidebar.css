@@ -18,7 +18,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 10px var(--space-md);
+  padding: var(--space-sm2) var(--space-md);
   border-bottom: 1px solid var(--border-color);
   font-size: var(--text-sm);
   font-weight: 500;
@@ -26,7 +26,7 @@
 }
 
 .edit-sidebar__panel-header .material-symbols-outlined {
-  font-size: 16px;
+  font-size: var(--icon-sm);
 }
 
 .edit-sidebar__panel-body {
@@ -90,8 +90,8 @@
 }
 
 .edit-sidebar__save-indicator .loading-indicator__spinner {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }
 
 /* Locale selector (pill-style tabs in sidebar) */
@@ -142,8 +142,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 6px 0;
+  gap: var(--space-xs2);
+  padding: var(--space-xs2) 0;
   border-bottom: 1px solid var(--border-color-light, var(--border-color));
 }
 
@@ -154,7 +154,7 @@
 .edit-sidebar__version-info {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-xs2);
   flex: 1;
 }
 
@@ -180,4 +180,13 @@
 
 .edit-sidebar__versions-link:hover {
   text-decoration: underline;
+}
+
+/* Reference info in actions panel */
+.edit-sidebar__ref-info {
+  margin: 0 0 var(--space-sm);
+}
+
+.edit-sidebar__ref-text {
+  margin: 0 0 var(--space-xs);
 }

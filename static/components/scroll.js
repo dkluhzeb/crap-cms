@@ -90,12 +90,17 @@ class CrapScrollRestore extends HTMLElement {
       }
     );
 
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch { /* private browsing or quota exceeded */ }
   }
 
   _restoreFormState() {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    sessionStorage.removeItem(STORAGE_KEY);
+    let raw;
+    try {
+      raw = sessionStorage.getItem(STORAGE_KEY);
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch { return; }
     if (!raw) return;
 
     /** @type {{ url: string, scrollY: number, tabs: Object<string,string>, groups: Object<string,string>, rows?: Object<string,string> }} */

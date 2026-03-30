@@ -9,7 +9,7 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 | Equals | `status = "published"` or `{ equals = "val" }` | `{"equals": "val"}` | `field = ?` |
 | Not equals | `{ not_equals = "val" }` | `{"not_equals": "val"}` | `field != ?` |
 | Like | `{ like = "pattern%" }` | `{"like": "pattern%"}` | `field LIKE ?` |
-| Contains | `{ contains = "text" }` | `{"contains": "text"}` | `field LIKE '%text%'` |
+| Contains | `{ contains = "text" }` | `{"contains": "text"}` | `field LIKE '%text%' ESCAPE '\'` (wildcards `%` and `_` in the search text are escaped) |
 | Greater than | `{ greater_than = "10" }` | `{"greater_than": "10"}` | `field > ?` |
 | Less than | `{ less_than = "10" }` | `{"less_than": "10"}` | `field < ?` |
 | Greater/equal | `{ greater_than_or_equal = "10" }` | `{"greater_than_or_equal": "10"}` | `field >= ?` |
@@ -18,6 +18,10 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 | Not in | `{ not_in = { "a", "b" } }` | `{"not_in": ["a", "b"]}` | `field NOT IN (?, ?)` |
 | Exists | `{ exists = true }` | `{"exists": true}` | `field IS NOT NULL` |
 | Not exists | `{ not_exists = true }` | `{"not_exists": true}` | `field IS NULL` |
+
+> **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. Use `not_exists` for IS NULL (not `{ exists = false }`).
+>
+> **gRPC shorthand limitation:** In Lua, bare values like `{ count = 42 }` or `{ active = true }` are coerced to string equals. The gRPC `where` JSON only accepts string or operator object values — numeric/boolean shorthand is not supported.
 
 ## Sorting
 

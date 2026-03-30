@@ -3,9 +3,14 @@ use std::collections::HashMap;
 use mlua::Lua;
 use serde_json::{Map as JsonMap, Value};
 
-use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use crate::core::{FieldDefinition, FieldType, registry::Registry, validate::FieldError};
 
-use super::{checks::is_valid_date_format, custom::run_validate_function_inner};
+use super::{
+    checks,
+    checks::is_valid_date_format,
+    custom::run_validate_function_inner,
+    richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
+};
 
 /// Stable context shared across recursive validation calls for a single row.
 struct RowValidationCtx<'a> {
@@ -15,16 +20,25 @@ struct RowValidationCtx<'a> {
     parent_name: &'a str,
     idx: usize,
     table: &'a str,
+    registry: Option<&'a Registry>,
+    is_draft: bool,
+}
+
+/// Parameters for sub-field validation within a single array/blocks row.
+pub(super) struct SubFieldParams<'a> {
+    pub lua: &'a Lua,
+    pub parent_name: &'a str,
+    pub idx: usize,
+    pub table: &'a str,
+    pub registry: Option<&'a Registry>,
+    pub is_draft: bool,
 }
 
 /// Validate sub-fields within a single array/blocks row (inner, no mutex).
 pub(super) fn validate_sub_fields_inner(
-    lua: &Lua,
+    params: &SubFieldParams<'_>,
     sub_fields: &[FieldDefinition],
     row_obj: &JsonMap<String, Value>,
-    parent_name: &str,
-    idx: usize,
-    table: &str,
     errors: &mut Vec<FieldError>,
 ) {
     let row_data: HashMap<String, Value> = row_obj
@@ -33,12 +47,14 @@ pub(super) fn validate_sub_fields_inner(
         .collect();
 
     let ctx = RowValidationCtx {
-        lua,
+        lua: params.lua,
         row_obj,
         row_data: &row_data,
-        parent_name,
-        idx,
-        table,
+        parent_name: params.parent_name,
+        idx: params.idx,
+        table: params.table,
+        registry: params.registry,
+        is_draft: params.is_draft,
     };
 
     validate_children_recursive(&ctx, sub_fields, "", errors);
@@ -65,9 +81,15 @@ fn validate_children_recursive(
                     && let Some(group_obj) = group_val.as_object()
                 {
                     let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
-                    validate_sub_fields_inner(
-                        ctx.lua, &sf.fields, group_obj, &qualified, 0, ctx.table, errors,
-                    );
+                    let params = SubFieldParams {
+                        lua: ctx.lua,
+                        parent_name: &qualified,
+                        idx: 0,
+                        table: ctx.table,
+                        registry: ctx.registry,
+                        is_draft: ctx.is_draft,
+                    };
+                    validate_sub_fields_inner(&params, &sf.fields, group_obj, errors);
                 }
             }
             FieldType::Row | FieldType::Collapsible => {
@@ -82,15 +104,7 @@ fn validate_children_recursive(
                 let data_key = format!("{}{}", group_prefix, sf.name);
                 let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
                 // Validate the array/blocks field itself (required, custom validate)
-                validate_leaf_sub_field(
-                    ctx.lua,
-                    sf,
-                    ctx.row_obj.get(&data_key),
-                    &qualified,
-                    ctx.row_data,
-                    ctx.table,
-                    errors,
-                );
+                validate_leaf_sub_field(ctx, sf, ctx.row_obj.get(&data_key), &qualified, errors);
                 // Recurse into nested rows
                 if let Some(Value::Array(nested_rows)) = ctx.row_obj.get(&data_key) {
                     for (nested_idx, nested_row) in nested_rows.iter().enumerate() {
@@ -108,13 +122,18 @@ fn validate_children_recursive(
                                 } else {
                                     &sf.fields
                                 };
+                            let params = SubFieldParams {
+                                lua: ctx.lua,
+                                parent_name: &qualified,
+                                idx: nested_idx,
+                                table: ctx.table,
+                                registry: ctx.registry,
+                                is_draft: ctx.is_draft,
+                            };
                             validate_sub_fields_inner(
-                                ctx.lua,
+                                &params,
                                 nested_sub_fields,
                                 nested_obj,
-                                &qualified,
-                                nested_idx,
-                                ctx.table,
                                 errors,
                             );
                         }
@@ -124,30 +143,20 @@ fn validate_children_recursive(
             _ => {
                 let data_key = format!("{}{}", group_prefix, sf.name);
                 let qualified = format!("{}[{}][{}]", ctx.parent_name, ctx.idx, data_key);
-                validate_leaf_sub_field(
-                    ctx.lua,
-                    sf,
-                    ctx.row_obj.get(&data_key),
-                    &qualified,
-                    ctx.row_data,
-                    ctx.table,
-                    errors,
-                );
+                validate_leaf_sub_field(ctx, sf, ctx.row_obj.get(&data_key), &qualified, errors);
             }
         }
     }
 }
 
 /// Validate a single leaf sub-field inside an array/blocks row container (Group, Row,
-/// Collapsible, or Tabs). Runs the required check, date format check, and custom Lua
-/// validate function — the same three-step sequence shared by all four container types.
+/// Collapsible, or Tabs). Runs the required check, date format check, custom Lua
+/// validate function, and richtext node attr validation.
 fn validate_leaf_sub_field(
-    lua: &Lua,
+    ctx: &RowValidationCtx<'_>,
     sf: &FieldDefinition,
     value: Option<&Value>,
     qualified_name: &str,
-    row_data: &HashMap<String, Value>,
-    table: &str,
     errors: &mut Vec<FieldError>,
 ) {
     let is_empty = match value {
@@ -157,8 +166,8 @@ fn validate_leaf_sub_field(
         _ => false,
     };
 
-    // 1. Required check (skip for Checkbox — absent/false is valid)
-    if sf.required && is_empty && sf.field_type != FieldType::Checkbox {
+    // 1. Required check (skip for Checkbox — absent/false is valid, skip for drafts)
+    if sf.required && is_empty && !ctx.is_draft && sf.field_type != FieldType::Checkbox {
         errors.push(FieldError::with_key(
             qualified_name.to_owned(),
             format!("{} is required", sf.name),
@@ -185,15 +194,61 @@ fn validate_leaf_sub_field(
     if let Some(ref validate_ref) = sf.validate
         && let Some(val) = value
     {
-        match run_validate_function_inner(lua, validate_ref, val, row_data, table, &sf.name) {
+        match run_validate_function_inner(
+            ctx.lua,
+            validate_ref,
+            val,
+            ctx.row_data,
+            ctx.table,
+            &sf.name,
+        ) {
             Ok(Some(err_msg)) => {
                 errors.push(FieldError::new(qualified_name.to_owned(), err_msg));
             }
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
+                errors.push(FieldError::with_key(
+                    qualified_name.to_owned(),
+                    format!("Validation failed (internal error in '{}')", validate_ref),
+                    "validation.custom_error",
+                    HashMap::from([("field".to_string(), sf.name.clone())]),
+                ));
             }
         }
+    }
+
+    // 4. Length bounds (min_length / max_length)
+    checks::check_length_bounds(sf, qualified_name, value, is_empty, errors);
+
+    // 5. Numeric bounds (min / max)
+    checks::check_numeric_bounds(sf, qualified_name, value, is_empty, errors);
+
+    // 6. Email format validation
+    checks::check_email_format(sf, qualified_name, value, is_empty, errors);
+
+    // 7. Select/radio option validation
+    checks::check_option_valid(sf, qualified_name, value, is_empty, errors);
+
+    // 8. Has-many element validation (per-element length/numeric bounds, row counts)
+    checks::check_has_many_elements(sf, qualified_name, value, is_empty, errors);
+
+    // 9. Richtext node attr validation
+    if sf.field_type == FieldType::Richtext
+        && !is_empty
+        && !sf.admin.nodes.is_empty()
+        && let Some(registry) = ctx.registry
+        && let Some(Value::String(content)) = value
+    {
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(ctx.lua, registry, ctx.table)
+                .draft(ctx.is_draft)
+                .build(),
+            content,
+            qualified_name,
+            sf,
+            errors,
+        );
     }
 }
 

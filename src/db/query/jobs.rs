@@ -54,11 +54,13 @@ pub fn claim_pending_jobs(
     running_counts: &std::collections::HashMap<String, i64>,
     job_concurrency: &std::collections::HashMap<String, u32>,
 ) -> Result<Vec<JobRun>> {
+    let now = conn.now_expr();
     let rows = conn.query_all(
         &format!(
             "SELECT id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at
          FROM _crap_jobs
          WHERE status = 'pending'
+           AND (retry_after IS NULL OR retry_after <= {now})
          ORDER BY created_at ASC
          LIMIT {}",
             conn.placeholder(1)
@@ -167,14 +169,47 @@ pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>
     Ok(())
 }
 
-/// Mark a job as failed. If should_retry is true and attempt < max_attempts, resets to pending.
-pub fn fail_job(conn: &dyn DbConnection, id: &str, error: &str, should_retry: bool) -> Result<()> {
+/// Compute exponential backoff delay in seconds for a given attempt number.
+///
+/// Formula: `min(2^(attempt-1) * 5, 300)` — yields 5s, 10s, 20s, 40s, 80s, 160s, 300s cap.
+/// `attempt` is 1-based (first failure = attempt 1).
+fn backoff_seconds(attempt: u32) -> i64 {
+    let exp = attempt.saturating_sub(1).min(6) as i64;
+    std::cmp::min(5 * (1i64 << exp), 300)
+}
+
+/// Mark a job as failed. If should_retry is true, resets to pending with exponential backoff.
+/// `attempt` is the current attempt number (already incremented by claim).
+pub fn fail_job(
+    conn: &dyn DbConnection,
+    id: &str,
+    error: &str,
+    should_retry: bool,
+    attempt: u32,
+) -> Result<()> {
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+
     if should_retry {
+        let delay = backoff_seconds(attempt);
+
+        // Use the date_offset_expr SQL template but with a positive offset (future time).
+        // date_offset_expr returns e.g. ("datetime('now', ?3)", _) — we override the
+        // param to "+N seconds" instead of the default "-N seconds".
+        let (offset_sql, _) = conn.date_offset_expr(delay, 3);
+        let offset_param = DbValue::Text(format!("+{} seconds", delay));
+
         conn.execute(
-            &format!("UPDATE _crap_jobs SET status = 'pending', error = {p2}, started_at = NULL, completed_at = NULL
-             WHERE id = {p1}"),
-            &[DbValue::Text(id.to_string()), DbValue::Text(error.to_string())],
+            &format!(
+                "UPDATE _crap_jobs SET status = 'pending', error = {p2}, \
+                 started_at = NULL, completed_at = NULL, heartbeat_at = NULL, \
+                 retry_after = {offset_sql} \
+                 WHERE id = {p1}"
+            ),
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(error.to_string()),
+                offset_param,
+            ],
         )
         .context("Failed to retry job")?;
     } else {
@@ -191,6 +226,7 @@ pub fn fail_job(conn: &dyn DbConnection, id: &str, error: &str, should_retry: bo
         )
         .context("Failed to fail job")?;
     }
+
     Ok(())
 }
 
@@ -214,7 +250,7 @@ pub fn find_stale_jobs(conn: &dyn DbConnection, stale_threshold_secs: u64) -> Re
     let rows = conn.query_all(
         &format!(
             "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                    scheduled_by, created_at, started_at, completed_at, heartbeat_at
+                    scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
              FROM _crap_jobs
              WHERE status = 'running'
                AND (heartbeat_at IS NULL OR heartbeat_at < {})",
@@ -280,7 +316,7 @@ pub fn list_job_runs(
 ) -> Result<Vec<JobRun>> {
     let mut sql = String::from(
         "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
          FROM _crap_jobs WHERE 1=1",
     );
     let mut params: Vec<DbValue> = Vec::new();
@@ -311,7 +347,7 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
     let row = conn.query_one(
         &format!(
             "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
          FROM _crap_jobs WHERE id = {}",
             conn.placeholder(1)
         ),
@@ -330,7 +366,10 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
 pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
     let deleted = if let Some(slug) = slug {
         conn.execute(
-            "DELETE FROM _crap_jobs WHERE status = 'pending' AND slug = ?1",
+            &format!(
+                "DELETE FROM _crap_jobs WHERE status = 'pending' AND slug = {}",
+                conn.placeholder(1)
+            ),
             &[DbValue::Text(slug.to_string())],
         )? as i64
     } else {
@@ -395,7 +434,7 @@ pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<
     let row = conn.query_one(
         &format!(
             "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at, retry_after
          FROM _crap_jobs
          WHERE slug = {} AND status = 'completed'
          ORDER BY completed_at DESC
@@ -482,6 +521,9 @@ fn row_to_job_run(row: &DbRow) -> Result<JobRun> {
     if let Some(ha) = get_opt_text(13) {
         b = b.heartbeat_at(ha);
     }
+    if let Some(ra) = get_opt_text(14) {
+        b = b.retry_after(ra);
+    }
 
     Ok(b.build())
 }
@@ -513,7 +555,8 @@ mod tests {
                 created_at TEXT DEFAULT (datetime('now')),
                 started_at TEXT,
                 completed_at TEXT,
-                heartbeat_at TEXT
+                heartbeat_at TEXT,
+                retry_after TEXT
             );
             CREATE INDEX idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX idx_crap_jobs_queue ON _crap_jobs(queue, status);
@@ -593,7 +636,7 @@ mod tests {
         )
         .unwrap();
 
-        fail_job(&conn, &job.id, "something broke", false).unwrap();
+        fail_job(&conn, &job.id, "something broke", false, 1).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
         assert_eq!(fetched.status, JobStatus::Failed);
         assert_eq!(fetched.error.as_deref(), Some("something broke"));
@@ -609,9 +652,30 @@ mod tests {
         )
         .unwrap();
 
-        fail_job(&conn, &job.id, "transient error", true).unwrap();
+        fail_job(&conn, &job.id, "transient error", true, 1).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
         assert_eq!(fetched.status, JobStatus::Pending);
+    }
+
+    /// Regression: fail_job with retry did not clear heartbeat_at, causing the
+    /// re-queued job to be immediately detected as stale by find_stale_jobs.
+    #[test]
+    fn test_fail_job_retry_clears_heartbeat() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = datetime('now') WHERE id = ?1",
+            &[DbValue::Text(job.id.clone())],
+        )
+        .unwrap();
+
+        fail_job(&conn, &job.id, "transient error", true, 1).unwrap();
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert_eq!(fetched.status, JobStatus::Pending);
+        assert!(
+            fetched.heartbeat_at.is_none(),
+            "heartbeat_at should be cleared on retry so the job is not detected as stale"
+        );
     }
 
     #[test]
@@ -840,6 +904,84 @@ mod tests {
         // Different slug should return None
         let other = last_completed_run(&conn, "other").unwrap();
         assert!(other.is_none());
+    }
+
+    #[test]
+    fn test_backoff_seconds() {
+        // attempt is 1-based (first failure = 1 after claim increments)
+        assert_eq!(backoff_seconds(0), 5); // edge case: 2^0 * 5 = 5
+        assert_eq!(backoff_seconds(1), 5); // first failure: 2^0 * 5 = 5
+        assert_eq!(backoff_seconds(2), 10); // second: 2^1 * 5 = 10
+        assert_eq!(backoff_seconds(3), 20); // third: 2^2 * 5 = 20
+        assert_eq!(backoff_seconds(4), 40);
+        assert_eq!(backoff_seconds(5), 80);
+        assert_eq!(backoff_seconds(6), 160);
+        assert_eq!(backoff_seconds(7), 300); // capped
+        // Capped at 300
+        assert_eq!(backoff_seconds(8), 300);
+        assert_eq!(backoff_seconds(100), 300);
+    }
+
+    /// Regression: fail_job with retry did not set retry_after, causing immediate re-execution.
+    #[test]
+    fn test_fail_job_retry_sets_retry_after() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
+            &[DbValue::Text(job.id.clone())],
+        )
+        .unwrap();
+
+        fail_job(&conn, &job.id, "transient error", true, 1).unwrap();
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert_eq!(fetched.status, JobStatus::Pending);
+        assert!(
+            fetched.retry_after.is_some(),
+            "retry_after should be set for backoff"
+        );
+    }
+
+    /// Regression: claim_pending_jobs should skip jobs whose retry_after is in the future.
+    #[test]
+    fn test_claim_skips_jobs_with_future_retry_after() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
+
+        // Set retry_after far in the future
+        conn.execute(
+            "UPDATE _crap_jobs SET retry_after = datetime('now', '+3600 seconds')",
+            &[],
+        )
+        .unwrap();
+
+        let running = std::collections::HashMap::new();
+        let conc = std::collections::HashMap::new();
+        let claimed = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
+        assert_eq!(
+            claimed.len(),
+            0,
+            "should not claim job with future retry_after"
+        );
+    }
+
+    /// Jobs with retry_after in the past should be claimable.
+    #[test]
+    fn test_claim_picks_up_jobs_with_past_retry_after() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
+
+        // Set retry_after in the past
+        conn.execute(
+            "UPDATE _crap_jobs SET retry_after = datetime('now', '-10 seconds')",
+            &[],
+        )
+        .unwrap();
+
+        let running = std::collections::HashMap::new();
+        let conc = std::collections::HashMap::new();
+        let claimed = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
+        assert_eq!(claimed.len(), 1, "should claim job with past retry_after");
     }
 
     /// Regression: cancel_pending_jobs used `name` instead of `slug` column.

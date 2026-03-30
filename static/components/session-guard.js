@@ -48,7 +48,7 @@ class CrapSessionDialog extends HTMLElement {
           border: none;
           border-radius: var(--radius-xl, 12px);
           padding: 0;
-          max-width: 400px;
+          max-width: 25rem;
           width: 90vw;
           box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.2));
           font-family: inherit;
@@ -77,7 +77,8 @@ class CrapSessionDialog extends HTMLElement {
           font-family: inherit;
           font-size: var(--text-sm, 0.8125rem);
           font-weight: 500;
-          padding: var(--space-sm, 0.5rem) var(--space-lg, 1rem);
+          height: var(--button-height, 2.25rem);
+          padding: 0 var(--space-lg, 1rem);
           border-radius: var(--radius-md, 6px);
           border: none;
           cursor: pointer;
@@ -126,6 +127,7 @@ class CrapSessionDialog extends HTMLElement {
     const cleanup = () => {
       logoutBtn.removeEventListener('click', handleLogout);
       stayBtn.removeEventListener('click', handleStay);
+      dialog.removeEventListener('cancel', handleCancel);
     };
 
     const handleLogout = () => {
@@ -140,8 +142,14 @@ class CrapSessionDialog extends HTMLElement {
       onStay();
     };
 
+    const handleCancel = (e) => {
+      e.preventDefault();
+      handleStay();
+    };
+
     logoutBtn.addEventListener('click', handleLogout);
     stayBtn.addEventListener('click', handleStay);
+    dialog.addEventListener('cancel', handleCancel);
 
     dialog.showModal();
   }

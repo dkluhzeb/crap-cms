@@ -1,5 +1,6 @@
 //! Form parsing helpers: multipart, array fields, upload metadata.
 
+use anyhow::anyhow;
 use axum::extract::{FromRequest, Multipart};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -160,28 +161,23 @@ fn parse_composite_form_data(
     for (key, value) in form {
         if let Some(rest) = key.strip_prefix(&prefix) {
             // rest looks like "0][title]" or "0][items][1][caption]"
-            if let Some(bracket_pos) = rest.find(']')
-                && let Ok(idx) = rest[..bracket_pos].parse::<usize>()
+            if let Some((idx_str, after)) = rest.split_once(']')
+                && let Ok(idx) = idx_str.parse::<usize>()
+                && let Some(remaining) = after.strip_prefix('[')
             {
-                let after = &rest[bracket_pos + 1..];
-                if let Some(remaining) = after.strip_prefix('[') {
-                    // remaining is "title]" or "items][1][caption]"
-                    // Find the first sub-field name
-                    if let Some(next_bracket) = remaining.find(']') {
-                        let sub_key = &remaining[..next_bracket];
-                        let tail = &remaining[next_bracket + 1..];
-
-                        if tail.is_empty() {
-                            // Leaf: simple key like "title]" → key="title", value=form value
-                            rows.entry(idx)
-                                .or_default()
-                                .push((sub_key.to_string(), value.clone()));
-                        } else {
-                            // Nested: "items][1][caption]" → reconstruct the deeper key
-                            // Store as sub_key + tail so we can re-parse recursively
-                            let deep_key = format!("{}{}", sub_key, tail);
-                            rows.entry(idx).or_default().push((deep_key, value.clone()));
-                        }
+                // remaining is "title]" or "items][1][caption]"
+                // Find the first sub-field name
+                if let Some((sub_key, tail)) = remaining.split_once(']') {
+                    if tail.is_empty() {
+                        // Leaf: simple key like "title]" → key="title", value=form value
+                        rows.entry(idx)
+                            .or_default()
+                            .push((sub_key.to_string(), value.clone()));
+                    } else {
+                        // Nested: "items][1][caption]" → reconstruct the deeper key
+                        // Store as sub_key + tail so we can re-parse recursively
+                        let deep_key = format!("{}{}", sub_key, tail);
+                        rows.entry(idx).or_default().push((deep_key, value.clone()));
                     }
                 }
             }
@@ -196,14 +192,13 @@ fn parse_composite_form_data(
             let mut nested_keys: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
             for (key, value) in entries {
-                if let Some(bracket_pos) = key.find('[') {
+                if let Some((base_key, rest_after_bracket)) = key.split_once('[') {
                     // This is a nested key like "items[1][caption]"
-                    let base_key = &key[..bracket_pos];
-                    let rest = &key[bracket_pos..]; // "[1][caption]"
+                    let rest = format!("[{rest_after_bracket}"); // "[1][caption]"
                     nested_keys
                         .entry(base_key.to_string())
                         .or_default()
-                        .push((rest.to_string(), value));
+                        .push((rest, value));
                 } else {
                     // Simple leaf key
                     obj.insert(key, serde_json::Value::String(value));
@@ -277,7 +272,7 @@ pub(crate) async fn parse_multipart_form(
 ) -> Result<(HashMap<String, String>, Option<UploadedFile>), anyhow::Error> {
     let mut multipart = Multipart::from_request(request, state)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse multipart: {}", e))?;
+        .map_err(|e| anyhow!("Failed to parse multipart: {}", e))?;
 
     let mut form_data = HashMap::new();
     let mut file: Option<UploadedFile> = None;
@@ -285,7 +280,7 @@ pub(crate) async fn parse_multipart_form(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to read multipart field: {}", e))?
+        .map_err(|e| anyhow!("Failed to read multipart field: {}", e))?
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "_file" && field.file_name().is_some() {
@@ -297,7 +292,7 @@ pub(crate) async fn parse_multipart_form(
             let data = field
                 .bytes()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to read file data: {}", e))?;
+                .map_err(|e| anyhow!("Failed to read file data: {}", e))?;
             if !data.is_empty() {
                 file = Some(
                     UploadedFileBuilder::new(filename, content_type)
@@ -306,7 +301,10 @@ pub(crate) async fn parse_multipart_form(
                 );
             }
         } else {
-            let text = field.text().await.unwrap_or_default();
+            let text = field
+                .text()
+                .await
+                .map_err(|e| anyhow!("Failed to read form field '{}': {}", name, e))?;
             form_data.insert(name, text);
         }
     }

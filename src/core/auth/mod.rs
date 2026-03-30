@@ -9,9 +9,29 @@ pub mod hashed_password;
 /// Newtype wrapper for JWT signing secrets.
 pub mod jwt_secret;
 
-use std::sync::LazyLock;
+use std::{fmt, sync::LazyLock};
 
 use anyhow::{Context as _, Result, anyhow};
+
+/// Error types for password reset token operations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResetTokenError {
+    /// The token was not found in any auth collection.
+    NotFound,
+    /// The token was found but has expired.
+    Expired,
+}
+
+impl fmt::Display for ResetTokenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "Invalid reset token"),
+            Self::Expired => write!(f, "Reset token has expired"),
+        }
+    }
+}
+
+impl std::error::Error for ResetTokenError {}
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
@@ -86,6 +106,9 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims> {
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::default();
+    // Clear required_spec_claims to avoid rejecting tokens that lack optional claims
+    // (e.g., `aud`, `iss`). We only enforce `exp` via validate_exp. This is safe because
+    // serde deserialization still populates all Claims fields from the token payload.
     validation.required_spec_claims.clear();
     validation.validate_exp = true;
     let data =
@@ -109,7 +132,8 @@ mod tests {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
             .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "test-secret").unwrap();
         let decoded = validate_token(&token, "test-secret").unwrap();
         assert_eq!(decoded.sub, "user123");
@@ -121,7 +145,8 @@ mod tests {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
             .exp(0) // expired
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "test-secret").unwrap();
         assert!(validate_token(&token, "test-secret").is_err());
     }
@@ -141,7 +166,8 @@ mod tests {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
             .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "correct-secret").unwrap();
         assert!(validate_token(&token, "wrong-secret").is_err());
     }
@@ -173,6 +199,30 @@ mod tests {
     }
 
     #[test]
+    fn reset_token_error_display() {
+        assert_eq!(ResetTokenError::NotFound.to_string(), "Invalid reset token");
+        assert_eq!(
+            ResetTokenError::Expired.to_string(),
+            "Reset token has expired"
+        );
+    }
+
+    #[test]
+    fn reset_token_error_downcast_roundtrip() {
+        let err: anyhow::Error = ResetTokenError::Expired.into();
+        assert_eq!(
+            err.downcast_ref::<ResetTokenError>(),
+            Some(&ResetTokenError::Expired)
+        );
+
+        let err: anyhow::Error = ResetTokenError::NotFound.into();
+        assert_eq!(
+            err.downcast_ref::<ResetTokenError>(),
+            Some(&ResetTokenError::NotFound)
+        );
+    }
+
+    #[test]
     fn hash_password_empty_string_succeeds() {
         // An empty password is technically valid and should produce a usable hash.
         let hash = hash_password("").unwrap();
@@ -188,12 +238,47 @@ mod tests {
         let claims = Claims::builder("abc-123", "admins")
             .email("admin@example.com")
             .exp(exp)
-            .build();
+            .build()
+            .unwrap();
         let token = create_token(&claims, "roundtrip-secret").unwrap();
         let decoded = validate_token(&token, "roundtrip-secret").unwrap();
         assert_eq!(decoded.sub, claims.sub);
         assert_eq!(decoded.collection, claims.collection);
         assert_eq!(decoded.email, claims.email);
         assert_eq!(decoded.exp, claims.exp);
+    }
+
+    #[test]
+    fn session_version_roundtrips_through_jwt() {
+        let exp = (chrono::Utc::now().timestamp() as u64) + 7200;
+        let claims = Claims::builder("user1", "users")
+            .email("test@example.com")
+            .exp(exp)
+            .session_version(5)
+            .build()
+            .unwrap();
+
+        let token = create_token(&claims, "sv-secret").unwrap();
+        let decoded = validate_token(&token, "sv-secret").unwrap();
+        assert_eq!(decoded.session_version, 5);
+    }
+
+    #[test]
+    fn legacy_token_without_session_version_defaults_to_zero() {
+        // Simulate a legacy JWT payload without session_version
+        use serde_json::json;
+
+        let payload = json!({
+            "sub": "user1",
+            "collection": "users",
+            "email": "test@example.com",
+            "exp": (chrono::Utc::now().timestamp() as u64) + 7200,
+        });
+
+        let claims: Claims = serde_json::from_value(payload).unwrap();
+        assert_eq!(
+            claims.session_version, 0,
+            "Missing session_version should default to 0"
+        );
     }
 }

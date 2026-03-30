@@ -6,7 +6,8 @@
  * Tags can be removed by clicking the X button or pressing Backspace
  * when the input is empty.
  *
- * Stores values as comma-separated in a hidden `<input>` for form submission.
+ * Uses Shadow DOM for the visual UI. The hidden `<input>` stays in light
+ * DOM for form participation.
  *
  * @module tags
  */
@@ -14,82 +15,106 @@
 class CrapTags extends HTMLElement {
   constructor() {
     super();
-    /** @type {HTMLInputElement|null} */
-    this._hidden = null;
-    /** @type {HTMLElement|null} */
-    this._container = null;
-    /** @type {HTMLInputElement|null} */
-    this._input = null;
+    this.attachShadow({ mode: 'open' });
+    /** @type {string[]} */
+    this._values = [];
     /** @type {string} */
     this._fieldType = 'text';
+    /** @type {boolean} */
+    this._connected = false;
   }
 
   connectedCallback() {
-    this._hidden = this.querySelector('input[type="hidden"]');
-    this._container = this.querySelector('.form__tags');
-    this._input = this.querySelector('.form__tags-input');
+    if (this._connected) return;
+    this._connected = true;
+
     this._fieldType = this.dataset.fieldType || 'text';
+    /** @type {boolean} */
+    this._readonly = this.dataset.readonly !== undefined;
 
-    if (!this._hidden || !this._container || !this._input) return;
+    // Read initial values from the hidden input
+    const hidden = /** @type {HTMLInputElement|null} */ (
+      this.querySelector('input[type="hidden"]')
+    );
+    if (hidden && hidden.value) {
+      this._values = hidden.value.split(',').filter(Boolean);
+    }
 
-    // Bind events on existing remove buttons
-    this._container.querySelectorAll('.form__tags-chip-remove').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const chip = btn.closest('.form__tags-chip');
-        if (chip) {
-          chip.remove();
-          this._sync();
-        }
-      });
-    });
+    // Check for error state from initial template
+    const hasError = !!this.querySelector('.form__tags--error');
 
-    // Input: add tag on Enter, comma (text only), or Tab
+    // Clear light DOM except the hidden input
+    const lightChildren = [...this.children];
+    for (const child of lightChildren) {
+      if (child !== hidden) child.remove();
+    }
+
+    // Build shadow UI
+    this.shadowRoot.innerHTML = `
+      <style>${CrapTags._styles()}</style>
+      <div class="tags${hasError ? ' tags--error' : ''}" id="container">
+        <input
+          class="tags__input"
+          type="${this._fieldType === 'number' ? 'number' : 'text'}"
+          placeholder="${this.dataset.placeholder || ''}"
+          ${this.dataset.minLength ? `minlength="${this.dataset.minLength}"` : ''}
+          ${this.dataset.maxLength ? `maxlength="${this.dataset.maxLength}"` : ''}
+          ${this._fieldType === 'number' && this.dataset.min ? `min="${this.dataset.min}"` : ''}
+          ${this._fieldType === 'number' && this.dataset.max ? `max="${this.dataset.max}"` : ''}
+        />
+      </div>
+    `;
+
+    this._container = this.shadowRoot.getElementById('container');
+    this._input = /** @type {HTMLInputElement} */ (
+      this.shadowRoot.querySelector('.tags__input')
+    );
+    this._hidden = hidden;
+
+    this._renderChips();
+
+    if (this._readonly) {
+      this._input.style.display = 'none';
+      return;
+    }
+
+    // Input: add tag on Enter, comma (text only)
     this._input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || (e.key === ',' && this._fieldType !== 'number')) {
         e.preventDefault();
         this._addFromInput();
-      } else if (e.key === 'Backspace' && this._input.value === '') {
-        // Remove last tag
-        const chips = this._container.querySelectorAll('.form__tags-chip');
-        if (chips.length > 0) {
-          chips[chips.length - 1].remove();
-          this._sync();
-        }
+      } else if (e.key === 'Backspace' && this._input.value === '' && this._values.length > 0) {
+        this._values.pop();
+        this._sync();
+        this._renderChips();
       }
     });
 
-    // Also add on blur (if there's pending text)
-    this._input.addEventListener('blur', () => {
-      this._addFromInput();
-    });
+    // Add on blur
+    this._input.addEventListener('blur', () => this._addFromInput());
 
     // Click on container focuses input
     this._container.addEventListener('click', (e) => {
-      if (e.target === this._container) {
+      if (/** @type {HTMLElement} */ (e.target) === this._container) {
         this._input.focus();
       }
     });
   }
 
-  /**
-   * Read the input value, validate, and add as a tag.
-   */
   _addFromInput() {
     if (!this._input) return;
-    const raw = this._input.value.trim().replace(/,$/,'');
+    const raw = this._input.value.trim().replace(/,$/, '');
     if (!raw) return;
 
     if (this._fieldType === 'number') {
       const num = Number(raw);
       if (isNaN(num)) return;
 
-      // Validate min/max
       const minAttr = this.dataset.min;
       const maxAttr = this.dataset.max;
       if (minAttr !== undefined && minAttr !== '' && num < Number(minAttr)) return;
       if (maxAttr !== undefined && maxAttr !== '' && num > Number(maxAttr)) return;
     } else {
-      // Validate min/max length for text
       const minLen = this.dataset.minLength;
       const maxLen = this.dataset.maxLength;
       if (minLen && raw.length < Number(minLen)) return;
@@ -97,58 +122,141 @@ class CrapTags extends HTMLElement {
     }
 
     // Prevent duplicates
-    const existing = this._getValues();
-    if (existing.includes(raw)) {
+    if (this._values.includes(raw)) {
       this._input.value = '';
       return;
     }
 
-    this._addChip(raw);
+    this._values.push(raw);
     this._input.value = '';
     this._sync();
+    this._renderChips();
   }
 
-  /**
-   * Create and insert a chip element.
-   *
-   * @param {string} value
-   */
-  _addChip(value) {
-    const chip = document.createElement('span');
-    chip.className = 'form__tags-chip';
-    chip.dataset.value = value;
-    chip.textContent = value;
+  _renderChips() {
+    // Remove existing chips
+    this._container.querySelectorAll('.chip').forEach((c) => c.remove());
 
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'form__tags-chip-remove';
-    btn.setAttribute('aria-label', 'Remove');
-    btn.innerHTML = '&times;';
-    btn.addEventListener('click', () => {
-      chip.remove();
-      this._sync();
-    });
+    // Insert chips before input
+    for (const value of this._values) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.dataset.value = value;
+      chip.textContent = value;
 
-    chip.appendChild(btn);
-    this._container.insertBefore(chip, this._input);
+      if (!this._readonly) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'chip__remove';
+        btn.setAttribute('aria-label', 'Remove');
+        btn.innerHTML = '&times;';
+        btn.addEventListener('click', () => {
+          this._values = this._values.filter((v) => v !== value);
+          this._sync();
+          this._renderChips();
+        });
+        chip.appendChild(btn);
+      }
+      this._container.insertBefore(chip, this._input);
+    }
   }
 
-  /**
-   * Get all current tag values.
-   *
-   * @returns {string[]}
-   */
-  _getValues() {
-    return [...this._container.querySelectorAll('.form__tags-chip')]
-      .map((el) => /** @type {HTMLElement} */ (el).dataset.value || '');
-  }
-
-  /**
-   * Sync the hidden input value from current chips.
-   */
   _sync() {
     if (!this._hidden) return;
-    this._hidden.value = this._getValues().join(',');
+    this._hidden.value = this._values.join(',');
+    this.dispatchEvent(new Event('crap:change', { bubbles: true }));
+  }
+
+  static _styles() {
+    return `
+      :host {
+        display: block;
+      }
+
+      .tags {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-xs, 0.25rem);
+        padding: var(--space-xs, 0.25rem) var(--space-sm, 0.5rem);
+        border: 1px solid var(--border-default, var(--border-color, rgba(0, 0, 0, 0.08)));
+        border-radius: var(--radius-md, 6px);
+        background: var(--surface-primary, #fff);
+        min-height: var(--input-height, 2.25rem);
+        cursor: text;
+      }
+
+      .tags:focus-within {
+        border-color: var(--accent-primary, var(--color-primary, #1677ff));
+        box-shadow: 0 0 0 2px var(--accent-primary-bg, rgba(59, 130, 246, 0.1));
+      }
+
+      .tags--error {
+        border-color: var(--color-danger, #ff4d4f);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs, 0.25rem);
+        padding: var(--space-xs, 0.25rem) var(--space-sm, 0.5rem);
+        background: var(--color-primary-bg, rgba(22, 119, 255, 0.06));
+        border: 1px solid color-mix(in srgb, var(--color-primary, #1677ff) 20%, transparent);
+        border-radius: var(--radius-md, 6px);
+        font-size: var(--text-sm, 0.8125rem);
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+
+      .chip__remove {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+        cursor: pointer;
+        font-size: var(--icon-sm, 1rem);
+        line-height: 1;
+        padding: 0;
+        margin-left: var(--space-2xs, 2px);
+        border-radius: var(--radius-sm, 4px);
+        transition: color 0.15s ease, background 0.15s ease;
+      }
+
+      .chip__remove:hover {
+        color: var(--color-danger, #ff4d4f);
+        background: var(--color-danger-bg, rgba(255, 77, 79, 0.06));
+      }
+
+      .tags__input {
+        flex: 1 1 calc(var(--base, 0.25rem) * 20);
+        min-width: calc(var(--base, 0.25rem) * 20);
+        height: auto;
+        border: none;
+        outline: none;
+        background: transparent;
+        box-shadow: none;
+        font-size: var(--text-sm, 0.8125rem);
+        font-family: inherit;
+        padding: var(--space-xs, 0.25rem) 0;
+        color: var(--text-primary, rgba(0, 0, 0, 0.88));
+      }
+
+      .tags__input:focus {
+        border: none;
+        box-shadow: none;
+      }
+
+      .tags__input::placeholder {
+        color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+      }
+
+      .chip + .tags__input {
+        margin-left: var(--space-xs, 0.25rem);
+      }
+    `;
   }
 }
 

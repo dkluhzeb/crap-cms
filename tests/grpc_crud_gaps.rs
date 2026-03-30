@@ -19,6 +19,7 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def
@@ -137,8 +138,14 @@ fn setup_service(
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -622,6 +629,8 @@ async fn delete_many_basic() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()
@@ -664,6 +673,8 @@ async fn delete_many_with_where_partial() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()
@@ -681,12 +692,101 @@ async fn delete_many_no_matches() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
+            hooks: None,
+            force_hard_delete: false,
         }))
         .await
         .unwrap()
         .into_inner();
 
     assert_eq!(resp.deleted, 0);
+}
+
+fn make_soft_delete_posts_def() -> CollectionDefinition {
+    let mut def = make_posts_def();
+    def.soft_delete = true;
+    def
+}
+
+#[tokio::test]
+async fn delete_many_soft_deletes_when_collection_has_soft_delete() {
+    let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
+
+    // Create 3 documents
+    for title in &["A", "B", "C"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", "draft")])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Delete all — should soft-delete, not hard-delete
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            r#where: None,
+            hooks: None,
+            force_hard_delete: false,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 0, "no documents should be hard-deleted");
+    assert_eq!(resp.soft_deleted, 3, "all 3 should be soft-deleted");
+
+    // Documents should no longer appear in normal find
+    let count = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .count;
+    assert_eq!(count, 0, "soft-deleted docs should not appear in count");
+}
+
+#[tokio::test]
+async fn delete_many_force_hard_delete_on_soft_delete_collection() {
+    let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
+
+    // Create 2 documents
+    for title in &["X", "Y"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", "draft")])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Force hard-delete
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            r#where: None,
+            hooks: None,
+            force_hard_delete: true,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 2, "all 2 should be hard-deleted");
+    assert_eq!(resp.soft_deleted, 0, "none should be soft-deleted");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -937,6 +1037,7 @@ async fn delete_nonexistent_collection() {
         .delete(Request::new(content::DeleteRequest {
             collection: "nonexistent".to_string(),
             id: "some-id".to_string(),
+            force_hard_delete: false,
         }))
         .await
         .unwrap_err();

@@ -11,6 +11,9 @@ import { t } from './i18n.js';
 
 class CrapUploadPreview extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     // Legacy: <select> for locale_locked fields
     const select = /** @type {HTMLSelectElement|null} */ (this.querySelector('[data-upload-select]'));
     if (select) {
@@ -32,7 +35,7 @@ class CrapUploadPreview extends HTMLElement {
     // Search widget: listen for crap:change events (bubbles from relationship-search)
     this.addEventListener('crap:change', () => {
       const hidden = /** @type {HTMLInputElement|null} */ (
-        this.querySelector('.relationship-search__hidden input[type="hidden"]')
+        this.querySelector('crap-relationship-search input[type="hidden"]')
       );
       if (!hidden || !hidden.value) {
         this._updatePreview(null, null, false);
@@ -57,22 +60,32 @@ class CrapUploadPreview extends HTMLElement {
 
     if (preview) {
       if (thumbnailUrl && isImage) {
-        preview.innerHTML = '<img src="' + thumbnailUrl + '" alt="' + t('preview') + '" />';
+        preview.textContent = '';
+        const img = document.createElement('img');
+        img.src = thumbnailUrl;
+        img.alt = t('preview');
+        preview.appendChild(img);
         preview.style.display = '';
       } else {
-        preview.innerHTML = '';
+        preview.textContent = '';
         preview.style.display = 'none';
       }
     }
 
     if (info) {
       if (filename) {
-        info.innerHTML =
-          '<span class="material-symbols-outlined icon--sm">description</span>' +
-          '<span class="upload-field__filename">' + filename + '</span>';
+        info.textContent = '';
+        const icon = document.createElement('span');
+        icon.className = 'material-symbols-outlined icon--sm';
+        icon.textContent = 'description';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'upload-field__filename';
+        nameSpan.textContent = filename;
+        info.appendChild(icon);
+        info.appendChild(nameSpan);
         info.style.display = '';
       } else {
-        info.innerHTML = '';
+        info.textContent = '';
         info.style.display = 'none';
       }
     }

@@ -147,7 +147,7 @@ fn fail_job_with_retry_resets_to_pending() {
     job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
 
     // Fail with should_retry = true (attempt < max_attempts)
-    job_query::fail_job(&conn, &run.id, "test error", true).unwrap();
+    job_query::fail_job(&conn, &run.id, "test error", true, 1).unwrap();
 
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
     assert_eq!(
@@ -171,7 +171,7 @@ fn fail_job_no_retry_stays_failed() {
     job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
 
     // Fail with should_retry = false
-    job_query::fail_job(&conn, &run.id, "permanent failure", false).unwrap();
+    job_query::fail_job(&conn, &run.id, "permanent failure", false, 1).unwrap();
 
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Failed);

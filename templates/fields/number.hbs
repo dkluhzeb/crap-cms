@@ -4,22 +4,8 @@
   {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
 {{#if has_many}}
-<crap-tags data-field-type="number"{{#if has_min}} data-min="{{min}}"{{/if}}{{#if has_max}} data-max="{{max}}"{{/if}}>
+<crap-tags data-field-type="number"{{#if has_min}} data-min="{{min}}"{{/if}}{{#if has_max}} data-max="{{max}}"{{/if}}{{#if placeholder}} data-placeholder="{{placeholder}}"{{else}} data-placeholder="{{t "type_and_press_enter"}}"{{/if}}{{#if readonly}} data-readonly{{/if}}{{#if error}} data-error{{/if}}>
   <input type="hidden" name="{{name}}" value="{{value}}" />
-  <div class="form__tags{{#if error}} form__tags--error{{/if}}" id="field-{{name}}">
-    {{#each tags}}
-    <span class="form__tags-chip" data-value="{{this}}">{{this}}<button type="button" class="form__tags-chip-remove" aria-label="Remove">&times;</button></span>
-    {{/each}}
-    <input
-      type="number"
-      class="form__tags-input"
-      step="{{step}}"
-      {{#if placeholder}}placeholder="{{placeholder}}"{{else}}placeholder="{{t "type_and_press_enter"}}"{{/if}}
-      {{#if readonly}}readonly{{/if}}
-      {{#if has_min}}min="{{min}}"{{/if}}
-      {{#if has_max}}max="{{max}}"{{/if}}
-    />
-  </div>
 </crap-tags>
 {{else}}
 <input

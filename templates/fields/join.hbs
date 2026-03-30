@@ -1,12 +1,12 @@
-<label>
+<span class="form__label">
   {{t label}}
-</label>
+</span>
 <div class="form__join">
   {{#if join_items}}
   <div class="form__join-list">
     {{#each join_items}}
-    <a class="form__join-item" href="/admin/collections/{{../join_collection}}/{{this.id}}/edit"
-      hx-get="/admin/collections/{{../join_collection}}/{{this.id}}/edit" hx-target="body" hx-push-url="true">
+    <a class="form__join-item" href="/admin/collections/{{../join_collection}}/{{this.id}}"
+      hx-get="/admin/collections/{{../join_collection}}/{{this.id}}" hx-target="body" hx-push-url="true">
       <span class="form__join-item-label">{{this.label}}</span>
       <span class="material-symbols-outlined form__join-item-icon">open_in_new</span>
     </a>

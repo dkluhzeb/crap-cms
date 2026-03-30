@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 
+use anyhow::Result;
+
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldType, Registry},
+    core::{CollectionDefinition, FieldDefinition, FieldType, Registry},
     db::query::sanitize_locale,
 };
 
@@ -35,44 +37,76 @@ pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
             .admin
             .list_searchable_fields
             .iter()
-            .filter(|name| {
-                def.fields
-                    .iter()
-                    .any(|f| f.name == **name && !CONTAINER_FIELD_TYPES.contains(&f.field_type))
-            })
+            .filter(|name| is_fts_eligible_field(name, &def.fields))
             .cloned()
             .collect();
     }
 
-    def.fields
-        .iter()
-        .filter(|f| {
-            matches!(
-                f.field_type,
-                FieldType::Text
-                    | FieldType::Textarea
-                    | FieldType::Richtext
-                    | FieldType::Email
-                    | FieldType::Code
-            )
-        })
-        .map(|f| f.name.clone())
-        .collect()
+    collect_fts_defaults(&def.fields)
+}
+
+/// Check if a field name refers to an FTS-eligible column, recursing into
+/// layout wrappers (Row, Collapsible, Tabs) that promote children.
+fn is_fts_eligible_field(name: &str, fields: &[FieldDefinition]) -> bool {
+    fields.iter().any(|f| {
+        if f.name == name && !CONTAINER_FIELD_TYPES.contains(&f.field_type) {
+            return true;
+        }
+
+        if matches!(
+            f.field_type,
+            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        ) {
+            return is_fts_eligible_field(name, &f.fields);
+        }
+
+        false
+    })
+}
+
+/// Collect default FTS fields (text-like) from top level and layout wrappers.
+fn collect_fts_defaults(fields: &[FieldDefinition]) -> Vec<String> {
+    let mut result = Vec::new();
+
+    for f in fields {
+        if matches!(
+            f.field_type,
+            FieldType::Text
+                | FieldType::Textarea
+                | FieldType::Richtext
+                | FieldType::Email
+                | FieldType::Code
+        ) {
+            result.push(f.name.clone());
+        }
+
+        if matches!(
+            f.field_type,
+            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        ) {
+            result.extend(collect_fts_defaults(&f.fields));
+        }
+    }
+
+    result
 }
 
 /// Expand logical field names to actual database column names.
 ///
 /// For non-localized fields, the column name is the field name.
 /// For localized fields, each field expands to `field__locale` for each locale.
-pub fn get_fts_columns(def: &CollectionDefinition, locale_config: &LocaleConfig) -> Vec<String> {
+pub fn get_fts_columns(
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<Vec<String>> {
     let logical_fields = get_fts_fields(def);
 
     if logical_fields.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     if !locale_config.is_enabled() {
-        return logical_fields;
+        return Ok(logical_fields);
     }
 
     let mut columns = Vec::new();
@@ -84,13 +118,14 @@ pub fn get_fts_columns(def: &CollectionDefinition, locale_config: &LocaleConfig)
 
         if is_localized {
             for locale in &locale_config.locales {
-                columns.push(format!("{}__{}", field_name, sanitize_locale(locale)));
+                columns.push(format!("{}__{}", field_name, sanitize_locale(locale)?));
             }
         } else {
             columns.push(field_name.clone());
         }
     }
-    columns
+
+    Ok(columns)
 }
 
 /// Build a set of column names that are JSON-format richtext fields.
@@ -223,7 +258,7 @@ mod tests {
     #[test]
     fn get_fts_columns_no_locale_returns_field_names() {
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        let cols = get_fts_columns(&def, &LocaleConfig::default());
+        let cols = get_fts_columns(&def, &LocaleConfig::default()).unwrap();
         assert_eq!(cols, vec!["title", "body"]);
     }
 
@@ -233,21 +268,21 @@ mod tests {
             localized_text_field("title"),
             localized_text_field("body"),
         ]);
-        let cols = get_fts_columns(&def, &locale_config_en_de());
+        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
         assert_eq!(cols, vec!["title__en", "title__de", "body__en", "body__de"]);
     }
 
     #[test]
     fn get_fts_columns_mixed_localized_and_non_localized() {
         let def = simple_def(vec![localized_text_field("title"), text_field("slug")]);
-        let cols = get_fts_columns(&def, &locale_config_en_de());
+        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
         assert_eq!(cols, vec!["title__en", "title__de", "slug"]);
     }
 
     #[test]
     fn get_fts_columns_locale_enabled_but_no_localized_fields() {
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        let cols = get_fts_columns(&def, &locale_config_en_de());
+        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
         // None of the fields are localized, so no expansion
         assert_eq!(cols, vec!["title", "body"]);
     }
@@ -257,7 +292,7 @@ mod tests {
         let def = simple_def(vec![
             FieldDefinition::builder("count", FieldType::Number).build(),
         ]);
-        let cols = get_fts_columns(&def, &locale_config_en_de());
+        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
         assert!(cols.is_empty());
     }
 
@@ -291,5 +326,50 @@ mod tests {
         def.admin.list_searchable_fields = vec!["title".into(), "nonexistent".into()];
         // Neither exists as a scalar field — result should be empty
         assert!(get_fts_fields(&def).is_empty());
+    }
+
+    // ── Regression: fields inside layout wrappers ────────────────────
+
+    #[test]
+    fn searchable_field_inside_row() {
+        let mut def = simple_def(vec![FieldDefinition {
+            name: "date_row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![text_field("title"), text_field("subtitle")],
+            ..Default::default()
+        }]);
+        def.admin.list_searchable_fields = vec!["title".into()];
+
+        assert_eq!(get_fts_fields(&def), vec!["title"]);
+    }
+
+    #[test]
+    fn searchable_field_inside_collapsible() {
+        let mut def = simple_def(vec![FieldDefinition {
+            name: "meta".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![text_field("description")],
+            ..Default::default()
+        }]);
+        def.admin.list_searchable_fields = vec!["description".into()];
+
+        assert_eq!(get_fts_fields(&def), vec!["description"]);
+    }
+
+    #[test]
+    fn default_fts_includes_fields_inside_wrappers() {
+        let def = simple_def(vec![
+            text_field("top_level"),
+            FieldDefinition {
+                name: "row".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![text_field("nested_in_row")],
+                ..Default::default()
+            },
+        ]);
+
+        let fields = get_fts_fields(&def);
+        assert!(fields.contains(&"top_level".to_string()));
+        assert!(fields.contains(&"nested_in_row".to_string()));
     }
 }

@@ -8,6 +8,9 @@
 
 class CrapLocalePicker extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     const toggle = this.querySelector('[data-locale-toggle]');
     const dropdown = this.querySelector('[data-locale-dropdown]');
     if (!toggle || !dropdown) return;
@@ -38,6 +41,14 @@ class CrapLocalePicker extends HTMLElement {
   }
 
   disconnectedCallback() {
+    const toggle = this.querySelector('[data-locale-toggle]');
+    const dropdown = this.querySelector('[data-locale-dropdown]');
+    if (toggle && this._onToggle) {
+      toggle.removeEventListener('click', this._onToggle);
+    }
+    if (dropdown && this._onSelect) {
+      dropdown.removeEventListener('click', this._onSelect);
+    }
     if (this._onOutsideClick) {
       document.removeEventListener('click', this._onOutsideClick);
     }

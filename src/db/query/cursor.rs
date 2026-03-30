@@ -95,7 +95,17 @@ fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<Str
         sort_val,
         id: doc.id.to_string(),
     };
-    cursor.encode().ok()
+    match cursor.encode() {
+        Ok(encoded) => Some(encoded),
+        Err(e) => {
+            tracing::error!(
+                "Failed to encode pagination cursor for doc {}: {:#}",
+                doc.id,
+                e
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]

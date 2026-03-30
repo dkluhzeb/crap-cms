@@ -107,12 +107,28 @@
       {{t "actions"}}
     </div>
     <div class="edit-sidebar__panel-body">
-      <a class="button button--danger button--full"
-        href="/admin/collections/{{collection.slug}}/{{document.id}}/delete"
-        hx-get="/admin/collections/{{collection.slug}}/{{document.id}}/delete"
-        hx-target="body" hx-push-url="true">
+      {{#if ref_count}}
+      <div class="edit-sidebar__ref-info">
+        <p class="text--muted text--sm edit-sidebar__ref-text">
+          <span class="material-symbols-outlined icon--inline">link</span>
+          {{t "referenced_by_count" count=ref_count}}
+        </p>
+        <crap-back-refs slug="{{collection.slug}}" doc-id="{{document.id}}">
+          <button type="button" class="button button--ghost button--small">
+            {{t "show_details"}}
+          </button>
+        </crap-back-refs>
+      </div>
+      {{/if}}
+      <button type="button" class="button button--danger button--full"
+        {{#if ref_count}}disabled title="{{t "cannot_delete_referenced"}}"{{/if}}
+        data-delete-id="{{document.id}}"
+        data-delete-title="{{document_title}}"
+        data-delete-slug="{{collection.slug}}"
+        data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
+        data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}">
         {{t "delete"}} {{collection.singular_name}}
-      </a>
+      </button>
     </div>
   </div>
   {{/if}}

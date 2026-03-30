@@ -21,6 +21,7 @@ use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -128,12 +129,21 @@ fn setup_app_with_config(
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             5, 300,
         )),
+        ip_login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )),
         forgot_password_limiter: std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+        ),
         has_auth,
         translations,
+        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     };
 
     let router = build_router(state);
@@ -168,7 +178,8 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
     let claims = auth::Claims::builder(user_id, "users")
         .email(email)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
-        .build();
+        .build()
+        .unwrap();
     let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
     format!("crap_session={}", token)
 }
@@ -639,7 +650,7 @@ async fn evaluate_conditions_returns_json() {
     let user_id = create_test_user(&app, "cond@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "cond@test.com");
 
-    let body_json = serde_json::json!({
+    let body_json = json!({
         "form_data": {"title": "Test"},
         "conditions": {}
     });

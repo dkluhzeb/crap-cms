@@ -27,7 +27,14 @@ pub(crate) fn check_unique(
         Some(other) => other.to_string(),
         None => String::new(),
     };
-    match query::count_where_field_eq(ctx.conn, ctx.table, col_name, &value_str, ctx.exclude_id) {
+    match query::count_where_field_eq(
+        ctx.conn,
+        ctx.table,
+        col_name,
+        &value_str,
+        ctx.exclude_id,
+        ctx.soft_delete,
+    ) {
         Ok(count) if count > 0 => {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
@@ -39,6 +46,15 @@ pub(crate) fn check_unique(
         Ok(_) => {}
         Err(e) => {
             tracing::warn!("Unique check failed for {}.{}: {}", ctx.table, data_key, e);
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!(
+                    "Could not verify uniqueness for {} (database error)",
+                    field.name
+                ),
+                "validation.unique_check_failed",
+                HashMap::from([("field".to_string(), field.name.clone())]),
+            ));
         }
     }
 }
@@ -300,6 +316,54 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_unique_soft_delete_excludes_deleted_rows() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT, _deleted_at TEXT);
+             INSERT INTO test (id, slug, _deleted_at) VALUES ('deleted1', 'taken', '2024-01-01');",
+        )
+        .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+
+        // With soft_delete=true, the soft-deleted row should be excluded from the unique check
+        let mut data = HashMap::new();
+        data.insert("slug".to_string(), json!("taken"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .soft_delete(true)
+                .build(),
+        );
+        assert!(
+            result.is_ok(),
+            "Unique check with soft_delete=true should ignore soft-deleted rows"
+        );
+
+        // With soft_delete=false (the old default), the same value would fail
+        let mut data = HashMap::new();
+        data.insert("slug".to_string(), json!("taken"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test")
+                .soft_delete(false)
+                .build(),
+        );
+        assert!(
+            result.is_err(),
+            "Unique check with soft_delete=false should include soft-deleted rows"
+        );
+    }
+
+    #[test]
     fn test_validate_unique_localized_without_locale_ctx_uses_bare_column() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -327,6 +391,38 @@ mod tests {
         assert!(
             result.is_err(),
             "Without locale context, should check bare column"
+        );
+    }
+
+    /// Regression: when the DB query for uniqueness fails (e.g. missing table),
+    /// the unique check must produce a validation error — not silently pass.
+    #[test]
+    fn test_validate_unique_db_error_produces_validation_error() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Table "test" does NOT exist — query will fail
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("any@test.com"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "DB error during unique check must fail validation"
+        );
+        let errs = result.unwrap_err().errors;
+        assert_eq!(errs.len(), 1);
+        assert_eq!(
+            errs[0].key.as_deref(),
+            Some("validation.unique_check_failed")
         );
     }
 }

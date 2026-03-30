@@ -43,9 +43,10 @@ Tokens expire after `token_expiry` seconds (default: 7200 = 2 hours). Configurab
 
 ## Security
 
-- **Rate limiting** — per-email tracking. After `max_login_attempts` (default: 5) failures, the email is locked out for `login_lockout_seconds` (default: 300).
+- **Rate limiting** — per-email tracking. After `max_login_attempts` (default: 5) failures, the email is locked out for `login_lockout_seconds` (default: 300). Per-IP rate limiting (`max_ip_login_attempts` in `[auth]`) provides additional protection against credential stuffing across multiple accounts.
 - **Timing safety** — login always performs a full Argon2id hash comparison, even for non-existent users, preventing timing-based email enumeration.
 - **JWT persistence** — when no `secret` is set in `crap.toml`, an auto-generated secret is persisted to `data/.jwt_secret` so tokens survive server restarts.
+- **Account locking** — when a user's `_locked` field is truthy, all authenticated requests (including `Me`) are rejected with `unauthenticated` status. This takes effect immediately, even for valid unexpired tokens.
 
 ## Creating Users via gRPC
 

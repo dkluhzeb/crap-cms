@@ -16,8 +16,11 @@ pub(super) fn register_auth(lua: &Lua, crap: &Table) -> Result<()> {
         verify_password(&password, &hash)
             .map_err(|e| mlua::Error::RuntimeError(format!("verify_password error: {}", e)))
     })?;
+
     auth_table.set("hash_password", hash_pw_fn)?;
     auth_table.set("verify_password", verify_pw_fn)?;
+
     crap.set("auth", auth_table)?;
+
     Ok(())
 }

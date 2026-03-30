@@ -1,8 +1,17 @@
+use std::collections::HashMap;
+
+use serde_json::json;
+
 use super::super::builder::build_field_contexts;
 use super::*;
 use crate::{
     admin::handlers::field_context::MAX_FIELD_DEPTH,
-    core::field::{BlockDefinition, FieldDefinition, LocalizedString, SelectOption},
+    core::{
+        FieldType,
+        field::{BlockDefinition, FieldAdmin, FieldDefinition, LocalizedString, SelectOption},
+        registry::Registry,
+        richtext::RichtextNodeDef,
+    },
 };
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
@@ -20,7 +29,7 @@ fn enriched_sub_field_nested_array_populates_rows() {
     ];
 
     // Simulate hydrated data: an array with 2 rows
-    let raw_value = serde_json::json!([
+    let raw_value = json!([
         {"url": "img1.jpg", "alt": "First"},
         {"url": "img2.jpg", "alt": "Second"},
     ]);
@@ -68,7 +77,7 @@ fn enriched_sub_field_nested_blocks_populates_rows() {
         bd
     }];
 
-    let raw_value = serde_json::json!([
+    let raw_value = json!([
         {"_block_type": "text", "body": "<p>Hello</p>"},
     ]);
 
@@ -104,7 +113,7 @@ fn enriched_sub_field_nested_group_populates_values() {
         make_field("published", FieldType::Checkbox),
     ];
 
-    let raw_value = serde_json::json!({
+    let raw_value = json!({
         "author": "Alice",
         "published": "1",
     });
@@ -154,7 +163,7 @@ fn enriched_sub_field_select_preserves_selected() {
         SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
     ];
 
-    let raw_value = serde_json::json!("published");
+    let raw_value = json!("published");
 
     let ctx = build_enriched_sub_field_context(
         &select_field,
@@ -199,7 +208,7 @@ fn enriched_sub_field_with_error() {
     errors.insert("content[0][title]".to_string(), "Required".to_string());
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!("val")),
+        Some(&json!("val")),
         "content",
         0,
         &SubFieldOpts::builder(&errors).depth(1).build(),
@@ -215,7 +224,7 @@ fn enriched_sub_field_max_depth_returns_early() {
     arr.fields = vec![make_field("leaf", FieldType::Text)];
     let ctx = build_enriched_sub_field_context(
         &arr,
-        Some(&serde_json::json!([])),
+        Some(&json!([])),
         "parent",
         0,
         &SubFieldOpts::builder(&HashMap::new())
@@ -232,7 +241,7 @@ fn enriched_sub_field_max_depth_returns_early() {
 #[test]
 fn enriched_sub_field_date_day_only() {
     let sf = make_field("d", FieldType::Date);
-    let raw = serde_json::json!("2026-03-15T10:00:00Z");
+    let raw = json!("2026-03-15T10:00:00Z");
     let ctx = build_enriched_sub_field_context(
         &sf,
         Some(&raw),
@@ -248,7 +257,7 @@ fn enriched_sub_field_date_day_only() {
 fn enriched_sub_field_date_day_and_time() {
     let mut sf = make_field("d", FieldType::Date);
     sf.picker_appearance = Some("dayAndTime".to_string());
-    let raw = serde_json::json!("2026-03-15T10:30:00Z");
+    let raw = json!("2026-03-15T10:30:00Z");
     let ctx = build_enriched_sub_field_context(
         &sf,
         Some(&raw),
@@ -263,7 +272,7 @@ fn enriched_sub_field_date_day_and_time() {
 #[test]
 fn enriched_sub_field_date_short_value() {
     let sf = make_field("d", FieldType::Date);
-    let raw = serde_json::json!("short");
+    let raw = json!("short");
     let ctx = build_enriched_sub_field_context(
         &sf,
         Some(&raw),
@@ -283,7 +292,7 @@ fn enriched_sub_field_upload() {
     sf.relationship = Some(RelationshipConfig::new("media", false));
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!("img123")),
+        Some(&json!("img123")),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -301,7 +310,7 @@ fn enriched_sub_field_relationship() {
     sf.relationship = Some(RelationshipConfig::new("users", true));
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!("user1")),
+        Some(&json!("user1")),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -330,7 +339,7 @@ fn enriched_sub_field_number_to_string() {
     let sf = make_field("count", FieldType::Number);
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!(42)),
+        Some(&json!(42)),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -363,7 +372,7 @@ fn enriched_sub_field_array_with_options() {
     arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
     let ctx = build_enriched_sub_field_context(
         &arr,
-        Some(&serde_json::json!([])),
+        Some(&json!([])),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -390,7 +399,7 @@ fn enriched_sub_field_blocks_with_options() {
     blk.admin.label_field = Some("body".to_string());
     let ctx = build_enriched_sub_field_context(
         &blk,
-        Some(&serde_json::json!([])),
+        Some(&json!([])),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -409,7 +418,7 @@ fn enriched_sub_field_nested_array_row_errors() {
     let mut inner_array = make_field("items", FieldType::Array);
     inner_array.fields = vec![make_field("title", FieldType::Text)];
 
-    let raw_value = serde_json::json!([{"title": ""}]);
+    let raw_value = json!([{"title": ""}]);
     let mut errors = HashMap::new();
     errors.insert(
         "parent[0][items][0][title]".to_string(),
@@ -440,7 +449,7 @@ fn enriched_sub_field_nested_blocks_row_errors() {
         bd
     }];
 
-    let raw_value = serde_json::json!([{"_block_type": "text", "body": ""}]);
+    let raw_value = json!([{"_block_type": "text", "body": ""}]);
     let mut errors = HashMap::new();
     errors.insert(
         "parent[0][sections][0][body]".to_string(),
@@ -467,7 +476,7 @@ fn enriched_sub_field_group_collapsed() {
     let mut grp = make_field("meta", FieldType::Group);
     grp.fields = vec![make_field("author", FieldType::Text)];
     grp.admin.collapsed = true;
-    let raw = serde_json::json!({"author": "Alice"});
+    let raw = json!({"author": "Alice"});
     let ctx = build_enriched_sub_field_context(
         &grp,
         Some(&raw),
@@ -508,7 +517,7 @@ fn enriched_sub_field_nested_blocks_unknown_type() {
     }];
 
     // Row with unknown block type
-    let raw_value = serde_json::json!([{"_block_type": "unknown_type", "body": "content"}]);
+    let raw_value = json!([{"_block_type": "unknown_type", "body": "content"}]);
 
     let ctx = build_enriched_sub_field_context(
         &blk,
@@ -575,7 +584,7 @@ fn enrich_nested_fields_upload_gets_options() {
     upload_field.relationship = Some(RelationshipConfig::new("media", false));
 
     let field_defs = vec![upload_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "content[0][image]",
         "field_type": "upload",
         "value": "img1",
@@ -624,7 +633,7 @@ fn enrich_nested_fields_relationship_gets_options() {
     rel_field.relationship = Some(RelationshipConfig::new("users", false));
 
     let field_defs = vec![rel_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "items[0][author]",
         "field_type": "relationship",
         "value": "u1",
@@ -675,7 +684,7 @@ fn enrich_nested_fields_recurses_into_layout() {
         .build();
 
     let field_defs = vec![row_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "row1",
         "field_type": "row",
         "sub_fields": [{
@@ -744,7 +753,7 @@ fn enrich_nested_fields_blocks_template_gets_upload_options() {
 
     let field_defs = vec![blocks_field];
     // Simulate the block_definitions context (as built by build_single_field_context)
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "content",
         "field_type": "blocks",
         "block_definitions": [{
@@ -818,7 +827,7 @@ fn enrich_nested_fields_array_template_gets_upload_options() {
         .build();
 
     let field_defs = vec![array_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "attachments",
         "field_type": "array",
         "sub_fields": [{
@@ -872,7 +881,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
     doc_fields.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "hero", "heading": "Welcome"},
         ]),
     );
@@ -897,6 +906,8 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     let email_renderer =
         std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let ip_login_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
     let translations =
         std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     let state = crate::admin::AdminState {
@@ -910,12 +921,19 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         email_renderer,
         event_bus: None,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
+        ),
         has_auth: false,
         translations,
+        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -957,7 +975,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
     let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
     doc_fields.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             {"label": "First"},
             {"label": "Second"},
         ]),
@@ -982,6 +1000,8 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
     let email_renderer =
         std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let ip_login_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
     let translations =
         std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     let state = crate::admin::AdminState {
@@ -995,12 +1015,19 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         email_renderer,
         event_bus: None,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
+        ),
         has_auth: false,
         translations,
+        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     };
 
     enrich_field_contexts(
@@ -1042,6 +1069,8 @@ fn make_test_state() -> crate::admin::AdminState {
     let email_renderer =
         std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let ip_login_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
     let translations =
         std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     crate::admin::AdminState {
@@ -1055,12 +1084,19 @@ fn make_test_state() -> crate::admin::AdminState {
         email_renderer,
         event_bus: None,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
+        ),
         has_auth: false,
         translations,
+        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     }
 }
 
@@ -1080,7 +1116,7 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
     ];
 
     // Simulate hydrated data: flat JSON (as it comes from the join table)
-    let row_data = serde_json::json!([
+    let row_data = json!([
         {"id": "r1", "title": "Hello", "body": "World"}
     ]);
 
@@ -1140,7 +1176,7 @@ fn enriched_sub_field_row_in_array_transparent_names() {
             .build(),
     ];
 
-    let row_data = serde_json::json!([
+    let row_data = json!([
         {"id": "r1", "x": "10", "y": "20"}
     ]);
 
@@ -1209,7 +1245,7 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
             .build(),
     ];
 
-    let row_data = serde_json::json!([
+    let row_data = json!([
         {"id": "r1", "first_name": "John", "last_name": "Doe", "email": "john@example.com", "job_title": "Dev"}
     ]);
 
@@ -1266,4 +1302,294 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
     let pro_fields = tabs[1]["sub_fields"].as_array().unwrap();
     assert_eq!(pro_fields[0]["name"], "team_members[0][job_title]");
     assert_eq!(pro_fields[0]["value"], "Dev");
+}
+
+// --- enrich_richtext tests ---
+
+fn make_cta_registry() -> Registry {
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("cta", "Call to Action")
+            .attrs(vec![
+                FieldDefinition::builder("text", FieldType::Text)
+                    .required(true)
+                    .admin(
+                        FieldAdmin::builder()
+                            .label(LocalizedString::Plain("Button Text".to_string()))
+                            .placeholder(LocalizedString::Plain("Click here".to_string()))
+                            .description(LocalizedString::Plain("Visible button text".to_string()))
+                            .build(),
+                    )
+                    .build(),
+                FieldDefinition::builder("url", FieldType::Text)
+                    .required(true)
+                    .admin(
+                        FieldAdmin::builder()
+                            .label(LocalizedString::Plain("URL".to_string()))
+                            .build(),
+                    )
+                    .build(),
+                FieldDefinition::builder("style", FieldType::Select)
+                    .options(vec![
+                        SelectOption::new(LocalizedString::Plain("Primary".to_string()), "primary"),
+                        SelectOption::new(
+                            LocalizedString::Plain("Secondary".to_string()),
+                            "secondary",
+                        ),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    );
+    reg
+}
+
+#[test]
+fn enrich_richtext_basic_node_defs() {
+    let reg = make_cta_registry();
+    let mut ctx = json!({
+        "_node_names": ["cta"],
+    });
+
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    // _node_names should be removed
+    assert!(ctx.get("_node_names").is_none());
+
+    // custom_nodes should be populated
+    let nodes = ctx["custom_nodes"].as_array().unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["name"], "cta");
+    assert_eq!(nodes[0]["label"], "Call to Action");
+    assert_eq!(nodes[0]["inline"], false);
+
+    // attrs
+    let attrs = nodes[0]["attrs"].as_array().unwrap();
+    assert_eq!(attrs.len(), 3);
+    assert_eq!(attrs[0]["name"], "text");
+    assert_eq!(attrs[0]["type"], "text");
+    assert_eq!(attrs[0]["label"], "Button Text");
+    assert_eq!(attrs[0]["required"], true);
+    assert_eq!(attrs[0]["placeholder"], "Click here");
+    assert_eq!(attrs[0]["description"], "Visible button text");
+
+    assert_eq!(attrs[1]["name"], "url");
+    assert_eq!(attrs[1]["required"], true);
+
+    // select with options
+    assert_eq!(attrs[2]["name"], "style");
+    assert_eq!(attrs[2]["type"], "select");
+    let options = attrs[2]["options"].as_array().unwrap();
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0]["value"], "primary");
+    assert_eq!(options[1]["value"], "secondary");
+}
+
+#[test]
+fn enrich_richtext_admin_display_hints() {
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("widget", "Widget")
+            .attrs(vec![
+                FieldDefinition::builder("secret", FieldType::Text)
+                    .admin(FieldAdmin::builder().hidden(true).build())
+                    .build(),
+                FieldDefinition::builder("locked", FieldType::Text)
+                    .admin(FieldAdmin::builder().readonly(true).build())
+                    .build(),
+                FieldDefinition::builder("half", FieldType::Text)
+                    .admin(FieldAdmin::builder().width("50%").build())
+                    .build(),
+                FieldDefinition::builder("amount", FieldType::Number)
+                    .admin(FieldAdmin::builder().step("0.01").build())
+                    .build(),
+                FieldDefinition::builder("body", FieldType::Textarea)
+                    .admin(FieldAdmin::builder().rows(8).build())
+                    .build(),
+                FieldDefinition::builder("snippet", FieldType::Code)
+                    .admin(FieldAdmin::builder().language("JSON").build())
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let mut ctx = json!({ "_node_names": ["widget"] });
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
+    assert_eq!(attrs[0]["hidden"], true);
+    assert_eq!(attrs[1]["readonly"], true);
+    assert_eq!(attrs[2]["width"], "50%");
+    assert_eq!(attrs[3]["step"], "0.01");
+    assert_eq!(attrs[4]["rows"], 8);
+    assert_eq!(attrs[5]["language"], "JSON");
+}
+
+#[test]
+fn enrich_richtext_validation_bounds() {
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("form", "Form")
+            .attrs(vec![
+                FieldDefinition::builder("name", FieldType::Text)
+                    .min_length(2)
+                    .max_length(50)
+                    .build(),
+                FieldDefinition::builder("age", FieldType::Number)
+                    .min(0.0)
+                    .max(150.0)
+                    .build(),
+                FieldDefinition::builder("start", FieldType::Date)
+                    .min_date("2020-01-01")
+                    .max_date("2030-12-31")
+                    .picker_appearance("dayAndTime")
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let mut ctx = json!({ "_node_names": ["form"] });
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
+
+    assert_eq!(attrs[0]["min_length"], 2);
+    assert_eq!(attrs[0]["max_length"], 50);
+
+    assert_eq!(attrs[1]["min"], 0.0);
+    assert_eq!(attrs[1]["max"], 150.0);
+
+    assert_eq!(attrs[2]["min_date"], "2020-01-01");
+    assert_eq!(attrs[2]["max_date"], "2030-12-31");
+    assert_eq!(attrs[2]["picker_appearance"], "dayAndTime");
+}
+
+#[test]
+fn enrich_richtext_missing_node_skipped() {
+    let reg = Registry::new(); // empty — no nodes registered
+    let mut ctx = json!({ "_node_names": ["nonexistent"] });
+
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    // _node_names removed, but no custom_nodes set (all were missing)
+    assert!(ctx.get("_node_names").is_none());
+    assert!(ctx.get("custom_nodes").is_none());
+}
+
+#[test]
+fn enrich_richtext_no_node_names_key() {
+    let reg = Registry::new();
+    let mut ctx = json!({ "value": "hello" });
+
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    // nothing changed, no crash
+    assert_eq!(ctx["value"], "hello");
+    assert!(ctx.get("custom_nodes").is_none());
+}
+
+#[test]
+fn enrich_richtext_default_value_forwarded() {
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("note", "Note")
+            .attrs(vec![
+                FieldDefinition::builder("priority", FieldType::Select)
+                    .options(vec![
+                        SelectOption::new(LocalizedString::Plain("Low".to_string()), "low"),
+                        SelectOption::new(LocalizedString::Plain("High".to_string()), "high"),
+                    ])
+                    .default_value(json!("low"))
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let mut ctx = json!({ "_node_names": ["note"] });
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
+    assert_eq!(attrs[0]["default"], "low");
+}
+
+#[test]
+fn enrich_richtext_hints_absent_when_not_set() {
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("plain", "Plain")
+            .attrs(vec![
+                FieldDefinition::builder("value", FieldType::Text).build(),
+            ])
+            .build(),
+    );
+
+    let mut ctx = json!({ "_node_names": ["plain"] });
+    enrich_types::enrich_richtext(&mut ctx, &reg);
+
+    let attr = &ctx["custom_nodes"][0]["attrs"][0];
+    // These should NOT be present when not explicitly set
+    assert!(attr.get("hidden").is_none());
+    assert!(attr.get("readonly").is_none());
+    assert!(attr.get("width").is_none());
+    assert!(attr.get("step").is_none());
+    assert!(attr.get("rows").is_none());
+    assert!(attr.get("language").is_none());
+    assert!(attr.get("min").is_none());
+    assert!(attr.get("max").is_none());
+    assert!(attr.get("min_length").is_none());
+    assert!(attr.get("max_length").is_none());
+    assert!(attr.get("min_date").is_none());
+    assert!(attr.get("max_date").is_none());
+    assert!(attr.get("picker_appearance").is_none());
+    assert!(attr.get("placeholder").is_none());
+    assert!(attr.get("description").is_none());
+    assert!(attr.get("options").is_none());
+    assert!(attr.get("default").is_none());
+}
+
+// --- collect_node_attr_errors tests ---
+
+#[test]
+fn collect_node_attr_errors_finds_matching() {
+    use crate::admin::handlers::field_context::collect_node_attr_errors;
+
+    let mut errors = HashMap::new();
+    errors.insert(
+        "content[cta#0].text".to_string(),
+        "Text is required".to_string(),
+    );
+    errors.insert(
+        "content[cta#0].url".to_string(),
+        "URL is required".to_string(),
+    );
+
+    let result = collect_node_attr_errors(&errors, "content");
+    assert!(result.is_some());
+    let msg = result.unwrap();
+    assert!(msg.contains("Text is required"));
+    assert!(msg.contains("URL is required"));
+}
+
+#[test]
+fn collect_node_attr_errors_ignores_unrelated() {
+    use crate::admin::handlers::field_context::collect_node_attr_errors;
+
+    let mut errors = HashMap::new();
+    errors.insert(
+        "other_field[cta#0].text".to_string(),
+        "Text is required".to_string(),
+    );
+    errors.insert("content".to_string(), "Field error".to_string());
+
+    let result = collect_node_attr_errors(&errors, "content");
+    assert!(result.is_none());
+}
+
+#[test]
+fn collect_node_attr_errors_empty() {
+    use crate::admin::handlers::field_context::collect_node_attr_errors;
+
+    let errors = HashMap::new();
+    let result = collect_node_attr_errors(&errors, "content");
+    assert!(result.is_none());
 }

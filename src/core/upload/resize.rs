@@ -5,9 +5,18 @@ use anyhow::{Context as _, Result, bail};
 use crate::core::upload::{ImageFit, ImageSize};
 
 /// Resize an image according to the given size definition and fit mode.
-pub(super) fn resize_image(img: &image::DynamicImage, size: &ImageSize) -> image::DynamicImage {
+///
+/// Returns `None` if the source image has zero width or height (malformed image).
+pub(super) fn resize_image(
+    img: &image::DynamicImage,
+    size: &ImageSize,
+) -> Option<image::DynamicImage> {
+    if img.width() == 0 || img.height() == 0 {
+        return None;
+    }
+
     let filter = image::imageops::FilterType::CatmullRom;
-    match size.fit {
+    Some(match size.fit {
         ImageFit::Cover => {
             // Resize to fill, then center crop
             let src_ratio = img.width() as f64 / img.height() as f64;
@@ -16,12 +25,14 @@ pub(super) fn resize_image(img: &image::DynamicImage, size: &ImageSize) -> image
             let (resize_w, resize_h) = if src_ratio > dst_ratio {
                 // Source is wider — fit height, crop width
                 let h = size.height;
-                let w = (img.width() as f64 * (size.height as f64 / img.height() as f64)) as u32;
+                let w = (img.width() as f64 * (size.height as f64 / img.height() as f64))
+                    .min(u32::MAX as f64) as u32;
                 (w.max(1), h)
             } else {
                 // Source is taller — fit width, crop height
                 let w = size.width;
-                let h = (img.height() as f64 * (size.width as f64 / img.width() as f64)) as u32;
+                let h = (img.height() as f64 * (size.width as f64 / img.width() as f64))
+                    .min(u32::MAX as f64) as u32;
                 (w, h.max(1))
             };
 
@@ -43,7 +54,7 @@ pub(super) fn resize_image(img: &image::DynamicImage, size: &ImageSize) -> image
             // Stretch to exact dimensions
             img.resize_exact(size.width, size.height, filter)
         }
-    }
+    })
 }
 
 /// Save image as lossy WebP with given quality (via libwebp).
@@ -138,7 +149,7 @@ mod tests {
             .height(100)
             .fit(ImageFit::Cover)
             .build();
-        let result = resize_image(&img, &size);
+        let result = resize_image(&img, &size).unwrap();
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 100);
     }
@@ -154,7 +165,7 @@ mod tests {
             .height(100)
             .fit(ImageFit::Cover)
             .build();
-        let result = resize_image(&img, &size);
+        let result = resize_image(&img, &size).unwrap();
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 100);
     }
@@ -170,7 +181,7 @@ mod tests {
             .height(100)
             .fit(ImageFit::Contain)
             .build();
-        let result = resize_image(&img, &size);
+        let result = resize_image(&img, &size).unwrap();
         // Should fit within 100x100 preserving 2:1 aspect → 100x50
         assert!(result.width() <= 100);
         assert!(result.height() <= 100);
@@ -189,7 +200,7 @@ mod tests {
             .height(100)
             .fit(ImageFit::Inside)
             .build();
-        let result = resize_image(&img, &size);
+        let result = resize_image(&img, &size).unwrap();
         assert!(result.width() <= 100);
         assert!(result.height() <= 100);
     }
@@ -205,7 +216,7 @@ mod tests {
             .height(75)
             .fit(ImageFit::Fill)
             .build();
-        let result = resize_image(&img, &size);
+        let result = resize_image(&img, &size).unwrap();
         assert_eq!(result.width(), 150);
         assert_eq!(result.height(), 75);
     }
@@ -221,9 +232,56 @@ mod tests {
             .height(50)
             .fit(ImageFit::Cover)
             .build();
-        let result = resize_image(&img, &size);
+        let result = resize_image(&img, &size).unwrap();
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn resize_image_cover_extreme_aspect_ratio_no_overflow() {
+        // Wide source with tall target — the intermediate width calculation
+        // could overflow u32 without the .min(u32::MAX) guard.
+        // Use small dimensions (10x1 → 1x10) to exercise the ratio math
+        // without allocating a huge intermediate image.
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(10, 1, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("extreme")
+            .width(1)
+            .height(10)
+            .fit(ImageFit::Cover)
+            .build();
+
+        // Should not panic from overflow
+        let result = resize_image(&img, &size).unwrap();
+        assert!(result.width() >= 1);
+        assert!(result.height() >= 1);
+    }
+
+    #[test]
+    fn resize_image_returns_none_for_zero_dimensions() {
+        let img_zero_height =
+            image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(100, 0, |_, _| {
+                image::Rgba([0, 0, 0, 255])
+            }));
+        let img_zero_width =
+            image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(0, 100, |_, _| {
+                image::Rgba([0, 0, 0, 255])
+            }));
+        let size = ImageSizeBuilder::new("thumb")
+            .width(50)
+            .height(50)
+            .fit(ImageFit::Cover)
+            .build();
+
+        assert!(
+            resize_image(&img_zero_height, &size).is_none(),
+            "Zero-height image should return None"
+        );
+        assert!(
+            resize_image(&img_zero_width, &size).is_none(),
+            "Zero-width image should return None"
+        );
     }
 
     #[test]

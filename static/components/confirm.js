@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 /**
  * <crap-confirm> — Confirmation dialog that wraps destructive form actions.
  *
@@ -34,6 +36,13 @@ class CrapConfirm extends HTMLElement {
      */
     this._pendingForm = null;
 
+    /**
+     * Guard against duplicate listener registration on reconnection.
+     * @type {boolean}
+     * @private
+     */
+    this._connected = false;
+
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.innerHTML = `
       <style>
@@ -69,9 +78,10 @@ class CrapConfirm extends HTMLElement {
         }
         button {
           font-family: inherit;
-          font-size: var(--text-base, 0.875rem);
+          font-size: var(--text-sm, 0.8125rem);
           font-weight: 500;
-          padding: var(--space-sm, 0.5rem) var(--space-lg, 1rem);
+          height: var(--button-height, 2.25rem);
+          padding: 0 var(--space-lg, 1rem);
           border-radius: var(--radius-md, 6px);
           border: none;
           cursor: pointer;
@@ -95,8 +105,8 @@ class CrapConfirm extends HTMLElement {
           <p></p>
         </div>
         <div class="dialog__actions">
-          <button class="btn-cancel" type="button">Cancel</button>
-          <button class="btn-confirm" type="button">Confirm</button>
+          <button class="btn-cancel" type="button">${t('cancel')}</button>
+          <button class="btn-confirm" type="button">${t('confirm')}</button>
         </div>
       </dialog>
     `;
@@ -104,6 +114,9 @@ class CrapConfirm extends HTMLElement {
 
   /** @returns {void} */
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     /** @type {HTMLDialogElement} */
     const dialog = this.shadowRoot.querySelector('dialog');
     /** @type {HTMLParagraphElement} */
@@ -124,7 +137,7 @@ class CrapConfirm extends HTMLElement {
       e.preventDefault();
       e.stopImmediatePropagation();
       this._pendingForm = /** @type {HTMLFormElement} */ (e.target);
-      messageEl.textContent = this.getAttribute('message') || 'Are you sure?';
+      messageEl.textContent = this.getAttribute('message') || t('are_you_sure');
       dialog.showModal();
     }, true);
 
@@ -142,6 +155,13 @@ class CrapConfirm extends HTMLElement {
         form.requestSubmit();
       }
     });
+  }
+
+  /** @returns {void} */
+  disconnectedCallback() {
+    // Do NOT reset _connected — listeners on `this` and shadow DOM elements
+    // survive DOM moves. Resetting causes duplicate submit interception on
+    // reconnect, which blocks confirmed form submissions.
   }
 }
 

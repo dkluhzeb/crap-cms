@@ -1,6 +1,6 @@
 # crap.log
 
-Structured logging that maps to Rust's `tracing` framework. Log messages appear with a `[lua]` prefix.
+Structured logging that maps to Rust's `tracing` framework. Log messages appear with a `[lua:<vm>]` prefix, where `<vm>` is the VM label (e.g., `init`, `vm-1`, `vm-2`).
 
 ## Functions
 
@@ -12,7 +12,7 @@ Log an info-level message.
 crap.log.info("Processing complete")
 ```
 
-Output: `INFO [lua] Processing complete`
+Output: `INFO [lua:vm-1] Processing complete`
 
 ### crap.log.warn(msg)
 
@@ -22,7 +22,7 @@ Log a warning-level message.
 crap.log.warn("Deprecated field used")
 ```
 
-Output: `WARN [lua] Deprecated field used`
+Output: `WARN [lua:vm-1] Deprecated field used`
 
 ### crap.log.error(msg)
 
@@ -32,7 +32,7 @@ Log an error-level message.
 crap.log.error("Failed to process webhook")
 ```
 
-Output: `ERROR [lua] Failed to process webhook`
+Output: `ERROR [lua:vm-1] Failed to process webhook`
 
 ## Parameters
 

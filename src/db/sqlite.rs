@@ -1,8 +1,11 @@
 //! SQLite implementation of `DbConnection`.
 
-use std::{collections::HashSet, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::types::Value as SqliteValue;
@@ -25,11 +28,31 @@ fn sqlite_table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
 }
 
 fn sqlite_get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("Invalid table name for PRAGMA: {:?}", table);
+    }
     let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
     Ok(rows
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
         .collect())
+}
+
+fn sqlite_get_table_column_types(
+    conn: &dyn DbConnection,
+    table: &str,
+) -> Result<HashMap<String, String>> {
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("Invalid table name for PRAGMA: {:?}", table);
+    }
+    let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
+    let mut map = HashMap::new();
+    for row in rows {
+        if let (Ok(name), Ok(col_type)) = (row.get_string("name"), row.get_string("type")) {
+            map.insert(name, col_type);
+        }
+    }
+    Ok(map)
 }
 
 fn sqlite_index_names(conn: &dyn DbConnection, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -51,9 +74,13 @@ fn sqlite_column_type_for(ft: &FieldType) -> &'static str {
 }
 
 fn sqlite_date_offset_expr(seconds: i64, param_pos: usize) -> (String, DbValue) {
+    // Use the absolute value with explicit sign to avoid double-negation
+    // when a negative value is passed (e.g., -30 would produce "--30 seconds").
+    let abs = seconds.unsigned_abs();
+    let sign = if seconds >= 0 { "-" } else { "+" };
     (
         format!("datetime('now', ?{})", param_pos),
-        DbValue::Text(format!("-{} seconds", seconds)),
+        DbValue::Text(format!("{}{} seconds", sign, abs)),
     )
 }
 
@@ -93,7 +120,11 @@ const SQLITE_SIDECAR_EXTENSIONS: &[&str] = &["db-wal", "db-shm"];
 /// Normalize SQLite's `"YYYY-MM-DD HH:MM:SS"` to ISO 8601 `"YYYY-MM-DDTHH:MM:SS.000Z"`.
 /// Already-normalized values pass through unchanged.
 fn sqlite_normalize_timestamp(ts: &str) -> String {
-    if ts.len() == 19 && ts.as_bytes().get(10) == Some(&b' ') {
+    if ts.len() == 19
+        && ts.as_bytes().get(10) == Some(&b' ')
+        && ts.is_char_boundary(10)
+        && ts.is_char_boundary(11)
+    {
         format!("{}T{}.000Z", &ts[..10], &ts[11..])
     } else {
         ts.to_string()
@@ -259,6 +290,10 @@ impl DbConnection for SqliteConnection {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -269,6 +304,10 @@ impl DbConnection for SqliteConnection {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -443,6 +482,10 @@ impl DbConnection for SqliteTransaction<'_> {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -453,6 +496,10 @@ impl DbConnection for SqliteTransaction<'_> {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -606,6 +653,10 @@ impl DbConnection for rusqlite::Transaction<'_> {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -616,6 +667,10 @@ impl DbConnection for rusqlite::Transaction<'_> {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -764,6 +819,10 @@ impl DbConnection for rusqlite::Connection {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -774,6 +833,10 @@ impl DbConnection for rusqlite::Connection {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -867,9 +930,13 @@ fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[Str
                 rusqlite::types::ValueRef::Null => DbValue::Null,
                 rusqlite::types::ValueRef::Integer(i) => DbValue::Integer(i),
                 rusqlite::types::ValueRef::Real(f) => DbValue::Real(f),
-                rusqlite::types::ValueRef::Text(s) => {
-                    DbValue::Text(String::from_utf8_lossy(s).into_owned())
-                }
+                rusqlite::types::ValueRef::Text(s) => match std::str::from_utf8(s) {
+                    Ok(valid) => DbValue::Text(valid.to_owned()),
+                    Err(e) => {
+                        tracing::warn!("Invalid UTF-8 in SQLite text column: {}", e);
+                        DbValue::Text(String::from_utf8_lossy(s).into_owned())
+                    }
+                },
                 rusqlite::types::ValueRef::Blob(b) => DbValue::Blob(b.to_vec()),
             })
             .unwrap_or(DbValue::Null);
@@ -970,6 +1037,10 @@ impl super::connection::DbConnection for InMemoryConn {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -980,6 +1051,10 @@ impl super::connection::DbConnection for InMemoryConn {
 
     fn get_table_columns(&self, table: &str) -> anyhow::Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> anyhow::Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> anyhow::Result<Vec<String>> {
@@ -1218,5 +1293,71 @@ mod tests {
 
         let rows = conn.query_all("SELECT id FROM t", &[]).unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn normalize_timestamp_sqlite_format() {
+        assert_eq!(
+            sqlite_normalize_timestamp("2024-01-15 12:30:45"),
+            "2024-01-15T12:30:45.000Z"
+        );
+    }
+
+    #[test]
+    fn normalize_timestamp_already_iso() {
+        let iso = "2024-01-15T12:30:45.000Z";
+        assert_eq!(sqlite_normalize_timestamp(iso), iso);
+    }
+
+    // ── sqlite_date_offset_expr sign handling ──────────────────────────
+
+    /// Regression: positive seconds must produce a negative offset modifier
+    /// (subtracting time), and negative seconds must produce a positive
+    /// offset modifier (adding time).
+    #[test]
+    fn date_offset_expr_positive_input() {
+        let (_expr, value) = sqlite_date_offset_expr(30, 1);
+        assert_eq!(
+            value,
+            DbValue::Text("-30 seconds".to_string()),
+            "positive input should produce negative offset"
+        );
+    }
+
+    #[test]
+    fn date_offset_expr_negative_input() {
+        let (_expr, value) = sqlite_date_offset_expr(-30, 1);
+        assert_eq!(
+            value,
+            DbValue::Text("+30 seconds".to_string()),
+            "negative input should produce positive offset"
+        );
+    }
+
+    #[test]
+    fn date_offset_expr_zero() {
+        let (_expr, value) = sqlite_date_offset_expr(0, 1);
+        assert_eq!(
+            value,
+            DbValue::Text("-0 seconds".to_string()),
+            "zero should produce -0 seconds"
+        );
+    }
+
+    #[test]
+    fn date_offset_expr_sql_format() {
+        let (expr, _value) = sqlite_date_offset_expr(30, 3);
+        assert_eq!(
+            expr, "datetime('now', ?3)",
+            "SQL expression should use the given param position"
+        );
+    }
+
+    /// Regression: multi-byte UTF-8 input must not panic from string slicing.
+    #[test]
+    fn normalize_timestamp_multibyte_utf8_no_panic() {
+        // 19-byte string with multi-byte chars -- should pass through unchanged
+        let input = "日本語テスト入力値";
+        assert_eq!(sqlite_normalize_timestamp(input), input);
     }
 }

@@ -6,6 +6,7 @@ use crap_cms::core::SharedRegistry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -734,7 +735,7 @@ crap.collections.define("items", {
     let def = reg.get_collection("items").expect("items");
 
     let mut data = HashMap::new();
-    data.insert("name".to_string(), serde_json::json!("test"));
+    data.insert("name".to_string(), json!("test"));
 
     let ctx = HookContext {
         collection: "items".to_string(),
@@ -757,7 +758,7 @@ crap.collections.define("items", {
 
     assert_eq!(
         ctx.context.get("step1"),
-        Some(&serde_json::json!("validated")),
+        Some(&json!("validated")),
         "step1 should be set after before_validate"
     );
 
@@ -768,17 +769,17 @@ crap.collections.define("items", {
 
     assert_eq!(
         ctx.context.get("step1"),
-        Some(&serde_json::json!("validated")),
+        Some(&json!("validated")),
         "step1 should persist through before_change"
     );
     assert_eq!(
         ctx.context.get("step2"),
-        Some(&serde_json::json!("changed")),
+        Some(&json!("changed")),
         "step2 should be set after before_change"
     );
     assert_eq!(
         ctx.context.get("counter"),
-        Some(&serde_json::json!(2)),
+        Some(&json!(2)),
         "counter should be incremented by both hooks"
     );
 }
@@ -941,10 +942,7 @@ fn context_flows_to_after_hooks() {
 
     // Simulate a context that was set by before-hooks
     let mut req_context = HashMap::new();
-    req_context.insert(
-        "before_marker".to_string(),
-        serde_json::json!("set-by-before-hook"),
-    );
+    req_context.insert("before_marker".to_string(), json!("set-by-before-hook"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),

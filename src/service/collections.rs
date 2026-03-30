@@ -47,14 +47,18 @@ pub fn create_document(
     let val_ctx = ValidationCtx::builder(&tx, slug)
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
+        .soft_delete(def.soft_delete)
         .build();
     let final_ctx = runner.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
     let final_data = final_ctx.to_string_map(&def.fields);
-    let persist_opts = crate::service::PersistOptions::builder()
+    let mut persist_builder = crate::service::PersistOptions::builder()
         .password(input.password)
         .locale_ctx(input.locale_ctx)
-        .draft(is_draft)
-        .build();
+        .draft(is_draft);
+    if let Some(lctx) = input.locale_ctx {
+        persist_builder = persist_builder.locale_config(&lctx.config);
+    }
+    let persist_opts = persist_builder.build();
     let doc = crate::service::persist_create(
         &tx,
         slug,
@@ -116,6 +120,7 @@ pub fn update_document(
         .exclude_id(Some(id))
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
+        .soft_delete(def.soft_delete)
         .build();
     let final_ctx = runner.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
     let final_data = final_ctx.to_string_map(&def.fields);
@@ -130,6 +135,12 @@ pub fn update_document(
             input.locale_ctx,
         )?
     } else {
+        let mut update_builder = crate::service::PersistOptions::builder()
+            .password(input.password)
+            .locale_ctx(input.locale_ctx);
+        if let Some(lctx) = input.locale_ctx {
+            update_builder = update_builder.locale_config(&lctx.config);
+        }
         crate::service::persist_update(
             &tx,
             slug,
@@ -137,10 +148,7 @@ pub fn update_document(
             def,
             &final_data,
             &final_ctx.data,
-            &crate::service::PersistOptions::builder()
-                .password(input.password)
-                .locale_ctx(input.locale_ctx)
-                .build(),
+            &update_builder.build(),
         )?
     };
 
@@ -183,6 +191,7 @@ pub fn unpublish_document(
 
     let hook_ctx = HookContext::builder(slug, "update")
         .data(doc.fields.clone())
+        .draft(true)
         .locale(None::<String>)
         .user(user)
         .build();
@@ -213,6 +222,7 @@ pub fn unpublish_document(
 // Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
 // Tested indirectly through CLI integration tests and gRPC API tests.
 #[cfg(not(tarpaulin_include))]
+#[allow(clippy::too_many_arguments)]
 pub fn delete_document(
     pool: &DbPool,
     runner: &HookRunner,
@@ -221,6 +231,7 @@ pub fn delete_document(
     def: &CollectionDefinition,
     user: Option<&Document>,
     config_dir: Option<&std::path::Path>,
+    locale_config: Option<&LocaleConfig>,
 ) -> Result<HashMap<String, Value>> {
     let mut conn = pool.get().context("DB connection")?;
 
@@ -228,31 +239,80 @@ pub fn delete_document(
     let upload_doc_fields = if def.is_upload_collection() {
         let locale_ctx = LocaleContext::from_locale_string(None, &LocaleConfig::default());
 
-        query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref())
-            .ok()
-            .flatten()
-            .map(|doc| doc.fields.clone())
+        match query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref()) {
+            Ok(Some(doc)) => Some(doc.fields.clone()),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load upload document {}/{} for file cleanup: {}",
+                    slug,
+                    id,
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };
 
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
+    // Block deletion of documents that are referenced by other documents.
+    // Only hard deletes are blocked — soft-deleted docs remain referenceable.
+    if !def.soft_delete {
+        let ref_count = query::ref_count::get_ref_count(&tx, slug, id)?.unwrap_or(0);
+        if ref_count > 0 {
+            anyhow::bail!(
+                "Cannot delete: this document is referenced by {} other document(s)",
+                ref_count
+            );
+        }
+    }
+
+    let mut hook_data: HashMap<String, Value> =
+        [("id".to_string(), Value::String(id.to_string()))].into();
+    if def.soft_delete {
+        hook_data.insert("soft_delete".to_string(), Value::Bool(true));
+    }
+
     let hook_ctx = HookContext::builder(slug, "delete")
-        .data([("id".to_string(), Value::String(id.to_string()))].into())
+        .data(hook_data.clone())
         .user(user)
         .build();
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx)?;
 
-    query::delete(&tx, slug, id)?;
+    // Decrement ref counts on targets before hard delete (CASCADE would remove junction rows).
+    // Soft delete does NOT adjust ref counts.
+    if !def.soft_delete {
+        let locale_cfg = locale_config.cloned().unwrap_or_default();
+        query::ref_count::before_hard_delete(&tx, slug, id, &def.fields, &locale_cfg)?;
+    }
 
+    if def.soft_delete {
+        let deleted = query::soft_delete(&tx, slug, id)?;
+        if !deleted {
+            anyhow::bail!(
+                "Document '{}' not found in '{}' (or already deleted)",
+                id,
+                slug
+            );
+        }
+    } else {
+        let deleted = query::delete(&tx, slug, id)?;
+        if !deleted {
+            anyhow::bail!("Document '{}' not found in '{}'", id, slug);
+        }
+    }
+
+    // Clean up FTS index in both hard-delete and soft-delete cases
     if tx.supports_fts() {
         query::fts::fts_delete(&tx, slug, id)?;
     }
 
     let after_ctx = HookContext::builder(slug, "delete")
-        .data([("id".to_string(), Value::String(id.to_string()))].into())
+        .data(hook_data)
         .context(final_ctx.context)
         .user(user)
         .build();
@@ -261,10 +321,43 @@ pub fn delete_document(
 
     tx.commit().context("Commit transaction")?;
 
-    // Clean up upload files after successful commit
-    if let (Some(dir), Some(fields)) = (config_dir, upload_doc_fields) {
+    // Clean up upload files after successful commit (skip for soft-delete to allow restore)
+    if !def.soft_delete
+        && let (Some(dir), Some(fields)) = (config_dir, upload_doc_fields)
+    {
         upload::delete_upload_files(dir, &fields);
     }
 
     Ok(after_result.context)
+}
+
+/// Restore a soft-deleted document: clear `_deleted_at`, re-sync FTS index.
+// Excluded from coverage: requires DB pool + FTS for full integration testing.
+// Tested indirectly through admin handler and Lua API tests.
+#[cfg(not(tarpaulin_include))]
+pub fn restore_document(
+    pool: &DbPool,
+    slug: &str,
+    id: &str,
+    def: &CollectionDefinition,
+) -> Result<Document> {
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
+
+    let restored = query::restore(&tx, slug, id)?;
+    if !restored {
+        anyhow::bail!("Document not found or not deleted");
+    }
+
+    // Re-sync FTS index (the FTS row was deleted on soft-delete)
+    if tx.supports_fts()
+        && let Ok(Some(doc)) = query::find_by_id_unfiltered(&tx, slug, def, id, None)
+    {
+        query::fts::fts_upsert(&tx, slug, &doc, Some(def))?;
+    }
+
+    tx.commit()?;
+
+    query::find_by_id(&conn, slug, def, id, None)?
+        .ok_or_else(|| anyhow!("Document not found after restore"))
 }

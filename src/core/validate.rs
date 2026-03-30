@@ -52,11 +52,18 @@ impl ValidationError {
     }
 
     /// Convert errors into a field-name-keyed map for template rendering.
+    /// When multiple errors exist for the same field, messages are joined with "; ".
     pub fn to_field_map(&self) -> HashMap<String, String> {
-        self.errors
-            .iter()
-            .map(|e| (e.field.clone(), e.message.clone()))
-            .collect()
+        let mut map = HashMap::new();
+        for e in &self.errors {
+            map.entry(e.field.clone())
+                .and_modify(|existing: &mut String| {
+                    existing.push_str("; ");
+                    existing.push_str(&e.message);
+                })
+                .or_insert_with(|| e.message.clone());
+        }
+        map
     }
 }
 
@@ -97,14 +104,46 @@ mod tests {
     }
 
     #[test]
-    fn to_field_map_duplicate_field_last_wins() {
+    fn to_field_map_duplicate_field_joins_with_separator() {
         let ve = ValidationError::new(vec![
             FieldError::new("title", "first error"),
             FieldError::new("title", "second error"),
         ]);
         let map = ve.to_field_map();
         assert_eq!(map.len(), 1);
-        assert_eq!(map.get("title").unwrap(), "second error");
+        assert_eq!(
+            map.get("title").unwrap(),
+            "first error; second error",
+            "Duplicate field errors should be joined with '; '"
+        );
+    }
+
+    #[test]
+    fn to_field_map_three_errors_same_field_all_joined() {
+        let ve = ValidationError::new(vec![
+            FieldError::new("email", "required"),
+            FieldError::new("email", "invalid format"),
+            FieldError::new("email", "already taken"),
+        ]);
+        let map = ve.to_field_map();
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get("email").unwrap(),
+            "required; invalid format; already taken",
+        );
+    }
+
+    #[test]
+    fn to_field_map_mixed_unique_and_duplicate_fields() {
+        let ve = ValidationError::new(vec![
+            FieldError::new("title", "too short"),
+            FieldError::new("email", "required"),
+            FieldError::new("title", "contains profanity"),
+        ]);
+        let map = ve.to_field_map();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("title").unwrap(), "too short; contains profanity",);
+        assert_eq!(map.get("email").unwrap(), "required");
     }
 
     #[test]
