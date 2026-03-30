@@ -14,7 +14,10 @@ use crate::{
         HookContext, HookEvent, ValidationCtx,
         lifecycle::{
             FieldHookEvent, HookDepth, HookDepthGuard, MaxHookDepth, UiLocaleContext, UserContext,
-            access::{check_access_with_lua, check_field_write_access_with_lua},
+            access::{
+                check_access_with_lua, check_field_read_access_with_lua,
+                check_field_write_access_with_lua,
+            },
             converters::*,
             execution::{run_field_hooks_inner, run_hooks_inner},
             validation::validate_fields_inner,
@@ -99,8 +102,11 @@ fn handle_unpublish(
         })?;
 
     if hooks_enabled {
+        let mut after_data = updated_doc.fields.clone();
+        after_data.insert("id".to_string(), Value::String(ctx.id.to_string()));
+
         let after_ctx = HookContext::builder(ctx.collection, "update")
-            .data(updated_doc.fields.clone())
+            .data(after_data)
             .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)
@@ -370,6 +376,17 @@ pub(super) fn register_create(
             )
             .map_err(|e| RuntimeError(format!("hydrate error: {:#}", e)))?;
 
+            // Strip field-level read-denied fields from returned document
+            if !override_access {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let denied = check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+                for name in &denied {
+                    doc.fields.remove(name);
+                }
+            }
+
             document_to_lua_table(lua, &doc)
         },
     )?;
@@ -607,6 +624,7 @@ pub(super) fn register_update(
 
                 if hooks_enabled {
                     let mut after_data = existing_doc.fields.clone();
+                    after_data.insert("id".to_string(), Value::String(id.to_string()));
 
                     run_field_hooks_inner(
                         lua,
@@ -639,6 +657,17 @@ pub(super) fn register_update(
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| RuntimeError(format!("hydrate error: {:#}", e)))?;
+
+                if !override_access {
+                    let user_doc = lua
+                        .app_data_ref::<UserContext>()
+                        .and_then(|uc| uc.0.clone());
+                    let denied =
+                        check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+                    for name in &denied {
+                        existing_doc.fields.remove(name);
+                    }
+                }
 
                 document_to_lua_table(lua, &existing_doc)
             } else {
@@ -692,6 +721,17 @@ pub(super) fn register_update(
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| RuntimeError(format!("hydrate error: {:#}", e)))?;
+
+                if !override_access {
+                    let user_doc = lua
+                        .app_data_ref::<UserContext>()
+                        .and_then(|uc| uc.0.clone());
+                    let denied =
+                        check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+                    for name in &denied {
+                        doc.fields.remove(name);
+                    }
+                }
 
                 document_to_lua_table(lua, &doc)
             }

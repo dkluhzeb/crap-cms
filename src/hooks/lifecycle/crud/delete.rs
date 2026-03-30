@@ -607,6 +607,8 @@ pub(super) fn register_update_many(
 
                 if hooks_enabled {
                     let mut after_data = updated.fields.clone();
+                    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
+
                     run_field_hooks_inner(
                         lua,
                         &def.fields,
@@ -616,8 +618,6 @@ pub(super) fn register_update_many(
                         "update",
                     )
                     .map_err(|e| RuntimeError(format!("after_change field hook error: {:#}", e)))?;
-
-                    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
                     let after_ctx = HookContext::builder(&collection, "update")
                         .data(after_data)
                         .locale(locale_str.as_deref())

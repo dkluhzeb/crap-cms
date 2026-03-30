@@ -10,6 +10,8 @@ use axum::{
 use serde_json::json;
 use tokio::task;
 
+use std::collections::HashMap;
+
 use crate::{
     admin::{
         AdminState,
@@ -20,6 +22,7 @@ use crate::{
         DbConnection,
         query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery},
     },
+    hooks::{HookContext, HookEvent},
 };
 
 /// POST /admin/collections/{slug}/empty-trash
@@ -60,6 +63,7 @@ pub async fn empty_trash_action(
     let config_dir = state.config_dir.clone();
     let locale_cfg = state.config.locale.clone();
     let slug_owned = slug.clone();
+    let runner = state.hook_runner.clone();
 
     let result = task::spawn_blocking(move || {
         let mut conn = pool.get().context("DB connection")?;
@@ -93,6 +97,14 @@ pub async fn empty_trash_action(
                 continue;
             }
 
+            // Run BeforeDelete hook
+            let hook_data: HashMap<String, serde_json::Value> =
+                [("id".into(), serde_json::Value::String(doc.id.to_string()))].into();
+            let hook_ctx = HookContext::builder(&slug_owned, "delete")
+                .data(hook_data)
+                .build();
+            runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx)?;
+
             // Decrement ref counts before hard delete (CASCADE removes junction rows)
             query::ref_count::before_hard_delete(
                 &tx,
@@ -110,6 +122,14 @@ pub async fn empty_trash_action(
                 query::fts::fts_delete(&tx, &slug_owned, &doc.id)?;
             }
             query::delete(&tx, &slug_owned, &doc.id)?;
+
+            // Run AfterDelete hook (fire-and-forget, no CRUD access)
+            let after_data: HashMap<String, serde_json::Value> =
+                [("id".into(), serde_json::Value::String(doc.id.to_string()))].into();
+            let after_ctx = HookContext::builder(&slug_owned, "delete")
+                .data(after_data)
+                .build();
+            let _ = runner.run_hooks(&def.hooks, HookEvent::AfterDelete, after_ctx);
         }
 
         tx.commit().context("Commit empty-trash")?;

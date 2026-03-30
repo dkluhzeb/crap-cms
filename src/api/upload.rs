@@ -307,7 +307,7 @@ async fn create_upload(
     .await;
 
     match result {
-        Ok(Ok((doc, _req_context))) => {
+        Ok(Ok((mut doc, _req_context))) => {
             guard.commit();
 
             // Enqueue deferred image conversions if any
@@ -333,6 +333,21 @@ async fn create_upload(
                     .edited_by(edited_by)
                     .build(),
             );
+
+            // Strip field-level read-denied fields from response
+            if let Ok(mut conn) = state.pool.get() {
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                if let Ok(tx) = conn.transaction() {
+                    let denied =
+                        state
+                            .hook_runner
+                            .check_field_read_access(&def.fields, user_doc, &tx);
+                    let _ = tx.commit();
+                    for name in &denied {
+                        doc.fields.remove(name);
+                    }
+                }
+            }
 
             let body = json!({ "document": doc });
             json_ok(StatusCode::CREATED, &body)
@@ -555,6 +570,22 @@ async fn update_upload(
                     .build(),
             );
 
+            // Strip field-level read-denied fields from response
+            let mut doc = doc;
+            if let Ok(mut conn) = state.pool.get() {
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                if let Ok(tx) = conn.transaction() {
+                    let denied =
+                        state
+                            .hook_runner
+                            .check_field_read_access(&def.fields, user_doc, &tx);
+                    let _ = tx.commit();
+                    for name in &denied {
+                        doc.fields.remove(name);
+                    }
+                }
+            }
+
             let body = json!({ "document": doc });
 
             json_ok(StatusCode::OK, &body)
@@ -609,13 +640,15 @@ async fn delete_upload(
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
 
-        let result = state.hook_runner.check_access(
-            def.access.delete.as_deref(),
-            user_doc,
-            Some(&id),
-            None,
-            &tx,
-        );
+        let access_fn = if def.soft_delete {
+            def.access.resolve_trash()
+        } else {
+            def.access.delete.as_deref()
+        };
+
+        let result = state
+            .hook_runner
+            .check_access(access_fn, user_doc, Some(&id), None, &tx);
 
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         if let Err(e) = tx.commit() {

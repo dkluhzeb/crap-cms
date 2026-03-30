@@ -1,13 +1,26 @@
 //! Registration of `crap.globals.get`, `crap.globals.update`, and `crap.jobs.queue` Lua functions.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table, Value};
 
 use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
-    db::{LocaleContext, query},
-    hooks::{api, lifecycle::converters::*},
+    db::{AccessResult, LocaleContext, query},
+    hooks::{
+        ValidationCtx, api,
+        lifecycle::{
+            UserContext,
+            access::{
+                check_access_with_lua, check_field_read_access_with_lua,
+                check_field_write_access_with_lua,
+            },
+            converters::*,
+            validation::validate_fields_inner,
+        },
+    },
 };
 
 use super::get_tx_conn;
@@ -31,6 +44,11 @@ pub(super) fn register_globals_get(
             .and_then(|o| o.get::<Option<String>>("locale").ok().flatten());
         let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
 
+        let override_access: bool = opts
+            .as_ref()
+            .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
+            .unwrap_or(false);
+
         let def = {
             let r = reg
                 .read()
@@ -40,8 +58,38 @@ pub(super) fn register_globals_get(
                 .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))?
         };
 
-        let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
+        // Enforce collection-level read access
+        if !override_access {
+            let user_doc = lua
+                .app_data_ref::<UserContext>()
+                .and_then(|uc| uc.0.clone());
+            let result = check_access_with_lua(
+                lua,
+                def.access.read.as_deref(),
+                user_doc.as_ref(),
+                None,
+                None,
+            )
+            .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
+
+            if matches!(result, AccessResult::Denied) {
+                return Err(RuntimeError("Read access denied".into()));
+            }
+        }
+
+        let mut doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
             .map_err(|e| RuntimeError(format!("get_global error: {:#}", e)))?;
+
+        // Strip field-level read-denied fields
+        if !override_access {
+            let user_doc = lua
+                .app_data_ref::<UserContext>()
+                .and_then(|uc| uc.0.clone());
+            let denied = check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+            for name in &denied {
+                doc.fields.remove(name);
+            }
+        }
 
         document_to_lua_table(lua, &doc)
     })?;
@@ -69,6 +117,11 @@ pub(super) fn register_globals_update(
                 .and_then(|o| o.get::<Option<String>>("locale").ok().flatten());
             let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
 
+            let override_access: bool = opts
+                .as_ref()
+                .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
+                .unwrap_or(false);
+
             let def = {
                 let r = reg
                     .read()
@@ -78,8 +131,61 @@ pub(super) fn register_globals_update(
                     .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))?
             };
 
-            let data = lua_table_to_hashmap(&data_table)?;
-            let join_data = lua_table_to_json_map(lua, &data_table)?;
+            // Enforce collection-level update access
+            if !override_access {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let result = check_access_with_lua(
+                    lua,
+                    def.access.update.as_deref(),
+                    user_doc.as_ref(),
+                    None,
+                    None,
+                )
+                .map_err(|e| RuntimeError(format!("access check error: {:#}", e)))?;
+
+                if matches!(result, AccessResult::Denied) {
+                    return Err(RuntimeError("Update access denied".into()));
+                }
+            }
+
+            let mut data = lua_table_to_hashmap(&data_table)?;
+            let mut join_data = lua_table_to_json_map(lua, &data_table)?;
+
+            // Strip field-level write-denied fields
+            if !override_access {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let denied = check_field_write_access_with_lua(
+                    lua,
+                    &def.fields,
+                    user_doc.as_ref(),
+                    "update",
+                );
+                for name in &denied {
+                    data.remove(name);
+                    join_data.remove(name);
+                }
+            }
+
+            // Build hook data for validation
+            let mut hook_data: HashMap<String, serde_json::Value> = data
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            for (k, v) in &join_data {
+                hook_data.insert(k.clone(), v.clone());
+            }
+
+            // Run validation
+            let global_table = format!("_global_{}", slug);
+            let val_ctx = ValidationCtx::builder(conn, &global_table)
+                .locale_ctx(locale_ctx.as_ref())
+                .build();
+            validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
+                .map_err(|e| RuntimeError(format!("validation error: {:#}", e)))?;
 
             let global_table = format!("_global_{}", slug);
             let old_refs = query::ref_count::snapshot_outgoing_refs(
@@ -115,8 +221,19 @@ pub(super) fn register_globals_update(
             .map_err(|e| RuntimeError(format!("ref count update error: {:#}", e)))?;
 
             // Re-fetch to hydrate join data in the returned document
-            let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
+            let mut doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
                 .map_err(|e| RuntimeError(format!("get_global error: {:#}", e)))?;
+
+            // Strip field-level read-denied fields
+            if !override_access {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let denied = check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+                for name in &denied {
+                    doc.fields.remove(name);
+                }
+            }
 
             document_to_lua_table(lua, &doc)
         },

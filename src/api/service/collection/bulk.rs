@@ -180,6 +180,7 @@ impl ContentService {
                             .exclude_id(Some(&doc.id))
                             .locale_ctx(locale_ctx.as_ref())
                             .soft_delete(def_owned.soft_delete)
+                            .draft(draft.unwrap_or(false))
                             .build();
                         let final_ctx = hook_runner
                             .run_before_write(
