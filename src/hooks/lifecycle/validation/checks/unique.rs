@@ -46,6 +46,15 @@ pub(crate) fn check_unique(
         Ok(_) => {}
         Err(e) => {
             tracing::warn!("Unique check failed for {}.{}: {}", ctx.table, data_key, e);
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!(
+                    "Could not verify uniqueness for {} (database error)",
+                    field.name
+                ),
+                "validation.unique_check_failed",
+                HashMap::from([("field".to_string(), field.name.clone())]),
+            ));
         }
     }
 }
@@ -382,6 +391,38 @@ mod tests {
         assert!(
             result.is_err(),
             "Without locale context, should check bare column"
+        );
+    }
+
+    /// Regression: when the DB query for uniqueness fails (e.g. missing table),
+    /// the unique check must produce a validation error — not silently pass.
+    #[test]
+    fn test_validate_unique_db_error_produces_validation_error() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Table "test" does NOT exist — query will fail
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("any@test.com"));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "DB error during unique check must fail validation"
+        );
+        let errs = result.unwrap_err().errors;
+        assert_eq!(errs.len(), 1);
+        assert_eq!(
+            errs[0].key.as_deref(),
+            Some("validation.unique_check_failed")
         );
     }
 }

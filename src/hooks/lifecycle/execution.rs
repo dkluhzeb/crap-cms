@@ -186,22 +186,22 @@ pub(crate) fn call_display_condition_with_lua(
                 visible,
             })
         }
-        Ok(Value::Nil) => None, // nil → show field (safe default)
+        Ok(Value::Nil) => None, // nil → no condition, show field normally
         Err(e) => {
             tracing::warn!(
-                "Display condition '{}' failed: {} — showing field as safe default",
+                "Display condition '{}' failed: {} — hiding field (fail closed)",
                 func_ref,
                 e
             );
-            None
+            Some(DisplayConditionResult::Bool(false))
         }
         Ok(other) => {
             tracing::warn!(
-                "Display condition '{}' returned unexpected type {:?} — showing field as safe default",
+                "Display condition '{}' returned unexpected type {:?} — hiding field (fail closed)",
                 func_ref,
                 other.type_name()
             );
-            None
+            Some(DisplayConditionResult::Bool(false))
         }
     }
 }
@@ -1010,19 +1010,27 @@ mod tests {
         assert!(result.is_none(), "nil should show field (None)");
     }
 
+    /// Regression: display condition errors must fail closed (hide field),
+    /// not fail open (show field). Showing a field on error could expose
+    /// access-controlled content.
     #[test]
-    fn display_condition_error_shows_field() {
+    fn display_condition_error_hides_field() {
         let lua = mlua::Lua::new();
         lua.load(r#"package.loaded["hooks.boom"] = function() error("broken") end"#)
             .exec()
             .unwrap();
 
         let result = call_display_condition_with_lua(&lua, "hooks.boom", &json!({}));
-        assert!(result.is_none(), "error should show field as safe default");
+        assert!(
+            matches!(result, Some(DisplayConditionResult::Bool(false))),
+            "error must hide field (fail closed), got {:?}",
+            result
+        );
     }
 
+    /// Regression: display condition returning unexpected type must fail closed.
     #[test]
-    fn display_condition_unexpected_type_shows_field() {
+    fn display_condition_unexpected_type_hides_field() {
         let lua = mlua::Lua::new();
         lua.load(r#"package.loaded["hooks.num"] = function() return 42 end"#)
             .exec()
@@ -1030,8 +1038,9 @@ mod tests {
 
         let result = call_display_condition_with_lua(&lua, "hooks.num", &json!({}));
         assert!(
-            result.is_none(),
-            "unexpected type (number) should show field as safe default"
+            matches!(result, Some(DisplayConditionResult::Bool(false))),
+            "unexpected type must hide field (fail closed), got {:?}",
+            result
         );
     }
 

@@ -183,9 +183,8 @@ fn validate_scalar_field(
     // Localized fields store data in suffixed columns (e.g., slug__en).
     let is_localized = (inherited_localized || field.localized) && ctx.locale_ctx.is_some();
     // Compute the actual DB column name for the unique check.
-    // If locale sanitization fails, skip the unique check entirely rather than
-    // checking against the wrong (non-localized) column, which could allow
-    // duplicates to slip through in the localized column.
+    // If locale sanitization fails, emit a validation error rather than silently
+    // skipping the unique check, which could allow duplicates to slip through.
     let col_name = if let (true, Some(lctx)) = (is_localized, ctx.locale_ctx) {
         let locale = match &lctx.mode {
             LocaleMode::Single(l) => l.as_str(),
@@ -194,11 +193,18 @@ fn validate_scalar_field(
         match sanitize_locale(locale) {
             Ok(l) => Some(format!("{}__{}", data_key, l)),
             Err(_) => {
-                tracing::warn!(
-                    "Skipping unique check for '{}': invalid locale '{}'",
-                    data_key,
-                    locale,
-                );
+                errors.push(FieldError::with_key(
+                    data_key.clone(),
+                    format!(
+                        "{}: invalid locale '{}' — cannot verify uniqueness",
+                        field.name, locale,
+                    ),
+                    "validation.invalid_locale",
+                    HashMap::from([
+                        ("field".to_string(), field.name.clone()),
+                        ("locale".to_string(), locale.to_string()),
+                    ]),
+                ));
                 None
             }
         }
@@ -1098,17 +1104,13 @@ mod tests {
         assert_eq!(errs[1].field, "content[cta#0].text");
     }
 
-    /// Regression: when locale sanitization fails, the unique check must be
-    /// skipped entirely rather than falling back to the non-localized column
-    /// name, which would check uniqueness against the wrong column and could
-    /// allow duplicates in the localized column.
+    /// Regression: when locale sanitization fails, validation must emit an
+    /// error rather than silently skipping the unique check (which could allow
+    /// duplicates to slip through in the localized column).
     #[test]
-    fn test_invalid_locale_skips_unique_check_instead_of_wrong_column() {
+    fn test_invalid_locale_emits_validation_error() {
         let lua = mlua::Lua::new();
         let conn = InMemoryConn::open();
-        // The non-localized column `slug` has a duplicate, but localized column
-        // `slug__en` does not. If the unique check falls back to the wrong column,
-        // it would report a false positive.
         conn.setup(
             "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT, slug__en TEXT);
              INSERT INTO test (id, slug, slug__en) VALUES ('existing', 'taken', 'unique-en');",
@@ -1127,9 +1129,9 @@ mod tests {
             fallback: false,
         };
 
-        // Use an invalid locale string that will fail sanitize_locale
+        // Use a locale string that sanitizes to empty (only special chars)
         let locale_ctx = LocaleContext {
-            mode: LocaleMode::Single("inv@lid!".to_string()),
+            mode: LocaleMode::Single("@!#$%".to_string()),
             config: locale_config,
         };
 
@@ -1145,12 +1147,14 @@ mod tests {
                 .build(),
         );
 
-        // Should pass because the unique check is skipped (invalid locale),
-        // NOT fail because it checked the non-localized `slug` column.
+        assert!(result.is_err(), "Invalid locale must fail validation");
+        let errs = result.unwrap_err().errors;
+        assert_eq!(errs.len(), 1);
         assert!(
-            result.is_ok(),
-            "Invalid locale should skip unique check, not check the wrong column: {:?}",
-            result.unwrap_err().errors,
+            errs[0].message.contains("invalid locale"),
+            "Error should mention invalid locale, got: {}",
+            errs[0].message,
         );
+        assert_eq!(errs[0].key.as_deref(), Some("validation.invalid_locale"));
     }
 }

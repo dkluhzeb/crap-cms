@@ -80,7 +80,8 @@ pub async fn empty_trash_action(
 
         for doc in &docs {
             // Skip documents that are still referenced — protect referential integrity
-            let ref_count = query::ref_count::get_ref_count(&tx, &slug_owned, &doc.id)?;
+            let ref_count =
+                query::ref_count::get_ref_count(&tx, &slug_owned, &doc.id)?.unwrap_or(0);
             if ref_count > 0 {
                 tracing::debug!(
                     "Skipping permanent delete of {}/{}: referenced by {} document(s)",

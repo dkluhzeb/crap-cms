@@ -266,6 +266,7 @@ pub async fn edit_form(
         .get()
         .ok()
         .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
+        .flatten()
         .unwrap_or(0);
     data["ref_count"] = json!(ref_count);
 

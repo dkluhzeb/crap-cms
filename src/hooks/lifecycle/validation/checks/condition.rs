@@ -7,7 +7,15 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
     match condition {
         Value::Array(arr) => arr.iter().all(|c| evaluate_condition_table(c, data)),
         Value::Object(obj) => {
-            let field_name = obj.get("field").and_then(|v| v.as_str()).unwrap_or("");
+            let field_name = match obj.get("field").and_then(|v| v.as_str()) {
+                Some(f) if !f.is_empty() => f,
+                _ => {
+                    tracing::warn!(
+                        "Display condition missing or empty 'field' key — defaulting to show"
+                    );
+                    return true;
+                }
+            };
             let field_val = data.get(field_name).unwrap_or(&Value::Null);
 
             if let Some(eq) = obj.get("equals") {
@@ -180,6 +188,30 @@ mod tests {
         let data = json!({"status": "published"});
         let cond = json!({"field": "nonexistent", "equals": "something"});
         assert!(!evaluate_condition_table(&cond, &data));
+    }
+
+    /// Regression: a condition with missing "field" key must show the field
+    /// (default to visible) and not silently match against an empty-string lookup.
+    #[test]
+    fn test_condition_missing_field_key_shows() {
+        let data = json!({"status": "published"});
+        // No "field" key at all
+        let cond = json!({"equals": "something"});
+        assert!(
+            evaluate_condition_table(&cond, &data),
+            "Missing 'field' key should default to show"
+        );
+    }
+
+    /// Regression: a condition with an empty-string "field" key must default to show.
+    #[test]
+    fn test_condition_empty_field_key_shows() {
+        let data = json!({"status": "published"});
+        let cond = json!({"field": "", "equals": "something"});
+        assert!(
+            evaluate_condition_table(&cond, &data),
+            "Empty 'field' key should default to show"
+        );
     }
 
     #[test]

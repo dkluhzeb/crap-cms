@@ -374,7 +374,7 @@ The `data` table contains fields to update on all matched documents (partial upd
 
 ## crap.collections.delete_many(collection, query, opts?)
 
-Delete multiple documents matching a query. Returns `{ deleted = N }`. For upload collections, associated files are automatically cleaned up from disk for each deleted document.
+Delete multiple documents matching a query. Returns `{ deleted = N, skipped = N }`. For upload collections, associated files are automatically cleaned up from disk for each deleted document. Documents that are still referenced by other documents are skipped (hard delete only) and reported in `skipped`.
 
 **All-or-nothing semantics:** finds all matching documents, checks delete access for each (if `overrideAccess = false`), and only proceeds if all pass.
 
@@ -387,6 +387,7 @@ local result = crap.collections.delete_many("posts", {
     where = { status = "archived" },
 })
 print(result.deleted)  -- number of deleted documents
+print(result.skipped)  -- number skipped due to outstanding references
 
 -- Bypass access control for internal operations
 local result = crap.collections.delete_many("posts", {

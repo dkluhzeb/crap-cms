@@ -190,7 +190,7 @@ impl ContentService {
         let def = self.get_global_def(&req.slug)?;
 
         // Extract join table data (preserves structured arrays/objects)
-        let join_data = req
+        let mut join_data = req
             .data
             .as_ref()
             .map(prost_struct_to_json_map)
@@ -246,6 +246,7 @@ impl ContentService {
                 }
                 for name in &denied {
                     data.remove(name);
+                    join_data.remove(name);
                 }
             }
 

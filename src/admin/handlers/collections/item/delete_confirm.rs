@@ -37,14 +37,15 @@ pub async fn delete_confirm(
         }
     };
 
-    // Check delete access
-    match check_access_or_forbid(
-        &state,
-        def.access.delete.as_deref(),
-        &auth_user,
-        Some(&id),
-        None,
-    ) {
+    // For soft-delete collections, use trash access (falls back to update).
+    // For hard-delete collections, use delete access.
+    let access_fn = if def.soft_delete {
+        def.access.resolve_trash()
+    } else {
+        def.access.delete.as_deref()
+    };
+
+    match check_access_or_forbid(&state, access_fn, &auth_user, Some(&id), None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to delete this item");
         }
@@ -78,6 +79,7 @@ pub async fn delete_confirm(
         .get()
         .ok()
         .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
+        .flatten()
         .unwrap_or(0);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);

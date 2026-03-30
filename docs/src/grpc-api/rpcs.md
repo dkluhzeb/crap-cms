@@ -267,6 +267,7 @@ message DeleteManyRequest {
 message DeleteManyResponse {
   int64 deleted = 1;                    // permanently deleted count
   int64 soft_deleted = 2;              // soft-deleted (trashed) count
+  int64 skipped = 3;                   // skipped because still referenced by other documents
 }
 ```
 

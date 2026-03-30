@@ -14,8 +14,15 @@ impl HelperDef for JsonHelper {
     ) -> Result<ScopedJson<'rc>, RenderError> {
         let val = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
         let json_str = serde_json::to_string(val).unwrap_or_default();
-        // Prevent </script> breakout when used inside <script> blocks via {{{json ...}}}
+
+        // Prevent </script> breakout when used inside <script> blocks.
         let json_str = json_str.replace("</", r"<\/");
+
+        // Prevent HTML attribute breakout when used in single-quoted attributes
+        // like data-condition='{{{json condition_json}}}'.
+        // \u0027 is valid JSON — parsers decode it back to '.
+        let json_str = json_str.replace('\'', r"\u0027");
+
         Ok(ScopedJson::Derived(Value::String(json_str)))
     }
 }
@@ -72,6 +79,23 @@ mod tests {
         hbs.register_template_string("t", "{{{json}}}").unwrap();
         let result = hbs.render("t", &json!({})).unwrap();
         assert_eq!(result, "null");
+    }
+
+    #[test]
+    fn json_escapes_single_quotes_for_html_attributes() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json val}}}").unwrap();
+        let result = hbs.render("t", &json!({"val": "it's a test"})).unwrap();
+        assert!(
+            !result.contains('\''),
+            "must not contain literal single quote: {}",
+            result
+        );
+        assert!(
+            result.contains(r"\u0027"),
+            r"should escape ' to \u0027: {}",
+            result
+        );
     }
 
     #[test]

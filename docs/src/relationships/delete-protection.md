@@ -60,11 +60,12 @@ Cannot delete '<id>' from '<collection>': referenced by N document(s)
 -- Single delete: fails with error if referenced
 local ok, err = pcall(crap.collections.delete, "media", "m1")
 
--- Bulk delete: silently skips referenced documents
+-- Bulk delete: skips referenced documents and reports the count
 local result = crap.collections.delete_many("media", {
     where = { status = { equals = "unused" } }
 })
--- result.deleted only includes documents that were actually deleted
+-- result.deleted = documents actually deleted
+-- result.skipped = documents skipped due to outstanding references
 ```
 
 ### Force Hard Delete

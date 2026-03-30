@@ -13,6 +13,7 @@ use crate::{
 use axum::{
     Extension,
     extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use tokio::task;
@@ -57,14 +58,23 @@ pub async fn restore_action(
     match result {
         Ok(Ok(_doc)) => {
             tracing::info!("Restored document {} in {}", id, slug);
+            htmx_redirect(&format!("/admin/collections/{}?trash=1", slug))
         }
         Ok(Err(e)) => {
             tracing::error!("Restore error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Restore failed: {}", e),
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::error!("Restore task error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Restore failed: {}", e),
+            )
+                .into_response()
         }
     }
-
-    htmx_redirect(&format!("/admin/collections/{}?trash=1", slug))
 }

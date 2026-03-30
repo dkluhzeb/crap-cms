@@ -44,8 +44,8 @@ service ContentAPI {
   rpc Find (FindRequest) returns (FindResponse);
 
   // FindByID fetches a single document by its nanoid. Fires before_read /
-  // after_read hooks. Returns an empty document field when no document matches
-  // (NOT_FOUND is NOT returned for a missing document; check response.document).
+  // after_read hooks. Returns a NOT_FOUND (code 5) gRPC status error when no
+  // document matches the given ID.
   //
   // Auth: optional. Access functions are evaluated when a token is present.
   //
@@ -834,6 +834,9 @@ message DeleteManyResponse {
 
   // Number of documents soft-deleted (moved to trash) in this operation.
   int64 soft_deleted = 2;
+
+  // Number of documents skipped because they are still referenced by other documents.
+  int64 skipped = 3;
 }
 
 // Document represents a single CMS document as returned by the API.
@@ -950,8 +953,8 @@ message FieldInfo {
 
   // The field type string as defined in Lua.
   // Common values: text, textarea, richtext, number, email, checkbox, select,
-  //   multiselect, date, relationship, array, group, blocks, tabs, json,
-  //   point, upload, code, color.
+  //   radio, date, relationship, array, group, blocks, tabs, json,
+  //   upload, code, row, collapsible, join.
   string type = 2;
 
   // True if the field is required (non-empty validation enforced).
@@ -1204,7 +1207,7 @@ message GetJobRunResponse {
   // Total allowed attempts (retries + 1).
   uint32 max_attempts = 8;
 
-  // How this run was initiated: "grpc", "scheduler", or "admin".
+  // How this run was initiated: "grpc", "cron", or "admin".
   optional string scheduled_by = 9;
 
   // ISO-8601 UTC timestamp when the job run was created.

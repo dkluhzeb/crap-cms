@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result, anyhow};
 use tokio::select;
 
 use crate::{
-    config::JobsConfig,
+    config::{JobsConfig, LocaleConfig},
     core::{SharedRegistry, upload},
     db::{
         DbConnection, DbPool, DbValue,
@@ -33,6 +33,7 @@ pub async fn start(
     config: JobsConfig,
     shutdown: tokio_util::sync::CancellationToken,
     config_dir: std::path::PathBuf,
+    locale_config: LocaleConfig,
 ) -> Result<()> {
     tracing::info!(
         "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
@@ -122,7 +123,7 @@ pub async fn start(
                 // Purge expired soft-deleted documents (every 10 cron intervals)
                 if purge_counter.is_multiple_of(10)
                     && let Ok(conn) = pool.get() {
-                        match purge_soft_deleted(&conn, &registry, &config_dir) {
+                        match purge_soft_deleted(&conn, &registry, &config_dir, &locale_config) {
                             Ok(n) if n > 0 => tracing::info!("Purged {} expired soft-deleted doc(s)", n),
                             Ok(_) => {}
                             Err(e) => tracing::warn!("Soft-delete purge error: {}", e),

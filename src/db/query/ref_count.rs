@@ -20,19 +20,22 @@ pub struct OutgoingRef {
     target_id: String,
 }
 
-/// Read the `_ref_count` value for a document. Returns 0 if the document is not found.
-pub fn get_ref_count(conn: &dyn DbConnection, collection: &str, id: &str) -> Result<i64> {
+/// Read the `_ref_count` value for a document.
+/// Returns `None` if the document does not exist, `Some(count)` otherwise
+/// (defaulting to 0 when the column is NULL).
+pub fn get_ref_count(conn: &dyn DbConnection, collection: &str, id: &str) -> Result<Option<i64>> {
     let p1 = conn.placeholder(1);
     let sql = format!("SELECT _ref_count FROM \"{}\" WHERE id = {p1}", collection);
     let row = conn.query_one(&sql, &[DbValue::Text(id.to_string())])?;
 
-    Ok(row
-        .and_then(|r| r.get_value(0).cloned())
-        .and_then(|v| match v {
-            DbValue::Integer(n) => Some(n),
-            _ => None,
-        })
-        .unwrap_or(0))
+    Ok(row.map(|r| {
+        r.get_value(0)
+            .and_then(|v| match v {
+                DbValue::Integer(n) => Some(*n),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }))
 }
 
 /// Adjust ref counts after creating a new document.
@@ -648,7 +651,9 @@ mod tests {
     }
 
     fn get_ref_count_val(conn: &dyn DbConnection, table: &str, id: &str) -> i64 {
-        get_ref_count(conn, table, id).unwrap()
+        get_ref_count(conn, table, id)
+            .unwrap()
+            .expect("document should exist")
     }
 
     // ── get_ref_count ────────────────────────────────────────────────────
@@ -661,6 +666,18 @@ mod tests {
 
         insert_doc(&conn, "media", "m1");
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
+    }
+
+    /// Regression: get_ref_count must return None for missing documents
+    /// instead of 0, so callers can distinguish "not found" from "zero refs".
+    #[test]
+    fn ref_count_returns_none_for_missing_document() {
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        let result = get_ref_count(&conn, "media", "nonexistent").unwrap();
+        assert_eq!(result, None, "Missing document should return None");
     }
 
     // ── to_delta_map ─────────────────────────────────────────────────────

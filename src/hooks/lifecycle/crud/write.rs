@@ -335,6 +335,8 @@ pub(super) fn register_create(
             // After-change hooks
             if hooks_enabled {
                 let mut after_data = doc.fields.clone();
+                after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
+
                 run_field_hooks_inner(
                     lua,
                     &def.fields,
@@ -657,6 +659,8 @@ pub(super) fn register_update(
 
                 if hooks_enabled {
                     let mut after_data = doc.fields.clone();
+                    after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
+
                     run_field_hooks_inner(
                         lua,
                         &def.fields,

@@ -193,7 +193,7 @@ fn backfill_has_one(
             let rows = match conn.query_all(&sql, &[]) {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!("Backfill skipping {}.{}: {}", table, col_name, e);
+                    tracing::warn!("Backfill skipping {}.{}: {}", table, col_name, e);
                     continue;
                 }
             };
@@ -224,7 +224,7 @@ fn backfill_has_one(
             let rows = match conn.query_all(&sql, &[]) {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!("Backfill skipping {}.{}: {}", table, col_name, e);
+                    tracing::warn!("Backfill skipping {}.{}: {}", table, col_name, e);
                     continue;
                 }
             };
@@ -262,7 +262,7 @@ fn backfill_has_many(
         let rows = match conn.query_all(&sql, &[]) {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Backfill skipping {}: {}", junction_table, e);
+                tracing::warn!("Backfill skipping {}: {}", junction_table, e);
                 return Ok(());
             }
         };
@@ -291,7 +291,7 @@ fn backfill_has_many(
         let rows = match conn.query_all(&sql, &[]) {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Backfill skipping {}: {}", junction_table, e);
+                tracing::warn!("Backfill skipping {}: {}", junction_table, e);
                 return Ok(());
             }
         };
@@ -338,7 +338,7 @@ fn backfill_array(
         let rows = match conn.query_all(&sql, &[]) {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Backfill skipping {}.{}: {}", array_table, sub.name, e);
+                tracing::warn!("Backfill skipping {}.{}: {}", array_table, sub.name, e);
                 continue;
             }
         };
@@ -502,7 +502,9 @@ mod tests {
     }
 
     fn get_ref_count(conn: &dyn DbConnection, table: &str, id: &str) -> i64 {
-        crate::db::query::ref_count::get_ref_count(conn, table, id).unwrap()
+        crate::db::query::ref_count::get_ref_count(conn, table, id)
+            .unwrap()
+            .expect("document should exist")
     }
 
     // ── Basic backfill ───────────────────────────────────────────────────

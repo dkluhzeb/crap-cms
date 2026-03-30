@@ -107,6 +107,16 @@ pub fn restore_global_version(
     } else {
         None
     };
+
+    // Snapshot outgoing refs before restore for ref count adjustment
+    let old_refs = super::super::ref_count::snapshot_outgoing_refs(
+        conn,
+        &global_table,
+        "default",
+        &def.fields,
+        locale_config,
+    )?;
+
     let doc = super::super::update_global(conn, slug, def, &data, locale_ctx.as_ref())?;
 
     restore_locale_and_join_data(
@@ -116,6 +126,16 @@ pub fn restore_global_version(
         &def.fields,
         obj,
         locale_config,
+    )?;
+
+    // Adjust ref counts based on before/after diff
+    super::super::ref_count::after_update(
+        conn,
+        &global_table,
+        "default",
+        &def.fields,
+        locale_config,
+        old_refs,
     )?;
 
     // Update status and create a new version for the restore

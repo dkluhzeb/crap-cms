@@ -120,6 +120,13 @@ impl ContentService {
                 )
                 .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
 
+                if docs.len() >= BULK_QUERY_LIMIT as usize {
+                    return Err(Status::resource_exhausted(format!(
+                        "Query matches too many documents (limit: {}). Narrow your filter.",
+                        BULK_QUERY_LIMIT
+                    )));
+                }
+
                 // All-or-nothing update access check (always run, even when no
                 // access function is configured — check_access respects default_deny)
                 {
@@ -349,8 +356,8 @@ impl ContentService {
         let def_owned = def;
         let collection_for_event = req.collection.clone();
 
-        let (hard_count, soft_count, deleted_ids) =
-            tokio::task::spawn_blocking(move || -> Result<(i64, i64, Vec<String>), Status> {
+        let (hard_count, soft_count, skipped_count, deleted_ids) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, i64, i64, Vec<String>), Status> {
                 let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
                 // Auth + read access (all on blocking thread)
@@ -385,6 +392,13 @@ impl ContentService {
                 let docs = query::find(&tx, &collection, &def_owned, &find_query, None)
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
+                if docs.len() >= BULK_QUERY_LIMIT as usize {
+                    return Err(Status::resource_exhausted(format!(
+                        "Query matches too many documents (limit: {}). Narrow your filter.",
+                        BULK_QUERY_LIMIT
+                    )));
+                }
+
                 // All-or-nothing access check (always run, even when no
                 // access function is configured — check_access respects default_deny)
                 {
@@ -412,6 +426,7 @@ impl ContentService {
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
                 let mut hard_count = 0i64;
                 let mut soft_count = 0i64;
+                let mut skipped_count = 0i64;
                 let mut hard_deleted_indices = Vec::new();
                 let mut deleted_ids = Vec::new();
 
@@ -420,8 +435,10 @@ impl ContentService {
                     // docs remain referenceable (ref counts are NOT decremented).
                     if !soft_delete {
                         let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
-                            .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
+                            .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?
+                            .unwrap_or(0);
                         if ref_count > 0 {
+                            skipped_count += 1;
                             continue;
                         }
                     }
@@ -504,7 +521,7 @@ impl ContentService {
                     }
                 }
 
-                Ok((hard_count, soft_count, deleted_ids))
+                Ok((hard_count, soft_count, skipped_count, deleted_ids))
             })
             .await
             .map_err(|e| {
@@ -533,6 +550,7 @@ impl ContentService {
         Ok(Response::new(content::DeleteManyResponse {
             deleted: hard_count,
             soft_deleted: soft_count,
+            skipped: skipped_count,
         }))
     }
 }

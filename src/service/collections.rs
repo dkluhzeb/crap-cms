@@ -259,12 +259,15 @@ pub fn delete_document(
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     // Block deletion of documents that are referenced by other documents.
-    let ref_count = query::ref_count::get_ref_count(&tx, slug, id)?;
-    if ref_count > 0 {
-        anyhow::bail!(
-            "Cannot delete: this document is referenced by {} other document(s)",
-            ref_count
-        );
+    // Only hard deletes are blocked — soft-deleted docs remain referenceable.
+    if !def.soft_delete {
+        let ref_count = query::ref_count::get_ref_count(&tx, slug, id)?.unwrap_or(0);
+        if ref_count > 0 {
+            anyhow::bail!(
+                "Cannot delete: this document is referenced by {} other document(s)",
+                ref_count
+            );
+        }
     }
 
     let mut hook_data: HashMap<String, Value> =

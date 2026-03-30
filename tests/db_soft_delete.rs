@@ -322,7 +322,8 @@ fn purge_soft_deleted_removes_expired_docs() {
 
     // Run purge
     let conn = pool.get().unwrap();
-    let purged = purge_soft_deleted(&conn, &registry, _tmp.path()).unwrap();
+    let purged =
+        purge_soft_deleted(&conn, &registry, _tmp.path(), &LocaleConfig::default()).unwrap();
     assert_eq!(purged, 1, "should purge exactly the one expired doc");
     drop(conn);
 
@@ -586,7 +587,9 @@ fn empty_trash_skips_referenced_documents() {
         .unwrap();
 
     // Verify m1 has ref_count > 0
-    let rc = query::ref_count::get_ref_count(&conn, "media", &m1).unwrap();
+    let rc = query::ref_count::get_ref_count(&conn, "media", &m1)
+        .unwrap()
+        .expect("m1 should exist");
     assert!(rc > 0, "m1 should be referenced, got ref_count={}", rc);
 
     // Soft-delete both media docs
@@ -607,7 +610,9 @@ fn empty_trash_skips_referenced_documents() {
     assert_eq!(docs.len(), 2, "both should be in trash");
 
     for doc in &docs {
-        let ref_count = query::ref_count::get_ref_count(&conn, "media", &doc.id).unwrap();
+        let ref_count = query::ref_count::get_ref_count(&conn, "media", &doc.id)
+            .unwrap()
+            .unwrap_or(0);
         if ref_count > 0 {
             continue; // Skip referenced — this is the fix under test
         }

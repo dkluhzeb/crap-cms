@@ -184,6 +184,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Unique check swallowed database errors** — When the uniqueness query
+  failed (e.g. database connectivity issue), the error was logged at `warn`
+  level but validation silently passed. Duplicate values could be persisted
+  if the database was temporarily unavailable during validation. Now produces
+  a `validation.unique_check_failed` error.
+
+- **Custom validator errors silently passed** — When a Lua `validate`
+  function threw a runtime error, the exception was logged at `warn` level
+  but the field silently passed validation. Invalid data could be persisted.
+  Now produces a `validation.custom_error` error.
+
+- **`delete_many` silently skipped referenced documents** — When a bulk
+  hard delete encountered documents with outstanding references, they were
+  silently skipped with only a debug log. The caller received only the
+  `deleted` count with no indication that some documents were not removed.
+  Both Lua and gRPC `delete_many` now report a `skipped` count alongside
+  `deleted`.
+
+- **Has-many validation only reported first invalid value** — Per-element
+  validation of has_many text/number fields used `break` after the first
+  error, hiding subsequent violations. Users had to fix one value, resubmit,
+  and discover the next. Now all invalid values are reported at once.
+
+- **Unique check silently skipped on invalid locale** — When locale
+  sanitization failed for a localized unique field, the unique constraint
+  check was silently skipped with only a debug-level log. Duplicate values
+  could slip through. Now emits a validation error instead.
+
+- **Display conditions failed open on error** — When a display condition
+  Lua function threw an error or returned an unexpected type, the field was
+  shown as a "safe default". This could expose access-controlled content.
+  Now fails closed (hides the field) on error.
+
+- **Upload Bearer token silently fell back to anonymous** — The HTTP upload
+  endpoint treated `Authorization: Basic ...` (non-Bearer scheme) as
+  anonymous access instead of returning 401. Misconfigured clients were
+  silently unauthenticated.
+
+- **Bulk operations silently capped at 10K documents** — `UpdateMany` and
+  `DeleteMany` applied a `LIMIT 10000` to the query but did not inform
+  the client when results were truncated. Partial mutations occurred with
+  no feedback. Now returns `RESOURCE_EXHAUSTED` when the limit is hit.
+
+- **`get_ref_count` returned 0 for missing documents** — The function
+  could not distinguish "document has zero references" from "document
+  does not exist", which could mask lookup failures in delete protection.
+  Now returns `Option<i64>` (`None` for missing documents).
+
+- **Backfill migration silently skipped errors** — `backfill_ref_counts`
+  caught query errors at `debug` level and returned `Ok(())`, hiding
+  corrupted junction tables. Ref counts could remain incorrect while the
+  migration appeared to succeed. Errors are now logged at `warn` level.
+
+- **Display condition evaluated empty field name** — A condition object
+  with a missing or empty `"field"` key silently matched against an
+  empty-string lookup instead of warning. Now logs a warning and defaults
+  to showing the field.
+
 - **Length validation counted bytes instead of characters** — `min_length`
   and `max_length` field validation used `s.len()` (byte count) instead of
   `s.chars().count()` (character count). Multibyte UTF-8 strings were
@@ -1101,6 +1159,106 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   1x1000 dimensions, causing a 1000000x1000 intermediate allocation that
   took over 60 seconds. Reduced to 10x1 → 1x10 which exercises the same
   ratio math instantly.
+
+- **JSON template helper missing single-quote escape** — The `{{{json ...}}}`
+  Handlebars helper only escaped `</` (for `<script>` breakout prevention)
+  but not single quotes. When used in single-quoted HTML attributes like
+  `data-condition='{{{json condition_json}}}'`, a value containing `'`
+  could break out of the attribute. Now escapes `'` to `\u0027` (valid
+  JSON unicode escape, decoded transparently by `JSON.parse`). Affects
+  display condition attributes on fields, collapsibles, rows, tabs, groups,
+  and sidebar sections.
+
+- **Soft-delete purge skipped ref count checks** (CRITICAL) — The
+  scheduler's `purge_collection()` hard-deleted expired soft-deleted
+  documents without checking `_ref_count`, without calling
+  `before_hard_delete()` to decrement outgoing references, and without
+  cleaning up FTS entries. This silently broke referential integrity:
+  referenced documents were permanently deleted, and target documents
+  retained phantom ref counts that blocked their deletion. Now mirrors
+  the `empty_trash` logic: checks ref count (skips referenced docs),
+  decrements outgoing refs, cleans FTS, then deletes.
+
+- **`delete_document` blocked soft-delete of referenced documents**
+  (HIGH) — The single-document `delete_document` service function
+  unconditionally checked `_ref_count > 0` before any delete, including
+  soft deletes. Every other code path (gRPC `DeleteMany`, Lua `delete`,
+  Lua `delete_many`, admin `empty_trash`) correctly only checks ref
+  count for hard deletes. Users could not soft-delete (trash) documents
+  that were referenced by other documents. Now only checks ref count
+  for hard deletes.
+
+- **gRPC field-level write access bypass via `join_data`** (HIGH) —
+  The gRPC `Create`, `Update`, and `UpdateGlobal` endpoints stripped
+  denied fields from the `data` map but not from `join_data`. Array,
+  Blocks, and has-many relationship data for access-controlled fields
+  could still be written through the gRPC API. The bulk `UpdateMany`
+  endpoint correctly stripped both maps. Now all endpoints strip
+  `join_data` as well.
+
+- **Sub-field custom validator errors silently passed** (HIGH) — When a
+  Lua `validate` function threw a runtime error inside an Array or
+  Blocks sub-field, the error was logged but validation silently passed.
+  The top-level `check_custom_validate` correctly failed validation on
+  error; the sub-field counterpart did not. Invalid data could be
+  persisted through Array/Blocks fields. Now produces a
+  `validation.custom_error` error, matching the top-level behavior.
+
+- **`restore_global_version` skipped ref count adjustment** (HIGH) —
+  Restoring a version snapshot on a Global never adjusted ref counts.
+  If a relationship field changed between versions, restoring the old
+  version left the new target's count too high and the old target's
+  count too low. The collection `restore_version` handled this
+  correctly. Now snapshots outgoing refs before restore and applies
+  the diff after.
+
+- **AfterChange hooks missing document `id` in `ctx.data`** — The
+  AfterChange hook context for single `create` and `update` operations
+  in the Lua CRUD API received `doc.fields` without the document `id`.
+  Hooks needing to reference the document (e.g., for follow-up
+  operations or notifications) had no way to get it. The bulk
+  `update_many` path correctly included `id`. Now all paths include it.
+
+- **Delete confirmation page used wrong access check for soft-delete** —
+  The admin delete confirmation page always checked `access.delete`,
+  even for collections with `soft_delete` enabled. Users with
+  `access.trash` permission (but not `access.delete`) were blocked from
+  viewing the confirmation dialog, even though the soft-delete action
+  itself would succeed. Now uses `resolve_trash()` for soft-delete
+  collections.
+
+- **Upload update loaded old document without locale context** — The
+  HTTP upload PATCH endpoint loaded the old document for file cleanup
+  with `locale_ctx = None`, while the admin handler equivalent correctly
+  passed the locale context. On localized upload collections, this
+  could return wrong field values, causing incorrect file cleanup
+  (orphaned files or premature deletion).
+
+- **gRPC `FindByID` documentation contradicted behavior** — The
+  RPC-level comment stated that `FindByID` returns an empty document
+  field when no match is found and that `NOT_FOUND` is not returned.
+  The actual implementation returns a `NOT_FOUND` status error, as
+  correctly documented in the `FindByIDResponse` message comment.
+  Fixed the RPC-level comment to match actual behavior.
+
+- **Restore action silently redirected on failure** — The admin restore
+  action logged errors but always redirected to the trash page,
+  regardless of whether the restore succeeded. Users had no indication
+  of failure. Now returns an HTTP 500 error response on failure.
+
+- **Proto `FieldInfo.type` listed nonexistent field types** — The
+  proto comment listed `multiselect`, `point`, and `color` as valid
+  field types, none of which exist. Updated to match the actual
+  `VALID_FIELD_TYPES` list.
+
+- **Proto `scheduled_by` documentation mismatch** — The
+  `GetJobRunResponse.scheduled_by` comment listed `"scheduler"` but
+  the code sends `"cron"`. Fixed the comment.
+
+- **Cron schedule test non-deterministic** — `check_cron_schedules_skips_not_due`
+  used `chrono::Utc::now()` with a 1-second window, which could
+  non-deterministically fire if run at an exact hour boundary. Now uses
+  a fixed time at minute :30 to guarantee deterministic behavior.
 
 ### Changed
 

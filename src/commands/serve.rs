@@ -700,6 +700,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                 cfg.jobs.clone(),
                 shutdown.clone(),
                 config_dir.clone(),
+                cfg.locale.clone(),
             )
             .await
         } else {

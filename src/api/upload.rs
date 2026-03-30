@@ -53,7 +53,8 @@ fn extract_bearer_token(auth_header: &str) -> Option<&str> {
 /// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
 ///
 /// Returns `Ok(None)` when no Authorization header is present (anonymous),
-/// `Ok(Some(user))` for a valid token, or `Err(401)` for an invalid/expired token.
+/// `Ok(Some(user))` for a valid token, or `Err(401)` for an invalid/expired token
+/// or a non-Bearer scheme.
 #[cfg(not(tarpaulin_include))]
 fn extract_bearer_user(
     state: &AdminState,
@@ -73,7 +74,12 @@ fn extract_bearer_user(
     };
     let token = match extract_bearer_token(auth_header) {
         Some(t) => t,
-        None => return Ok(None),
+        None => {
+            return Err(Box::new(json_error(
+                StatusCode::UNAUTHORIZED,
+                "Authorization header must use Bearer scheme",
+            )));
+        }
     };
     let claims = auth::validate_token(token, state.jwt_secret.as_ref()).map_err(|_| {
         Box::new(json_error(
@@ -420,11 +426,12 @@ async fn update_upload(
 
     // Load old document to get file paths for cleanup
     let mut old_doc_fields: Option<HashMap<String, Value>> = None;
+    let locale_ctx = crate::db::LocaleContext::from_locale_string(None, &state.config.locale);
 
     if let Some(ref f) = file
         && !f.data.is_empty()
         && let Ok(conn) = state.pool.get()
-        && let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, None)
+        && let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, locale_ctx.as_ref())
     {
         old_doc_fields = Some(old_doc.fields.clone());
     }

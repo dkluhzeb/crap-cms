@@ -5,6 +5,7 @@ use std::{str::FromStr, time::Instant};
 use anyhow::{Context as _, Result, anyhow};
 
 use crate::{
+    config::LocaleConfig,
     core::{
         SharedRegistry,
         job::{JobDefinition, JobRun},
@@ -223,6 +224,7 @@ pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
     registry: &SharedRegistry,
     config_dir: &std::path::Path,
+    locale_config: &LocaleConfig,
 ) -> Result<u64> {
     let reg = registry
         .read()
@@ -248,7 +250,7 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let purged = purge_collection(conn, slug, def, seconds, config_dir)?;
+        let purged = purge_collection(conn, slug, def, seconds, config_dir, locale_config)?;
         total += purged;
     }
 
@@ -267,6 +269,7 @@ fn purge_collection(
     def: &crate::core::CollectionDefinition,
     retention_seconds: i64,
     config_dir: &std::path::Path,
+    locale_config: &LocaleConfig,
 ) -> Result<u64> {
     // Find docs past the retention threshold
     let (offset_sql, offset_param) = conn.date_offset_expr(retention_seconds, 1);
@@ -286,6 +289,21 @@ fn purge_collection(
             _ => continue,
         };
 
+        // Skip documents that are still referenced — protect referential integrity
+        let ref_count = query::ref_count::get_ref_count(conn, slug, &id)?.unwrap_or(0);
+        if ref_count > 0 {
+            tracing::debug!(
+                "Skipping purge of {}/{}: referenced by {} document(s)",
+                slug,
+                id,
+                ref_count
+            );
+            continue;
+        }
+
+        // Decrement ref counts on targets before hard delete (CASCADE removes junction rows)
+        query::ref_count::before_hard_delete(conn, slug, &id, &def.fields, locale_config)?;
+
         // Collect upload file paths BEFORE deleting from DB
         if def.is_upload_collection()
             && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, slug, def, &id, None)
@@ -293,7 +311,12 @@ fn purge_collection(
             upload_docs.push(doc);
         }
 
-        // Hard delete the document from DB first
+        // Clean up FTS index before hard delete
+        if conn.supports_fts() {
+            query::fts::fts_delete(conn, slug, &id)?;
+        }
+
+        // Hard delete the document from DB
         query::delete(conn, slug, &id)?;
         purged += 1;
     }
@@ -331,6 +354,7 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Timelike;
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
 
@@ -688,18 +712,24 @@ mod tests {
                 .build(),
         ]);
 
-        // Set the window to just 1 second — unlikely an hour boundary is crossed
-        let now = chrono::Utc::now();
+        // Use a fixed window that is guaranteed to NOT cross an hour boundary:
+        // pick a time at minute :30 with a 1-second window.
+        let now = chrono::Utc::now()
+            .with_minute(30)
+            .unwrap()
+            .with_second(30)
+            .unwrap();
         let last_check = now - chrono::Duration::seconds(1);
 
         check_cron_schedules(&pool, &registry, last_check, now).unwrap();
 
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
-        // Might be 0 or 1 depending on exact timing, but we can't fully control
-        // this without a fixed clock. For a 1-second window, it's almost certainly 0
-        // unless we happen to cross an hour boundary.
-        assert!(jobs.len() <= 1);
+        assert_eq!(
+            jobs.len(),
+            0,
+            "hourly job should not fire in a 1s window at :30"
+        );
     }
 
     #[test]

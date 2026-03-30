@@ -208,6 +208,12 @@ fn validate_leaf_sub_field(
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
+                errors.push(FieldError::with_key(
+                    qualified_name.to_owned(),
+                    format!("Validation failed (internal error in '{}')", validate_ref),
+                    "validation.custom_error",
+                    HashMap::from([("field".to_string(), sf.name.clone())]),
+                ));
             }
         }
     }

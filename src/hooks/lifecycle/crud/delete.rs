@@ -123,7 +123,8 @@ pub(super) fn register_delete(
             // to prevent dangling references and _ref_count corruption.
             if !def.soft_delete || force_hard_delete {
                 let ref_count = query::ref_count::get_ref_count(conn, &collection, &id)
-                    .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?
+                    .unwrap_or(0);
                 if ref_count > 0 {
                     return Err(RuntimeError(format!(
                         "Cannot delete '{}' from '{}': referenced by {} document(s)",
@@ -784,12 +785,14 @@ pub(super) fn register_delete_many(
             };
 
             let mut deleted = 0i64;
+            let mut skipped = 0i64;
             for doc in &docs {
                 // Ref count protection only applies to hard deletes — soft-deleted
                 // docs remain referenceable (ref counts are NOT decremented).
                 if !soft_delete {
                     let ref_count = query::ref_count::get_ref_count(conn, &collection, &doc.id)
-                        .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?
+                        .unwrap_or(0);
                     if ref_count > 0 {
                         tracing::debug!(
                             "Skipping delete of {}/{}: referenced by {} document(s)",
@@ -797,6 +800,7 @@ pub(super) fn register_delete_many(
                             doc.id,
                             ref_count
                         );
+                        skipped += 1;
                         continue;
                     }
                 }
@@ -863,6 +867,7 @@ pub(super) fn register_delete_many(
 
             let result = lua.create_table()?;
             result.set("deleted", deleted)?;
+            result.set("skipped", skipped)?;
             Ok(result)
         },
     )?;

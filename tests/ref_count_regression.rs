@@ -129,7 +129,9 @@ fn make_posts_and_tags() -> Vec<CollectionDefinition> {
 
 fn get_ref_count(setup: &TestSetup, collection: &str, id: &str) -> i64 {
     let conn = setup.pool.get().unwrap();
-    query::ref_count::get_ref_count(&conn, collection, id).unwrap()
+    query::ref_count::get_ref_count(&conn, collection, id)
+        .unwrap()
+        .expect("document should exist")
 }
 
 // ── Regression: UpdateMany must adjust ref counts ────────────────────────

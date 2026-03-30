@@ -33,7 +33,7 @@ pub(crate) fn check_option_valid(
                                     ("value".to_string(), v.clone()),
                                 ]),
                             ));
-                            break;
+                            // Do NOT break — report all invalid values
                         }
                     }
                 }
@@ -263,6 +263,45 @@ mod tests {
             result.unwrap_err().errors[0]
                 .message
                 .contains("malformed JSON"),
+        );
+    }
+
+    /// Regression: has_many select must report ALL invalid options, not just the first.
+    /// Previously, `break` after the first error caused subsequent violations to be hidden.
+    #[test]
+    fn test_has_many_select_reports_all_invalid_options() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Red".to_string()),
+                    "red",
+                )])
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        // Two invalid options: "invalid1" and "invalid2"
+        data.insert(
+            "tags".to_string(),
+            json!(r#"["invalid1","red","invalid2"]"#),
+        );
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(result.is_err());
+        let errors = &result.unwrap_err().errors;
+        assert_eq!(
+            errors.len(),
+            2,
+            "Both invalid options should produce errors, got {}",
+            errors.len()
         );
     }
 
