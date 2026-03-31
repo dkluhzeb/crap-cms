@@ -234,7 +234,7 @@ impl DbConnection for SqliteConnection {
 
         let mut stmt = self
             .inner
-            .prepare(sql)
+            .prepare_cached(sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -262,7 +262,7 @@ impl DbConnection for SqliteConnection {
 
         let mut stmt = self
             .inner
-            .prepare(sql)
+            .prepare_cached(sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -426,7 +426,7 @@ impl DbConnection for SqliteTransaction<'_> {
 
         let mut stmt = self
             .inner
-            .prepare(sql)
+            .prepare_cached(sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -454,7 +454,7 @@ impl DbConnection for SqliteTransaction<'_> {
 
         let mut stmt = self
             .inner
-            .prepare(sql)
+            .prepare_cached(sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -598,7 +598,7 @@ impl DbConnection for rusqlite::Transaction<'_> {
         let refs: Vec<&dyn rusqlite::types::ToSql> =
             rusqlite_params.iter().map(|b| b.as_ref()).collect();
 
-        let mut stmt = rusqlite::Connection::prepare(inner, sql)
+        let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -625,7 +625,7 @@ impl DbConnection for rusqlite::Transaction<'_> {
         let refs: Vec<&dyn rusqlite::types::ToSql> =
             rusqlite_params.iter().map(|b| b.as_ref()).collect();
 
-        let mut stmt = rusqlite::Connection::prepare(inner, sql)
+        let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -765,7 +765,7 @@ impl DbConnection for rusqlite::Connection {
         let refs: Vec<&dyn rusqlite::types::ToSql> =
             rusqlite_params.iter().map(|b| b.as_ref()).collect();
 
-        let mut stmt = rusqlite::Connection::prepare(self, sql)
+        let mut stmt = rusqlite::Connection::prepare_cached(self, sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();
@@ -791,7 +791,7 @@ impl DbConnection for rusqlite::Connection {
         let refs: Vec<&dyn rusqlite::types::ToSql> =
             rusqlite_params.iter().map(|b| b.as_ref()).collect();
 
-        let mut stmt = rusqlite::Connection::prepare(self, sql)
+        let mut stmt = rusqlite::Connection::prepare_cached(self, sql)
             .with_context(|| format!("prepare failed: {sql}"))?;
 
         let col_count = stmt.column_count();

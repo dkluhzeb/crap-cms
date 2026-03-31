@@ -40,6 +40,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   number of CPU cores (fallback: 4 if detection fails). Override with
   `hooks.vm_pool_size` in `crap.toml`.
 
+- **SQLite statements re-parsed on every query** — All `query_all`
+  and `query_one` calls used `prepare()` which parses SQL from scratch
+  on every invocation. Switched to `prepare_cached()` which reuses
+  previously parsed statements. Reduces CPU overhead on every database
+  operation, especially for hot paths like `find` and `find_by_id`.
+
 - **Trash pagination navigated away from trash view** — The "Next" and
   "Previous" buttons in the trash list did not preserve `?trash=1` in
   the pagination URLs. Clicking next navigated to the regular (non-
