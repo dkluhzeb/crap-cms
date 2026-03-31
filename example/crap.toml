@@ -27,6 +27,14 @@ populate_cache_max_age_secs = 60
 
 [upload]
 max_file_size = "50MB"
+# storage = "s3"         # uncomment for S3-compatible storage
+# [upload.s3]
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = "http://localhost:9000"
+# access_key = "minioadmin"
+# secret_key = "minioadmin"
+# path_style = true
 
 [email]
 smtp_host = "${CRAP_SMTP_HOST:-}"

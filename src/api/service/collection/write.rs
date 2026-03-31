@@ -517,7 +517,7 @@ impl ContentService {
         let def_clone = def.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
-        let config_dir = self.config_dir.clone();
+        let storage = self.storage.clone();
         let locale_config = self.locale_config.clone();
         let access_owned = access_ref.map(|s| s.to_string());
         let deny_msg_owned = deny_msg.to_string();
@@ -550,7 +550,7 @@ impl ContentService {
                 &id,
                 &def_clone,
                 user_doc.as_ref(),
-                Some(&config_dir),
+                Some(&*storage),
                 Some(&locale_config),
             )
             .map_err(|e| map_db_error(e, "Delete error", &db_kind))?;

@@ -28,8 +28,10 @@ use crate::{
     admin, api, cli,
     config::{AuthConfig, CrapConfig},
     core::{
-        Registry, SharedRegistry, event::EventBus, rate_limit::LoginRateLimiter,
-        upload::format_filesize,
+        Registry, SharedRegistry,
+        event::EventBus,
+        rate_limit::LoginRateLimiter,
+        upload::{create_storage, format_filesize},
     },
     db::{DbConnection, migrate, pool},
     hooks,
@@ -607,6 +609,9 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         None
     };
 
+    // Create upload storage backend
+    let storage = create_storage(&config_dir, &cfg.upload)?;
+
     // Graceful shutdown: CancellationToken shared across all servers
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone());
@@ -667,6 +672,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .ip_login_limiter(ip_login_limiter.clone())
                     .forgot_password_limiter(forgot_password_limiter.clone())
                     .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
+                    .storage(storage.clone())
                     .build(),
                 shutdown.clone(),
             )
@@ -692,6 +698,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .ip_login_limiter(ip_login_limiter.clone())
                     .forgot_password_limiter(forgot_password_limiter.clone())
                     .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
+                    .storage(storage.clone())
                     .build(),
                 shutdown.clone(),
             )
@@ -709,7 +716,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                 registry.clone(),
                 cfg.jobs.clone(),
                 shutdown.clone(),
-                config_dir.clone(),
+                storage.clone(),
                 cfg.locale.clone(),
             )
             .await

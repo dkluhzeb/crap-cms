@@ -1,6 +1,6 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
-use crate::core::upload::{ProcessedUploadBuilder, QueuedConversion, SizeResult};
+use crate::core::upload::{ProcessedUploadBuilder, QueuedConversion, SizeResult, StorageBackend};
 
 /// Result of processing an upload (original + generated sizes/formats).
 #[derive(Debug)]
@@ -14,8 +14,8 @@ pub struct ProcessedUpload {
     pub sizes: HashMap<String, SizeResult>,
     /// Format conversions deferred to the background queue (when per-format `queue = true`).
     pub queued_conversions: Vec<QueuedConversion>,
-    /// Files created on disk during processing. Used for cleanup if the DB write fails.
-    pub created_files: Vec<PathBuf>,
+    /// Storage keys created during processing. Used for cleanup if the DB write fails.
+    pub created_files: Vec<String>,
 }
 
 impl ProcessedUpload {
@@ -23,11 +23,11 @@ impl ProcessedUpload {
         ProcessedUploadBuilder::new(filename, url)
     }
 
-    /// Delete all files created during processing.
+    /// Delete all files created during processing via the storage backend.
     /// Call this when the subsequent DB transaction fails to avoid orphaned files.
-    pub fn cleanup(&self) {
-        for path in &self.created_files {
-            let _ = std::fs::remove_file(path);
+    pub fn cleanup(&self, storage: &dyn StorageBackend) {
+        for key in &self.created_files {
+            let _ = storage.delete(key);
         }
     }
 }
@@ -35,41 +35,47 @@ impl ProcessedUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::upload::storage::LocalStorage;
 
     #[test]
     fn cleanup_removes_created_files() {
         let tmp = tempfile::tempdir().unwrap();
-        let f1 = tmp.path().join("a.txt");
-        let f2 = tmp.path().join("b.txt");
-        std::fs::write(&f1, b"a").unwrap();
-        std::fs::write(&f2, b"b").unwrap();
+        let storage = LocalStorage::new(tmp.path());
+
+        storage.put("a.txt", b"a", "text/plain").unwrap();
+        storage.put("b.txt", b"b", "text/plain").unwrap();
 
         let upload = ProcessedUploadBuilder::new("test.jpg", "/uploads/test.jpg")
             .mime_type("image/jpeg")
             .filesize(100)
-            .created_files(vec![f1.clone(), f2.clone()])
+            .created_files(vec!["a.txt".to_string(), "b.txt".to_string()])
             .build();
 
-        assert!(f1.exists());
-        assert!(f2.exists());
-        upload.cleanup();
-        assert!(!f1.exists(), "f1 should be deleted after cleanup");
-        assert!(!f2.exists(), "f2 should be deleted after cleanup");
+        assert!(storage.exists("a.txt").unwrap());
+        assert!(storage.exists("b.txt").unwrap());
+        upload.cleanup(&storage);
+        assert!(
+            !storage.exists("a.txt").unwrap(),
+            "a.txt should be deleted after cleanup"
+        );
+        assert!(
+            !storage.exists("b.txt").unwrap(),
+            "b.txt should be deleted after cleanup"
+        );
     }
 
     #[test]
     fn cleanup_ignores_already_deleted_files() {
         let tmp = tempfile::tempdir().unwrap();
-        let f1 = tmp.path().join("gone.txt");
-        // Don't create the file — it doesn't exist
+        let storage = LocalStorage::new(tmp.path());
 
         let upload = ProcessedUploadBuilder::new("test.jpg", "/uploads/test.jpg")
             .mime_type("image/jpeg")
             .filesize(100)
-            .created_files(vec![f1])
+            .created_files(vec!["gone.txt".to_string()])
             .build();
 
         // Should not panic
-        upload.cleanup();
+        upload.cleanup(&storage);
     }
 }

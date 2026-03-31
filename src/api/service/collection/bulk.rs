@@ -349,7 +349,7 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let req_where = req.r#where.clone();
-        let config_dir = self.config_dir.clone();
+        let storage = self.storage.clone();
         let locale_cfg = self.locale_config.clone();
         let access_owned = access_ref.map(|s| s.to_string());
         let deny_msg_owned = deny_msg.to_string();
@@ -494,6 +494,12 @@ impl ContentService {
                             .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
                     }
 
+                    // Cancel pending image conversions
+                    if def_owned.is_upload_collection() {
+                        let _ =
+                            query::images::delete_entries_for_document(&tx, &collection, &doc.id);
+                    }
+
                     if run_hooks {
                         let after_ctx = HookContext::builder(&collection, "delete")
                             .data(hook_data)
@@ -518,7 +524,7 @@ impl ContentService {
                 // (soft-deleted docs keep their files for potential restore).
                 if def_owned.is_upload_collection() {
                     for idx in &hard_deleted_indices {
-                        upload::delete_upload_files(&config_dir, &docs[*idx].fields);
+                        upload::delete_upload_files(&*storage, &docs[*idx].fields);
                     }
                 }
 

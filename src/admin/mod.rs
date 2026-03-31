@@ -72,6 +72,8 @@ pub struct AdminState {
     pub max_sse_connections: usize,
     /// Pre-computed Content-Security-Policy header value. None = CSP disabled.
     pub csp_header: Option<String>,
+    /// The storage backend for uploaded files.
+    pub storage: crate::core::upload::SharedStorage,
 }
 
 impl AdminState {

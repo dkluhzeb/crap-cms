@@ -332,6 +332,28 @@ pub fn purge_old_image_entries(conn: &dyn DbConnection, older_than_secs: u64) ->
     Ok(deleted as i64)
 }
 
+/// Delete all pending/processing image queue entries for a document.
+/// Called when a document is deleted to prevent the scheduler from
+/// processing orphaned conversion jobs.
+pub fn delete_entries_for_document(
+    conn: &dyn DbConnection,
+    collection: &str,
+    document_id: &str,
+) -> Result<usize> {
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    conn.execute(
+        &format!(
+            "DELETE FROM _crap_image_queue \
+             WHERE collection = {p1} AND document_id = {p2} \
+             AND status IN ('pending', 'processing')"
+        ),
+        &[
+            DbValue::Text(collection.to_string()),
+            DbValue::Text(document_id.to_string()),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

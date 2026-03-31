@@ -143,6 +143,11 @@ fn setup_app_with_config(
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crap_cms::core::upload::create_storage(
+            tmp.path(),
+            &crap_cms::config::UploadConfig::default(),
+        )
+        .unwrap(),
     };
 
     let router = build_router(state);

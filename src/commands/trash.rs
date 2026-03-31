@@ -8,7 +8,7 @@ use super::TrashAction;
 use crate::{
     cli::{self, Table},
     config::CrapConfig,
-    core::{SharedRegistry, upload},
+    core::{SharedRegistry, upload, upload::StorageBackend},
     db::{DbConnection, DbPool, DbValue, migrate, pool, query},
     hooks,
 };
@@ -153,7 +153,7 @@ fn parse_older_than(s: &str) -> Option<i64> {
 fn run_purge(
     registry: &SharedRegistry,
     pool: &DbPool,
-    config_dir: &Path,
+    storage: &dyn StorageBackend,
     collection: Option<&str>,
     older_than: &str,
     dry_run: bool,
@@ -210,7 +210,7 @@ fn run_purge(
             if def.is_upload_collection()
                 && let Ok(Some(doc)) = query::find_by_id_unfiltered(&tx, slug, def, id, None)
             {
-                upload::delete_upload_files(config_dir, &doc.fields);
+                upload::delete_upload_files(storage, &doc.fields);
             }
 
             query::fts::fts_delete(&tx, slug, id)?;
@@ -314,7 +314,7 @@ fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &
 fn run_empty(
     registry: &SharedRegistry,
     pool: &DbPool,
-    config_dir: &Path,
+    storage: &dyn StorageBackend,
     collection: &str,
     confirm: bool,
 ) -> Result<()> {
@@ -369,7 +369,7 @@ fn run_empty(
 
     for doc in &docs {
         if def.is_upload_collection() {
-            upload::delete_upload_files(config_dir, &doc.fields);
+            upload::delete_upload_files(storage, &doc.fields);
         }
 
         query::fts::fts_delete(&tx, collection, &doc.id)?;
@@ -393,6 +393,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
     let (cfg, registry, pool) = init_stack(&config_dir)?;
+    let storage = upload::create_storage(&config_dir, &cfg.upload)?;
 
     match action {
         TrashAction::List { collection } => run_list(&registry, &pool, &cfg, collection.as_deref()),
@@ -404,7 +405,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
         } => run_purge(
             &registry,
             &pool,
-            &config_dir,
+            &*storage,
             collection.as_deref(),
             &older_than,
             dry_run,
@@ -415,7 +416,7 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
         TrashAction::Empty {
             collection,
             confirm,
-        } => run_empty(&registry, &pool, &config_dir, &collection, confirm),
+        } => run_empty(&registry, &pool, &*storage, &collection, confirm),
     }
 }
 

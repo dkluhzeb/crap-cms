@@ -934,6 +934,11 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crate::core::upload::create_storage(
+            tmp.path(),
+            &crate::config::UploadConfig::default(),
+        )
+        .unwrap(),
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1028,6 +1033,11 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crate::core::upload::create_storage(
+            tmp.path(),
+            &crate::config::UploadConfig::default(),
+        )
+        .unwrap(),
     };
 
     enrich_field_contexts(
@@ -1097,6 +1107,11 @@ fn make_test_state() -> crate::admin::AdminState {
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crate::core::upload::create_storage(
+            tmp.path(),
+            &crate::config::UploadConfig::default(),
+        )
+        .unwrap(),
     }
 }
 

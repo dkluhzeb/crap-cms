@@ -44,6 +44,7 @@ use crate::{
         email::EmailRenderer,
         event::EventBus,
         rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::{DbConnection, DbPool, query},
     hooks::HookRunner,
@@ -69,6 +70,7 @@ pub struct AdminStartParams {
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub storage: SharedStorage,
 }
 
 impl AdminStartParams {
@@ -98,6 +100,7 @@ pub async fn start(
         ip_login_limiter,
         forgot_password_limiter,
         ip_forgot_password_limiter,
+        storage,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
     let handlebars =
@@ -132,6 +135,7 @@ pub async fn start(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections,
         csp_header,
+        storage,
     };
 
     let h2c_enabled = state.config.server.h2c;

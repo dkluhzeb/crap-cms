@@ -1,4 +1,6 @@
-use std::{fs, io::Cursor, path::Path};
+use std::io::Cursor;
+#[cfg(test)]
+use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -57,18 +59,26 @@ pub(super) fn resize_image(
     })
 }
 
-/// Save image as lossy WebP with given quality (via libwebp).
-pub(super) fn save_webp(img: &image::DynamicImage, path: &Path, quality: u8) -> Result<()> {
+/// Encode image as lossy WebP with given quality (via libwebp), returning raw bytes.
+pub(super) fn webp_to_bytes(img: &image::DynamicImage, quality: u8) -> Vec<u8> {
     let rgba = img.to_rgba8();
     let encoder = webp::Encoder::from_rgba(&rgba, img.width(), img.height());
     let mem = encoder.encode(quality as f32);
-    fs::write(path, &*mem).with_context(|| format!("Failed to write WebP: {}", path.display()))?;
+    mem.to_vec()
+}
+
+/// Save image as lossy WebP with given quality (via libwebp).
+#[cfg(test)]
+pub(super) fn save_webp(img: &image::DynamicImage, path: &Path, quality: u8) -> Result<()> {
+    let data = webp_to_bytes(img, quality);
+    fs::write(path, &data).with_context(|| format!("Failed to write WebP: {}", path.display()))?;
     Ok(())
 }
 
-/// Save image as AVIF with given quality.
-pub(super) fn save_avif(img: &image::DynamicImage, path: &Path, quality: u8) -> Result<()> {
+/// Encode image as AVIF with given quality, returning raw bytes.
+pub(super) fn avif_to_bytes(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>> {
     use image::ImageEncoder;
+
     let rgba = img.to_rgba8();
     let mut buf = Cursor::new(Vec::new());
     let encoder = image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut buf, 8, quality);
@@ -80,13 +90,58 @@ pub(super) fn save_avif(img: &image::DynamicImage, path: &Path, quality: u8) -> 
             image::ExtendedColorType::Rgba8,
         )
         .with_context(|| "Failed to encode AVIF")?;
-    fs::write(path, buf.into_inner())
-        .with_context(|| format!("Failed to write AVIF: {}", path.display()))?;
+
+    Ok(buf.into_inner())
+}
+
+/// Save image as AVIF with given quality.
+#[cfg(test)]
+pub(super) fn save_avif(img: &image::DynamicImage, path: &Path, quality: u8) -> Result<()> {
+    let data = avif_to_bytes(img, quality)?;
+    fs::write(path, &data).with_context(|| format!("Failed to write AVIF: {}", path.display()))?;
     Ok(())
 }
 
 /// Process a single image queue entry: read source, convert to target format, save to disk.
 /// Returns Ok(()) on success, Err on failure.
+/// Process a queued image conversion using storage backend.
+/// `source_key` and `target_key` are storage keys (or filesystem paths for local).
+pub fn process_image_entry_with_storage(
+    source_key: &str,
+    target_key: &str,
+    format: &str,
+    quality: u8,
+    storage: &dyn super::StorageBackend,
+) -> Result<()> {
+    let source_data = storage
+        .get(source_key)
+        .with_context(|| format!("Source image not found: {}", source_key))?;
+
+    let img = image::load_from_memory(&source_data)
+        .with_context(|| format!("Failed to decode image: {}", source_key))?;
+
+    let target_data = match format {
+        "webp" => webp_to_bytes(&img, quality),
+        "avif" => avif_to_bytes(&img, quality)?,
+        _ => bail!("Unsupported format: {}", format),
+    };
+
+    let content_type = match format {
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    };
+
+    storage
+        .put(target_key, &target_data, content_type)
+        .with_context(|| format!("Failed to save converted image: {}", target_key))?;
+
+    Ok(())
+}
+
+/// Process a queued image conversion using local filesystem paths.
+/// Only used in tests — production code uses `process_image_entry_with_storage`.
+#[cfg(test)]
 pub fn process_image_entry(
     source_path: &str,
     target_path: &str,

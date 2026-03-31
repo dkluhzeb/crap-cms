@@ -217,22 +217,16 @@ async fn create_upload(
         }
     };
 
-    // Process the upload (validate, save to disk, generate sizes) — runs on blocking thread
+    // Process the upload (validate, save via storage, generate sizes) — runs on blocking thread
     let upload_config = match def.upload.as_ref() {
         Some(c) => c.clone(),
         None => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Upload config missing"),
     };
-    let config_dir = state.config_dir.clone();
+    let storage = state.storage.clone();
     let slug_for_upload = slug.clone();
     let global_max = state.config.upload.max_file_size;
     let (processed, mut guard) = match tokio::task::spawn_blocking(move || {
-        upload::process_upload(
-            file,
-            &upload_config,
-            &config_dir,
-            &slug_for_upload,
-            global_max,
-        )
+        upload::process_upload(file, &upload_config, storage, &slug_for_upload, global_max)
     })
     .await
     {
@@ -458,11 +452,11 @@ async fn update_upload(
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
     {
-        let config_dir = state.config_dir.clone();
+        let storage = state.storage.clone();
         let slug_for_upload = slug.clone();
         let global_max = state.config.upload.max_file_size;
         match tokio::task::spawn_blocking(move || {
-            upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+            upload::process_upload(f, &upload_config, storage, &slug_for_upload, global_max)
         })
         .await
         {
@@ -544,7 +538,7 @@ async fn update_upload(
 
             // Clean up old files on success
             if let Some(old_fields) = old_doc_fields {
-                upload::delete_upload_files(&state.config_dir, &old_fields);
+                upload::delete_upload_files(&*state.storage, &old_fields);
             }
 
             // Enqueue deferred image conversions if any
@@ -696,7 +690,7 @@ async fn delete_upload(
     let slug_owned = slug.clone();
     let id_owned = id.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let config_dir = state.config_dir.clone();
+    let storage = state.storage.clone();
     let locale_config = state.config.locale.clone();
     let result = tokio::task::spawn_blocking(move || {
         service::delete_document(
@@ -706,7 +700,7 @@ async fn delete_upload(
             &id_owned,
             &def_clone,
             user_doc_owned.as_ref(),
-            Some(&config_dir),
+            Some(&*storage),
             Some(&locale_config),
         )
     })

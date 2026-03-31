@@ -89,11 +89,11 @@ pub async fn create_action(
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
     {
-        let config_dir = state.config_dir.clone();
+        let storage = state.storage.clone();
         let slug_for_upload = slug.clone();
         let global_max = state.config.upload.max_file_size;
         let upload_result = tokio::task::spawn_blocking(move || {
-            upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+            upload::process_upload(f, &upload_config, storage, &slug_for_upload, global_max)
         })
         .await;
 

@@ -10,6 +10,7 @@ use crate::{
         SharedRegistry,
         job::{JobDefinition, JobRun},
         upload,
+        upload::StorageBackend,
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::HookRunner,
@@ -223,7 +224,7 @@ pub(crate) fn parse_retention_seconds(s: &str) -> Option<i64> {
 pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
     registry: &SharedRegistry,
-    config_dir: &std::path::Path,
+    storage: &dyn StorageBackend,
     locale_config: &LocaleConfig,
 ) -> Result<u64> {
     let reg = registry
@@ -250,7 +251,7 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let purged = purge_collection(conn, slug, def, seconds, config_dir, locale_config)?;
+        let purged = purge_collection(conn, slug, def, seconds, storage, locale_config)?;
         total += purged;
     }
 
@@ -268,7 +269,7 @@ fn purge_collection(
     slug: &str,
     def: &crate::core::CollectionDefinition,
     retention_seconds: i64,
-    config_dir: &std::path::Path,
+    storage: &dyn StorageBackend,
     locale_config: &LocaleConfig,
 ) -> Result<u64> {
     // Find docs past the retention threshold
@@ -311,6 +312,11 @@ fn purge_collection(
             upload_docs.push(doc);
         }
 
+        // Cancel pending image conversions
+        if def.is_upload_collection() {
+            let _ = query::images::delete_entries_for_document(conn, slug, &id);
+        }
+
         // Clean up FTS index before hard delete
         if conn.supports_fts() {
             query::fts::fts_delete(conn, slug, &id)?;
@@ -325,7 +331,7 @@ fn purge_collection(
     // If the process crashes here, we get orphaned files (harmless)
     // rather than DB records pointing to missing files (harmful).
     for doc in &upload_docs {
-        upload::delete_upload_files(config_dir, &doc.fields);
+        upload::delete_upload_files(storage, &doc.fields);
     }
 
     if purged > 0 {

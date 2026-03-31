@@ -16,7 +16,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, ValidationCtx,
         lifecycle::{
-            ConfigDir, FieldHookEvent, HookDepth, HookDepthGuard, MaxHookDepth, UiLocaleContext,
+            FieldHookEvent, HookDepth, HookDepthGuard, LuaStorage, MaxHookDepth, UiLocaleContext,
             UserContext,
             access::{check_access_with_lua, check_field_write_access_with_lua},
             converters::*,
@@ -185,13 +185,18 @@ pub(super) fn register_delete(
                     .map_err(|e| RuntimeError(format!("FTS delete error: {:#}", e)))?;
             }
 
+            // Cancel pending image conversions
+            if def.is_upload_collection() {
+                let _ = query::images::delete_entries_for_document(conn, &collection, &id);
+            }
+
             // Clean up upload files after successful DB delete (skip for soft-delete
             // unless force_hard_delete was requested)
             if (!def.soft_delete || force_hard_delete)
                 && let Some(fields) = upload_doc_fields
-                && let Some(config_dir) = lua.app_data_ref::<ConfigDir>()
+                && let Some(lua_storage) = lua.app_data_ref::<LuaStorage>()
             {
-                upload::delete_upload_files(&config_dir.0, &fields);
+                upload::delete_upload_files(&*lua_storage.0, &fields);
             }
 
             if hooks_enabled {
@@ -782,8 +787,8 @@ pub(super) fn register_delete_many(
             };
 
             let is_upload = def.is_upload_collection();
-            let config_dir_path = if is_upload {
-                lua.app_data_ref::<ConfigDir>().map(|cd| cd.0.clone())
+            let lua_storage_ref = if is_upload {
+                lua.app_data_ref::<LuaStorage>().map(|ls| ls.0.clone())
             } else {
                 None
             };
@@ -851,9 +856,14 @@ pub(super) fn register_delete_many(
                         .map_err(|e| RuntimeError(format!("FTS delete error: {:#}", e)))?;
                 }
 
+                // Cancel pending image conversions
+                if def.is_upload_collection() {
+                    let _ = query::images::delete_entries_for_document(conn, &collection, &doc.id);
+                }
+
                 // Clean up upload files after successful DB delete (skip for soft-delete)
-                if !soft_delete && let Some(dir) = &config_dir_path {
-                    upload::delete_upload_files(dir, &doc.fields);
+                if !soft_delete && let Some(ref s) = lua_storage_ref {
+                    upload::delete_upload_files(&**s, &doc.fields);
                 }
 
                 if hooks_enabled {

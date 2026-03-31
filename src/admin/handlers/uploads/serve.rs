@@ -24,7 +24,7 @@ use crate::{
 /// Serve an uploaded file, checking collection read access if configured.
 ///
 /// Supports content negotiation for images: if the browser Accept header includes
-/// `image/avif` or `image/webp`, and a variant file exists on disk, the more
+/// `image/avif` or `image/webp`, and a variant file exists, the more
 /// efficient format is served instead of the original.
 pub async fn serve_upload(
     State(state): State<AdminState>,
@@ -40,20 +40,6 @@ pub async fn serve_upload(
         || filename.contains('\\')
     {
         return StatusCode::NOT_FOUND.into_response();
-    }
-
-    // Belt-and-suspenders: verify resolved path stays within uploads directory
-    let upload_dir = state.config_dir.join("uploads").join(&collection_slug);
-    let file_path = upload_dir.join(&filename);
-    match (upload_dir.canonicalize(), file_path.canonicalize()) {
-        (Ok(canonical_base), Ok(canonical_file)) => {
-            if !canonical_file.starts_with(&canonical_base) {
-                return StatusCode::NOT_FOUND.into_response();
-            }
-        }
-        // If either path can't be canonicalized (doesn't exist, broken symlink),
-        // reject the request — never serve unchecked paths.
-        _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
     // Parse Accept header for content negotiation
@@ -169,32 +155,47 @@ async fn serve_file(
     accepts_webp: bool,
     original_request: Request<Body>,
 ) -> Response {
-    let upload_dir = state.config_dir.join("uploads").join(collection_slug);
+    let storage = &*state.storage;
 
     // Extract conditional headers from original request for ServeFile forwarding
     let conditional_headers = extract_conditional_headers(&original_request);
 
     // Content negotiation: try serving a more efficient format variant
     for (variant_name, variant_mime) in negotiate_variants(filename, accepts_avif, accepts_webp) {
-        let variant_path = upload_dir.join(&variant_name);
-        if variant_path.exists() {
-            let req = build_serve_request(&conditional_headers);
-            return serve_with_headers(&variant_path, req, cache_control, true, variant_mime).await;
+        let variant_key = format!("{}/{}", collection_slug, variant_name);
+
+        if let Some(local_path) = storage.local_path(&variant_key) {
+            if local_path.exists() {
+                let req = build_serve_request(&conditional_headers);
+                return serve_with_headers(&local_path, req, cache_control, true, variant_mime)
+                    .await;
+            }
+        } else if let Ok(data) = storage.get(&variant_key) {
+            return serve_bytes(data, cache_control, true, variant_mime);
         }
     }
 
     // Serve the original file
-    let file_path = upload_dir.join(filename);
-    if !file_path.exists() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
+    let original_key = format!("{}/{}", collection_slug, filename);
 
     let requested_mime = mime_guess::from_path(filename)
         .first_or_octet_stream()
         .to_string();
     let is_image = requested_mime.starts_with("image/");
-    let req = build_serve_request(&conditional_headers);
-    serve_with_headers(&file_path, req, cache_control, is_image, &requested_mime).await
+
+    if let Some(local_path) = storage.local_path(&original_key) {
+        if !local_path.exists() {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+
+        let req = build_serve_request(&conditional_headers);
+        serve_with_headers(&local_path, req, cache_control, is_image, &requested_mime).await
+    } else {
+        match storage.get(&original_key) {
+            Ok(data) => serve_bytes(data, cache_control, is_image, &requested_mime),
+            Err(_) => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
 }
 
 /// Given a filename and accepted formats, return candidate variant filenames to try.
@@ -318,6 +319,38 @@ async fn serve_with_headers(
     }
 
     response
+}
+
+/// Build a response from in-memory bytes (for non-local storage backends).
+fn serve_bytes(data: Vec<u8>, cache_control: &str, varied: bool, mime: &str) -> Response {
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CACHE_CONTROL, cache_control);
+
+    // Content-Disposition: SVGs and non-image files use attachment to prevent
+    // stored XSS. Images (except SVG) use inline.
+    let disposition = if mime.starts_with("image/") && mime != "image/svg+xml" {
+        "inline"
+    } else {
+        "attachment"
+    };
+    builder = builder.header(header::CONTENT_DISPOSITION, disposition);
+
+    if mime == "image/svg+xml" {
+        builder = builder.header(
+            header::CONTENT_SECURITY_POLICY,
+            "sandbox; default-src 'none'",
+        );
+    }
+
+    if varied {
+        builder = builder.header(header::VARY, "Accept");
+    }
+
+    builder
+        .body(Body::from(data))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[cfg(test)]

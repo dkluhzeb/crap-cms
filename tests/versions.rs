@@ -115,6 +115,13 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),

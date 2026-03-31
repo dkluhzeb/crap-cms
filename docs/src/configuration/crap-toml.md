@@ -161,7 +161,18 @@ max_limit = 1000         # Hard cap on limit — requests above this are clamped
 # mode = "page"          # "page" (offset) or "cursor" (keyset)
 
 [upload]
+storage = "local"        # Storage backend: "local" (default), "s3", or "custom"
 max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
+
+# [upload.s3]            # S3-compatible storage (requires --features s3-storage)
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = ""          # custom endpoint for MinIO, R2, etc.
+# access_key = "${AWS_ACCESS_KEY}"
+# secret_key = "${AWS_SECRET_KEY}"
+# prefix = ""            # optional key prefix
+# public_url_base = ""   # CDN URL base (empty = S3 URLs)
+# path_style = false     # true for MinIO
 
 [email]
 smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
@@ -340,7 +351,23 @@ Password strength requirements applied to all password-setting paths (create, up
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `storage` | string | `"local"` | Storage backend: `"local"` (filesystem), `"s3"` (S3-compatible, requires `--features s3-storage`), or `"custom"` (Lua-delegated). |
 | `max_file_size` | integer/string | `52428800` (`"50MB"`) | Global maximum file size. Accepts bytes (integer) or human-readable (`"50MB"`, `"1GB"`). Per-collection `max_file_size` overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding). |
+
+### `[upload.s3]`
+
+S3-compatible storage configuration. Only used when `storage = "s3"`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bucket` | string | (required) | S3 bucket name. |
+| `region` | string | `"us-east-1"` | AWS region. |
+| `endpoint` | string | (AWS default) | Custom endpoint URL for MinIO, R2, B2, etc. |
+| `access_key` | string | (required) | AWS access key ID. Supports `${ENV_VAR}` expansion. |
+| `secret_key` | string | (required) | AWS secret access key. Supports `${ENV_VAR}` expansion. |
+| `prefix` | string | `""` | Optional key prefix prepended to all storage keys. |
+| `public_url_base` | string | `""` | Base URL for public file links (e.g., CDN). Empty = S3 URLs. |
+| `path_style` | boolean | `false` | Use path-style addressing (required for MinIO). |
 
 ### `[email]`
 

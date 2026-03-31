@@ -7,12 +7,12 @@ use mlua::{Lua, LuaOptions, StdLib};
 
 use crate::{
     config::CrapConfig,
-    core::{SharedRegistry, registry::Registry},
+    core::{SharedRegistry, registry::Registry, upload},
     hooks::{
         self, HookRunner,
         api::{self, VmLabel},
         lifecycle::{
-            ConfigDir,
+            LuaStorage,
             crud::register_crud_functions,
             execution::scan_registered_events,
             types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
@@ -124,7 +124,10 @@ fn create_lua_vm(
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
-    lua.set_app_data(ConfigDir(config_dir.to_path_buf()));
+    // Create and store storage backend for upload file cleanup in CRUD hooks
+    let storage = upload::create_storage(config_dir, &config.upload)
+        .context("Failed to create storage backend for Lua VM")?;
+    lua.set_app_data(LuaStorage(storage));
 
     // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
     let collections_dir = config_dir.join("collections");

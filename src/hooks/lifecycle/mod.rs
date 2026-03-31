@@ -16,7 +16,7 @@ pub use types::{DisplayConditionResult, FieldHookEvent, HookEvent};
 // Internal types needed by sibling submodules (crud.rs, access.rs, context.rs).
 pub use execution::AfterReadCtx;
 pub(crate) use types::{
-    ConfigDir, DefaultDeny, HookDepth, HookDepthGuard, MaxHookDepth, TxContext, UiLocaleContext,
+    DefaultDeny, HookDepth, HookDepthGuard, LuaStorage, MaxHookDepth, TxContext, UiLocaleContext,
     UserContext,
 };
 pub use validation::ValidationCtx;

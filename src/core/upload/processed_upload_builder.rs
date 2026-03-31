@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
 use crate::core::upload::{ProcessedUpload, QueuedConversion, SizeResult};
 
@@ -15,7 +15,7 @@ pub struct ProcessedUploadBuilder {
     url: String,
     sizes: HashMap<String, SizeResult>,
     queued_conversions: Vec<QueuedConversion>,
-    created_files: Vec<PathBuf>,
+    created_files: Vec<String>,
 }
 
 impl ProcessedUploadBuilder {
@@ -63,7 +63,7 @@ impl ProcessedUploadBuilder {
         self
     }
 
-    pub fn created_files(mut self, files: Vec<PathBuf>) -> Self {
+    pub fn created_files(mut self, files: Vec<String>) -> Self {
         self.created_files = files;
         self
     }

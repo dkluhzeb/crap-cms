@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, upload},
+    core::{CollectionDefinition, Document, upload, upload::StorageBackend},
     db::{DbConnection, DbPool, LocaleContext, query},
     hooks::{HookContext, HookEvent, HookRunner, ValidationCtx},
     service::{AfterChangeInput, WriteInput, WriteResult, build_hook_data, run_after_change_hooks},
@@ -255,7 +255,7 @@ pub fn delete_document(
     id: &str,
     def: &CollectionDefinition,
     user: Option<&Document>,
-    config_dir: Option<&std::path::Path>,
+    storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<HashMap<String, Value>> {
     let mut conn = pool.get().context("DB connection")?;
@@ -266,7 +266,7 @@ pub fn delete_document(
         id,
         def,
         user,
-        config_dir,
+        storage,
         locale_config,
     )
 }
@@ -280,17 +280,21 @@ pub fn delete_document_with_conn(
     id: &str,
     def: &CollectionDefinition,
     user: Option<&Document>,
-    config_dir: Option<&std::path::Path>,
+    storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<HashMap<String, Value>> {
     // For upload collections, load the document before deleting to get file paths
     let upload_doc_fields = if def.is_upload_collection() {
-        let locale_ctx = LocaleContext::from_locale_string(None, &LocaleConfig::default());
+        let lc = locale_config.cloned().unwrap_or_default();
+        let locale_ctx = LocaleContext::from_locale_string(None, &lc);
 
         let conn_ref: &dyn crate::db::DbConnection = conn;
         match query::find_by_id(conn_ref, slug, def, id, locale_ctx.as_ref()) {
             Ok(Some(doc)) => Some(doc.fields.clone()),
-            Ok(None) => None,
+            Ok(None) => {
+                tracing::warn!("Upload document {}/{} not found for file cleanup", slug, id);
+                None
+            }
             Err(e) => {
                 tracing::warn!(
                     "Failed to load upload document {}/{} for file cleanup: {}",
@@ -360,6 +364,11 @@ pub fn delete_document_with_conn(
         query::fts::fts_delete(&tx, slug, id)?;
     }
 
+    // Cancel pending image conversions for this document
+    if def.is_upload_collection() {
+        let _ = query::images::delete_entries_for_document(&tx, slug, id);
+    }
+
     let after_ctx = HookContext::builder(slug, "delete")
         .data(hook_data)
         .context(final_ctx.context)
@@ -372,9 +381,9 @@ pub fn delete_document_with_conn(
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
     if !def.soft_delete
-        && let (Some(dir), Some(fields)) = (config_dir, upload_doc_fields)
+        && let (Some(s), Some(fields)) = (storage, upload_doc_fields)
     {
-        upload::delete_upload_files(dir, &fields);
+        upload::delete_upload_files(s, &fields);
     }
 
     Ok(after_result.context)

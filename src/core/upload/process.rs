@@ -1,41 +1,46 @@
-use std::{
-    collections::HashMap,
-    fs,
-    io::Cursor,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, io::Cursor};
 
 use anyhow::{Context as _, Result, bail};
 use image::ImageReader;
 
 use super::{
-    resize::{resize_image, save_avif, save_webp},
+    resize::{avif_to_bytes, resize_image, webp_to_bytes},
     validate::{format_filesize, mime_matches, sanitize_filename, validate_mime_type},
 };
 use crate::core::upload::{
     CollectionUpload, FormatResult, ProcessedUpload, ProcessedUploadBuilder,
-    QueuedConversionBuilder, SizeResultBuilder, UploadedFile,
+    QueuedConversionBuilder, SharedStorage, SizeResultBuilder, UploadedFile,
 };
 
 /// RAII guard that deletes written files if not committed.
 /// Returned from [`process_upload`] so callers can commit only after
 /// their DB transaction succeeds — preventing orphaned files on rollback.
-#[derive(Debug)]
 pub struct CleanupGuard {
-    files: Vec<PathBuf>,
+    keys: Vec<String>,
+    storage: SharedStorage,
     committed: bool,
 }
 
+impl std::fmt::Debug for CleanupGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CleanupGuard")
+            .field("keys", &self.keys)
+            .field("committed", &self.committed)
+            .finish()
+    }
+}
+
 impl CleanupGuard {
-    fn new() -> Self {
+    fn new(storage: SharedStorage) -> Self {
         Self {
-            files: Vec::new(),
+            keys: Vec::new(),
+            storage,
             committed: false,
         }
     }
 
-    fn push(&mut self, path: PathBuf) {
-        self.files.push(path);
+    fn push(&mut self, key: String) {
+        self.keys.push(key);
     }
 
     /// Mark the guard as committed — files will NOT be cleaned up on drop.
@@ -48,14 +53,14 @@ impl CleanupGuard {
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if !self.committed {
-            for path in &self.files {
-                let _ = fs::remove_file(path);
+            for key in &self.keys {
+                let _ = self.storage.delete(key);
             }
         }
     }
 }
 
-/// Process an uploaded file: validate, save to disk, generate image sizes + format variants.
+/// Process an uploaded file: validate, save via storage backend, generate image sizes + format variants.
 ///
 /// Returns both the processed upload metadata and a [`CleanupGuard`].
 /// The caller **must** call `guard.commit()` after their DB transaction succeeds.
@@ -65,7 +70,7 @@ impl Drop for CleanupGuard {
 pub fn process_upload(
     file: UploadedFile,
     upload_config: &CollectionUpload,
-    config_dir: &Path,
+    storage: SharedStorage,
     collection_slug: &str,
     global_max_file_size: u64,
 ) -> Result<(ProcessedUpload, CleanupGuard)> {
@@ -106,25 +111,20 @@ pub fn process_upload(
     let sanitized = sanitize_filename(&file.filename);
     let unique_filename = format!("{}_{}", id, sanitized);
 
-    // Create upload directory
-    let upload_dir = config_dir.join("uploads").join(collection_slug);
-    fs::create_dir_all(&upload_dir).with_context(|| {
-        format!(
-            "Failed to create upload directory: {}",
-            upload_dir.display()
-        )
-    })?;
-
     // Track written files for cleanup on error
-    let mut guard = CleanupGuard::new();
+    let mut guard = CleanupGuard::new(storage.clone());
 
     // Save original file
-    let original_path = upload_dir.join(&unique_filename);
-    fs::write(&original_path, &file.data)
-        .with_context(|| format!("Failed to write file: {}", original_path.display()))?;
-    guard.push(original_path);
+    let original_key = format!("{}/{}", collection_slug, unique_filename);
+    storage
+        .put(&original_key, &file.data, &file.content_type)
+        .with_context(|| format!("Failed to write file: {}", original_key))?;
+    guard.push(original_key.clone());
 
-    let url = format!("/uploads/{}/{}", collection_slug, unique_filename);
+    // Always store the proxy URL in the document — works with CSP and
+    // allows the serve handler to apply access control. External frontends
+    // can use storage.public_url() for direct S3/CDN URLs.
+    let url = format!("/uploads/{}", original_key);
 
     let is_image = file.content_type.starts_with("image/");
 
@@ -172,37 +172,62 @@ pub fn process_upload(
                 .rsplit_once('.')
                 .unwrap_or((&unique_filename, "bin"));
 
+            // Save resized image via storage
             let size_filename = format!("{}_{}.{}", stem, size_def.name, ext);
-            let size_path = upload_dir.join(&size_filename);
-            resized.save(&size_path).with_context(|| {
-                format!("Failed to save resized image: {}", size_path.display())
-            })?;
-            guard.push(size_path.clone());
+            let size_key = format!("{}/{}", collection_slug, size_filename);
 
-            let size_url = format!("/uploads/{}/{}", collection_slug, size_filename);
+            let mut size_buf = Cursor::new(Vec::new());
+            resized
+                .write_to(
+                    &mut size_buf,
+                    image::ImageFormat::from_extension(ext).unwrap_or(image::ImageFormat::Png),
+                )
+                .with_context(|| format!("Failed to encode resized image: {}", size_key))?;
+            let size_bytes = size_buf.into_inner();
+
+            let size_mime = mime_guess::from_path(&size_filename)
+                .first_or_octet_stream()
+                .to_string();
+            storage
+                .put(&size_key, &size_bytes, &size_mime)
+                .with_context(|| format!("Failed to save resized image: {}", size_key))?;
+            guard.push(size_key.clone());
+
+            let size_url = format!("/uploads/{}", size_key);
             let mut formats = HashMap::new();
 
             // WebP variant
             if let Some(ref webp_opts) = upload_config.format_options.webp {
                 let webp_filename = format!("{}_{}.webp", stem, size_def.name);
-                let webp_path = upload_dir.join(&webp_filename);
-                let webp_url = format!("/uploads/{}/{}", collection_slug, webp_filename);
+                let webp_key = format!("{}/{}", collection_slug, webp_filename);
+                let webp_url = format!("/uploads/{}", webp_key);
 
                 if webp_opts.queue {
+                    // For queued conversions, use storage keys as source/target paths.
+                    // The scheduler will need to resolve these via storage.
+                    let source_path = storage
+                        .local_path(&size_key)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| size_key.clone());
+                    let target_path = storage
+                        .local_path(&webp_key)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| webp_key.clone());
+
                     queued_conversions.push(
-                        QueuedConversionBuilder::new(
-                            size_path.to_string_lossy(),
-                            webp_path.to_string_lossy(),
-                        )
-                        .format("webp")
-                        .quality(webp_opts.quality)
-                        .url_column(format!("{}_webp_url", size_def.name))
-                        .url_value(webp_url)
-                        .build(),
+                        QueuedConversionBuilder::new(source_path, target_path)
+                            .format("webp")
+                            .quality(webp_opts.quality)
+                            .url_column(format!("{}_webp_url", size_def.name))
+                            .url_value(webp_url)
+                            .build(),
                     );
                 } else {
-                    save_webp(&resized, &webp_path, webp_opts.quality)?;
-                    guard.push(webp_path);
+                    let webp_data = webp_to_bytes(&resized, webp_opts.quality);
+                    storage
+                        .put(&webp_key, &webp_data, "image/webp")
+                        .with_context(|| format!("Failed to save WebP: {}", webp_key))?;
+                    guard.push(webp_key);
                     formats.insert("webp".to_string(), FormatResult::new(webp_url));
                 }
             }
@@ -210,24 +235,33 @@ pub fn process_upload(
             // AVIF variant
             if let Some(ref avif_opts) = upload_config.format_options.avif {
                 let avif_filename = format!("{}_{}.avif", stem, size_def.name);
-                let avif_path = upload_dir.join(&avif_filename);
-                let avif_url = format!("/uploads/{}/{}", collection_slug, avif_filename);
+                let avif_key = format!("{}/{}", collection_slug, avif_filename);
+                let avif_url = format!("/uploads/{}", avif_key);
 
                 if avif_opts.queue {
+                    let source_path = storage
+                        .local_path(&size_key)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| size_key.clone());
+                    let target_path = storage
+                        .local_path(&avif_key)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| avif_key.clone());
+
                     queued_conversions.push(
-                        QueuedConversionBuilder::new(
-                            size_path.to_string_lossy(),
-                            avif_path.to_string_lossy(),
-                        )
-                        .format("avif")
-                        .quality(avif_opts.quality)
-                        .url_column(format!("{}_avif_url", size_def.name))
-                        .url_value(avif_url)
-                        .build(),
+                        QueuedConversionBuilder::new(source_path, target_path)
+                            .format("avif")
+                            .quality(avif_opts.quality)
+                            .url_column(format!("{}_avif_url", size_def.name))
+                            .url_value(avif_url)
+                            .build(),
                     );
                 } else {
-                    save_avif(&resized, &avif_path, avif_opts.quality)?;
-                    guard.push(avif_path);
+                    let avif_data = avif_to_bytes(&resized, avif_opts.quality)?;
+                    storage
+                        .put(&avif_key, &avif_data, "image/avif")
+                        .with_context(|| format!("Failed to save AVIF: {}", avif_key))?;
+                    guard.push(avif_key);
                     formats.insert("avif".to_string(), FormatResult::new(avif_url));
                 }
             }
@@ -243,13 +277,13 @@ pub fn process_upload(
         }
     }
 
-    let created_files = guard.files.clone();
+    let created_keys = guard.keys.clone();
     let mut builder = ProcessedUploadBuilder::new(unique_filename, url)
         .mime_type(file.content_type.clone())
         .filesize(filesize)
         .sizes(sizes)
         .queued_conversions(queued_conversions)
-        .created_files(created_files);
+        .created_files(created_keys);
 
     if let Some(w) = width {
         builder = builder.width(w);
@@ -262,11 +296,12 @@ pub fn process_upload(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::sync::Arc;
 
     use super::*;
     use crate::core::upload::{
         FormatOptions, FormatQuality, ImageFit, ImageSizeBuilder, UploadedFileBuilder,
+        storage::LocalStorage,
     };
 
     use image::{ImageBuffer, ImageEncoder, Rgba};
@@ -284,6 +319,11 @@ mod tests {
         buf
     }
 
+    /// Helper to create a SharedStorage backed by a tempdir.
+    fn test_storage(tmp: &tempfile::TempDir) -> SharedStorage {
+        Arc::new(LocalStorage::new(tmp.path().join("uploads")))
+    }
+
     #[test]
     fn magic_byte_verification_rejects_mismatched_type() {
         // PNG magic bytes but claimed as text/plain
@@ -293,7 +333,8 @@ mod tests {
             .build();
         let upload_config = CollectionUpload::default();
         let tmp = tempfile::tempdir().unwrap();
-        let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
+        let storage = test_storage(&tmp);
+        let result = process_upload(file, &upload_config, storage.clone(), "test", 10_000_000);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -315,8 +356,9 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
+        let storage = test_storage(&tmp);
         // Won't fully succeed (no valid full PNG) but passes the MIME check
-        let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
+        let result = process_upload(file, &upload_config, storage.clone(), "test", 10_000_000);
         // Should pass MIME validation (might fail later on image processing, that's OK)
         let err_msg = result
             .as_ref()
@@ -338,7 +380,8 @@ mod tests {
             .build();
         let upload_config = CollectionUpload::default();
         let tmp = tempfile::tempdir().unwrap();
-        let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
+        let storage = test_storage(&tmp);
+        let result = process_upload(file, &upload_config, storage.clone(), "test", 10_000_000);
         let err_msg = result
             .as_ref()
             .err()
@@ -369,8 +412,9 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
+        let storage = test_storage(&tmp);
 
-        let result = process_upload(file, &config, tmp.path(), "test", 10_000_000);
+        let result = process_upload(file, &config, storage.clone(), "test", 10_000_000);
         assert!(
             result.is_err(),
             "Mismatched detected vs claimed MIME should fail"
@@ -387,6 +431,7 @@ mod tests {
     #[test]
     fn process_upload_rejects_invalid_mime() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let file = UploadedFileBuilder::new("test.txt", "text/plain")
             .data(b"hello".to_vec())
             .build();
@@ -395,7 +440,7 @@ mod tests {
             mime_types: vec!["image/*".into()],
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
+        let result = process_upload(file, &config, storage.clone(), "posts", 50 * 1024 * 1024);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -407,6 +452,7 @@ mod tests {
     #[test]
     fn process_upload_rejects_oversized_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let file = UploadedFileBuilder::new("big.bin", "application/octet-stream")
             .data(vec![0u8; 1024]) // 1KB
             .build();
@@ -415,7 +461,7 @@ mod tests {
             max_file_size: Some(512), // only allow 512 bytes
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
+        let result = process_upload(file, &config, storage.clone(), "posts", 50 * 1024 * 1024);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -427,6 +473,7 @@ mod tests {
     #[test]
     fn process_upload_uses_global_max_when_no_per_collection_limit() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let file = UploadedFileBuilder::new("big.bin", "application/octet-stream")
             .data(vec![0u8; 1024]) // 1KB
             .build();
@@ -435,7 +482,7 @@ mod tests {
             ..Default::default()
         };
         // Global max is 512 bytes
-        let result = process_upload(file, &config, tmp.path(), "posts", 512);
+        let result = process_upload(file, &config, storage.clone(), "posts", 512);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds"));
     }
@@ -443,6 +490,7 @@ mod tests {
     #[test]
     fn process_upload_non_image_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let file = UploadedFileBuilder::new("document.pdf", "application/pdf")
             .data(b"%PDF-1.4 test content".to_vec())
             .build();
@@ -450,8 +498,9 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "docs", 50 * 1024 * 1024)
-            .expect("should succeed for non-image");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "docs", 50 * 1024 * 1024)
+                .expect("should succeed for non-image");
         assert!(result.url.starts_with("/uploads/docs/"));
         assert!(result.url.ends_with("document.pdf"));
         assert_eq!(result.mime_type, "application/pdf");
@@ -459,14 +508,19 @@ mod tests {
         assert!(result.width.is_none());
         assert!(result.height.is_none());
         assert!(result.sizes.is_empty());
-        // Verify file was written to disk
-        let on_disk = tmp.path().join("uploads/docs").join(&result.filename);
-        assert!(on_disk.exists(), "File should be saved to disk");
+
+        // Verify file was written via storage
+        let key = format!("docs/{}", result.filename);
+        assert!(
+            storage.exists(&key).unwrap(),
+            "File should exist in storage"
+        );
     }
 
     #[test]
     fn process_upload_image_no_sizes() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(50, 50);
         let file = UploadedFileBuilder::new("photo.png", "image/png")
             .data(png_data)
@@ -475,8 +529,9 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed for image");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed for image");
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.width, Some(50));
         assert_eq!(result.height, Some(50));
@@ -489,6 +544,7 @@ mod tests {
     #[test]
     fn process_upload_image_with_sizes() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(200, 200);
         let file = UploadedFileBuilder::new("photo.png", "image/png")
             .data(png_data)
@@ -504,8 +560,9 @@ mod tests {
             ],
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed");
         assert_eq!(result.width, Some(200));
         assert_eq!(result.height, Some(200));
         assert!(result.sizes.contains_key("thumb"));
@@ -513,15 +570,22 @@ mod tests {
         assert_eq!(thumb.width, 50);
         assert_eq!(thumb.height, 50);
         assert!(thumb.url.contains("_thumb.png"));
-        // Verify the resized file was written
-        let thumb_filename = thumb.url.strip_prefix("/uploads/media/").unwrap();
-        let thumb_path = tmp.path().join("uploads/media").join(thumb_filename);
-        assert!(thumb_path.exists(), "Thumbnail file should be saved");
+
+        // Verify the resized file was written via storage
+        let thumb_key = thumb
+            .url
+            .strip_prefix("/uploads/")
+            .expect("thumb url should start with /uploads/");
+        assert!(
+            storage.exists(thumb_key).unwrap(),
+            "Thumbnail file should exist in storage"
+        );
     }
 
     #[test]
     fn process_upload_image_with_webp_format() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(100, 100);
         let file = UploadedFileBuilder::new("photo.png", "image/png")
             .data(png_data)
@@ -541,8 +605,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
             small.formats.contains_key("webp"),
@@ -555,6 +620,7 @@ mod tests {
     #[test]
     fn process_upload_image_with_avif_format() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(100, 100);
         let file = UploadedFileBuilder::new("photo.png", "image/png")
             .data(png_data)
@@ -574,8 +640,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
             small.formats.contains_key("avif"),
@@ -588,6 +655,7 @@ mod tests {
     #[test]
     fn process_upload_image_with_both_formats() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(80, 80);
         let file = UploadedFileBuilder::new("photo.png", "image/png")
             .data(png_data)
@@ -607,8 +675,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed");
         let icon = &result.sizes["icon"];
         assert!(icon.formats.contains_key("webp"));
         assert!(icon.formats.contains_key("avif"));
@@ -617,6 +686,7 @@ mod tests {
     #[test]
     fn process_upload_filename_without_extension() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         // Test with a non-image file that has no extension
         let file = UploadedFileBuilder::new("noext", "application/octet-stream")
             .data(b"binary data".to_vec())
@@ -625,8 +695,9 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed even without extension");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed even without extension");
         // The filename should have the nanoid prefix and sanitized name
         assert!(result.filename.contains("noext"));
         assert!(result.width.is_none());
@@ -637,6 +708,7 @@ mod tests {
     fn process_upload_image_with_extension_in_sizes() {
         // Verify that the size URL uses the file extension from the original filename
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(100, 100);
         let file = UploadedFileBuilder::new("test.png", "image/png")
             .data(png_data)
@@ -652,8 +724,9 @@ mod tests {
             ],
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed");
         let thumb = &result.sizes["thumb"];
         assert!(
             thumb.url.ends_with("_thumb.png"),
@@ -665,6 +738,7 @@ mod tests {
     #[test]
     fn process_upload_queue_mode_defers_format_conversion() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let png_data = create_test_png(80, 80);
         let file = UploadedFileBuilder::new("photo.png", "image/png")
             .data(png_data)
@@ -684,10 +758,11 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
-            .expect("should succeed");
+        let (result, _guard) =
+            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
+                .expect("should succeed");
 
-        // Sizes should be created but format variants should NOT exist on disk
+        // Sizes should be created but format variants should NOT exist
         let small = &result.sizes["small"];
         assert!(
             small.formats.is_empty(),
@@ -719,6 +794,7 @@ mod tests {
     #[test]
     fn process_upload_guard_cleans_up_on_drop() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
         let file = UploadedFileBuilder::new("test.txt", "application/octet-stream")
             .data(b"test content".to_vec())
             .build();
@@ -727,15 +803,18 @@ mod tests {
             ..Default::default()
         };
         let (processed, guard) =
-            process_upload(file, &config, tmp.path(), "test", 50 * 1024 * 1024)
+            process_upload(file, &config, storage.clone(), "test", 50 * 1024 * 1024)
                 .expect("should succeed");
 
-        let file_path = tmp.path().join("uploads/test").join(&processed.filename);
-        assert!(file_path.exists(), "File should exist after upload");
+        let key = format!("test/{}", processed.filename);
+        assert!(
+            storage.exists(&key).unwrap(),
+            "File should exist after upload"
+        );
 
         drop(guard);
         assert!(
-            !file_path.exists(),
+            !storage.exists(&key).unwrap(),
             "File should be cleaned up when guard drops without commit"
         );
     }
@@ -743,34 +822,44 @@ mod tests {
     #[test]
     fn cleanup_guard_removes_files_on_drop() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let f1 = tmp.path().join("a.txt");
-        let f2 = tmp.path().join("b.txt");
-        fs::write(&f1, b"a").unwrap();
-        fs::write(&f2, b"b").unwrap();
+        let storage = test_storage(&tmp);
+
+        storage.put("a.txt", b"a", "text/plain").unwrap();
+        storage.put("b.txt", b"b", "text/plain").unwrap();
 
         {
-            let mut guard = CleanupGuard::new();
-            guard.push(f1.clone());
-            guard.push(f2.clone());
+            let mut guard = CleanupGuard::new(storage.clone());
+            guard.push("a.txt".to_string());
+            guard.push("b.txt".to_string());
             // guard drops here without commit
         }
 
-        assert!(!f1.exists(), "f1 should be removed on drop");
-        assert!(!f2.exists(), "f2 should be removed on drop");
+        assert!(
+            !storage.exists("a.txt").unwrap(),
+            "a.txt should be removed on drop"
+        );
+        assert!(
+            !storage.exists("b.txt").unwrap(),
+            "b.txt should be removed on drop"
+        );
     }
 
     #[test]
     fn cleanup_guard_keeps_files_on_commit() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let f1 = tmp.path().join("keep.txt");
-        fs::write(&f1, b"keep").unwrap();
+        let storage = test_storage(&tmp);
+
+        storage.put("keep.txt", b"keep", "text/plain").unwrap();
 
         {
-            let mut guard = CleanupGuard::new();
-            guard.push(f1.clone());
+            let mut guard = CleanupGuard::new(storage.clone());
+            guard.push("keep.txt".to_string());
             guard.commit();
         }
 
-        assert!(f1.exists(), "f1 should remain after commit");
+        assert!(
+            storage.exists("keep.txt").unwrap(),
+            "keep.txt should remain after commit"
+        );
     }
 }

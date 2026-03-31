@@ -60,7 +60,7 @@ pub async fn empty_trash_action(
     }
 
     let pool = state.pool.clone();
-    let config_dir = state.config_dir.clone();
+    let storage = state.storage.clone();
     let locale_cfg = state.config.locale.clone();
     let slug_owned = slug.clone();
     let runner = state.hook_runner.clone();
@@ -115,7 +115,8 @@ pub async fn empty_trash_action(
             )?;
 
             if def.is_upload_collection() {
-                upload::delete_upload_files(&config_dir, &doc.fields);
+                upload::delete_upload_files(&*storage, &doc.fields);
+                let _ = query::images::delete_entries_for_document(&tx, &slug_owned, &doc.id);
             }
 
             if tx.supports_fts() {

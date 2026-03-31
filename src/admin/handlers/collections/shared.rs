@@ -211,12 +211,12 @@ pub(super) async fn do_update(
             old_doc_fields = Some(old_doc.fields.clone());
         }
 
-        let config_dir = state.config_dir.clone();
+        let storage = state.storage.clone();
         let slug_for_upload = slug.to_string();
         let global_max = state.config.upload.max_file_size;
 
         let upload_result = task::spawn_blocking(move || {
-            process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+            process_upload(f, &upload_config, storage, &slug_for_upload, global_max)
         })
         .await;
 
@@ -358,7 +358,7 @@ pub(super) async fn do_update(
 
             // If a new file was uploaded and old files exist, clean up old files
             if let Some(old_fields) = old_doc_fields {
-                delete_upload_files(&state.config_dir, &old_fields);
+                delete_upload_files(&*state.storage, &old_fields);
             }
 
             // Enqueue deferred image conversions if any
@@ -517,7 +517,7 @@ pub(super) async fn delete_action_impl(
     let slug_owned = slug.to_string();
     let id_owned = id.to_string();
     let user_doc = get_user_doc(auth_user).cloned();
-    let config_dir = state.config_dir.clone();
+    let storage = state.storage.clone();
 
     // When force_hard_delete is requested, temporarily override soft_delete
     if force_hard_delete {
@@ -534,7 +534,7 @@ pub(super) async fn delete_action_impl(
             &id_owned,
             &def_clone,
             user_doc.as_ref(),
-            Some(&config_dir),
+            Some(&*storage),
             Some(&locale_config),
         )
     })

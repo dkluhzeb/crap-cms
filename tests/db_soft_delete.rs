@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::core::upload::create_storage;
 use crap_cms::core::{Registry, SharedRegistry};
 use crap_cms::db::{DbConnection, DbPool, DbValue, FindQuery, migrate, ops, pool, query};
 use crap_cms::scheduler::purge_soft_deleted;
@@ -322,8 +323,8 @@ fn purge_soft_deleted_removes_expired_docs() {
 
     // Run purge
     let conn = pool.get().unwrap();
-    let purged =
-        purge_soft_deleted(&conn, &registry, _tmp.path(), &LocaleConfig::default()).unwrap();
+    let storage = create_storage(_tmp.path(), &crap_cms::config::UploadConfig::default()).unwrap();
+    let purged = purge_soft_deleted(&conn, &registry, &*storage, &LocaleConfig::default()).unwrap();
     assert_eq!(purged, 1, "should purge exactly the one expired doc");
     drop(conn);
 

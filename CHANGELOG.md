@@ -54,7 +54,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - Connection recycling uses `DISCARD ALL` for clean state
   - `VACUUM INTO` not supported (use `pg_dump` for backups)
 
+- **Storage backend abstraction** — Upload file storage is now pluggable
+  via a `StorageBackend` trait with three implementations:
+
+  - **`local`** (default) — Local filesystem, identical to previous
+    behavior. Zero config, files in `{config_dir}/uploads/`.
+  - **`s3`** (feature-flagged) — S3-compatible storage for multi-server
+    deployments. Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2,
+    DigitalOcean Spaces. Enable with `--features s3-storage`.
+  - **`custom`** — Delegates storage operations to user-provided Lua
+    functions via `crap.storage.register()`. For exotic providers
+    (Azure Blob, GCS, custom APIs) without adding SDK dependencies.
+
+  The entire upload pipeline (upload, serve, resize, delete, deferred
+  image conversion) now goes through the storage trait. File serving
+  uses `tower_http::ServeFile` for local storage (Range, ETag,
+  conditional GET) and streams from the backend for non-local storage.
+
+  ```toml
+  [upload]
+  storage = "s3"
+
+  [upload.s3]
+  bucket = "my-uploads"
+  region = "us-east-1"
+  endpoint = "http://minio.example.com:9000"
+  access_key = "${AWS_ACCESS_KEY}"
+  secret_key = "${AWS_SECRET_KEY}"
+  path_style = true
+  ```
+
 ### Fixed
+
+- **Upload file deletion broken on localized collections** — The
+  delete cleanup path used `LocaleConfig::default()` (empty) instead
+  of the actual locale config when loading the document for file URL
+  extraction. On collections with localized fields, the SELECT query
+  referenced bare column names (`caption`) instead of locale-suffixed
+  ones (`caption__en`), causing the query to fail. Upload files were
+  silently orphaned on deletion. Now uses the correct locale config.
+
+- **Deferred image conversions not cancelled on document delete** —
+  When an upload document was deleted, pending image queue entries
+  (deferred AVIF/WebP conversions) were not cleaned up. The scheduler
+  would attempt to process them, fail because the source was deleted,
+  and waste retries. Now cancels pending entries in all delete paths:
+  single delete, bulk DeleteMany, Lua delete/delete_many, empty trash,
+  and auto-purge.
+
+- **Bulk DeleteMany missing upload file cleanup for image queue** —
+  The gRPC `DeleteMany` and Lua `delete_many` did not cancel pending
+  image queue entries for deleted documents. Now cleans up alongside
+  the existing upload file deletion.
 
 - **Debug logs shown in production** — The default stdout log filter
   for `serve` was `crap_cms=debug,info`, flooding production logs with

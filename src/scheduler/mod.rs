@@ -15,7 +15,7 @@ use tokio::select;
 
 use crate::{
     config::{JobsConfig, LocaleConfig},
-    core::{SharedRegistry, upload},
+    core::{SharedRegistry, upload, upload::SharedStorage},
     db::{
         DbConnection, DbPool, DbValue,
         query::{self, images as image_query, jobs as job_query},
@@ -32,7 +32,7 @@ pub async fn start(
     registry: SharedRegistry,
     config: JobsConfig,
     shutdown: tokio_util::sync::CancellationToken,
-    config_dir: std::path::PathBuf,
+    storage: SharedStorage,
     locale_config: LocaleConfig,
 ) -> Result<()> {
     tracing::info!(
@@ -123,7 +123,7 @@ pub async fn start(
                 // Purge expired soft-deleted documents (every 10 cron intervals)
                 if purge_counter.is_multiple_of(10)
                     && let Ok(conn) = pool.get() {
-                        match purge_soft_deleted(&conn, &registry, &config_dir, &locale_config) {
+                        match purge_soft_deleted(&conn, &registry, &*storage, &locale_config) {
                             Ok(n) if n > 0 => tracing::info!("Purged {} expired soft-deleted doc(s)", n),
                             Ok(_) => {}
                             Err(e) => tracing::warn!("Soft-delete purge error: {}", e),
@@ -149,8 +149,9 @@ pub async fn start(
                 // Process pending image format conversions
                 let pool = pool.clone();
                 let batch_size = config.image_queue_batch_size;
+                let img_storage = storage.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = process_image_queue(&pool, batch_size).await {
+                    if let Err(e) = process_image_queue(&pool, batch_size, &img_storage).await {
                         tracing::error!("Image queue error: {}", e);
                     }
                 });
@@ -161,7 +162,11 @@ pub async fn start(
 
 /// Process pending image format conversions from the queue.
 #[cfg(not(tarpaulin_include))]
-async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
+async fn process_image_queue(
+    pool: &DbPool,
+    batch_size: usize,
+    storage: &SharedStorage,
+) -> Result<()> {
     let mut conn = pool
         .get()
         .context("Image queue: failed to get DB connection")?;
@@ -202,8 +207,15 @@ async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
         let target = entry.target_path.clone();
         let format = entry.format.clone();
         let quality = entry.quality;
+        let img_storage = storage.clone();
         let result = tokio::task::spawn_blocking(move || {
-            upload::process_image_entry(&source, &target, &format, quality)
+            upload::process_image_entry_with_storage(
+                &source,
+                &target,
+                &format,
+                quality,
+                &*img_storage,
+            )
         })
         .await;
 

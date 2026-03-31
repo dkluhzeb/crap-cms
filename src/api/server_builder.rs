@@ -5,7 +5,9 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     api::server::GrpcStartParams,
     config::CrapConfig,
-    core::{JwtSecret, Registry, event::EventBus, rate_limit::LoginRateLimiter},
+    core::{
+        JwtSecret, Registry, event::EventBus, rate_limit::LoginRateLimiter, upload::SharedStorage,
+    },
     db::DbPool,
     hooks::HookRunner,
 };
@@ -23,6 +25,7 @@ pub struct GrpcStartParamsBuilder {
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    storage: Option<SharedStorage>,
 }
 
 impl GrpcStartParamsBuilder {
@@ -39,6 +42,7 @@ impl GrpcStartParamsBuilder {
             ip_login_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
+            storage: None,
         }
     }
 
@@ -97,6 +101,11 @@ impl GrpcStartParamsBuilder {
         self
     }
 
+    pub fn storage(mut self, storage: SharedStorage) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
     pub fn build(self) -> GrpcStartParams {
         GrpcStartParams {
             pool: self.pool.expect("pool is required"),
@@ -114,6 +123,7 @@ impl GrpcStartParamsBuilder {
             ip_forgot_password_limiter: self
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
+            storage: self.storage.expect("storage is required"),
         }
     }
 }

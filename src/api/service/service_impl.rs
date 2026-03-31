@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
     pin::Pin,
     sync::{Arc, atomic::AtomicUsize},
 };
@@ -21,6 +20,7 @@ use crate::{
         email::EmailRenderer,
         event::{EventBus, EventUser},
         rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::{
         AccessResult, BoxedConnection, DbConnection, DbPool,
@@ -44,7 +44,7 @@ pub struct ContentService {
     pub(in crate::api::service) server_config: ServerConfig,
     pub(in crate::api::service) event_bus: Option<EventBus>,
     pub(in crate::api::service) locale_config: LocaleConfig,
-    pub(in crate::api::service) config_dir: PathBuf,
+    pub(in crate::api::service) storage: SharedStorage,
     pub(in crate::api::service) login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::service) ip_login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::service) reset_token_expiry: u64,
@@ -144,7 +144,7 @@ impl ContentService {
             server_config: deps.config.server,
             event_bus: deps.event_bus,
             locale_config: deps.config.locale,
-            config_dir: deps.config_dir,
+            storage: deps.storage,
             login_limiter: deps.login_limiter,
             ip_login_limiter: deps.ip_login_limiter,
             reset_token_expiry,

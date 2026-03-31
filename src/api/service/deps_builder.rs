@@ -7,6 +7,7 @@ use crate::{
     config::CrapConfig,
     core::{
         JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -26,6 +27,7 @@ pub struct ContentServiceDepsBuilder {
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    storage: Option<SharedStorage>,
 }
 
 impl ContentServiceDepsBuilder {
@@ -43,6 +45,7 @@ impl ContentServiceDepsBuilder {
             ip_login_limiter: None,
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
+            storage: None,
         }
     }
 
@@ -112,6 +115,11 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    pub fn storage(mut self, storage: SharedStorage) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
     pub fn build(self) -> ContentServiceDeps {
         ContentServiceDeps {
             pool: self.pool.expect("pool is required"),
@@ -130,6 +138,7 @@ impl ContentServiceDepsBuilder {
             ip_forgot_password_limiter: self
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
+            storage: self.storage.expect("storage is required"),
         }
     }
 }

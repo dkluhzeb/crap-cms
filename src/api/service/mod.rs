@@ -17,6 +17,7 @@ use crate::{
     config::CrapConfig,
     core::{
         JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -36,6 +37,7 @@ pub struct ContentServiceDeps {
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub storage: SharedStorage,
 }
 
 impl ContentServiceDeps {
