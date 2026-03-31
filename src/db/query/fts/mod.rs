@@ -1,4 +1,6 @@
-//! FTS5 full-text search helpers: index management, search, sync on writes.
+//! Full-text search helpers: index management, search, sync on writes.
+//!
+//! Supports SQLite (FTS5) and PostgreSQL (tsvector + GIN).
 
 mod fields;
 mod prosemirror;

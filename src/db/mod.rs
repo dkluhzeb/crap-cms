@@ -5,7 +5,10 @@ pub mod document;
 pub mod migrate;
 pub mod ops;
 pub mod pool;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 pub mod query;
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod types;
 
@@ -16,5 +19,5 @@ pub use query::{
 };
 pub use types::{DbRow, DbValue};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub use sqlite::InMemoryConn;

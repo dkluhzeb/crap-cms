@@ -6,6 +6,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.4] — Unreleased
 
+### Added
+
+- **Optional PostgreSQL backend** — Crap CMS now supports PostgreSQL as
+  an alternative database backend, available via the `postgres` Cargo
+  feature flag. SQLite remains the default and recommended backend for
+  most deployments.
+
+  **Why SQLite is the default:** Crap CMS is designed for simplicity.
+  SQLite requires zero infrastructure — no database server, no
+  connection strings, no Docker, no backups to configure. The entire
+  database is a single file you can copy, move, or version-control.
+  For the vast majority of CMS deployments (content sites, editorial
+  teams, headless API backends), SQLite handles thousands of concurrent
+  readers and hundreds of writes per second — more than enough.
+
+  **When to consider PostgreSQL:** Multi-server deployments where
+  multiple instances need to share a database, or workloads with 50+
+  simultaneous writers (rare for a CMS). PostgreSQL also provides
+  better read performance under extreme concurrency (50+ concurrent
+  requests) due to MVCC.
+
+  **Build & configure:**
+  ```bash
+  cargo build --features postgres       # both backends
+  cargo build --no-default-features --features postgres  # PG only
+  ```
+  ```toml
+  [database]
+  backend = "postgres"
+  url = "host=localhost user=crap dbname=crap_cms"
+  ```
+
+  The `sqlite` and `postgres` feature flags are independent — both can
+  be compiled in and switched at runtime via `crap.toml`. The `r2d2`
+  dependency is now optional (only pulled with `sqlite`). PostgreSQL
+  uses `deadpool-postgres` with `tokio-postgres` for async-native
+  connection pooling.
+
+  Postgres-specific implementation details:
+  - Full-text search uses `tsvector`/`tsquery` with GIN indexes
+    (SQLite uses FTS5)
+  - Timestamps stored as ISO 8601 TEXT (matching SQLite behavior)
+  - `SET timezone = 'UTC'` enforced on every connection
+  - DDL automatically adjusts `INTEGER` to `BIGINT` via dedicated
+    `execute_ddl`/`execute_batch_ddl` methods
+  - Connection recycling uses `DISCARD ALL` for clean state
+  - `VACUUM INTO` not supported (use `pg_dump` for backups)
+
 ### Fixed
 
 - **Debug logs shown in production** — The default stdout log filter

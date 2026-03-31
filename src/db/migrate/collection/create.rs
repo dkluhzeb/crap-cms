@@ -44,10 +44,11 @@ pub fn create_collection_table(
                     if spec.field.unique && !def.soft_delete {
                         col.push_str(" UNIQUE");
                     }
-                    append_default_value(
+                    append_default_value_for(
                         &mut col,
                         &spec.field.default_value,
                         &spec.field.field_type,
+                        conn.kind(),
                     );
                 }
                 columns.push(col);
@@ -68,7 +69,12 @@ pub fn create_collection_table(
                 if spec.field.unique && !def.soft_delete {
                     col.push_str(" UNIQUE");
                 }
-                append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
+                append_default_value_for(
+                    &mut col,
+                    &spec.field.default_value,
+                    &spec.field.field_type,
+                    conn.kind(),
+                );
             }
             columns.push(col);
         }
@@ -81,7 +87,7 @@ pub fn create_collection_table(
 
     // Soft-delete collections get a _deleted_at column
     if def.soft_delete {
-        columns.push("_deleted_at TEXT".to_string());
+        columns.push(format!("_deleted_at {}", conn.timestamp_column_type()));
     }
 
     // All collections get a reference count for delete protection
@@ -113,17 +119,28 @@ pub fn create_collection_table(
     tracing::info!("Creating collection table: {}", slug);
     tracing::debug!("SQL: {}", sql);
 
-    conn.execute(&sql, &[])
+    conn.execute_ddl(&sql, &[])
         .with_context(|| format!("Failed to create table {}", slug))?;
 
     Ok(())
 }
 
 /// Append a DEFAULT value clause to a column definition string.
+#[cfg(test)]
 pub fn append_default_value(
     col: &mut String,
     default_value: &Option<Value>,
     field_type: &FieldType,
+) {
+    append_default_value_for(col, default_value, field_type, "sqlite");
+}
+
+/// Append a DEFAULT clause. Uses `0`/`1` for booleans (INTEGER on all backends).
+pub fn append_default_value_for(
+    col: &mut String,
+    default_value: &Option<Value>,
+    field_type: &FieldType,
+    _db_kind: &str,
 ) {
     if let Some(default) = &default_value {
         warn_default_type_mismatch(default, field_type);

@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-use super::create::append_default_value;
+use super::create::append_default_value_for;
 
 /// Shared context for ALTER TABLE operations.
 struct AlterCtx<'a> {
@@ -109,10 +109,11 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                     let mut col_def = expected_type.to_string();
 
                     if !spec.companion_text {
-                        append_default_value(
+                        append_default_value_for(
                             &mut col_def,
                             &spec.field.default_value,
                             &spec.field.field_type,
+                            ctx.conn.kind(),
                         );
                     }
 
@@ -121,7 +122,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                         ctx.slug, col_name, col_def
                     );
                     tracing::info!("Adding column to {}: {}", ctx.slug, col_name);
-                    ctx.conn.execute(&sql, &[]).with_context(|| {
+                    ctx.conn.execute_ddl(&sql, &[]).with_context(|| {
                         format!("Failed to add column {} to {}", col_name, ctx.slug)
                     })?;
                 }
@@ -132,10 +133,11 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
             let mut col_def = expected_type.to_string();
 
             if !spec.companion_text {
-                append_default_value(
+                append_default_value_for(
                     &mut col_def,
                     &spec.field.default_value,
                     &spec.field.field_type,
+                    ctx.conn.kind(),
                 );
             }
 
@@ -144,7 +146,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                 ctx.slug, spec.col_name, col_def
             );
             tracing::info!("Adding column to {}: {}", ctx.slug, spec.col_name);
-            ctx.conn.execute(&sql, &[]).with_context(|| {
+            ctx.conn.execute_ddl(&sql, &[]).with_context(|| {
                 format!("Failed to add column {} to {}", spec.col_name, ctx.slug)
             })?;
         }
@@ -163,7 +165,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
         );
         tracing::info!("Adding _status column to {}", ctx.slug);
         ctx.conn
-            .execute(&sql, &[])
+            .execute_ddl(&sql, &[])
             .with_context(|| format!("Failed to add _status to {}", ctx.slug))?;
     }
 
@@ -186,7 +188,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                 let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
                 tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                 ctx.conn
-                    .execute(&sql, &[])
+                    .execute_ddl(&sql, &[])
                     .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
             }
         }
@@ -205,7 +207,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                     let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
                     tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                     ctx.conn
-                        .execute(&sql, &[])
+                        .execute_ddl(&sql, &[])
                         .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
                 }
             }
@@ -214,10 +216,14 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
 
     // Soft-delete collections: ensure _deleted_at column exists
     if ctx.def.soft_delete && !ctx.existing.contains("_deleted_at") {
-        let sql = format!("ALTER TABLE \"{}\" ADD COLUMN _deleted_at TEXT", ctx.slug);
+        let sql = format!(
+            "ALTER TABLE \"{}\" ADD COLUMN _deleted_at {}",
+            ctx.slug,
+            ctx.conn.timestamp_column_type()
+        );
         tracing::info!("Adding _deleted_at column to {}", ctx.slug);
         ctx.conn
-            .execute(&sql, &[])
+            .execute_ddl(&sql, &[])
             .with_context(|| format!("Failed to add _deleted_at to {}", ctx.slug))?;
     }
 
@@ -229,7 +235,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
         );
         tracing::info!("Adding _ref_count column to {}", ctx.slug);
         ctx.conn
-            .execute(&sql, &[])
+            .execute_ddl(&sql, &[])
             .with_context(|| format!("Failed to add _ref_count to {}", ctx.slug))?;
     }
 
@@ -246,7 +252,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                 );
                 tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                 ctx.conn
-                    .execute(&sql, &[])
+                    .execute_ddl(&sql, &[])
                     .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
             }
         }
@@ -357,7 +363,7 @@ fn rebuild_without_inline_unique(
     let old_cols = get_table_columns(conn, slug)?;
     let temp = format!("_rebuild_{}", slug);
 
-    conn.execute_batch(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
+    conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
 
     super::create::create_collection_table(conn, slug, def, locale_config)?;
 
@@ -386,12 +392,12 @@ fn rebuild_without_inline_unique(
             slug,
             e
         );
-        let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
-        let _ = conn.execute_batch(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
+        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
+        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
         return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{}'", slug));
     }
 
-    conn.execute_batch(&format!("DROP TABLE \"{}\"", temp))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE \"{}\"", temp))?;
 
     tracing::info!("Table '{}' rebuilt successfully", slug);
     Ok(())

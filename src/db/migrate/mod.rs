@@ -41,7 +41,7 @@ pub fn sync_all(
     let ts_type = tx.timestamp_column_type();
 
     // Create metadata table
-    tx.execute_batch(&format!(
+    tx.execute_batch_ddl(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
@@ -51,7 +51,7 @@ pub fn sync_all(
     .context("Failed to create _crap_meta table")?;
 
     // Create migrations tracking table
-    tx.execute_batch(&format!(
+    tx.execute_batch_ddl(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_migrations (
             filename TEXT PRIMARY KEY,
             applied_at {ts_default}
@@ -60,7 +60,7 @@ pub fn sync_all(
     .context("Failed to create _crap_migrations table")?;
 
     // Create jobs table
-    tx.execute_batch(&format!(
+    tx.execute_batch_ddl(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_jobs (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
@@ -87,12 +87,12 @@ pub fn sync_all(
     // Ensure retry_after column exists (added in 0.1.0-alpha.3)
     let job_cols = tx.get_table_columns("_crap_jobs")?;
     if !job_cols.contains("retry_after") {
-        tx.execute_batch("ALTER TABLE _crap_jobs ADD COLUMN retry_after TEXT")
+        tx.execute_batch_ddl("ALTER TABLE _crap_jobs ADD COLUMN retry_after TEXT")
             .context("Failed to add retry_after column to _crap_jobs")?;
     }
 
     // Create user settings table (decoupled from auth collections)
-    tx.execute_batch(
+    tx.execute_batch_ddl(
         "CREATE TABLE IF NOT EXISTS _crap_user_settings (
             user_id TEXT PRIMARY KEY,
             settings TEXT NOT NULL DEFAULT '{}'
@@ -101,7 +101,7 @@ pub fn sync_all(
     .context("Failed to create _crap_user_settings table")?;
 
     // Create image processing queue table
-    tx.execute_batch(&format!(
+    tx.execute_batch_ddl(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_image_queue (
             id TEXT PRIMARY KEY,
             collection TEXT NOT NULL,

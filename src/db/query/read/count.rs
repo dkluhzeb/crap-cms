@@ -64,15 +64,19 @@ pub fn count_with_search(
 
     // FTS5 full-text search filter
     if let Some(search_term) = search {
-        let sanitized = fts::sanitize_fts_query(search_term);
+        let sanitized = fts::sanitize_fts_query(conn, search_term);
         if !sanitized.is_empty() {
             let fts_table = format!("_fts_{slug}");
             let fts_exists = conn.table_exists(&fts_table).unwrap_or(false);
 
             if fts_exists {
                 let ph = conn.placeholder(params.len() + 1);
-                let fts_clause =
-                    format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})");
+                let fts_clause = match conn.kind() {
+                    "postgres" => format!(
+                        "id IN (SELECT id FROM {fts_table} WHERE tsv @@ to_tsquery('simple', {ph}))"
+                    ),
+                    _ => format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})"),
+                };
                 if has_where {
                     sql.push_str(&format!(" AND {fts_clause}"));
                 } else {

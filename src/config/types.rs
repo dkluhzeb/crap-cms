@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(config.server.grpc_port, 50051);
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.database.path, "data/crap.db");
-        assert_eq!(config.database.pool_max_size, 32);
+        assert_eq!(config.database.pool_max_size, 64);
         assert_eq!(config.database.busy_timeout, 30000);
         assert!(!config.admin.dev_mode);
         assert!(config.admin.require_auth);

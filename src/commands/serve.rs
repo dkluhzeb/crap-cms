@@ -727,6 +727,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     // Checkpoint WAL before exit — process::exit() skips destructors
     if let Ok(conn) = pool.get()
+        && conn.kind() == "sqlite"
         && let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
     {
         warn!("WAL checkpoint failed: {}", e);

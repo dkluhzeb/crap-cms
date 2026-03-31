@@ -132,13 +132,13 @@ pub(super) fn sync_indexes(
     // 4. Drop stale indexes (in existing but not in desired)
     for name in existing.difference(&desired) {
         tracing::info!("Dropping stale index: {}", name);
-        conn.execute(&format!("DROP INDEX IF EXISTS {}", name), &[])
+        conn.execute_ddl(&format!("DROP INDEX IF EXISTS {}", name), &[])
             .with_context(|| format!("Failed to drop index {}", name))?;
     }
 
     // 5. Create missing indexes
     for stmt_sql in &create_stmts {
-        conn.execute(stmt_sql, &[])
+        conn.execute_ddl(stmt_sql, &[])
             .with_context(|| format!("Failed to create index: {}", stmt_sql))?;
     }
 

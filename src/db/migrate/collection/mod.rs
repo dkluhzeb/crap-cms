@@ -14,7 +14,7 @@ use crate::{
 
 use crate::db::migrate::helpers::{sync_join_tables, sync_versions_table, table_exists};
 
-pub(super) use create::append_default_value;
+pub(super) use create::append_default_value_for;
 
 #[cfg(test)]
 pub(super) use create::create_collection_table;

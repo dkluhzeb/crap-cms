@@ -42,7 +42,7 @@ pub(super) fn ensure_locale_column(
             sanitize_locale(default_locale)?
         );
         tracing::info!("Adding _locale column to {}", table_name);
-        conn.execute(&sql, &[])
+        conn.execute_ddl(&sql, &[])
             .with_context(|| format!("Failed to add _locale to {}", table_name))?;
     }
     Ok(())
@@ -220,7 +220,7 @@ fn sync_join_tables_inner(
                             )
                         };
                         tracing::info!("Creating junction table: {}", table_name);
-                        conn.execute(&sql, &[]).with_context(|| {
+                        conn.execute_ddl(&sql, &[]).with_context(|| {
                             format!("Failed to create junction table {}", table_name)
                         })?;
                     } else {
@@ -275,7 +275,7 @@ fn sync_join_tables_inner(
                     }
                     let sql = format!("CREATE TABLE \"{}\" ({})", table_name, columns.join(", "));
                     tracing::info!("Creating array table: {}", table_name);
-                    conn.execute(&sql, &[])
+                    conn.execute_ddl(&sql, &[])
                         .with_context(|| format!("Failed to create array table {}", table_name))?;
                 } else {
                     if has_locale_col {
@@ -292,7 +292,7 @@ fn sync_join_tables_inner(
                                 conn.column_type_for(&sub_field.field_type)
                             );
                             tracing::info!("Adding column to {}: {}", table_name, sub_field.name);
-                            conn.execute(&sql, &[]).with_context(|| {
+                            conn.execute_ddl(&sql, &[]).with_context(|| {
                                 format!("Failed to add column {} to {}", sub_field.name, table_name)
                             })?;
                         }
@@ -305,7 +305,7 @@ fn sync_join_tables_inner(
                                     table_name, tz_col
                                 );
                                 tracing::info!("Adding column to {}: {}", table_name, tz_col);
-                                conn.execute(&sql, &[]).with_context(|| {
+                                conn.execute_ddl(&sql, &[]).with_context(|| {
                                     format!("Failed to add column {} to {}", tz_col, table_name)
                                 })?;
                             }
@@ -335,7 +335,7 @@ fn sync_join_tables_inner(
                         table_name, collection_slug, locale_col
                     );
                     tracing::info!("Creating blocks table: {}", table_name);
-                    conn.execute(&sql, &[])
+                    conn.execute_ddl(&sql, &[])
                         .with_context(|| format!("Failed to create blocks table {}", table_name))?;
                 } else if has_locale_col {
                     ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
@@ -394,7 +394,7 @@ fn rebuild_junction_table_for_polymorphic(
 ) -> Result<()> {
     let temp = format!("_{}_migrate", table_name);
 
-    conn.execute_batch(&format!(
+    conn.execute_batch_ddl(&format!(
         "ALTER TABLE \"{}\" RENAME TO \"{}\"",
         table_name, temp
     ))?;
@@ -402,7 +402,7 @@ fn rebuild_junction_table_for_polymorphic(
     let locale_col = if has_locale { ", _locale TEXT" } else { "" };
     let locale_pk = if has_locale { ", _locale" } else { "" };
 
-    conn.execute_batch(&format!(
+    conn.execute_batch_ddl(&format!(
         "CREATE TABLE \"{}\" (\
             parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
             related_id TEXT NOT NULL, \
@@ -427,7 +427,7 @@ fn rebuild_junction_table_for_polymorphic(
         ))?;
     }
 
-    conn.execute_batch(&format!("DROP TABLE \"{}\"", temp))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE \"{}\"", temp))?;
 
     tracing::info!(
         "Rebuilt junction table {} for polymorphic upgrade (updated PRIMARY KEY)",
@@ -459,14 +459,14 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
             conn.timestamp_column_default()
         );
         tracing::info!("Creating versions table: {}", table_name);
-        conn.execute(&sql, &[])
+        conn.execute_ddl(&sql, &[])
             .with_context(|| format!("Failed to create versions table {}", table_name))?;
 
         // Indexes for efficient version lookups.
         // Prefixed with `idx__ver_` to avoid collisions with user field indexes
         // (e.g. a field named `parent_latest` with `index: true` would create
         // `idx_{slug}_parent_latest` — same name without the `_ver_` namespace).
-        conn.execute(
+        conn.execute_ddl(
             &format!(
                 "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_latest ON {table} (_parent, _latest)",
                 slug = slug,
@@ -474,7 +474,7 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
             ),
             &[],
         )?;
-        conn.execute(
+        conn.execute_ddl(
             &format!(
                 "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version ON {table} (_parent, _version DESC)",
                 slug = slug, table = table_name
@@ -482,7 +482,7 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
             &[],
         )?;
         // Defense-in-depth: prevent duplicate version numbers per document
-        conn.execute(
+        conn.execute_ddl(
             &format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version_unique ON {table} (_parent, _version)",
                 slug = slug, table = table_name

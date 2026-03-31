@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use crate::{config::LocaleConfig, core::collection::GlobalDefinition, db::DbConnection};
 
 use crate::db::migrate::{
-    collection::append_default_value,
+    collection::append_default_value_for,
     helpers::{
         collect_column_specs, get_table_columns, sanitize_locale, sync_join_tables,
         sync_versions_table, table_exists,
@@ -41,10 +41,11 @@ pub(super) fn sync_global_table(
                     );
 
                     if !spec.companion_text {
-                        append_default_value(
+                        append_default_value_for(
                             &mut col,
                             &spec.field.default_value,
                             &spec.field.field_type,
+                            conn.kind(),
                         );
                     }
 
@@ -54,10 +55,11 @@ pub(super) fn sync_global_table(
                 let mut col = format!("{} {}", spec.col_name, col_type);
 
                 if !spec.companion_text {
-                    append_default_value(
+                    append_default_value_for(
                         &mut col,
                         &spec.field.default_value,
                         &spec.field.field_type,
+                        conn.kind(),
                     );
                 }
 
@@ -79,7 +81,7 @@ pub(super) fn sync_global_table(
         let sql = format!("CREATE TABLE \"{}\" ({})", table_name, columns.join(", "));
 
         tracing::info!("Creating global table: {}", table_name);
-        conn.execute(&sql, &[])
+        conn.execute_ddl(&sql, &[])
             .with_context(|| format!("Failed to create table {}", table_name))?;
 
         // Insert the single global row
@@ -106,10 +108,11 @@ pub(super) fn sync_global_table(
                         let mut col_def = col_type.to_string();
 
                         if !spec.companion_text {
-                            append_default_value(
+                            append_default_value_for(
                                 &mut col_def,
                                 &spec.field.default_value,
                                 &spec.field.field_type,
+                                conn.kind(),
                             );
                         }
 
@@ -118,7 +121,7 @@ pub(super) fn sync_global_table(
                             table_name, col_name, col_def
                         );
                         tracing::info!("Adding column to {}: {}", table_name, col_name);
-                        conn.execute(&sql, &[]).with_context(|| {
+                        conn.execute_ddl(&sql, &[]).with_context(|| {
                             format!("Failed to add column {} to {}", col_name, table_name)
                         })?;
                     }
@@ -127,10 +130,11 @@ pub(super) fn sync_global_table(
                 let mut col_def = col_type.to_string();
 
                 if !spec.companion_text {
-                    append_default_value(
+                    append_default_value_for(
                         &mut col_def,
                         &spec.field.default_value,
                         &spec.field.field_type,
+                        conn.kind(),
                     );
                 }
 
@@ -139,7 +143,7 @@ pub(super) fn sync_global_table(
                     table_name, spec.col_name, col_def
                 );
                 tracing::info!("Adding column to {}: {}", table_name, spec.col_name);
-                conn.execute(&sql, &[]).with_context(|| {
+                conn.execute_ddl(&sql, &[]).with_context(|| {
                     format!("Failed to add column {} to {}", spec.col_name, table_name)
                 })?;
             }
@@ -156,7 +160,7 @@ pub(super) fn sync_global_table(
                 table_name
             );
             tracing::info!("Adding _status column to {}", table_name);
-            conn.execute(&sql, &[])
+            conn.execute_ddl(&sql, &[])
                 .with_context(|| format!("Failed to add _status to {}", table_name))?;
         }
     }
@@ -171,7 +175,7 @@ pub(super) fn sync_global_table(
                 table_name
             );
             tracing::info!("Adding _ref_count column to {}", table_name);
-            conn.execute(&sql, &[])
+            conn.execute_ddl(&sql, &[])
                 .with_context(|| format!("Failed to add _ref_count to {}", table_name))?;
         }
     }

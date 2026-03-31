@@ -103,7 +103,14 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
-    /// Path to the SQLite database file.
+    /// Database backend: `"sqlite"` (default) or `"postgres"`.
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    /// PostgreSQL connection URL (only used when `backend = "postgres"`).
+    /// e.g., `"host=localhost user=crap dbname=crap_cms"`
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Path to the SQLite database file (only used when `backend = "sqlite"`).
     pub path: String,
     /// Maximum number of connections in the pool. Default: 64.
     pub pool_max_size: u32,
@@ -141,9 +148,15 @@ fn default_wal_autocheckpoint() -> u32 {
     1000
 }
 
+fn default_backend() -> String {
+    "sqlite".to_string()
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
+            backend: default_backend(),
+            url: None,
             path: "data/crap.db".to_string(),
             pool_max_size: 64,
             busy_timeout: 30000,

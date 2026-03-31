@@ -19,6 +19,21 @@ pub trait DbConnection {
     /// Execute multiple statements as a batch (no parameters).
     fn execute_batch(&self, sql: &str) -> Result<()>;
 
+    /// Execute a DDL statement (CREATE TABLE, ALTER TABLE, etc.).
+    /// On Postgres, automatically adjusts `INTEGER` to `BIGINT` since
+    /// `DbValue::Integer` is `i64` which tokio-postgres binds to `int8`.
+    /// Default: delegates to `execute`.
+    fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+        self.execute(sql, params)
+    }
+
+    /// Execute a batch DDL statement (no parameters).
+    /// Same adjustment as `execute_ddl`.
+    /// Default: delegates to `execute_batch`.
+    fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
+        self.execute_batch(sql)
+    }
+
     /// Execute a query and return all matching rows.
     fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>>;
 
@@ -215,6 +230,14 @@ impl DbConnection for BoxedConnection {
         self.inner.execute_batch(sql)
     }
 
+    fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+        self.inner.execute_ddl(sql, params)
+    }
+
+    fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
+        self.inner.execute_batch_ddl(sql)
+    }
+
     fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
         self.inner.query_all(sql, params)
     }
@@ -339,6 +362,14 @@ impl DbConnection for BoxedTransaction<'_> {
 
     fn execute_batch(&self, sql: &str) -> Result<()> {
         self.inner.execute_batch(sql)
+    }
+
+    fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+        self.inner.execute_ddl(sql, params)
+    }
+
+    fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
+        self.inner.execute_batch_ddl(sql)
     }
 
     fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {

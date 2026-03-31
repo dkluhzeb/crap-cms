@@ -1,28 +1,34 @@
-//! SQLite connection pool with WAL mode and tuned pragmas.
+//! Database connection pool with backend-specific configuration.
 
 use anyhow::{Context as _, Result};
+#[cfg(feature = "sqlite")]
 use r2d2::Pool;
+#[cfg(feature = "sqlite")]
 use r2d2_sqlite::SqliteConnectionManager;
 use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::config::CrapConfig;
 
-use super::{connection::BoxedConnection, sqlite::SqliteConnection};
+use super::connection::BoxedConnection;
+#[cfg(feature = "sqlite")]
+use super::sqlite::SqliteConnection;
 
-/// Private trait for pool backends.
+/// Trait for pool backends.
 ///
 /// Each backend (SQLite, PostgreSQL, ...) implements this once.
 /// `DbPool` holds an `Arc<dyn PoolBackend>` and delegates `get()` to it.
-trait PoolBackend: Send + Sync {
+pub(crate) trait PoolBackend: Send + Sync {
     fn get(&self) -> Result<BoxedConnection>;
     fn kind(&self) -> &'static str;
 }
 
 /// SQLite pool backend.
+#[cfg(feature = "sqlite")]
 struct SqlitePoolBackend {
     pool: Pool<SqliteConnectionManager>,
 }
 
+#[cfg(feature = "sqlite")]
 impl PoolBackend for SqlitePoolBackend {
     fn get(&self) -> Result<BoxedConnection> {
         let conn = self.pool.get().context("Failed to get DB connection")?;
@@ -55,15 +61,49 @@ impl DbPool {
     }
 
     /// Wrap an existing r2d2 SQLite pool. Used in tests.
+    #[cfg(feature = "sqlite")]
     pub fn from_pool(pool: Pool<SqliteConnectionManager>) -> Self {
         Self {
             inner: Arc::new(SqlitePoolBackend { pool }),
         }
     }
+
+    /// Create from an `Arc<dyn PoolBackend>` (used by backend-specific pool constructors).
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    pub(crate) fn from_backend(backend: Arc<dyn PoolBackend>) -> Self {
+        Self { inner: backend }
+    }
 }
 
-/// Create a connection pool, ensuring the database directory exists.
+/// Create a connection pool based on the configured backend.
 pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
+    match config.database.backend.as_str() {
+        #[cfg(feature = "sqlite")]
+        "sqlite" => create_sqlite_pool(config_dir, config),
+        #[cfg(feature = "postgres")]
+        "postgres" => super::postgres::create_pool(config),
+        other => anyhow::bail!(
+            "Unknown database backend '{}'. Supported: {}",
+            other,
+            supported_backends()
+        ),
+    }
+}
+
+fn supported_backends() -> &'static str {
+    #[cfg(all(feature = "sqlite", feature = "postgres"))]
+    return "sqlite, postgres";
+    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
+    return "sqlite";
+    #[cfg(all(not(feature = "sqlite"), feature = "postgres"))]
+    return "postgres";
+    #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+    return "(none — enable the 'sqlite' or 'postgres' feature)";
+}
+
+/// Create a SQLite connection pool.
+#[cfg(feature = "sqlite")]
+fn create_sqlite_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     let db_path = config.db_path(config_dir);
 
     // Ensure parent directory exists
@@ -94,6 +134,7 @@ pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     Ok(DbPool::from_pool(pool))
 }
 
+#[cfg(feature = "sqlite")]
 #[derive(Debug)]
 struct SqlitePragmas {
     busy_timeout: u64,
@@ -102,6 +143,7 @@ struct SqlitePragmas {
     wal_autocheckpoint: u32,
 }
 
+#[cfg(feature = "sqlite")]
 impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for SqlitePragmas {
     fn on_acquire(&self, conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(&format!(

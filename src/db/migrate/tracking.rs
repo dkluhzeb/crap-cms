@@ -103,7 +103,7 @@ pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     let tables = conn.list_user_tables()?;
 
     for table in &tables {
-        conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", table), &[])
+        conn.execute_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", table), &[])
             .with_context(|| format!("Failed to drop table {}", table))?;
         tracing::info!("Dropped table: {}", table);
     }
