@@ -6,7 +6,10 @@ use crate::{
     api::server::GrpcStartParams,
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, cache::SharedCache, event::EventBus, rate_limit::LoginRateLimiter,
+        JwtSecret, Registry,
+        cache::SharedCache,
+        event::EventBus,
+        rate_limit::{LoginRateLimiter, SharedRateLimitBackend},
         upload::SharedStorage,
     },
     db::DbPool,
@@ -28,6 +31,7 @@ pub struct GrpcStartParamsBuilder {
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
     cache: Option<SharedCache>,
+    rate_limit_backend: Option<SharedRateLimitBackend>,
 }
 
 impl GrpcStartParamsBuilder {
@@ -46,6 +50,7 @@ impl GrpcStartParamsBuilder {
             ip_forgot_password_limiter: None,
             storage: None,
             cache: None,
+            rate_limit_backend: None,
         }
     }
 
@@ -114,6 +119,11 @@ impl GrpcStartParamsBuilder {
         self
     }
 
+    pub fn rate_limit_backend(mut self, backend: SharedRateLimitBackend) -> Self {
+        self.rate_limit_backend = Some(backend);
+        self
+    }
+
     pub fn build(self) -> GrpcStartParams {
         GrpcStartParams {
             pool: self.pool.expect("pool is required"),
@@ -133,6 +143,9 @@ impl GrpcStartParamsBuilder {
                 .expect("ip_forgot_password_limiter is required"),
             storage: self.storage.expect("storage is required"),
             cache: self.cache.expect("cache is required"),
+            rate_limit_backend: self
+                .rate_limit_backend
+                .expect("rate_limit_backend is required"),
         }
     }
 }

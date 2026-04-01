@@ -36,9 +36,27 @@ pub struct AuthConfig {
     /// Max failed login attempts per IP before lockout. Default: 20.
     /// Higher than per-email to tolerate shared IPs (offices, NAT).
     pub max_ip_login_attempts: u32,
+    /// Rate limit backend: `"memory"` (default), `"redis"`, or `"none"`.
+    /// `"redis"` shares rate limit state across servers (requires `--features redis`).
+    #[serde(default = "default_rate_limit_backend")]
+    pub rate_limit_backend: String,
+    /// Redis URL for rate limit backend. Defaults to `cache.redis_url` if empty.
+    #[serde(default)]
+    pub rate_limit_redis_url: String,
+    /// Key prefix for Redis rate limit backend.
+    #[serde(default = "default_rate_limit_prefix")]
+    pub rate_limit_prefix: String,
     /// Password strength requirements.
     #[serde(default)]
     pub password_policy: PasswordPolicy,
+}
+
+fn default_rate_limit_backend() -> String {
+    "memory".to_string()
+}
+
+fn default_rate_limit_prefix() -> String {
+    "crap:rl:".to_string()
 }
 
 impl Default for AuthConfig {
@@ -52,6 +70,9 @@ impl Default for AuthConfig {
             reset_token_expiry: 3600,
             max_forgot_password_attempts: 3,
             forgot_password_window_seconds: 900,
+            rate_limit_backend: default_rate_limit_backend(),
+            rate_limit_redis_url: String::new(),
+            rate_limit_prefix: default_rate_limit_prefix(),
             password_policy: PasswordPolicy::default(),
         }
     }

@@ -28,7 +28,7 @@ use crate::{
         cache::create_cache,
         email::create_email_provider,
         event::EventBus,
-        rate_limit::LoginRateLimiter,
+        rate_limit::{LoginRateLimiter, create_rate_limit_backend},
         upload::{create_storage, format_filesize},
     },
     db::{DbConnection, migrate, pool},
@@ -667,23 +667,43 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         info!("Background job scheduler disabled");
     }
 
+    // Create rate limit backend
+    let rl_redis_url = if cfg.auth.rate_limit_redis_url.is_empty() {
+        &cfg.cache.redis_url
+    } else {
+        &cfg.auth.rate_limit_redis_url
+    };
+    let rl_backend = create_rate_limit_backend(
+        &cfg.auth.rate_limit_backend,
+        rl_redis_url,
+        &cfg.auth.rate_limit_prefix,
+    )?;
+
     // Create shared rate limiters — both admin and gRPC servers share the same
     // instances so an attacker can't double their attempt budget across servers.
-    let login_limiter = Arc::new(LoginRateLimiter::new(
+    let login_limiter = Arc::new(LoginRateLimiter::with_backend(
+        rl_backend.clone(),
+        "login",
         cfg.auth.max_login_attempts,
         cfg.auth.login_lockout_seconds,
     ));
-    let ip_login_limiter = Arc::new(LoginRateLimiter::new(
+    let ip_login_limiter = Arc::new(LoginRateLimiter::with_backend(
+        rl_backend.clone(),
+        "ip_login",
         cfg.auth.max_ip_login_attempts,
         cfg.auth.login_lockout_seconds,
     ));
-    let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+    let forgot_password_limiter = Arc::new(LoginRateLimiter::with_backend(
+        rl_backend.clone(),
+        "forgot",
         cfg.auth.max_forgot_password_attempts,
         cfg.auth.forgot_password_window_seconds,
     ));
     // Uses max_ip_login_attempts intentionally — shared per-IP budget for login
     // and forgot-password (same threat model: brute-force from a single IP).
-    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::with_backend(
+        rl_backend.clone(),
+        "ip_forgot",
         cfg.auth.max_ip_login_attempts,
         cfg.auth.forgot_password_window_seconds,
     ));
@@ -732,6 +752,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
                     .storage(storage.clone())
                     .cache(cache.clone())
+                    .rate_limit_backend(rl_backend)
                     .build(),
                 shutdown.clone(),
             )

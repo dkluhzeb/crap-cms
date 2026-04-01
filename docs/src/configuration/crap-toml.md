@@ -337,6 +337,9 @@ Password strength requirements applied to all password-setting paths (create, up
 | `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
 | `require_digit` | boolean | `false` | Require at least one digit (0-9). |
 | `require_special` | boolean | `false` | Require at least one special (non-alphanumeric) character. |
+| `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
+| `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
+| `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. |
 
 ### `[depth]`
 

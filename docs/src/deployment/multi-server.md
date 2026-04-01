@@ -36,6 +36,7 @@ For high availability and dedicated job processing. Requires a shared database a
 1. **Shared database** — PostgreSQL (build with `--features postgres`)
 2. **Shared file storage** — S3-compatible (build with `--features s3-storage`) or shared filesystem (NFS/EFS)
 3. **Shared cache** (recommended) — Redis (build with `--features redis`) for cross-server cache invalidation
+4. **Shared rate limits** (recommended) — Redis for cross-server rate limit enforcement
 
 ## Setup
 
@@ -80,7 +81,17 @@ backend = "memory"
 max_age_secs = 10
 ```
 
-### 4. App Servers
+### 4. Rate Limits
+
+Without shared rate limits, each server tracks login attempts independently. Use Redis to enforce global rate limits:
+
+```toml
+[auth]
+rate_limit_backend = "redis"
+# rate_limit_redis_url defaults to cache.redis_url if empty
+```
+
+### 5. App Servers
 
 Run without the scheduler — job processing is handled by dedicated workers.
 
@@ -88,7 +99,7 @@ Run without the scheduler — job processing is handled by dedicated workers.
 crap-cms serve --no-scheduler
 ```
 
-### 5. Workers
+### 6. Workers
 
 One or more dedicated job workers process queues.
 

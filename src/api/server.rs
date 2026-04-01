@@ -35,6 +35,7 @@ pub struct GrpcStartParams {
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub storage: crate::core::upload::SharedStorage,
     pub cache: crate::core::cache::SharedCache,
+    pub rate_limit_backend: crate::core::rate_limit::SharedRateLimitBackend,
 }
 
 impl GrpcStartParams {
@@ -104,7 +105,11 @@ pub async fn start(
         });
     }
 
-    let grpc_limiter = Arc::new(GrpcRateLimiter::new(grpc_rate_requests, grpc_rate_window));
+    let grpc_limiter = Arc::new(GrpcRateLimiter::with_backend(
+        params.rate_limit_backend,
+        grpc_rate_requests,
+        grpc_rate_window,
+    ));
     let rate_limit_layer = rate_limit::GrpcRateLimitLayer::new(grpc_limiter);
 
     let content_svc = content::content_api_server::ContentApiServer::new(content_service)

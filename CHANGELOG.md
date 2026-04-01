@@ -84,6 +84,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   path_style = true
   ```
 
+- **Rate limit backend abstraction** — Login and gRPC rate limiters now
+  support pluggable backends via a `RateLimitBackend` trait:
+
+  - **`memory`** (default) — In-process sliding window counters. Same
+    behavior as before.
+  - **`redis`** (feature-flagged) — Shared rate limits across servers
+    using Redis sorted sets. Requires `--features redis`.
+  - **`none`** — Rate limiting disabled.
+
+  Multi-server deployments should use `redis` to prevent attackers from
+  bypassing rate limits by hitting different servers.
+
+  ```toml
+  [auth]
+  rate_limit_backend = "redis"
+  # rate_limit_redis_url defaults to cache.redis_url if empty
+  rate_limit_prefix = "crap:rl:"
+  ```
+
 - **Cache backend abstraction** — The cross-request populate cache is now
   pluggable via a `CacheBackend` trait with four implementations:
 
