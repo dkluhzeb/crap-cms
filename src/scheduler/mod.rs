@@ -374,7 +374,7 @@ async fn poll_and_execute(
     running_jobs: &Arc<Mutex<Vec<String>>>,
     email: &EmailQueueConfig,
 ) -> Result<()> {
-    let conn = pool.get().context("Failed to get DB connection")?;
+    let mut conn = pool.get().context("Failed to get DB connection")?;
 
     // Check global concurrency
     let total_running = job_query::count_running(&conn, None)?;
@@ -385,8 +385,6 @@ async fn poll_and_execute(
 
     let available = max_concurrent - total_running as usize;
 
-    // Get per-slug running counts and concurrency limits
-    let running_counts = job_query::count_running_per_slug(&conn)?;
     let job_concurrency = {
         let reg = registry
             .read()
@@ -397,8 +395,21 @@ async fn poll_and_execute(
             .collect::<HashMap<String, u32>>()
     };
 
-    let claimed =
-        job_query::claim_pending_jobs(&conn, available, &running_counts, &job_concurrency)?;
+    // Claim jobs atomically.
+    // SQLite: use IMMEDIATE transaction to serialize writes across workers.
+    // Postgres: FOR UPDATE SKIP LOCKED handles concurrency within the query.
+    let empty_counts = HashMap::new();
+    let claimed = if conn.kind() == "sqlite" {
+        let tx = conn
+            .transaction_immediate()
+            .context("Failed to start claim transaction")?;
+        let result =
+            job_query::claim_pending_jobs(&tx, available, &empty_counts, &job_concurrency)?;
+        tx.commit().context("Failed to commit claim transaction")?;
+        result
+    } else {
+        job_query::claim_pending_jobs(&conn, available, &empty_counts, &job_concurrency)?
+    };
     drop(conn);
 
     for job_run in claimed {

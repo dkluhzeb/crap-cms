@@ -84,6 +84,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   path_style = true
   ```
 
+- **Multi-server scheduler safety** — Job queue is now safe for
+  multi-server deployments:
+
+  - **Cron dedup** — New `_crap_cron_fired` table prevents cron jobs
+    from double-firing when multiple servers run the scheduler. Uses
+    an atomic upsert to claim each cron window.
+  - **Atomic job claiming (Postgres)** — Uses `FOR UPDATE SKIP LOCKED`
+    for lock-free atomic claiming. Workers skip rows being claimed by
+    other workers. Per-slug concurrency limits are enforced inside the
+    query (not in-memory).
+  - **Atomic job claiming (SQLite)** — Claim operations now run inside
+    an IMMEDIATE transaction, serializing concurrent workers. Per-slug
+    concurrency counts are read from the DB inside the transaction.
+
 - **Rate limit backend abstraction** — Login and gRPC rate limiters now
   support pluggable backends via a `RateLimitBackend` trait:
 

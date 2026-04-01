@@ -120,6 +120,16 @@ crap-cms work --stop
 crap-cms work --restart
 ```
 
+## Job Queue Safety
+
+The job queue is multi-server safe:
+
+- **Cron dedup** — Cron jobs are deduplicated via the `_crap_cron_fired` table. Only one server fires each cron job per schedule window, regardless of how many instances run the scheduler.
+- **Atomic claiming (Postgres)** — Jobs are claimed using `FOR UPDATE SKIP LOCKED`. Workers never claim the same job, and per-slug concurrency limits are enforced in the database.
+- **Atomic claiming (SQLite)** — Claims run inside IMMEDIATE transactions, serializing concurrent workers.
+
+Multiple workers can safely run `crap-cms work` against the same database.
+
 ## Configuration Notes
 
 - All servers and workers share the same `crap.toml` and config directory

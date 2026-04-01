@@ -204,6 +204,20 @@ pub fn check_cron_schedules(
             continue;
         }
 
+        // Atomic cron dedup: only one instance wins each cron window.
+        // Uses _crap_cron_fired table to prevent double-fire in multi-server.
+        let fired_at = now.to_rfc3339();
+        let window_start = last_check.to_rfc3339();
+
+        if !job_query::try_claim_cron_window(&tx, slug, &fired_at, &window_start)? {
+            debug!(
+                "Cron job '{}' already fired by another instance in this window",
+                slug
+            );
+
+            continue;
+        }
+
         // Check skip_if_running (atomic with insert inside the same IMMEDIATE transaction)
         if def.skip_if_running {
             let running = job_query::count_running(&tx, Some(slug))?;
@@ -717,7 +731,11 @@ mod tests {
             );
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);",
+            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);
+            CREATE TABLE IF NOT EXISTS _crap_cron_fired (
+                slug TEXT PRIMARY KEY,
+                fired_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
         )
         .unwrap();
         drop(conn);

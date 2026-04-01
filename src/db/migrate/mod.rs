@@ -84,6 +84,15 @@ pub fn sync_all(
     ))
     .context("Failed to create _crap_jobs table")?;
 
+    // Create cron dedup table (prevents double-fire in multi-server deployments)
+    tx.execute_batch_ddl(&format!(
+        "CREATE TABLE IF NOT EXISTS _crap_cron_fired (
+            slug TEXT PRIMARY KEY,
+            fired_at {ts_default}
+        );"
+    ))
+    .context("Failed to create _crap_cron_fired table")?;
+
     // Ensure retry_after column exists (added in 0.1.0-alpha.3)
     let job_cols = tx.get_table_columns("_crap_jobs")?;
     if !job_cols.contains("retry_after") {
