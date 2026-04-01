@@ -16,7 +16,7 @@ pub use queue::{EmailJobData, SYSTEM_EMAIL_JOB, queue_email};
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::EmailConfig;
 
@@ -67,24 +67,4 @@ pub fn create_email_provider(config: &EmailConfig) -> Result<SharedEmailProvider
         }
         other => bail!("Unknown email provider: '{}'", other),
     }
-}
-
-// Legacy compatibility: direct send function for callers not yet migrated.
-pub fn send_email(
-    config: &crate::config::EmailConfig,
-    to: &str,
-    subject: &str,
-    html: &str,
-    text: Option<&str>,
-) -> Result<()> {
-    if config.smtp_host.is_empty() {
-        warn!(
-            "Email not configured (smtp_host empty), skipping send to {}",
-            to
-        );
-
-        return Ok(());
-    }
-
-    smtp::send_email_smtp(config, to, subject, html, text)
 }

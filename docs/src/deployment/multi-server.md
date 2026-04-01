@@ -1,0 +1,116 @@
+# Multi-Server Deployment
+
+For high availability and dedicated job processing. Requires a shared database and shared file storage.
+
+> **Most projects don't need this.** A single server handles thousands of concurrent users. See [Single Server](single-server.md) for the recommended default.
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────┐
+│  App Server  │     │  App Server  │
+│  serve       │     │  serve       │
+│  --no-sched  │     │  --no-sched  │
+└──────┬───────┘     └──────┬───────┘
+       │                    │
+       ▼                    ▼
+┌──────────────────────────────────┐
+│          Load Balancer           │
+└──────────────────────────────────┘
+       │                    │
+       ▼                    ▼
+┌─────────────┐     ┌─────────────┐
+│  PostgreSQL  │     │  S3 / MinIO │
+│  (shared DB) │     │ (shared FS) │
+└─────────────┘     └─────────────┘
+       ▲
+       │
+┌──────┴───────┐
+│   Worker     │
+│   work       │
+└──────────────┘
+```
+
+## Requirements
+
+1. **Shared database** — PostgreSQL (build with `--features postgres`)
+2. **Shared file storage** — S3-compatible (build with `--features s3-storage`) or shared filesystem (NFS/EFS)
+
+## Setup
+
+### 1. Database
+
+```toml
+# crap.toml (all servers share the same config)
+[database]
+backend = "postgres"
+url = "host=db.example.com user=crap dbname=crap_cms"
+```
+
+### 2. File Storage
+
+```toml
+[upload]
+storage = "s3"
+
+[upload.s3]
+bucket = "my-uploads"
+endpoint = "https://s3.amazonaws.com"
+access_key = "${AWS_ACCESS_KEY}"
+secret_key = "${AWS_SECRET_KEY}"
+```
+
+### 3. App Servers
+
+Run without the scheduler — job processing is handled by dedicated workers.
+
+```bash
+crap-cms serve --no-scheduler
+```
+
+### 4. Workers
+
+One or more dedicated job workers process queues.
+
+```bash
+# General worker (all queues)
+crap-cms work --detach
+
+# Specialized workers
+crap-cms work --detach --queues email
+crap-cms work --detach --queues heavy --concurrency 2
+```
+
+Workers support the same lifecycle management as the server:
+
+```bash
+crap-cms work --status
+crap-cms work --stop
+crap-cms work --restart
+```
+
+## Configuration Notes
+
+- All servers and workers share the same `crap.toml` and config directory
+- Schema sync (`migrate up`) only needs to run once — any server that starts first handles it
+- `on_init` hooks run on every server/worker startup
+- Email uses the job queue automatically — password resets and verification emails are processed by workers with retries
+
+## Email Configuration
+
+With dedicated workers, the `webhook` email provider is recommended over SMTP for better reliability:
+
+```toml
+[email]
+provider = "webhook"
+webhook_url = "https://api.sendgrid.com/v3/mail/send"
+webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
+```
+
+Emails are queued and processed by workers with automatic retries. Configure retry behavior:
+
+```toml
+[email]
+queue_retries = 5
+queue_concurrency = 10
+```

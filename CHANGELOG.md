@@ -105,6 +105,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   from_address = "noreply@example.com"
   ```
 
+- **`crap-cms work` standalone worker command** — New top-level command
+  that runs a dedicated job worker without HTTP/gRPC servers. Supports
+  `--queues` (filter by queue name), `--concurrency` (override max
+  concurrent jobs), `--no-cron` (skip cron scheduling), and
+  `--detach`/`--stop`/`--restart`/`--status` for background management.
+  Enables multi-server deployments where app servers run
+  `serve --no-scheduler` and dedicated workers process jobs.
+
 - **Queued email delivery with retries** — New `crap.email.queue(opts)`
   Lua API queues emails as jobs for async delivery with automatic
   retries on failure. Uses the existing job system with exponential

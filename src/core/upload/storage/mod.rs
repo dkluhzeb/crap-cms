@@ -69,7 +69,11 @@ pub fn create_storage(
         #[cfg(feature = "s3-storage")]
         "s3" => s3::create_s3_storage(&config.s3),
         "custom" => {
-            todo!("Custom Lua storage backend not yet implemented")
+            // Custom storage is initialized after Lua init via crap.storage.register().
+            // Use local as placeholder — Lua will replace it when init.lua runs.
+            tracing::info!("Custom storage selected — waiting for Lua init");
+            let base_dir = config_dir.join("uploads");
+            Ok(Arc::new(LocalStorage::new(base_dir)))
         }
         other => anyhow::bail!("Unknown upload storage backend: '{}'", other),
     }

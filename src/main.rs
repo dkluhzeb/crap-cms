@@ -69,6 +69,37 @@ enum Command {
         no_scheduler: bool,
     },
 
+    /// Run a standalone job worker (processes queues without HTTP/gRPC servers)
+    Work {
+        /// Run in the background (detached).
+        #[arg(short, long, conflicts_with_all = ["stop", "restart", "status"])]
+        detach: bool,
+
+        /// Stop a running detached worker.
+        #[arg(long, conflicts_with_all = ["detach", "restart", "status"])]
+        stop: bool,
+
+        /// Restart a running detached worker (stop + start).
+        #[arg(long, conflicts_with_all = ["detach", "stop", "status"])]
+        restart: bool,
+
+        /// Show status of a detached worker.
+        #[arg(long, conflicts_with_all = ["detach", "stop", "restart"])]
+        status: bool,
+
+        /// Process only specific queues (comma-separated). Default: all queues.
+        #[arg(long, value_delimiter = ',')]
+        queues: Option<Vec<String>>,
+
+        /// Override max concurrent jobs for this worker.
+        #[arg(long)]
+        concurrency: Option<usize>,
+
+        /// Skip cron scheduling (let another worker handle it).
+        #[arg(long)]
+        no_cron: bool,
+    },
+
     /// Show project status (collections, globals, migrations)
     Status,
 
@@ -238,16 +269,19 @@ async fn run(cli: Cli) -> Result<()> {
             .map(|v| v == "json")
             .unwrap_or(false);
 
-    let is_serve = matches!(&cli.command, Command::Serve { .. });
+    let is_long_running = matches!(
+        &cli.command,
+        Command::Serve { .. } | Command::Work { .. } | Command::Mcp
+    );
 
     // _CRAP_DETACHED is set by detach() on the child process.
     let is_detached_child = std::env::var("_CRAP_DETACHED").is_ok();
 
     let config_flag = cli.config;
 
-    // For serve: load config before tracing init so we can set up file logging.
-    // Config will be loaded again inside serve::run() — this is intentional and cheap.
-    let (serve_logging, dev_mode) = if is_serve {
+    // For serve/work: load config before tracing init so we can set up file logging.
+    // Config will be loaded again inside serve::run()/work::run() — intentional and cheap.
+    let (serve_logging, dev_mode) = if is_long_running {
         let config_dir = commands::resolve_config_dir(config_flag.clone())?;
         let mut config = CrapConfig::load(&config_dir)?;
 
@@ -265,6 +299,9 @@ async fn run(cli: Cli) -> Result<()> {
     let default_filter = match &cli.command {
         Command::Serve { .. } if dev_mode => "crap_cms=debug,info",
         Command::Serve { .. } => "crap_cms=info",
+        Command::Work { .. } if dev_mode => "crap_cms=debug,info",
+        Command::Work { .. } => "crap_cms=info",
+        Command::Mcp => "crap_cms=info",
         _ => "crap_cms=error",
     };
 
@@ -303,6 +340,39 @@ async fn run(cli: Cli) -> Result<()> {
                 return commands::serve::detach(&config, only, no_scheduler);
             }
             commands::serve::run(&config, only, no_scheduler).await
+        }
+        Command::Work {
+            detach,
+            stop,
+            restart,
+            status,
+            queues,
+            concurrency,
+            no_cron,
+        } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            if stop {
+                #[cfg(unix)]
+                return commands::work::stop(&config);
+                #[cfg(not(unix))]
+                anyhow::bail!("--stop is not supported on this platform");
+            }
+            if status {
+                #[cfg(unix)]
+                return commands::work::status(&config);
+                #[cfg(not(unix))]
+                anyhow::bail!("--status is not supported on this platform");
+            }
+            if restart {
+                #[cfg(unix)]
+                return commands::work::restart(&config, queues, concurrency, no_cron);
+                #[cfg(not(unix))]
+                anyhow::bail!("--restart is not supported on this platform");
+            }
+            if detach {
+                return commands::work::detach(&config, queues, concurrency, no_cron);
+            }
+            commands::work::run(&config, queues, concurrency, no_cron).await
         }
         Command::Status => {
             let config = commands::resolve_config_dir(config_flag)?;
