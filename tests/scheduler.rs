@@ -67,7 +67,7 @@ fn execute_job_echo_completes_successfully() {
     };
 
     let job_run = &claimed[0];
-    scheduler::execute_job(&pool, &runner, &job_def, job_run).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, job_run, None).expect("execute_job");
 
     // Verify the job is marked as completed
     let conn = pool.get().expect("DB connection");
@@ -106,7 +106,7 @@ fn execute_job_creates_document() {
         reg.get_job("test_create_post").unwrap().clone()
     };
 
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0]).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
 
     // Verify the document was created
     let reg = registry.read().unwrap();
@@ -148,7 +148,7 @@ fn execute_job_failing_handler_marks_failed() {
         .build();
 
     // execute_job itself returns Ok — it handles the error internally
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0]).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
 
     // Verify the job is marked as failed (attempt 1, max_attempts 1 => no retry)
     let conn = pool.get().expect("DB connection");
@@ -185,7 +185,7 @@ fn execute_job_failing_handler_retries() {
         .build();
 
     // claimed[0].attempt = 1 (after claim), max_attempts = 3 => should_retry = true
-    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0]).expect("execute_job");
+    scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
 
     let conn = pool.get().expect("DB connection");
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();

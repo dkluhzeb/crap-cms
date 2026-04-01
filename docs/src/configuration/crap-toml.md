@@ -175,7 +175,8 @@ max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB",
 # path_style = false     # true for MinIO
 
 [email]
-smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+provider = "smtp"        # "smtp" (default), "webhook", "log", or "custom"
+smtp_host = ""           # SMTP server hostname. Empty = falls back to log provider
 smtp_port = 587          # SMTP port (587 for STARTTLS, 465 for TLS, 25/1025 for plain)
 smtp_user = ""           # SMTP username
 smtp_pass = ""           # SMTP password
@@ -183,6 +184,8 @@ smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit TLS), "none" (p
 from_address = "noreply@example.com"  # Sender email address
 from_name = "Crap CMS"  # Sender display name
 # smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")
+# webhook_url = ""      # URL for webhook provider (POST JSON)
+# webhook_headers = { Authorization = "Bearer ${API_KEY}" }  # Extra headers for webhook
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
@@ -363,8 +366,8 @@ S3-compatible storage configuration. Only used when `storage = "s3"`.
 | `bucket` | string | (required) | S3 bucket name. |
 | `region` | string | `"us-east-1"` | AWS region. |
 | `endpoint` | string | (AWS default) | Custom endpoint URL for MinIO, R2, B2, etc. |
-| `access_key` | string | (required) | AWS access key ID. Supports `${ENV_VAR}` expansion. |
-| `secret_key` | string | (required) | AWS secret access key. Supports `${ENV_VAR}` expansion. |
+| `access_key` | string | (required) | AWS access key ID. |
+| `secret_key` | string | (required) | AWS secret access key. |
 | `prefix` | string | `""` | Optional key prefix prepended to all storage keys. |
 | `public_url_base` | string | `""` | Base URL for public file links (e.g., CDN). Empty = S3 URLs. |
 | `path_style` | boolean | `false` | Use path-style addressing (required for MinIO). |
@@ -373,7 +376,8 @@ S3-compatible storage configuration. Only used when `storage = "s3"`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `smtp_host` | string | `""` (empty) | SMTP server hostname. **Empty = email disabled** — all send attempts log a warning and return Ok. |
+| `provider` | string | `"smtp"` | Email provider: `"smtp"` (default), `"webhook"` (HTTP POST), `"log"` (dev mode), or `"custom"` (Lua). |
+| `smtp_host` | string | `""` (empty) | SMTP server hostname. **Empty with smtp provider = falls back to log provider.** |
 | `smtp_port` | integer | `587` | SMTP port. 587 is the standard STARTTLS port. |
 | `smtp_user` | string | `""` | SMTP authentication username. |
 | `smtp_pass` | string | `""` | SMTP authentication password. |
@@ -381,8 +385,14 @@ S3-compatible storage configuration. Only used when `storage = "s3"`.
 | `from_address` | string | `"noreply@example.com"` | Sender email address for outgoing mail. |
 | `from_name` | string | `"Crap CMS"` | Sender display name. |
 | `smtp_timeout` | integer/string | `30` | SMTP connection and send timeout in seconds. Accepts integer or duration string (`"30s"`, `"1m"`). |
+| `webhook_url` | string | `""` | URL for the webhook email provider. Receives POST with JSON body. |
+| `webhook_headers` | map | `{}` | Extra HTTP headers for webhook requests (e.g., `{ Authorization = "Bearer ..." }`). |
+| `queue_retries` | integer | `3` | Retry count for emails sent via `crap.email.queue()`. |
+| `queue_name` | string | `"email"` | Job queue name for queued emails. |
+| `queue_timeout` | integer | `30` | Per-attempt timeout in seconds for queued email jobs. |
+| `queue_concurrency` | integer | `5` | Max concurrent queued email jobs processed by the scheduler. |
 
-When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API.
+When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API. The `log` provider is useful for development — it logs email content to tracing without sending. The `custom` provider delegates to Lua via `crap.email.register()`.
 
 ### `[hooks]`
 

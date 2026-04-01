@@ -84,6 +84,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   path_style = true
   ```
 
+- **Email provider abstraction** — Email sending is now pluggable
+  via an `EmailProvider` trait with four implementations:
+
+  - **`smtp`** (default) — SMTP via `lettre`, identical to previous
+    behavior. Falls back to `log` provider if `smtp_host` is empty.
+  - **`webhook`** — HTTP POST to any URL. Works with SendGrid,
+    Mailgun, Resend, or any API that accepts JSON email payloads.
+    Configure with `webhook_url` and `webhook_headers`.
+  - **`log`** — Logs emails to tracing instead of sending. Useful
+    for development and testing.
+  - **`custom`** — Delegates to a Lua function registered via
+    `crap.email.register({ send = function(opts) ... end })`.
+
+  ```toml
+  [email]
+  provider = "webhook"
+  webhook_url = "https://api.sendgrid.com/v3/mail/send"
+  webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
+  from_address = "noreply@example.com"
+  ```
+
+- **Queued email delivery with retries** — New `crap.email.queue(opts)`
+  Lua API queues emails as jobs for async delivery with automatic
+  retries on failure. Uses the existing job system with exponential
+  backoff (5s, 10s, 20s, ..., max 300s). Configurable via
+  `queue_retries` (default 3), `queue_name` (default `"email"`), and
+  `queue_timeout` (default 30s) in `[email]` config. System email jobs
+  (`_system_email`) execute directly in Rust without Lua VM overhead.
+  `crap.email.send()` remains available for immediate blocking delivery.
+
 ### Fixed
 
 - **Upload file deletion broken on localized collections** — The

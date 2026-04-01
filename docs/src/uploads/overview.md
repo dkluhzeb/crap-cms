@@ -104,7 +104,7 @@ storage = "s3"
 bucket = "my-uploads"
 region = "us-east-1"
 endpoint = "https://s3.amazonaws.com"    # or MinIO/R2 URL
-access_key = "${AWS_ACCESS_KEY}"         # env var expansion supported
+access_key = "${AWS_ACCESS_KEY}"
 secret_key = "${AWS_SECRET_KEY}"
 prefix = ""                              # optional key prefix
 public_url_base = ""                     # CDN URL (empty = S3 URLs)

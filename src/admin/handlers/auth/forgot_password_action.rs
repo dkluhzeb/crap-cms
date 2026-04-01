@@ -110,14 +110,16 @@ pub async fn forgot_password_action(
                 }
             };
 
-            if let Err(e) = email::send_email(
-                &email_config,
+            if let Err(e) = email::queue_email(
+                &conn,
                 &user_email,
                 "Reset your password",
                 &html,
                 None,
+                email_config.queue_retries + 1,
+                &email_config.queue_name,
             ) {
-                tracing::error!("Failed to send reset email: {}", e);
+                tracing::error!("Failed to queue reset email: {}", e);
             }
         });
     }

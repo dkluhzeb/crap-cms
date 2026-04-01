@@ -1,13 +1,16 @@
 //! `serve` command — start admin UI and gRPC servers.
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use nanoid::nanoid;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     process,
     sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 #[cfg(unix)]
 use tokio::select;
@@ -17,18 +20,12 @@ use tokio::try_join;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-/// Which server to start when using `--only`.
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum ServeMode {
-    Admin,
-    Api,
-}
-
 use crate::{
     admin, api, cli,
     config::{AuthConfig, CrapConfig},
     core::{
         Registry, SharedRegistry,
+        email::create_email_provider,
         event::EventBus,
         rate_limit::LoginRateLimiter,
         upload::{create_storage, format_filesize},
@@ -38,6 +35,13 @@ use crate::{
     hooks::HookRunner,
     scheduler, typegen,
 };
+
+/// Which server to start when using `--only`.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum ServeMode {
+    Admin,
+    Api,
+}
 
 /// Send a signal to a process by PID.
 #[cfg(unix)]
@@ -49,7 +53,7 @@ fn send_signal(pid: u32, sig: i32) -> Result<()> {
     if ret == 0 {
         Ok(())
     } else {
-        Err(std::io::Error::last_os_error())
+        Err(io::Error::last_os_error())
             .with_context(|| format!("Failed to send signal {sig} to PID {pid}"))
     }
 }
@@ -74,6 +78,7 @@ fn validate_config_dir(config_dir: &Path) -> Result<()> {
             config_dir.display()
         );
     }
+
     Ok(())
 }
 
@@ -86,8 +91,10 @@ fn pid_file_path(config_dir: &Path) -> PathBuf {
 fn write_pid_file(config_dir: &Path, pid: u32) -> Result<()> {
     let path = pid_file_path(config_dir);
     let _ = fs::create_dir_all(path.parent().expect("pid path has parent"));
+
     fs::write(&path, pid.to_string())
         .with_context(|| format!("Failed to write PID file: {}", path.display()))?;
+
     Ok(())
 }
 
@@ -127,11 +134,14 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
+
     validate_config_dir(&config_dir)?;
+
     #[cfg(unix)]
     check_existing_pid(&config_dir);
 
     let mut cmd = process::Command::new(&exe);
+
     cmd.arg("-C").arg(&config_dir).arg("serve");
 
     if let Some(mode) = only {
@@ -141,6 +151,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
             ServeMode::Api => "api",
         });
     }
+
     if no_scheduler {
         cmd.arg("--no-scheduler");
     }
@@ -157,7 +168,9 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
         .context("Failed to spawn detached process")?;
 
     let pid = child.id();
+
     write_pid_file(&config_dir, pid)?;
+
     cli::success(&format!("Started crap-cms in background (PID {})", pid));
 
     Ok(())
@@ -185,6 +198,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 
     if !is_process_running(pid) {
         remove_pid_file(config_dir);
+
         bail!("Process {} is not running (stale PID file removed)", pid);
     }
 
@@ -192,25 +206,28 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     send_signal(pid, libc::SIGTERM)?;
 
     // Wait for graceful shutdown (up to 10 seconds).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
 
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         if !is_process_running(pid) {
             remove_pid_file(config_dir);
             cli::success(&format!("Stopped crap-cms (PID {pid})"));
+
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        thread::sleep(Duration::from_millis(100));
     }
 
     // Still running — force kill.
     cli::warning(&format!(
         "Process {pid} did not stop within 10s, sending SIGKILL"
     ));
+
     let _ = send_signal(pid, libc::SIGKILL);
 
     // Brief wait for the force kill to take effect.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    thread::sleep(Duration::from_millis(500));
     remove_pid_file(config_dir);
     cli::success(&format!("Force-stopped crap-cms (PID {pid})"));
 
@@ -227,7 +244,7 @@ pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -
         if is_process_running(pid) {
             if let Err(e) = stop(config_dir) {
                 // Process may have exited between check and stop — not an error.
-                tracing::debug!("stop() during restart: {e}");
+                debug!("stop() during restart: {e}");
             }
         } else {
             remove_pid_file(config_dir);
@@ -246,6 +263,7 @@ pub fn status(config_dir: &Path) -> Result<()> {
         Some(pid) => pid,
         None => {
             cli::info("Not running (no PID file)");
+
             return Ok(());
         }
     };
@@ -253,6 +271,7 @@ pub fn status(config_dir: &Path) -> Result<()> {
     if !is_process_running(pid) {
         remove_pid_file(config_dir);
         cli::info("Not running (stale PID file removed)");
+
         return Ok(());
     }
 
@@ -350,7 +369,7 @@ fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> Result<String
         }
 
         // Generate and persist a new secret
-        let secret = nanoid::nanoid!(64);
+        let secret = nanoid!(64);
         let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
 
         fs::write(&secret_path, &secret).with_context(|| {
@@ -521,11 +540,13 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         let reg = registry
             .read()
             .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+
         info!(
             "Loaded {} collection(s), {} global(s)",
             reg.collections.len(),
             reg.globals.len()
         );
+
         for (slug, col) in &reg.collections {
             info!("  Collection '{}': {} field(s)", slug, col.fields.len());
         }
@@ -536,6 +557,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         let reg = registry
             .read()
             .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+
         match typegen::generate(&config_dir, &reg) {
             Ok(path) => info!("Generated type definitions: {}", path.display()),
             Err(e) => warn!("Failed to generate type definitions: {}", e),
@@ -560,10 +582,13 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         info!("Running on_init hooks...");
         let mut conn = pool.get().context("DB connection for on_init")?;
         let tx = conn.transaction().context("Transaction for on_init")?;
+
         hook_runner
             .run_system_hooks_with_conn(&cfg.hooks.on_init, &tx)
             .context("on_init hooks failed")?;
+
         tx.commit().context("Commit on_init transaction")?;
+
         info!("on_init hooks completed");
     }
 
@@ -599,13 +624,16 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     // Create EventBus for live updates (if enabled)
     let event_bus = if cfg.live.enabled {
         let bus = EventBus::new(cfg.live.channel_capacity);
+
         info!(
             "Live event streaming enabled (capacity: {})",
             cfg.live.channel_capacity
         );
+
         Some(bus)
     } else {
         info!("Live event streaming disabled");
+
         None
     };
 
@@ -711,13 +739,19 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     let scheduler_handle = async {
         if run_scheduler {
             scheduler::start(
-                pool.clone(),
-                hook_runner.clone(),
-                registry.clone(),
-                cfg.jobs.clone(),
-                shutdown.clone(),
-                storage.clone(),
-                cfg.locale.clone(),
+                scheduler::SchedulerParamsBuilder::new(
+                    pool.clone(),
+                    hook_runner.clone(),
+                    registry.clone(),
+                    cfg.jobs.clone(),
+                    shutdown.clone(),
+                    storage.clone(),
+                    cfg.locale.clone(),
+                )
+                .email_provider(create_email_provider(&cfg.email)?)
+                .email_queue_timeout(cfg.email.queue_timeout)
+                .email_queue_concurrency(cfg.email.queue_concurrency)
+                .build(),
             )
             .await
         } else {

@@ -33,6 +33,7 @@ use crate::{
         handlers::{
             auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
         },
+        server_builder::AdminStartParamsBuilder,
         templates,
     },
     api::upload::upload_router,
@@ -41,7 +42,7 @@ use crate::{
         AuthUser, JwtSecret, Registry, Slug,
         auth::{self, ClaimsBuilder},
         collection::Auth as CollectionAuth,
-        email::EmailRenderer,
+        email::{EmailRenderer, create_email_provider},
         event::EventBus,
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
@@ -75,8 +76,8 @@ pub struct AdminStartParams {
 
 impl AdminStartParams {
     /// Create a builder for `AdminStartParams`.
-    pub fn builder() -> crate::admin::server_builder::AdminStartParamsBuilder {
-        crate::admin::server_builder::AdminStartParamsBuilder::new()
+    pub fn builder() -> AdminStartParamsBuilder {
+        AdminStartParamsBuilder::new()
     }
 }
 
@@ -106,6 +107,7 @@ pub async fn start(
     let handlebars =
         templates::create_handlebars(&config_dir, config.admin.dev_mode, translations.clone())?;
     let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
+    let email_provider = create_email_provider(&config.email)?;
 
     // Check if any auth collections exist
     let has_auth = registry
@@ -124,6 +126,7 @@ pub async fn start(
         hook_runner,
         jwt_secret,
         email_renderer,
+        email_provider,
         event_bus,
         login_limiter,
         ip_login_limiter,

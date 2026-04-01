@@ -919,6 +919,10 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         hook_runner,
         jwt_secret: "test".into(),
         email_renderer,
+        email_provider: crate::core::email::create_email_provider(
+            &crate::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter,
         ip_login_limiter,
@@ -1018,6 +1022,10 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         hook_runner,
         jwt_secret: "test".into(),
         email_renderer,
+        email_provider: crate::core::email::create_email_provider(
+            &crate::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter,
         ip_login_limiter,
@@ -1092,6 +1100,10 @@ fn make_test_state() -> crate::admin::AdminState {
         hook_runner,
         jwt_secret: "test".into(),
         email_renderer,
+        email_provider: crate::core::email::create_email_provider(
+            &crate::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter,
         ip_login_limiter,

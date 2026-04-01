@@ -3,11 +3,15 @@
 use std::{str::FromStr, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
+use chrono::{DateTime, Utc};
+use cron::Schedule;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     config::LocaleConfig,
     core::{
-        SharedRegistry,
+        CollectionDefinition, SharedRegistry,
+        email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
         job::{JobDefinition, JobRun},
         upload,
         upload::StorageBackend,
@@ -16,12 +20,14 @@ use crate::{
     hooks::HookRunner,
 };
 
-/// Execute a single job: call the Lua handler with CRUD access.
+/// Execute a single job: call the Lua handler with CRUD access,
+/// or handle system jobs (like `_system_email`) directly in Rust.
 pub fn execute_job(
     pool: &DbPool,
     hook_runner: &HookRunner,
     job_def: &JobDefinition,
     job_run: &JobRun,
+    email_provider: Option<&dyn EmailProvider>,
 ) -> Result<()> {
     let start = Instant::now();
 
@@ -32,6 +38,11 @@ pub fn execute_job(
         job_run.attempt,
         job_run.max_attempts
     );
+
+    // System email job: handle directly without Lua VM
+    if job_run.slug == SYSTEM_EMAIL_JOB {
+        return execute_system_email(pool, job_run, email_provider, start);
+    }
 
     // Open a transaction for the job handler (same TxContext pattern as hooks)
     let mut conn = pool.get().context("Failed to get DB connection for job")?;
@@ -54,13 +65,14 @@ pub fn execute_job(
             let c = pool
                 .get()
                 .context("Failed to get DB connection for completion")?;
+
             job_query::complete_job(&c, &job_run.id, result_json.as_deref())?;
+
             let elapsed = start.elapsed();
-            tracing::info!(
+
+            info!(
                 "Job {} ({}) completed in {:?}",
-                job_run.id,
-                job_run.slug,
-                elapsed
+                job_run.id, job_run.slug, elapsed
             );
         }
         Err(e) => {
@@ -71,24 +83,72 @@ pub fn execute_job(
             let c = pool
                 .get()
                 .context("Failed to get DB connection for failure")?;
+
             job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
 
             if should_retry {
-                tracing::warn!(
+                warn!(
                     "Job {} ({}) failed (attempt {}/{}), will retry: {}",
-                    job_run.id,
-                    job_run.slug,
-                    job_run.attempt,
-                    job_run.max_attempts,
-                    error_msg
+                    job_run.id, job_run.slug, job_run.attempt, job_run.max_attempts, error_msg
                 );
             } else {
-                tracing::error!(
+                error!(
                     "Job {} ({}) failed permanently: {}",
-                    job_run.id,
-                    job_run.slug,
-                    error_msg
+                    job_run.id, job_run.slug, error_msg
                 );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute a `_system_email` job: parse data and send via email provider.
+fn execute_system_email(
+    pool: &DbPool,
+    job_run: &JobRun,
+    email_provider: Option<&dyn EmailProvider>,
+    start: Instant,
+) -> Result<()> {
+    let provider = email_provider
+        .ok_or_else(|| anyhow!("System email job requires email provider but none configured"))?;
+
+    let data: EmailJobData =
+        serde_json::from_str(&job_run.data).context("Invalid email job data")?;
+
+    let result = provider.send(&data.to, &data.subject, &data.html, data.text.as_deref());
+
+    match result {
+        Ok(()) => {
+            let c = pool
+                .get()
+                .context("Failed to get DB connection for email job completion")?;
+
+            job_query::complete_job(&c, &job_run.id, None)?;
+
+            let elapsed = start.elapsed();
+
+            info!(
+                "Email job {} completed in {:?} (to: {})",
+                job_run.id, elapsed, data.to
+            );
+        }
+        Err(e) => {
+            let error_msg = format!("{:#}", e);
+            let should_retry = job_run.attempt < job_run.max_attempts;
+            let c = pool
+                .get()
+                .context("Failed to get DB connection for email job failure")?;
+
+            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
+
+            if should_retry {
+                warn!(
+                    "Email job {} failed (attempt {}/{}), will retry: {}",
+                    job_run.id, job_run.attempt, job_run.max_attempts, error_msg
+                );
+            } else {
+                error!("Email job {} failed permanently: {}", job_run.id, error_msg);
             }
         }
     }
@@ -100,8 +160,8 @@ pub fn execute_job(
 pub fn check_cron_schedules(
     pool: &DbPool,
     registry: &SharedRegistry,
-    last_check: chrono::DateTime<chrono::Utc>,
-    now: chrono::DateTime<chrono::Utc>,
+    last_check: DateTime<Utc>,
+    now: DateTime<Utc>,
 ) -> Result<()> {
     let reg = registry
         .read()
@@ -121,15 +181,14 @@ pub fn check_cron_schedules(
         // Parse cron expression (the cron crate expects 6-7 fields with seconds;
         // normalize standard 5-field expressions by prepending "0" for seconds)
         let normalized = normalize_cron(schedule_str);
-        let schedule = match cron::Schedule::from_str(&normalized) {
+        let schedule = match Schedule::from_str(&normalized) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(
+                warn!(
                     "Invalid cron expression '{}' for job '{}': {}",
-                    schedule_str,
-                    slug,
-                    e
+                    schedule_str, slug, e
                 );
+
                 continue;
             }
         };
@@ -150,14 +209,16 @@ pub fn check_cron_schedules(
             let running = job_query::count_running(&tx, Some(slug))?;
 
             if running > 0 {
-                tracing::debug!("Skipping cron job '{}' — still running", slug);
+                debug!("Skipping cron job '{}' — still running", slug);
+
                 continue;
             }
         }
 
         // Insert a pending job
         let job = job_query::insert_job(&tx, slug, "{}", "cron", def.retries + 1, &def.queue)?;
-        tracing::info!("Cron scheduled job '{}' (run {})", slug, job.id);
+
+        info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
 
     tx.commit()
@@ -188,11 +249,11 @@ pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &SharedRegistry) ->
             timeout
         );
         job_query::mark_stale(conn, &job.id, &error)?;
-        tracing::info!("Marked stale job {} ({})", job.id, job.slug);
+        info!("Marked stale job {} ({})", job.id, job.slug);
     }
 
     if !stale.is_empty() {
-        tracing::info!("Recovered {} stale job(s)", stale.len());
+        info!("Recovered {} stale job(s)", stale.len());
     }
 
     Ok(())
@@ -267,7 +328,7 @@ pub fn purge_soft_deleted(
 fn purge_collection(
     conn: &dyn DbConnection,
     slug: &str,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     retention_seconds: i64,
     storage: &dyn StorageBackend,
     locale_config: &LocaleConfig,
@@ -293,11 +354,9 @@ fn purge_collection(
         // Skip documents that are still referenced — protect referential integrity
         let ref_count = query::ref_count::get_ref_count(conn, slug, &id)?.unwrap_or(0);
         if ref_count > 0 {
-            tracing::debug!(
+            debug!(
                 "Skipping purge of {}/{}: referenced by {} document(s)",
-                slug,
-                id,
-                ref_count
+                slug, id, ref_count
             );
             continue;
         }
@@ -335,10 +394,9 @@ fn purge_collection(
     }
 
     if purged > 0 {
-        tracing::info!(
+        info!(
             "Purged {} expired soft-deleted doc(s) from '{}'",
-            purged,
-            slug
+            purged, slug
         );
     }
 

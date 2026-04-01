@@ -11,11 +11,17 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use tokio::select;
+use chrono::Utc;
+use tokio::{
+    select,
+    time::{Duration, interval},
+};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 use crate::{
     config::{JobsConfig, LocaleConfig},
-    core::{SharedRegistry, upload, upload::SharedStorage},
+    core::{SharedRegistry, email::SharedEmailProvider, upload, upload::SharedStorage},
     db::{
         DbConnection, DbPool, DbValue,
         query::{self, images as image_query, jobs as job_query},
@@ -23,23 +29,108 @@ use crate::{
     hooks::HookRunner,
 };
 
-/// Start the scheduler background loop. Runs until the task is cancelled.
-// Untestable: infinite async loop with tokio timers and spawn.
-#[cfg(not(tarpaulin_include))]
-pub async fn start(
+/// Parameters for starting the scheduler.
+pub struct SchedulerParams {
     pool: DbPool,
     hook_runner: HookRunner,
     registry: SharedRegistry,
     config: JobsConfig,
-    shutdown: tokio_util::sync::CancellationToken,
+    shutdown: CancellationToken,
     storage: SharedStorage,
     locale_config: LocaleConfig,
-) -> Result<()> {
-    tracing::info!(
+    email_provider: Option<SharedEmailProvider>,
+    email_queue_timeout: u64,
+    email_queue_concurrency: u32,
+}
+
+/// Builder for [`SchedulerParams`].
+pub struct SchedulerParamsBuilder {
+    pool: DbPool,
+    hook_runner: HookRunner,
+    registry: SharedRegistry,
+    config: JobsConfig,
+    shutdown: CancellationToken,
+    storage: SharedStorage,
+    locale_config: LocaleConfig,
+    email_provider: Option<SharedEmailProvider>,
+    email_queue_timeout: u64,
+    email_queue_concurrency: u32,
+}
+
+impl SchedulerParamsBuilder {
+    pub fn new(
+        pool: DbPool,
+        hook_runner: HookRunner,
+        registry: SharedRegistry,
+        config: JobsConfig,
+        shutdown: CancellationToken,
+        storage: SharedStorage,
+        locale_config: LocaleConfig,
+    ) -> Self {
+        Self {
+            pool,
+            hook_runner,
+            registry,
+            config,
+            shutdown,
+            storage,
+            locale_config,
+            email_provider: None,
+            email_queue_timeout: 30,
+            email_queue_concurrency: 5,
+        }
+    }
+
+    pub fn email_provider(mut self, provider: SharedEmailProvider) -> Self {
+        self.email_provider = Some(provider);
+        self
+    }
+
+    pub fn email_queue_timeout(mut self, timeout: u64) -> Self {
+        self.email_queue_timeout = timeout;
+        self
+    }
+
+    pub fn email_queue_concurrency(mut self, concurrency: u32) -> Self {
+        self.email_queue_concurrency = concurrency;
+        self
+    }
+
+    pub fn build(self) -> SchedulerParams {
+        SchedulerParams {
+            pool: self.pool,
+            hook_runner: self.hook_runner,
+            registry: self.registry,
+            config: self.config,
+            shutdown: self.shutdown,
+            storage: self.storage,
+            locale_config: self.locale_config,
+            email_provider: self.email_provider,
+            email_queue_timeout: self.email_queue_timeout,
+            email_queue_concurrency: self.email_queue_concurrency,
+        }
+    }
+}
+
+/// Start the scheduler background loop. Runs until the task is cancelled.
+// Untestable: infinite async loop with tokio timers and spawn.
+#[cfg(not(tarpaulin_include))]
+pub async fn start(params: SchedulerParams) -> Result<()> {
+    let SchedulerParams {
+        pool,
+        hook_runner,
+        registry,
+        config,
+        shutdown,
+        storage,
+        locale_config,
+        email_provider,
+        email_queue_timeout,
+        email_queue_concurrency,
+    } = params;
+    info!(
         "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
-        config.poll_interval,
-        config.cron_interval,
-        config.max_concurrent
+        config.poll_interval, config.cron_interval, config.max_concurrent
     );
 
     // Recover stale jobs and image queue entries on startup
@@ -50,28 +141,28 @@ pub async fn start(
         recover_stale_jobs(&conn, &registry)?;
 
         match image_query::recover_stale_images(&conn) {
-            Ok(n) if n > 0 => tracing::info!("Recovered {} stale image queue entries", n),
+            Ok(n) if n > 0 => info!("Recovered {} stale image queue entries", n),
             Ok(_) => {}
-            Err(e) => tracing::warn!("Image queue recovery error: {}", e),
+            Err(e) => warn!("Image queue recovery error: {}", e),
         }
     }
 
-    let poll_interval = tokio::time::Duration::from_secs(config.poll_interval);
-    let cron_interval = tokio::time::Duration::from_secs(config.cron_interval);
-    let heartbeat_interval = tokio::time::Duration::from_secs(config.heartbeat_interval);
+    let poll_interval = Duration::from_secs(config.poll_interval);
+    let cron_interval = Duration::from_secs(config.cron_interval);
+    let heartbeat_interval = Duration::from_secs(config.heartbeat_interval);
     let auto_purge_secs = config.auto_purge;
 
-    let mut poll_ticker = tokio::time::interval(poll_interval);
-    let mut cron_ticker = tokio::time::interval(cron_interval);
-    let mut heartbeat_ticker = tokio::time::interval(heartbeat_interval);
+    let mut poll_ticker = interval(poll_interval);
+    let mut cron_ticker = interval(cron_interval);
+    let mut heartbeat_ticker = interval(heartbeat_interval);
     // Image processing queue uses the same poll interval as jobs
-    let mut image_ticker = tokio::time::interval(poll_interval);
+    let mut image_ticker = interval(poll_interval);
 
     // Track running job IDs for heartbeat updates
-    let running_jobs: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let running_jobs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Track last cron check time to avoid duplicate firing
-    let mut last_cron_check = chrono::Utc::now();
+    let mut last_cron_check = Utc::now();
 
     // Auto-purge timer: check once per cron interval
     let mut purge_counter: u64 = 0;
@@ -79,7 +170,7 @@ pub async fn start(
     loop {
         select! {
             _ = shutdown.cancelled() => {
-                tracing::info!("Scheduler shutting down");
+                info!("Scheduler shutting down");
                 break Ok(());
             }
             _ = poll_ticker.tick() => {
@@ -90,21 +181,28 @@ pub async fn start(
                 let running_jobs = running_jobs.clone();
                 let max_concurrent = config.max_concurrent;
 
+                let eq = EmailQueueConfig {
+                    provider: email_provider.clone(),
+                    timeout: email_queue_timeout,
+                    concurrency: email_queue_concurrency,
+                };
+
                 tokio::spawn(async move {
                     if let Err(e) = poll_and_execute(
-                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs,
+                        &pool, &hook_runner, &registry, max_concurrent, &running_jobs, &eq,
                     ).await {
-                        tracing::error!("Scheduler poll error: {}", e);
+                        error!("Scheduler poll error: {}", e);
                     }
                 });
             }
             _ = cron_ticker.tick() => {
                 // Check cron schedules and insert pending jobs for due schedules
-                let now = chrono::Utc::now();
+                let now = Utc::now();
 
                 if let Err(e) = check_cron_schedules(&pool, &registry, last_cron_check, now) {
-                    tracing::error!("Scheduler cron error: {}", e);
+                    error!("Scheduler cron error: {}", e);
                 }
+
                 last_cron_check = now;
 
                 // Auto-purge old jobs periodically (every 10 cron intervals)
@@ -114,9 +212,9 @@ pub async fn start(
                     && let Some(secs) = auto_purge_secs
                         && let Ok(conn) = pool.get() {
                             match job_query::purge_old_jobs(&conn, secs) {
-                                Ok(n) if n > 0 => tracing::info!("Auto-purged {} old job run(s)", n),
+                                Ok(n) if n > 0 => info!("Auto-purged {} old job run(s)", n),
                                 Ok(_) => {}
-                                Err(e) => tracing::warn!("Auto-purge error: {}", e),
+                                Err(e) => warn!("Auto-purge error: {}", e),
                             }
                         }
 
@@ -124,9 +222,9 @@ pub async fn start(
                 if purge_counter.is_multiple_of(10)
                     && let Ok(conn) = pool.get() {
                         match purge_soft_deleted(&conn, &registry, &*storage, &locale_config) {
-                            Ok(n) if n > 0 => tracing::info!("Purged {} expired soft-deleted doc(s)", n),
+                            Ok(n) if n > 0 => info!("Purged {} expired soft-deleted doc(s)", n),
                             Ok(_) => {}
-                            Err(e) => tracing::warn!("Soft-delete purge error: {}", e),
+                            Err(e) => warn!("Soft-delete purge error: {}", e),
                         }
                     }
             }
@@ -140,7 +238,7 @@ pub async fn start(
                     && let Ok(conn) = pool.get() {
                         for id in &ids {
                             if let Err(e) = job_query::update_heartbeat(&conn, id) {
-                                tracing::warn!("Heartbeat update error for {}: {}", id, e);
+                                warn!("Heartbeat update error for {}: {}", id, e);
                             }
                         }
                     }
@@ -150,9 +248,10 @@ pub async fn start(
                 let pool = pool.clone();
                 let batch_size = config.image_queue_batch_size;
                 let img_storage = storage.clone();
+
                 tokio::spawn(async move {
                     if let Err(e) = process_image_queue(&pool, batch_size, &img_storage).await {
-                        tracing::error!("Image queue error: {}", e);
+                        error!("Image queue error: {}", e);
                     }
                 });
             }
@@ -260,12 +359,20 @@ async fn process_image_queue(
 /// Poll for pending jobs and execute them.
 // Untestable: async function with tokio::task::spawn_blocking orchestration.
 #[cfg(not(tarpaulin_include))]
+/// Email queue config passed to poll_and_execute.
+struct EmailQueueConfig {
+    provider: Option<SharedEmailProvider>,
+    timeout: u64,
+    concurrency: u32,
+}
+
 async fn poll_and_execute(
     pool: &DbPool,
     hook_runner: &HookRunner,
     registry: &SharedRegistry,
     max_concurrent: usize,
     running_jobs: &Arc<Mutex<Vec<String>>>,
+    email: &EmailQueueConfig,
 ) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
@@ -299,25 +406,33 @@ async fn poll_and_execute(
             let reg = registry
                 .read()
                 .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-            match reg.get_job(&job_run.slug) {
-                Some(def) => def.clone(),
-                None => {
-                    tracing::warn!(
-                        "Job definition '{}' not found, marking as failed",
-                        job_run.slug
-                    );
+            if let Some(def) = reg.get_job(&job_run.slug) {
+                def.clone()
+            } else if job_run.slug == crate::core::email::SYSTEM_EMAIL_JOB {
+                // System email job: create a synthetic definition from config
+                crate::core::job::JobDefinition::builder(
+                    crate::core::email::SYSTEM_EMAIL_JOB,
+                    "_system",
+                )
+                .timeout(email.timeout)
+                .concurrency(email.concurrency)
+                .build()
+            } else {
+                tracing::warn!(
+                    "Job definition '{}' not found, marking as failed",
+                    job_run.slug
+                );
 
-                    if let Ok(c) = pool.get() {
-                        let _ = job_query::fail_job(
-                            &c,
-                            &job_run.id,
-                            "job definition not found",
-                            false,
-                            job_run.attempt,
-                        );
-                    }
-                    continue;
+                if let Ok(c) = pool.get() {
+                    let _ = job_query::fail_job(
+                        &c,
+                        &job_run.id,
+                        "job definition not found",
+                        false,
+                        job_run.attempt,
+                    );
                 }
+                continue;
             }
         };
 
@@ -336,6 +451,7 @@ async fn poll_and_execute(
         let job_id = job_run.id.clone();
         let id_log = job_run.id.clone();
         let slug_log = job_run.slug.clone();
+        let ep = email.provider.clone();
 
         // Execute the job in a blocking task with enforced timeout.
         // On timeout the blocking thread keeps running (can't cancel sync Rust)
@@ -345,7 +461,7 @@ async fn poll_and_execute(
             let result = tokio::time::timeout(
                 timeout_dur,
                 tokio::task::spawn_blocking(move || {
-                    execute_job(&pool, &hook_runner, &job_def, &job_run)
+                    execute_job(&pool, &hook_runner, &job_def, &job_run, ep.as_deref())
                 }),
             )
             .await;

@@ -1092,11 +1092,50 @@ crap.email = {}
 --- @field html    string  HTML email body (required).
 --- @field text?   string  Plain text fallback body.
 
---- Send an email via SMTP. Blocking — safe to call from hooks.
---- Returns true on success. If email is not configured (smtp_host empty), logs a warning and returns true (no-op).
+--- Send an email immediately via the configured provider. Blocking — safe to call from hooks.
+--- Returns true on success. If email is not configured, logs a warning and returns true (no-op).
 --- @param opts crap.EmailOptions  Email options.
 --- @return boolean success
 function crap.email.send(opts) end
+
+--- @class crap.EmailQueueOptions : crap.EmailOptions
+--- @field retries? integer  Override retry count from config (default: `email.queue_retries`).
+
+--- Queue an email for async delivery via the job system.
+--- Returns immediately — the email is processed by the scheduler with
+--- automatic retries on failure (exponential backoff: 5s, 10s, 20s, ...).
+--- Requires a transaction context (only available in before-hooks with CRUD access).
+--- @param opts crap.EmailQueueOptions  Email options (same as send, plus optional `retries`).
+--- @return string job_id  The queued job run ID.
+function crap.email.queue(opts) end
+
+--- Custom email send handler for the `"custom"` provider.
+--- @class crap.EmailHandler
+--- @field send fun(opts: crap.EmailOptions)  Send an email. Called with `{to, subject, html, text?}`.
+
+--- Register a custom email send handler for the `"custom"` email provider.
+--- Called in `init.lua`. Only used when `[email] provider = "custom"` in crap.toml.
+---
+--- Example:
+--- ```lua
+--- crap.email.register({
+---   send = function(opts)
+---     crap.http.request({
+---       method = "POST",
+---       url = "https://api.sendgrid.com/v3/mail/send",
+---       headers = { Authorization = "Bearer " .. crap.env.get("SENDGRID_KEY") },
+---       body = crap.json.encode({
+---         personalizations = {{ to = {{ email = opts.to }} }},
+---         from = { email = "noreply@example.com" },
+---         subject = opts.subject,
+---         content = {{ type = "text/html", value = opts.html }},
+---       }),
+---     })
+---   end,
+--- })
+--- ```
+--- @param handler crap.EmailHandler  The email handler with a `send` function.
+function crap.email.register(handler) end
 
 
 --- Read-only access to crap.toml configuration values.

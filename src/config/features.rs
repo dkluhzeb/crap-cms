@@ -1,5 +1,7 @@
 //! Feature configuration: email, depth, pagination, uploads, locale, jobs, live, hooks, access, MCP.
 
+use std::{collections::HashMap, thread};
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +28,10 @@ pub enum SmtpTls {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EmailConfig {
-    /// SMTP server hostname. Empty = email disabled.
+    /// Email provider: `"smtp"` (default), `"webhook"`, `"log"`, or `"custom"`.
+    #[serde(default = "default_email_provider")]
+    pub provider: String,
+    /// SMTP server hostname. Empty = email disabled (falls back to log provider).
     pub smtp_host: String,
     /// SMTP server port (default 587).
     pub smtp_port: u16,
@@ -43,6 +48,44 @@ pub struct EmailConfig {
     /// SMTP connection/send timeout in seconds (default 30).
     #[serde(default = "default_smtp_timeout", with = "serde_duration")]
     pub smtp_timeout: u64,
+    /// Webhook URL for the webhook email provider.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Extra HTTP headers for webhook requests (e.g., Authorization).
+    #[serde(default)]
+    pub webhook_headers: HashMap<String, String>,
+    /// Retry count for queued emails via `crap.email.queue()`. Default: 3.
+    #[serde(default = "default_queue_retries")]
+    pub queue_retries: u32,
+    /// Job queue name for queued emails. Default: "email".
+    #[serde(default = "default_queue_name")]
+    pub queue_name: String,
+    /// Per-attempt timeout for queued email jobs in seconds. Default: 30.
+    #[serde(default = "default_queue_timeout")]
+    pub queue_timeout: u64,
+    /// Max concurrent queued email jobs. Default: 5.
+    #[serde(default = "default_queue_concurrency")]
+    pub queue_concurrency: u32,
+}
+
+fn default_queue_retries() -> u32 {
+    3
+}
+
+fn default_queue_name() -> String {
+    "email".to_string()
+}
+
+fn default_queue_timeout() -> u64 {
+    30
+}
+
+fn default_queue_concurrency() -> u32 {
+    5
+}
+
+fn default_email_provider() -> String {
+    "smtp".to_string()
 }
 
 fn default_smtp_timeout() -> u64 {
@@ -52,6 +95,7 @@ fn default_smtp_timeout() -> u64 {
 impl Default for EmailConfig {
     fn default() -> Self {
         Self {
+            provider: default_email_provider(),
             smtp_host: String::new(),
             smtp_port: 587,
             smtp_user: String::new(),
@@ -60,6 +104,12 @@ impl Default for EmailConfig {
             from_name: "Crap CMS".to_string(),
             smtp_tls: SmtpTls::default(),
             smtp_timeout: 30,
+            webhook_url: None,
+            webhook_headers: HashMap::new(),
+            queue_retries: default_queue_retries(),
+            queue_name: default_queue_name(),
+            queue_timeout: default_queue_timeout(),
+            queue_concurrency: default_queue_concurrency(),
         }
     }
 }
@@ -185,10 +235,10 @@ pub struct S3Config {
     /// S3 endpoint URL. Default: AWS. Set for MinIO, R2, etc.
     #[serde(default)]
     pub endpoint: Option<String>,
-    /// Access key ID. Supports `${ENV_VAR}` expansion.
+    /// Access key ID.
     #[serde(default)]
     pub access_key: String,
-    /// Secret access key. Supports `${ENV_VAR}` expansion.
+    /// Secret access key.
     #[serde(default)]
     pub secret_key: String,
     /// Optional key prefix prepended to all storage keys.
@@ -381,7 +431,7 @@ impl Default for HooksConfig {
         Self {
             on_init: Vec::new(),
             max_depth: 3,
-            vm_pool_size: std::thread::available_parallelism()
+            vm_pool_size: thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4),
             max_instructions: 10_000_000,

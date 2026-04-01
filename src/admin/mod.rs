@@ -24,7 +24,8 @@ use serde_json::Value;
 use crate::{
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+        JwtSecret, Registry, email::EmailRenderer, email::SharedEmailProvider, event::EventBus,
+        rate_limit::LoginRateLimiter, upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -50,6 +51,8 @@ pub struct AdminState {
     pub jwt_secret: JwtSecret,
     /// The renderer for email notifications.
     pub email_renderer: Arc<EmailRenderer>,
+    /// The email provider for sending emails.
+    pub email_provider: SharedEmailProvider,
     /// The event bus for asynchronous event handling, if enabled.
     pub event_bus: Option<EventBus>,
     /// The rate limiter for login attempts (per-email).
@@ -73,7 +76,7 @@ pub struct AdminState {
     /// Pre-computed Content-Security-Policy header value. None = CSP disabled.
     pub csp_header: Option<String>,
     /// The storage backend for uploaded files.
-    pub storage: crate::core::upload::SharedStorage,
+    pub storage: SharedStorage,
 }
 
 impl AdminState {

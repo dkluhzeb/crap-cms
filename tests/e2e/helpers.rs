@@ -85,6 +85,10 @@ pub fn setup_app_with_config(
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
         email_renderer,
+        email_provider: crap_cms::core::email::create_email_provider(
+            &crap_cms::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),

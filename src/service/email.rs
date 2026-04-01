@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::{
     config::{EmailConfig, ServerConfig},
-    core::email::{EmailRenderer, is_configured, send_email},
+    core::email::{EmailRenderer, is_configured, queue_email},
     db::{DbPool, query},
 };
 
@@ -67,8 +67,16 @@ pub fn send_verification_email(
             }
         };
 
-        if let Err(e) = send_email(&email_config, &user_email, "Verify your email", &html, None) {
-            tracing::error!("Failed to send verification email: {}", e);
+        if let Err(e) = queue_email(
+            &conn,
+            &user_email,
+            "Verify your email",
+            &html,
+            None,
+            email_config.queue_retries + 1,
+            &email_config.queue_name,
+        ) {
+            tracing::error!("Failed to queue verification email: {}", e);
         }
     });
 }
