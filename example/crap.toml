@@ -22,8 +22,10 @@ token_expiry = 7200
 [depth]
 default_depth = 1
 max_depth = 5
-populate_cache = true
-populate_cache_max_age_secs = 60
+
+[cache]
+backend = "memory"
+max_age_secs = 60
 
 [upload]
 max_file_size = "50MB"

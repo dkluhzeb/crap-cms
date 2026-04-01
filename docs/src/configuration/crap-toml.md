@@ -152,8 +152,13 @@ max_length = 128            # Maximum password length (DoS protection)
 [depth]
 default_depth = 1        # Default population depth for FindByID (Find always defaults to 0)
 max_depth = 10           # Hard cap on population depth (prevents abuse)
-# populate_cache = false           # Cross-request populate cache (opt-in)
-# populate_cache_max_age_secs = 0  # Periodic cache clear for external DB mutations
+
+[cache]
+backend = "memory"       # Cache backend: "memory" (default), "redis", "none", "custom"
+# max_entries = 10000    # Soft cap for memory backend (default: 10000)
+# max_age_secs = 0       # Periodic full clear interval (0 = disabled)
+# redis_url = "redis://127.0.0.1:6379"  # Redis connection URL
+# prefix = "crap:"       # Key prefix for Redis backend
 
 [pagination]
 default_limit = 20      # Default limit for Find queries (when none is specified)
@@ -339,8 +344,16 @@ Password strength requirements applied to all password-setting paths (create, up
 |-------|------|---------|-------------|
 | `default_depth` | integer | `1` | Default population depth for `FindByID`. `Find` always defaults to `0`. |
 | `max_depth` | integer | `10` | Maximum allowed depth for any request. Hard cap to prevent excessive queries. |
-| `populate_cache` | boolean | `false` | Enable cross-request populate cache. Caches populated documents in memory, cleared on any write through the API. Improves read performance for repeated deep population. **Opt-in** because external DB modifications can cause stale reads. |
-| `populate_cache_max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. Only used when `populate_cache = true`. |
+
+### `[cache]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backend` | string | `"memory"` | Cache backend: `"memory"` (in-memory DashMap), `"redis"` (shared, requires `--features redis`), `"none"` (disabled), or `"custom"` (Lua-delegated, planned). |
+| `max_entries` | integer | `10000` | Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear. |
+| `max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. |
+| `redis_url` | string | `"redis://127.0.0.1:6379"` | Redis connection URL. Only used when `backend = "redis"`. |
+| `prefix` | string | `"crap:"` | Key prefix for the Redis backend. All keys are stored as `{prefix}{key}`. |
 
 ### `[pagination]`
 

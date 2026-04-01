@@ -10,8 +10,9 @@ mod tests;
 use anyhow::Result;
 use std::collections::HashSet;
 
+use crate::core::cache::CacheBackend;
 use crate::core::{Document, FieldType, field::flatten_array_sub_fields};
-use crate::db::query::populate::{PopulateCache, PopulateContext, PopulateCtx, PopulateOpts};
+use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts};
 
 /// Recursively populate relationship fields with full document objects.
 /// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
@@ -22,7 +23,7 @@ pub fn populate_relationships_cached(
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
-    cache: &PopulateCache,
+    cache: &dyn CacheBackend,
 ) -> Result<()> {
     let conn = ctx.conn;
     let registry = ctx.registry;

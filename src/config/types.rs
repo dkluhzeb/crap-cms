@@ -12,8 +12,8 @@ use super::{
     cors::CorsConfig,
     env::substitute_in_value,
     features::{
-        AccessConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig, LocaleConfig,
-        LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
+        AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
+        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
@@ -54,6 +54,8 @@ pub struct CrapConfig {
     pub pagination: PaginationConfig,
     /// MCP (Model Context Protocol) settings.
     pub mcp: McpConfig,
+    /// Cache backend settings.
+    pub cache: CacheConfig,
     /// File-based logging settings.
     pub logging: LoggingConfig,
 }
@@ -199,6 +201,13 @@ impl CrapConfig {
         // Fatal: rate limit window must be positive when rate limiting is enabled
         if self.server.grpc_rate_limit_requests > 0 && self.server.grpc_rate_limit_window == 0 {
             bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
+        }
+
+        // Warning: cache max_entries = 0 effectively disables caching
+        if self.cache.backend == "memory" && self.cache.max_entries == 0 {
+            tracing::warn!(
+                "cache.max_entries = 0 with memory backend — cache will never store entries (equivalent to backend = \"none\")"
+            );
         }
 
         // Fatal: empty log path

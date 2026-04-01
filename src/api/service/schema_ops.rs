@@ -294,8 +294,8 @@ impl ContentService {
             Status::internal("Internal error")
         })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         {
@@ -783,8 +783,8 @@ impl ContentService {
             Status::internal("Internal error")
         })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         let mut proto_doc = document_to_proto(&doc, &req.collection);

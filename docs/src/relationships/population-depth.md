@@ -99,19 +99,24 @@ Population adds queries beyond the main find/find_by_id. How many depends on the
 
 Join fields add one query per document per join field at each depth level.
 
-### Populate Cache
+### Cache Backend
 
-For high-traffic deployments, an opt-in cross-request cache avoids redundant population queries. When enabled, populated documents are cached in memory and reused across requests. The cache is automatically cleared on any write operation (create, update, delete).
+A pluggable cache backend avoids redundant population queries across requests. The default `memory` backend caches populated documents in-process using DashMap. For multi-server deployments, use `redis` for a shared cache. The cache is automatically cleared on any write operation (create, update, delete).
 
 ```toml
-[depth]
-populate_cache = true              # Enable cross-request populate cache (default: false)
-populate_cache_max_age_secs = 60   # Optional: periodic full cache clear (default: 0 = off)
+[cache]
+backend = "memory"      # "memory" (default), "redis", "none", "custom"
+max_entries = 10000      # Soft cap for memory backend
+max_age_secs = 60        # Optional: periodic full cache clear (default: 0 = off)
 ```
 
-**When to enable:** High read traffic with repeated deep population of the same related documents (e.g., many posts referencing the same set of authors/categories).
+**Backends:**
+- `"memory"` — In-process DashMap with soft entry cap. Default. Good for single-server.
+- `"redis"` — Shared Redis cache. Requires `--features redis`. Good for multi-server.
+- `"none"` — Cache disabled. Each request creates its own temporary cache (no cross-request sharing).
+- `"custom"` — Lua-delegated (planned, not yet implemented).
 
-**Trade-off:** If the database is modified outside the API (e.g., direct SQL, external tools), cached data can become stale. Set `populate_cache_max_age_secs` to limit staleness, or leave the cache disabled (default).
+**Trade-off:** If the database is modified outside the API (e.g., direct SQL, external tools), cached data can become stale. Set `max_age_secs` to limit staleness, or use `backend = "none"` to disable.
 
 ### Recommendations
 

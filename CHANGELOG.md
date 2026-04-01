@@ -84,6 +84,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   path_style = true
   ```
 
+- **Cache backend abstraction** — The cross-request populate cache is now
+  pluggable via a `CacheBackend` trait with four implementations:
+
+  - **`memory`** (default) — In-memory DashMap with configurable soft
+    entry cap. Good for single-server deployments.
+  - **`redis`** (feature-flagged) — Shared Redis cache for multi-server
+    deployments. Enable with `--features redis`. Uses key prefixing for
+    namespace isolation.
+  - **`none`** — No-op cache. Disables cross-request caching entirely.
+  - **`custom`** — Lua-delegated cache backend (planned, not yet
+    implemented — uses `none` as placeholder).
+
+  **Breaking:** The `depth.populate_cache` and
+  `depth.populate_cache_max_age_secs` config options have been replaced
+  by a new `[cache]` section. Migration:
+  - `populate_cache = true` → `[cache] backend = "memory"`
+  - `populate_cache = false` → `[cache] backend = "none"`
+  - `populate_cache_max_age_secs = 60` → `max_age_secs = 60`
+
+  ```toml
+  [cache]
+  backend = "memory"       # "memory", "redis", "none", "custom"
+  max_entries = 10000      # soft cap for memory backend
+  max_age_secs = 60        # periodic full clear (0 = disabled)
+  # redis_url = "redis://127.0.0.1:6379"
+  # prefix = "crap:"
+  ```
+
 - **Email provider abstraction** — Email sending is now pluggable
   via an `EmailProvider` trait with four implementations:
 
@@ -195,7 +223,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Now uses `forceHardDelete: true` and sums both `deleted` and
   `softDeleted` counts.
 
-- **Example `populate_cache` not enabled** — The example project now
+- **Example cache not enabled** — The example project now
   enables the relationship populate cache with a 60-second TTL,
   gRPC compression, and optimized depth/polling settings for better
   out-of-the-box demo performance.

@@ -16,6 +16,7 @@ use crate::{
     core::{
         AuthUser, CollectionDefinition, JwtSecret, Registry,
         auth::validate_token,
+        cache::SharedCache,
         collection::GlobalDefinition,
         email::EmailRenderer,
         event::{EventBus, EventUser},
@@ -52,8 +53,8 @@ pub struct ContentService {
     pub(in crate::api::service) forgot_password_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::service) ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     /// Shared cross-request cache for populated relationship documents.
-    /// None when disabled (default). Cleared on any write operation.
-    pub(in crate::api::service) populate_cache: Option<Arc<query::PopulateCache>>,
+    /// Uses NoneCache when caching is disabled. Cleared on any write operation.
+    pub(in crate::api::service) cache: SharedCache,
     pub(in crate::api::service) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
     pub(in crate::api::service) db_kind: String,
@@ -65,9 +66,9 @@ pub struct ContentService {
 
 /// Pure helper methods — testable without I/O dependencies.
 impl ContentService {
-    /// Get a clone of the shared populate cache handle (for periodic clearing).
-    pub fn populate_cache_handle(&self) -> Option<Arc<query::PopulateCache>> {
-        self.populate_cache.clone()
+    /// Get a clone of the shared cache handle (for periodic clearing).
+    pub fn cache_handle(&self) -> SharedCache {
+        self.cache.clone()
     }
 
     pub(in crate::api::service) fn get_collection_def(
@@ -116,11 +117,6 @@ impl ContentService {
 impl ContentService {
     /// Create a new gRPC content service with all dependencies.
     pub fn new(deps: ContentServiceDeps) -> Self {
-        let populate_cache = if deps.config.depth.populate_cache {
-            Some(Arc::new(query::PopulateCache::new()))
-        } else {
-            None
-        };
         let default_depth = deps.config.depth.default_depth;
         let max_depth = deps.config.depth.max_depth;
         let pagination_ctx = query::PaginationCtx::new(
@@ -151,7 +147,7 @@ impl ContentService {
             password_policy: deps.config.auth.password_policy,
             forgot_password_limiter: deps.forgot_password_limiter,
             ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
-            populate_cache,
+            cache: deps.cache,
             pagination_ctx,
             db_kind,
             subscribe_connections: Arc::new(AtomicUsize::new(0)),

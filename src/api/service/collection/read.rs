@@ -66,7 +66,7 @@ impl ContentService {
         let def_fields = def.fields.clone();
         let fields = def_fields.clone();
         let collection = req.collection.clone();
-        let pop_cache = self.populate_cache.clone();
+        let pop_cache = self.cache.clone();
         let req_where = req.r#where.clone();
         let has_drafts = def.has_drafts();
         let draft = req.draft;
@@ -174,14 +174,7 @@ impl ContentService {
 
                 // Populate relationships if depth > 0 (batch for efficiency)
                 if depth > 0 {
-                    let local_cache;
-                    let cache_ref = match &pop_cache {
-                        Some(shared) => &**shared,
-                        None => {
-                            local_cache = query::PopulateCache::new();
-                            &local_cache
-                        }
-                    };
+                    let cache_ref = &*pop_cache;
                     let pop_ctx =
                         query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
                     let mut pop_opts = query::PopulateOpts::new(depth);
@@ -291,7 +284,7 @@ impl ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let def_fields = def.fields.clone();
-        let pop_cache = self.populate_cache.clone();
+        let pop_cache = self.cache.clone();
         let def_owned = def;
         let result = tokio::task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
@@ -357,14 +350,7 @@ impl ContentService {
                 && let Some(ref mut d) = doc
             {
                 let mut visited = std::collections::HashSet::new();
-                let local_cache;
-                let cache_ref = match &pop_cache {
-                    Some(shared) => &**shared,
-                    None => {
-                        local_cache = query::PopulateCache::new();
-                        &local_cache
-                    }
-                };
+                let cache_ref = &*pop_cache;
                 let pop_ctx =
                     query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
                 let mut pop_opts = query::PopulateOpts::new(depth);

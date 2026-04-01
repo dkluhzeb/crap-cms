@@ -9,9 +9,8 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashSet;
 
-use crate::db::query::populate::{
-    PopulateCache, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-};
+use crate::core::cache::CacheBackend;
+use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
 use crate::{
     core::{Document, FieldType, field::flatten_array_sub_fields, upload},
     db::{
@@ -35,7 +34,7 @@ pub fn populate_relationships_batch_cached(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
-    cache: &PopulateCache,
+    cache: &dyn CacheBackend,
 ) -> Result<()> {
     let conn = ctx.conn;
     let registry = ctx.registry;

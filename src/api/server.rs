@@ -34,6 +34,7 @@ pub struct GrpcStartParams {
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub storage: crate::core::upload::SharedStorage,
+    pub cache: crate::core::cache::SharedCache,
 }
 
 impl GrpcStartParams {
@@ -55,7 +56,7 @@ pub async fn start(
 
     let email_renderer = Arc::new(EmailRenderer::new(&params.config_dir)?);
 
-    let populate_cache_max_age = params.config.depth.populate_cache_max_age_secs;
+    let cache_max_age = params.config.cache.max_age_secs;
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
     let grpc_reflection = params.config.server.grpc_reflection;
@@ -78,21 +79,25 @@ pub async fn start(
             .forgot_password_limiter(params.forgot_password_limiter)
             .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
             .storage(params.storage)
+            .cache(params.cache)
             .build(),
     );
 
     // Spawn periodic cache clear task for external DB mutation handling
-    if populate_cache_max_age > 0
-        && let Some(cache) = content_service.populate_cache_handle()
-    {
-        let interval_secs = populate_cache_max_age;
+    if cache_max_age > 0 && content_service.cache_handle().kind() != "none" {
+        let cache = content_service.cache_handle();
+        let interval_secs = cache_max_age;
         let cache_shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             interval.tick().await; // skip first immediate tick
             loop {
                 select! {
-                    _ = interval.tick() => cache.clear(),
+                    _ = interval.tick() => {
+                        if let Err(e) = cache.clear() {
+                            tracing::warn!("Periodic cache clear failed: {:#}", e);
+                        }
+                    },
                     _ = cache_shutdown.cancelled() => break,
                 }
             }

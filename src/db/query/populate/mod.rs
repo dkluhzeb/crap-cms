@@ -8,34 +8,35 @@ mod types;
 pub use batch::populate_relationships_batch_cached;
 pub(crate) use helpers::{document_to_json, parse_poly_ref};
 pub use single::populate_relationships_cached;
-pub use types::{MAX_POPULATE_CACHE_SIZE, PopulateCache, PopulateContext, PopulateOpts};
+pub use types::{PopulateContext, PopulateOpts, populate_cache_key};
 pub(crate) use types::{PopulateCtx, locale_cache_key};
 
 use anyhow::Result;
 use std::collections::HashSet;
 
 use crate::core::Document;
+use crate::core::cache::NoneCache;
 
 /// Recursively populate relationship fields with full document objects.
-/// Convenience wrapper that creates a fresh cache per call.
+/// Convenience wrapper that creates a fresh no-op cache per call.
 pub fn populate_relationships(
     ctx: &PopulateContext<'_>,
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
 ) -> Result<()> {
-    let cache = PopulateCache::new();
+    let cache = NoneCache;
     populate_relationships_cached(ctx, doc, visited, opts, &cache)
 }
 
 /// Batch-populate relationship fields across a slice of documents.
-/// Convenience wrapper that creates a fresh cache per call.
+/// Convenience wrapper that creates a fresh no-op cache per call.
 pub fn populate_relationships_batch(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
 ) -> Result<()> {
-    let cache = PopulateCache::new();
+    let cache = NoneCache;
     populate_relationships_batch_cached(ctx, docs, opts, &cache)
 }
 

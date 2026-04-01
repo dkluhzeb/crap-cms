@@ -35,6 +35,7 @@ For high availability and dedicated job processing. Requires a shared database a
 
 1. **Shared database** — PostgreSQL (build with `--features postgres`)
 2. **Shared file storage** — S3-compatible (build with `--features s3-storage`) or shared filesystem (NFS/EFS)
+3. **Shared cache** (recommended) — Redis (build with `--features redis`) for cross-server cache invalidation
 
 ## Setup
 
@@ -60,7 +61,26 @@ access_key = "${AWS_ACCESS_KEY}"
 secret_key = "${AWS_SECRET_KEY}"
 ```
 
-### 3. App Servers
+### 3. Cache
+
+Without a shared cache, each server maintains its own in-memory populate cache. Writes on one server won't invalidate another's cache. Use Redis for shared cache invalidation:
+
+```toml
+[cache]
+backend = "redis"
+redis_url = "redis://redis.example.com:6379"
+prefix = "crap:"
+```
+
+Alternatively, use `max_age_secs` with the memory backend to limit staleness:
+
+```toml
+[cache]
+backend = "memory"
+max_age_secs = 10
+```
+
+### 4. App Servers
 
 Run without the scheduler — job processing is handled by dedicated workers.
 
@@ -68,7 +88,7 @@ Run without the scheduler — job processing is handled by dedicated workers.
 crap-cms serve --no-scheduler
 ```
 
-### 4. Workers
+### 5. Workers
 
 One or more dedicated job workers process queues.
 

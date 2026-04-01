@@ -25,6 +25,7 @@ use crate::{
     config::{AuthConfig, CrapConfig},
     core::{
         Registry, SharedRegistry,
+        cache::create_cache,
         email::create_email_provider,
         event::EventBus,
         rate_limit::LoginRateLimiter,
@@ -640,6 +641,9 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     // Create upload storage backend
     let storage = create_storage(&config_dir, &cfg.upload)?;
 
+    // Create cache backend
+    let cache = create_cache(&cfg.cache)?;
+
     // Graceful shutdown: CancellationToken shared across all servers
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone());
@@ -727,6 +731,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .forgot_password_limiter(forgot_password_limiter.clone())
                     .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
                     .storage(storage.clone())
+                    .cache(cache.clone())
                     .build(),
                 shutdown.clone(),
             )

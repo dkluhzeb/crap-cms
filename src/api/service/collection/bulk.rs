@@ -288,8 +288,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         // Publish mutation events for Subscribe stream listeners
@@ -536,8 +536,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         // Publish mutation events for Subscribe stream listeners

@@ -16,8 +16,8 @@ use std::sync::Arc;
 use crate::{
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
-        upload::SharedStorage,
+        JwtSecret, Registry, cache::SharedCache, email::EmailRenderer, event::EventBus,
+        rate_limit::LoginRateLimiter, upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -38,6 +38,7 @@ pub struct ContentServiceDeps {
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub storage: SharedStorage,
+    pub cache: SharedCache,
 }
 
 impl ContentServiceDeps {

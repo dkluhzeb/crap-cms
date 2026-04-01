@@ -5,7 +5,8 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 use super::populate_relationships_cached;
-use crate::db::query::populate::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
+use crate::core::cache::CacheBackend;
+use crate::db::query::populate::{PopulateContext, PopulateOpts, document_to_json};
 use crate::{
     core::{Document, FieldType, upload},
     db::{
@@ -20,7 +21,7 @@ pub(super) fn populate_join_fields(
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
-    cache: &PopulateCache,
+    cache: &dyn CacheBackend,
 ) -> Result<()> {
     let conn = ctx.conn;
     let registry = ctx.registry;
@@ -99,8 +100,9 @@ mod tests {
     use serde_json::json;
 
     use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
+    use super::super::super::{PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
+    use crate::core::cache::NoneCache;
     use crate::core::{Document, Registry};
     use std::collections::HashSet;
 
@@ -131,7 +133,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -177,7 +179,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -216,7 +218,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -260,7 +262,7 @@ mod tests {
                 select: Some(&select),
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 

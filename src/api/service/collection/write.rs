@@ -148,8 +148,8 @@ impl ContentService {
             Status::internal("Internal error")
         })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         {
@@ -319,8 +319,8 @@ impl ContentService {
                     Status::internal("Internal error")
                 })??;
 
-            if let Some(c) = &self.populate_cache {
-                c.clear();
+            if let Err(e) = self.cache.clear() {
+                tracing::warn!("Cache clear failed: {:#}", e);
             }
 
             self.hook_runner.publish_event(
@@ -448,8 +448,8 @@ impl ContentService {
             Status::internal("Internal error")
         })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         {
@@ -563,8 +563,8 @@ impl ContentService {
             Status::internal("Internal error")
         })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         self.hook_runner.publish_event(
@@ -658,8 +658,8 @@ impl ContentService {
             Status::internal("Internal error")
         })??;
 
-        if let Some(c) = &self.populate_cache {
-            c.clear();
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
         }
 
         self.hook_runner.publish_event(

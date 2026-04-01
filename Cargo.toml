@@ -113,6 +113,7 @@ default = ["sqlite"]
 sqlite = ["dep:rusqlite", "dep:r2d2", "dep:r2d2_sqlite"]
 postgres = ["dep:tokio-postgres", "dep:deadpool-postgres"]
 s3-storage = ["dep:rust-s3"]
+redis = ["dep:redis"]
 browser-tests = ["dep:chromiumoxide"]
 
 [dependencies.rusqlite]
@@ -139,6 +140,10 @@ optional = true
 default-features = false
 features = ["tokio-runtime"]
 
+[dependencies.redis]
+version = "0.29"
+optional = true
+
 [dependencies.rust-s3]
 version = "0.35"
 optional = true
@@ -159,7 +164,7 @@ opt-level = 2
 tonic-prost-build = "0.14"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)', 'cfg(feature, values("browser-tests", "sqlite", "postgres", "s3-storage"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)', 'cfg(feature, values("browser-tests", "sqlite", "postgres", "s3-storage", "redis"))'] }
 
 [profile.release]
 lto = true

@@ -8,8 +8,8 @@ use crate::{
     core::{Document, upload},
     db::query::{
         populate::{
-            MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-            locale_cache_key, parse_poly_ref, populate_relationships_batch_cached,
+            PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
+            parse_poly_ref, populate_cache_key, populate_relationships_batch_cached,
         },
         read::find_by_ids,
     },
@@ -131,11 +131,17 @@ pub(super) fn batch_fetch_with_cache(
             let item_def = item_def.clone();
             let mut doc_map: HashMap<String, Document> = HashMap::new();
             let mut uncached_ids: Vec<String> = Vec::new();
-            for id in col_ids {
-                let key = (col.clone(), id.clone(), locale_cache_key(ctx.locale_ctx));
+            let locale_key = locale_cache_key(ctx.locale_ctx);
 
-                if let Some(cached) = ctx.cache.get(&key) {
-                    doc_map.insert(id.clone(), cached.value().clone());
+            for id in col_ids {
+                let key = populate_cache_key(col, id, locale_key.as_deref());
+
+                if let Ok(Some(bytes)) = ctx.cache.get(&key) {
+                    if let Ok(cached) = serde_json::from_slice::<Document>(&bytes) {
+                        doc_map.insert(id.clone(), cached);
+                    } else {
+                        uncached_ids.push(id.clone());
+                    }
                 } else {
                     uncached_ids.push(id.clone());
                 }
@@ -169,16 +175,11 @@ pub(super) fn batch_fetch_with_cache(
                     )?;
                 }
                 for d in fetched {
-                    if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-                        ctx.cache.insert(
-                            (
-                                col.clone(),
-                                d.id.to_string(),
-                                locale_cache_key(ctx.locale_ctx),
-                            ),
-                            d.clone(),
-                        );
+                    let key = populate_cache_key(col, d.id.as_ref(), locale_key.as_deref());
+                    if let Ok(bytes) = serde_json::to_vec(&d) {
+                        let _ = ctx.cache.set(&key, &bytes);
                     }
+
                     doc_map.insert(d.id.to_string(), d);
                 }
             }
@@ -192,13 +193,14 @@ pub(super) fn batch_fetch_with_cache(
 mod tests {
     use serde_json::json;
 
+    use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::field::*;
     use crate::core::{Document, Registry};
     use crate::db::{
         DbConnection,
         query::{
-            PopulateCache, PopulateContext, PopulateOpts, join,
-            populate::{populate_relationships_batch_cached, test_helpers::*},
+            PopulateContext, PopulateOpts, join,
+            populate::{populate_cache_key, populate_relationships_batch_cached, test_helpers::*},
         },
     };
 
@@ -236,7 +238,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -291,7 +293,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -336,7 +338,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -384,7 +386,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -432,7 +434,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -478,7 +480,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -506,7 +508,7 @@ mod tests {
         doc.fields
             .insert("related".to_string(), json!("articles/a1"));
 
-        let cache = PopulateCache::new();
+        let cache = MemoryCache::new(10_000);
         let mut docs = vec![doc];
 
         // Pre-populate cache so the doc is returned from cache in distribution
@@ -514,10 +516,10 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedFromBatchCache"));
-        cache.insert(
-            ("articles".to_string(), "a1".to_string(), None),
-            cached_article,
-        );
+        let key = populate_cache_key("articles", "a1", None);
+        cache
+            .set(&key, &serde_json::to_vec(&cached_article).unwrap())
+            .unwrap();
 
         populate_relationships_batch_cached(
             &PopulateContext {
@@ -558,15 +560,15 @@ mod tests {
         registry.register_collection(articles_def);
 
         // Pre-populate cache so find_by_ids is skipped for this id
-        let cache = PopulateCache::new();
+        let cache = MemoryCache::new(10_000);
         let mut cached_article = Document::new("a1".to_string());
         cached_article
             .fields
             .insert("title".to_string(), json!("CachedTitle"));
-        cache.insert(
-            ("articles".to_string(), "a1".to_string(), None),
-            cached_article,
-        );
+        let key = populate_cache_key("articles", "a1", None);
+        cache
+            .set(&key, &serde_json::to_vec(&cached_article).unwrap())
+            .unwrap();
 
         let mut doc = Document::new("e1".to_string());
         doc.fields

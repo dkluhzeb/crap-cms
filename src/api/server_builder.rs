@@ -6,7 +6,8 @@ use crate::{
     api::server::GrpcStartParams,
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, event::EventBus, rate_limit::LoginRateLimiter, upload::SharedStorage,
+        JwtSecret, Registry, cache::SharedCache, event::EventBus, rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -26,6 +27,7 @@ pub struct GrpcStartParamsBuilder {
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
+    cache: Option<SharedCache>,
 }
 
 impl GrpcStartParamsBuilder {
@@ -43,6 +45,7 @@ impl GrpcStartParamsBuilder {
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
             storage: None,
+            cache: None,
         }
     }
 
@@ -106,6 +109,11 @@ impl GrpcStartParamsBuilder {
         self
     }
 
+    pub fn cache(mut self, cache: SharedCache) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
     pub fn build(self) -> GrpcStartParams {
         GrpcStartParams {
             pool: self.pool.expect("pool is required"),
@@ -124,6 +132,7 @@ impl GrpcStartParamsBuilder {
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
             storage: self.storage.expect("storage is required"),
+            cache: self.cache.expect("cache is required"),
         }
     }
 }

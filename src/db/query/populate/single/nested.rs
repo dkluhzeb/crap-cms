@@ -11,8 +11,8 @@ use crate::core::{
     upload,
 };
 use crate::db::query::populate::{
-    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-    locale_cache_key, parse_poly_ref,
+    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
+    populate_cache_key,
 };
 use crate::db::query::read::find_by_id;
 
@@ -204,6 +204,27 @@ fn populate_rel_in_map(
     Ok(())
 }
 
+/// Try to get a cached document from the cache backend.
+fn cache_get_doc(
+    cache: &dyn crate::core::cache::CacheBackend,
+    key: &str,
+) -> Result<Option<Document>> {
+    match cache.get(key)? {
+        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// Store a document in the cache backend.
+fn cache_set_doc(
+    cache: &dyn crate::core::cache::CacheBackend,
+    key: &str,
+    doc: &Document,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(doc)?;
+    cache.set(key, &bytes)
+}
+
 /// Populate a non-polymorphic has-one field within a JSON map.
 fn populate_has_one_in_map(
     pctx: &PopulateCtx<'_>,
@@ -223,17 +244,11 @@ fn populate_has_one_in_map(
         return Ok(());
     }
 
-    let cache_key = (
-        rel_collection.to_string(),
-        id.clone(),
-        locale_cache_key(pctx.locale_ctx),
-    );
+    let locale_key = locale_cache_key(pctx.locale_ctx);
+    let key = populate_cache_key(rel_collection, &id, locale_key.as_deref());
 
-    if let Some(cached) = pctx.cache.get(&cache_key) {
-        map.insert(
-            name.to_string(),
-            document_to_json(cached.value(), rel_collection),
-        );
+    if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
+        map.insert(name.to_string(), document_to_json(&cached, rel_collection));
     } else if let Some(mut related_doc) =
         find_by_id(pctx.conn, rel_collection, rel_def, &id, pctx.locale_ctx)?
     {
@@ -242,6 +257,7 @@ fn populate_has_one_in_map(
         {
             upload::assemble_sizes_object(&mut related_doc, uc);
         }
+
         populate_relationships_cached(
             &PopulateContext {
                 conn: pctx.conn,
@@ -258,9 +274,8 @@ fn populate_has_one_in_map(
             },
             pctx.cache,
         )?;
-        if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-            pctx.cache.insert(cache_key, related_doc.clone());
-        }
+
+        let _ = cache_set_doc(pctx.cache, &key, &related_doc);
         map.insert(
             name.to_string(),
             document_to_json(&related_doc, rel_collection),
@@ -293,14 +308,12 @@ fn populate_has_many_in_map(
             populated.push(Value::String(id.clone()));
             continue;
         }
-        let cache_key = (
-            rel_collection.to_string(),
-            id.clone(),
-            locale_cache_key(pctx.locale_ctx),
-        );
 
-        if let Some(cached) = pctx.cache.get(&cache_key) {
-            populated.push(document_to_json(cached.value(), rel_collection));
+        let locale_key = locale_cache_key(pctx.locale_ctx);
+        let key = populate_cache_key(rel_collection, id, locale_key.as_deref());
+
+        if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
+            populated.push(document_to_json(&cached, rel_collection));
         } else if let Some(mut related_doc) =
             find_by_id(pctx.conn, rel_collection, rel_def, id, pctx.locale_ctx)?
         {
@@ -309,6 +322,7 @@ fn populate_has_many_in_map(
             {
                 upload::assemble_sizes_object(&mut related_doc, uc);
             }
+
             populate_relationships_cached(
                 &PopulateContext {
                     conn: pctx.conn,
@@ -325,9 +339,8 @@ fn populate_has_many_in_map(
                 },
                 pctx.cache,
             )?;
-            if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-                pctx.cache.insert(cache_key, related_doc.clone());
-            }
+
+            let _ = cache_set_doc(pctx.cache, &key, &related_doc);
             populated.push(document_to_json(&related_doc, rel_collection));
         } else {
             populated.push(Value::String(id.clone()));
@@ -364,16 +377,18 @@ fn populate_poly_has_one_in_map(
         None => return Ok(()),
     };
 
-    let cache_key = (col.clone(), id.clone(), locale_cache_key(pctx.locale_ctx));
+    let locale_key = locale_cache_key(pctx.locale_ctx);
+    let key = populate_cache_key(&col, &id, locale_key.as_deref());
 
-    if let Some(cached) = pctx.cache.get(&cache_key) {
-        map.insert(name.to_string(), document_to_json(cached.value(), &col));
+    if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
+        map.insert(name.to_string(), document_to_json(&cached, &col));
     } else if let Some(mut rd) = find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)? {
         if let Some(ref uc) = item_def.upload
             && uc.enabled
         {
             upload::assemble_sizes_object(&mut rd, uc);
         }
+
         populate_relationships_cached(
             &PopulateContext {
                 conn: pctx.conn,
@@ -390,9 +405,8 @@ fn populate_poly_has_one_in_map(
             },
             pctx.cache,
         )?;
-        if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-            pctx.cache.insert(cache_key, rd.clone());
-        }
+
+        let _ = cache_set_doc(pctx.cache, &key, &rd);
         map.insert(name.to_string(), document_to_json(&rd, &col));
     }
     Ok(())
@@ -437,16 +451,18 @@ fn populate_poly_has_many_in_map(
             }
         };
 
-        let cache_key = (col.clone(), id.clone(), locale_cache_key(pctx.locale_ctx));
+        let locale_key = locale_cache_key(pctx.locale_ctx);
+        let key = populate_cache_key(&col, &id, locale_key.as_deref());
 
-        if let Some(cached) = pctx.cache.get(&cache_key) {
-            populated.push(document_to_json(cached.value(), &col));
+        if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
+            populated.push(document_to_json(&cached, &col));
         } else if let Some(mut rd) = find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)? {
             if let Some(ref uc) = item_def.upload
                 && uc.enabled
             {
                 upload::assemble_sizes_object(&mut rd, uc);
             }
+
             populate_relationships_cached(
                 &PopulateContext {
                     conn: pctx.conn,
@@ -463,9 +479,8 @@ fn populate_poly_has_many_in_map(
                 },
                 pctx.cache,
             )?;
-            if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-                pctx.cache.insert(cache_key, rd.clone());
-            }
+
+            let _ = cache_set_doc(pctx.cache, &key, &rd);
             populated.push(document_to_json(&rd, &col));
         } else {
             populated.push(Value::String(item.clone()));

@@ -95,7 +95,8 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
         )))
         .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             20, 900,
-        )));
+        )))
+        .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache));
 
     let service = ContentService::new(deps.build());
 
