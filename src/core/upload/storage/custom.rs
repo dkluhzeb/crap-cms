@@ -99,3 +99,183 @@ impl StorageBackend for CustomStorage {
         "custom"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::upload::StorageBackend;
+
+    /// Create a Lua state with an in-memory storage implementation.
+    fn setup_lua() -> Lua {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            crap = {}
+            crap._storage = {}
+
+            -- In-memory file store
+            local files = {}
+
+            crap._storage.put = function(key, data, content_type)
+                files[key] = { data = data, content_type = content_type }
+            end
+
+            crap._storage.get = function(key)
+                local entry = files[key]
+                if not entry then error("not found: " .. key) end
+                return entry.data
+            end
+
+            crap._storage.delete = function(key)
+                files[key] = nil
+            end
+
+            crap._storage.url = function(key)
+                return "https://cdn.test/" .. key
+            end
+
+            crap._storage.exists = function(key)
+                return files[key] ~= nil
+            end
+            "#,
+        )
+        .exec()
+        .expect("Lua setup failed");
+        lua
+    }
+
+    #[test]
+    fn put_get_roundtrip() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        storage
+            .put("media/test.txt", b"hello world", "text/plain")
+            .unwrap();
+
+        let data = storage.get("media/test.txt").unwrap();
+        assert_eq!(data, b"hello world");
+    }
+
+    #[test]
+    fn get_nonexistent_returns_error() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        let result = storage.get("nonexistent.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn delete_removes_file() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        storage
+            .put("media/file.txt", b"data", "text/plain")
+            .unwrap();
+        assert!(storage.exists("media/file.txt").unwrap());
+
+        storage.delete("media/file.txt").unwrap();
+        assert!(!storage.exists("media/file.txt").unwrap());
+    }
+
+    #[test]
+    fn delete_nonexistent_is_ok() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        // Should not error
+        storage.delete("nonexistent.txt").unwrap();
+    }
+
+    #[test]
+    fn exists_returns_correct_value() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        assert!(!storage.exists("media/nope.txt").unwrap());
+
+        storage.put("media/yes.txt", b"data", "text/plain").unwrap();
+        assert!(storage.exists("media/yes.txt").unwrap());
+    }
+
+    #[test]
+    fn public_url_delegates_to_lua() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        assert_eq!(
+            storage.public_url("media/photo.jpg"),
+            "https://cdn.test/media/photo.jpg"
+        );
+    }
+
+    #[test]
+    fn kind_returns_custom() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+        assert_eq!(storage.kind(), "custom");
+    }
+
+    #[test]
+    fn binary_data_roundtrip() {
+        let lua = setup_lua();
+        let storage = CustomStorage::new(lua);
+
+        // Binary data with null bytes, high bytes, etc.
+        let binary: Vec<u8> = (0..=255).collect();
+        storage
+            .put("media/binary.bin", &binary, "application/octet-stream")
+            .unwrap();
+
+        let result = storage.get("media/binary.bin").unwrap();
+        assert_eq!(result, binary);
+    }
+
+    #[test]
+    fn exists_fallback_without_exists_function() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            crap = {}
+            crap._storage = {}
+            local files = {}
+
+            crap._storage.put = function(key, data, ct)
+                files[key] = data
+            end
+            crap._storage.get = function(key)
+                if not files[key] then error("not found") end
+                return files[key]
+            end
+            crap._storage.delete = function(key) files[key] = nil end
+            crap._storage.url = function(key) return "/" .. key end
+            -- No exists function — should fall back to get
+            "#,
+        )
+        .exec()
+        .expect("Lua setup failed");
+
+        let storage = CustomStorage::new(lua);
+
+        assert!(!storage.exists("nope.txt").unwrap());
+
+        storage.put("yes.txt", b"data", "text/plain").unwrap();
+        assert!(storage.exists("yes.txt").unwrap());
+    }
+
+    #[test]
+    fn missing_storage_functions_return_error() {
+        let lua = Lua::new();
+        lua.load("crap = { _storage = {} }")
+            .exec()
+            .expect("Lua setup failed");
+
+        let storage = CustomStorage::new(lua);
+
+        assert!(storage.put("k", b"d", "t").is_err());
+        assert!(storage.get("k").is_err());
+        assert!(storage.delete("k").is_err());
+    }
+}
