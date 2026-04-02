@@ -25,6 +25,9 @@ use crate::{
     config::{AuthConfig, CrapConfig},
     core::{
         Registry, SharedRegistry,
+        auth::{
+            Argon2PasswordProvider, JwtTokenProvider, SharedPasswordProvider, SharedTokenProvider,
+        },
         cache::create_cache,
         email::create_email_provider,
         event::EventBus,
@@ -644,6 +647,10 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     // Create cache backend
     let cache = create_cache(&cfg.cache)?;
 
+    // Create auth providers
+    let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new(&jwt_secret));
+    let password_provider: SharedPasswordProvider = Arc::new(Argon2PasswordProvider);
+
     // Graceful shutdown: CancellationToken shared across all servers
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone());
@@ -725,6 +732,8 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .forgot_password_limiter(forgot_password_limiter.clone())
                     .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
                     .storage(storage.clone())
+                    .token_provider(token_provider.clone())
+                    .password_provider(password_provider.clone())
                     .build(),
                 shutdown.clone(),
             )
@@ -752,6 +761,8 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
                     .storage(storage.clone())
                     .cache(cache.clone())
+                    .token_provider(token_provider.clone())
+                    .password_provider(password_provider.clone())
                     .rate_limit_backend(rl_backend)
                     .build(),
                 shutdown.clone(),

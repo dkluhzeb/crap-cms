@@ -15,7 +15,7 @@ use crate::{
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
         AuthUser, CollectionDefinition, JwtSecret, Registry,
-        auth::validate_token,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         collection::GlobalDefinition,
         email::EmailRenderer,
@@ -33,6 +33,7 @@ use crate::{
 use super::ContentServiceDeps;
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
+#[allow(dead_code)]
 pub struct ContentService {
     pub(in crate::api::service) pool: DbPool,
     pub(in crate::api::service) registry: Arc<Registry>,
@@ -52,6 +53,10 @@ pub struct ContentService {
     pub(in crate::api::service) password_policy: PasswordPolicy,
     pub(in crate::api::service) forgot_password_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::service) ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    /// The token provider for JWT creation and validation.
+    pub(in crate::api::service) token_provider: SharedTokenProvider,
+    /// The password provider for hashing and verification.
+    pub(in crate::api::service) password_provider: SharedPasswordProvider,
     /// Shared cross-request cache for populated relationship documents.
     /// Uses NoneCache when caching is disabled. Cleared on any write operation.
     pub(in crate::api::service) cache: SharedCache,
@@ -141,6 +146,8 @@ impl ContentService {
             event_bus: deps.event_bus,
             locale_config: deps.config.locale,
             storage: deps.storage,
+            token_provider: deps.token_provider,
+            password_provider: deps.password_provider,
             login_limiter: deps.login_limiter,
             ip_login_limiter: deps.ip_login_limiter,
             reset_token_expiry,
@@ -163,7 +170,7 @@ impl ContentService {
     /// Pure data lookup — safe to call inside `spawn_blocking`.
     pub(in crate::api::service) fn resolve_auth_user(
         token: Option<String>,
-        jwt_secret: &JwtSecret,
+        token_provider: &dyn crate::core::auth::TokenProvider,
         registry: &Registry,
         conn: &dyn DbConnection,
     ) -> Result<Option<AuthUser>, Status> {
@@ -171,7 +178,8 @@ impl ContentService {
             Some(t) => t,
             None => return Ok(None),
         };
-        let claims = validate_token(&token, jwt_secret.as_ref())
+        let claims = token_provider
+            .validate_token(&token)
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
         let def = match registry.get_collection(&claims.collection) {
             Some(d) => d.clone(),

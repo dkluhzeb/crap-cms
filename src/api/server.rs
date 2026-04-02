@@ -35,6 +35,8 @@ pub struct GrpcStartParams {
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub storage: crate::core::upload::SharedStorage,
     pub cache: crate::core::cache::SharedCache,
+    pub token_provider: crate::core::auth::SharedTokenProvider,
+    pub password_provider: crate::core::auth::SharedPasswordProvider,
     pub rate_limit_backend: crate::core::rate_limit::SharedRateLimitBackend,
 }
 
@@ -81,6 +83,8 @@ pub async fn start(
             .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
             .storage(params.storage)
             .cache(params.cache)
+            .token_provider(params.token_provider)
+            .password_provider(params.password_provider)
             .build(),
     );
 

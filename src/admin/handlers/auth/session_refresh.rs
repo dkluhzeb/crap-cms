@@ -10,7 +10,7 @@ use tokio::task;
 use super::session_cookies;
 use crate::{
     admin::AdminState,
-    core::auth::{Claims, ClaimsBuilder, create_token},
+    core::auth::{Claims, ClaimsBuilder},
     db::query::{self, is_valid_identifier},
 };
 
@@ -85,7 +85,7 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         }
     };
 
-    let token = match create_token(&new_claims, state.jwt_secret.as_ref()) {
+    let token = match state.token_provider.create_token(&new_claims) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Session refresh token creation: {}", e);

@@ -212,6 +212,27 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                 }
             }
         }
+        if ctx
+            .def
+            .auth
+            .as_ref()
+            .is_some_and(|a| a.mfa != crate::core::collection::MfaMode::Off)
+        {
+            for col in ["_mfa_code TEXT", "_mfa_code_exp INTEGER"] {
+                let col_name = col
+                    .split_whitespace()
+                    .next()
+                    .expect("static column definition");
+
+                if !ctx.existing.contains(col_name) {
+                    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
+                    tracing::info!("Adding {} column to {}", col_name, ctx.slug);
+                    ctx.conn
+                        .execute_ddl(&sql, &[])
+                        .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
+                }
+            }
+        }
     }
 
     // Soft-delete collections: ensure _deleted_at column exists

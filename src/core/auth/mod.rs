@@ -1,4 +1,8 @@
-//! Authentication primitives: Argon2id password hashing and JWT token management.
+//! Authentication primitives: token management, password hashing, and pluggable providers.
+//!
+//! - `TokenProvider` trait — JWT token creation/validation (default: `JwtTokenProvider`)
+//! - `PasswordProvider` trait — password hashing/verification (default: `Argon2PasswordProvider`)
+//! - Free functions for backward compat and Lua API usage
 
 /// JWT claims module.
 pub mod claims;
@@ -8,10 +12,26 @@ pub mod claims_builder;
 pub mod hashed_password;
 /// Newtype wrapper for JWT signing secrets.
 pub mod jwt_secret;
+/// Password hashing provider trait + Argon2id implementation.
+pub mod password;
+/// Token provider trait + JWT implementation.
+pub mod token;
 
-use std::{fmt, sync::LazyLock};
+use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::{Context as _, Result, anyhow};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
+
+pub use claims::Claims;
+pub use claims_builder::ClaimsBuilder;
+pub use hashed_password::HashedPassword;
+pub use jwt_secret::JwtSecret;
+pub use password::{Argon2PasswordProvider, PasswordProvider, SharedPasswordProvider};
+pub use token::{JwtTokenProvider, SharedTokenProvider, TokenProvider};
 
 /// Error types for password reset token operations.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,14 +52,6 @@ impl fmt::Display for ResetTokenError {
 }
 
 impl std::error::Error for ResetTokenError {}
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
-};
-pub use claims::Claims;
-pub use claims_builder::ClaimsBuilder;
-pub use hashed_password::HashedPassword;
-pub use jwt_secret::JwtSecret;
 
 /// Pre-computed Argon2 hash used to burn CPU time on user-not-found paths,
 /// preventing timing oracles that leak whether an email exists.
@@ -47,8 +59,6 @@ static DUMMY_HASH: LazyLock<HashedPassword> =
     LazyLock::new(|| hash_password("__crap_dummy_timing__").expect("dummy hash"));
 
 /// Perform a dummy password verification to equalize timing with real verifications.
-/// Call this on login paths where user-not-found or hash-missing would otherwise
-/// return fast, enabling email enumeration via response timing.
 pub fn dummy_verify() {
     let _ = verify_password("x", DUMMY_HASH.as_ref());
 }
@@ -106,9 +116,6 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims> {
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::default();
-    // Clear required_spec_claims to avoid rejecting tokens that lack optional claims
-    // (e.g., `aud`, `iss`). We only enforce `exp` via validate_exp. This is safe because
-    // serde deserialization still populates all Claims fields from the token payload.
     validation.required_spec_claims.clear();
     validation.validate_exp = true;
     let data =
@@ -144,7 +151,7 @@ mod tests {
     fn expired_token_fails() {
         let claims = Claims::builder("user123", "users")
             .email("test@example.com")
-            .exp(0) // expired
+            .exp(0)
             .build()
             .unwrap();
         let token = create_token(&claims, "test-secret").unwrap();
@@ -174,27 +181,18 @@ mod tests {
 
     #[test]
     fn verify_password_with_invalid_hash_returns_error() {
-        // A corrupted or non-Argon2 string should return Err, not panic.
         let result = verify_password("password", "not-a-valid-hash");
         assert!(result.is_err());
 
-        // Looks like a hash but is truncated/corrupted.
         let result = verify_password("password", "$argon2id$v=19$m=19456,t=2,p=1$AAAA$CORRUPT");
         assert!(result.is_err());
     }
 
     #[test]
     fn validate_token_with_malformed_jwt_returns_error() {
-        // Completely non-JWT string.
         assert!(validate_token("not-a-jwt", "secret").is_err());
-
-        // Wrong number of segments (JWT requires exactly 3 base64url parts).
         assert!(validate_token("aaa.bbb", "secret").is_err());
-
-        // Four segments instead of three.
         assert!(validate_token("aaa.bbb.ccc.ddd", "secret").is_err());
-
-        // Correct segment count but invalid base64 content.
         assert!(validate_token("!!!.???.$$$", "secret").is_err());
     }
 
@@ -224,10 +222,8 @@ mod tests {
 
     #[test]
     fn hash_password_empty_string_succeeds() {
-        // An empty password is technically valid and should produce a usable hash.
         let hash = hash_password("").unwrap();
         assert!(hash.as_ref().starts_with("$argon2"));
-        // And we can round-trip verify it.
         assert!(verify_password("", hash.as_ref()).unwrap());
         assert!(!verify_password("notempty", hash.as_ref()).unwrap());
     }
@@ -265,7 +261,6 @@ mod tests {
 
     #[test]
     fn legacy_token_without_session_version_defaults_to_zero() {
-        // Simulate a legacy JWT payload without session_version
         use serde_json::json;
 
         let payload = json!({

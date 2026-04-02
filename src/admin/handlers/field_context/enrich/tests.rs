@@ -943,6 +943,10 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
             &crate::config::UploadConfig::default(),
         )
         .unwrap(),
+        token_provider: std::sync::Arc::new(crate::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1046,6 +1050,10 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
             &crate::config::UploadConfig::default(),
         )
         .unwrap(),
+        token_provider: std::sync::Arc::new(crate::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
     };
 
     enrich_field_contexts(
@@ -1124,6 +1132,10 @@ fn make_test_state() -> crate::admin::AdminState {
             &crate::config::UploadConfig::default(),
         )
         .unwrap(),
+        token_provider: std::sync::Arc::new(crate::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
     }
 }
 

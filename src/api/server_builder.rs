@@ -7,6 +7,7 @@ use crate::{
     config::CrapConfig,
     core::{
         JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         event::EventBus,
         rate_limit::{LoginRateLimiter, SharedRateLimitBackend},
@@ -31,6 +32,8 @@ pub struct GrpcStartParamsBuilder {
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
     cache: Option<SharedCache>,
+    token_provider: Option<SharedTokenProvider>,
+    password_provider: Option<SharedPasswordProvider>,
     rate_limit_backend: Option<SharedRateLimitBackend>,
 }
 
@@ -50,6 +53,8 @@ impl GrpcStartParamsBuilder {
             ip_forgot_password_limiter: None,
             storage: None,
             cache: None,
+            token_provider: None,
+            password_provider: None,
             rate_limit_backend: None,
         }
     }
@@ -119,6 +124,16 @@ impl GrpcStartParamsBuilder {
         self
     }
 
+    pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
+        self.token_provider = Some(token_provider);
+        self
+    }
+
+    pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
+        self.password_provider = Some(password_provider);
+        self
+    }
+
     pub fn rate_limit_backend(mut self, backend: SharedRateLimitBackend) -> Self {
         self.rate_limit_backend = Some(backend);
         self
@@ -143,6 +158,10 @@ impl GrpcStartParamsBuilder {
                 .expect("ip_forgot_password_limiter is required"),
             storage: self.storage.expect("storage is required"),
             cache: self.cache.expect("cache is required"),
+            token_provider: self.token_provider.expect("token_provider is required"),
+            password_provider: self
+                .password_provider
+                .expect("password_provider is required"),
             rate_limit_backend: self
                 .rate_limit_backend
                 .expect("rate_limit_backend is required"),

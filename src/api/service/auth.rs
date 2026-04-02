@@ -8,7 +8,7 @@ use crate::{
     api::content,
     core::{
         Slug,
-        auth::{self, ClaimsBuilder, ResetTokenError},
+        auth::{ClaimsBuilder, ResetTokenError, dummy_verify},
         email,
     },
     db::query,
@@ -47,7 +47,10 @@ impl ContentService {
             )));
         }
 
-        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+        let disable_local = def.auth.as_ref().is_some_and(|a| a.disable_local);
+        let has_strategies = def.auth.as_ref().is_some_and(|a| !a.strategies.is_empty());
+
+        if disable_local && !has_strategies {
             return Err(Status::permission_denied(
                 "Local login is disabled for this collection",
             ));
@@ -59,35 +62,61 @@ impl ContentService {
         let password = req.password.clone();
         let def_owned = def.clone();
         let check_verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
+        let password_provider = self.password_provider.clone();
+        let hook_runner = self.hook_runner.clone();
 
-        // All checks in a single spawn_blocking: find user → verify password →
-        // check locked → check email verified. This ordering prevents locked/unverified
-        // accounts from leaking whether the password was correct.
         let login_result: Result<Option<_>, &'static str> =
             tokio::task::spawn_blocking(move || {
                 let conn = pool.get().context("DB connection")?;
-                let doc = query::find_by_email(&conn, &slug, &def_owned, &email)?;
-                let doc = match doc {
-                    Some(d) => d,
-                    None => {
-                        auth::dummy_verify();
-                        return Ok(Ok(None));
-                    }
-                };
-                let hash = query::get_password_hash(&conn, &slug, &doc.id)?;
-                let hash = match hash {
-                    Some(h) => h,
-                    None => {
-                        auth::dummy_verify();
-                        return Ok(Ok(None));
-                    }
-                };
 
-                if !auth::verify_password(&password, hash.as_ref())? {
-                    return Ok(Ok(None));
+                // Try local email+password authentication unless disabled
+                let mut user = None;
+
+                if !disable_local {
+                    if let Some(doc) = query::find_by_email(&conn, &slug, &def_owned, &email)? {
+                        let verified = match query::get_password_hash(&conn, &slug, &doc.id)? {
+                            Some(hash) => {
+                                password_provider.verify_password(&password, hash.as_ref())?
+                            }
+                            None => false,
+                        };
+
+                        if verified {
+                            user = Some(doc);
+                        }
+                    } else {
+                        dummy_verify();
+                    }
                 }
 
-                // Password is correct — now check locked and email verification
+                // Fallback: try auth strategies
+                if user.is_none()
+                    && let Some(auth) = &def_owned.auth
+                {
+                    for strategy in &auth.strategies {
+                        if let Ok(Some(doc)) = hook_runner.run_auth_strategy(
+                            &strategy.authenticate,
+                            &slug,
+                            &std::collections::HashMap::new(),
+                            &conn,
+                        ) {
+                            user = Some(doc);
+                            break;
+                        }
+                    }
+                }
+
+                let doc = match user {
+                    Some(d) => d,
+                    None => {
+                        if !disable_local {
+                            dummy_verify();
+                        }
+                        return Ok(Ok(None));
+                    }
+                };
+
+                // Check locked and email verification
                 if query::is_locked(&conn, &slug, &doc.id)? {
                     return Ok(Err("This account has been locked"));
                 }
@@ -146,7 +175,7 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-        let token = auth::create_token(&claims, self.jwt_secret.as_ref()).map_err(|e| {
+        let token = self.token_provider.create_token(&claims).map_err(|e| {
             tracing::error!("Token creation error: {}", e);
             Status::internal("Internal error")
         })?;
@@ -176,7 +205,9 @@ impl ContentService {
             })
             .ok_or_else(|| Status::unauthenticated("Missing token"))?;
 
-        let claims = auth::validate_token(&token, self.jwt_secret.as_ref())
+        let claims = self
+            .token_provider
+            .validate_token(&token)
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
 
         let def = self.get_collection_def(&claims.collection)?;

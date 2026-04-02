@@ -6,8 +6,13 @@ use crate::{
     api::service::ContentServiceDeps,
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, cache::SharedCache, email::EmailRenderer, event::EventBus,
-        rate_limit::LoginRateLimiter, upload::SharedStorage,
+        JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
+        cache::SharedCache,
+        email::EmailRenderer,
+        event::EventBus,
+        rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -29,6 +34,8 @@ pub struct ContentServiceDepsBuilder {
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
     cache: Option<SharedCache>,
+    token_provider: Option<SharedTokenProvider>,
+    password_provider: Option<SharedPasswordProvider>,
 }
 
 impl ContentServiceDepsBuilder {
@@ -48,6 +55,8 @@ impl ContentServiceDepsBuilder {
             ip_forgot_password_limiter: None,
             storage: None,
             cache: None,
+            token_provider: None,
+            password_provider: None,
         }
     }
 
@@ -127,6 +136,16 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
+        self.token_provider = Some(token_provider);
+        self
+    }
+
+    pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
+        self.password_provider = Some(password_provider);
+        self
+    }
+
     pub fn build(self) -> ContentServiceDeps {
         ContentServiceDeps {
             pool: self.pool.expect("pool is required"),
@@ -147,6 +166,10 @@ impl ContentServiceDepsBuilder {
                 .expect("ip_forgot_password_limiter is required"),
             storage: self.storage.expect("storage is required"),
             cache: self.cache.expect("cache is required"),
+            token_provider: self.token_provider.expect("token_provider is required"),
+            password_provider: self
+                .password_provider
+                .expect("password_provider is required"),
         }
     }
 }

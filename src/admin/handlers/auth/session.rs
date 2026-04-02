@@ -21,6 +21,29 @@ pub(in crate::admin::handlers) fn session_cookies(
     ]
 }
 
+/// MFA pending cookie expiry in seconds (5 minutes).
+const MFA_PENDING_EXPIRY: u64 = 300;
+
+/// Build a `Set-Cookie` header value for the MFA pending token.
+pub(in crate::admin::handlers) fn mfa_pending_cookie(token: &str, dev_mode: bool) -> String {
+    let secure = if dev_mode { "" } else { "; Secure" };
+
+    format!(
+        "crap_mfa_pending={}; HttpOnly; Path=/; SameSite=Lax; Max-Age={}{}",
+        token, MFA_PENDING_EXPIRY, secure,
+    )
+}
+
+/// Build a `Set-Cookie` header value that clears the MFA pending cookie.
+pub(in crate::admin::handlers) fn clear_mfa_pending_cookie(dev_mode: bool) -> String {
+    let secure = if dev_mode { "" } else { "; Secure" };
+
+    format!(
+        "crap_mfa_pending=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0{}",
+        secure,
+    )
+}
+
 /// Build `Set-Cookie` header values that clear both session cookies.
 pub(in crate::admin::handlers) fn clear_session_cookies(dev_mode: bool) -> Vec<String> {
     let secure = if dev_mode { "" } else { "; Secure" };
@@ -88,5 +111,39 @@ mod tests {
         assert!(cookies[0].contains("; Secure"));
         assert!(cookies[1].contains("crap_session_exp=;"));
         assert!(cookies[1].contains("; Secure"));
+    }
+
+    #[test]
+    fn mfa_pending_cookie_dev_mode() {
+        let cookie = mfa_pending_cookie("mfa-tok", true);
+        assert!(cookie.contains("crap_mfa_pending=mfa-tok"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Max-Age=300"));
+        assert!(!cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn mfa_pending_cookie_production_mode() {
+        let cookie = mfa_pending_cookie("mfa-tok", false);
+        assert!(cookie.contains("crap_mfa_pending=mfa-tok"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Max-Age=300"));
+        assert!(cookie.contains("; Secure"));
+    }
+
+    #[test]
+    fn clear_mfa_pending_cookie_dev_mode() {
+        let cookie = clear_mfa_pending_cookie(true);
+        assert!(cookie.contains("crap_mfa_pending=;"));
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(!cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn clear_mfa_pending_cookie_production_mode() {
+        let cookie = clear_mfa_pending_cookie(false);
+        assert!(cookie.contains("crap_mfa_pending=;"));
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(cookie.contains("; Secure"));
     }
 }

@@ -12,7 +12,7 @@ mod shared;
 
 pub use access_builder::AccessBuilder;
 pub use admin_config_builder::AdminConfigBuilder;
-pub use auth::{Auth, AuthStrategy};
+pub use auth::{Auth, AuthStrategy, MfaMode};
 pub use collection_definition::CollectionDefinition;
 pub use collection_definition_builder::CollectionDefinitionBuilder;
 pub use global_definition::GlobalDefinition;

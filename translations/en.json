@@ -137,6 +137,11 @@
   "error_reset_link_invalid": "Invalid or expired reset link. Please request a new one.",
   "success_password_reset": "Password reset successfully",
   "success_email_verified": "Email verified successfully",
+  "mfa_page_title": "Verification",
+  "mfa_enter_code": "Enter the 6-digit code sent to your email.",
+  "mfa_code_label": "Verification code",
+  "mfa_verify": "Verify",
+  "error_mfa_invalid_code": "Invalid or expired code. Please try again.",
 
   "restore_has_missing_relations": "This version references content that no longer exists:",
   "restore_missing_warning": "Restoring will write stale references back into the document.",

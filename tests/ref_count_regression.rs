@@ -96,7 +96,13 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
         .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             20, 900,
         )))
-        .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache));
+        .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+        .token_provider(std::sync::Arc::new(
+            crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+        ))
+        .password_provider(std::sync::Arc::new(
+            crap_cms::core::auth::Argon2PasswordProvider,
+        ));
 
     let service = ContentService::new(deps.build());
 

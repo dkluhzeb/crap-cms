@@ -2,7 +2,7 @@
 
 use mlua::{Table, Value};
 
-use crate::core::collection::{Auth, AuthStrategy};
+use crate::core::collection::{Auth, AuthStrategy, MfaMode};
 
 use super::helpers::*;
 
@@ -23,6 +23,10 @@ pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
             auth.disable_local = disable_local;
             auth.verify_email = verify_email;
             auth.forgot_password = forgot_password;
+            auth.mfa = match tbl.get::<String>("mfa").ok().as_deref() {
+                Some("email") => MfaMode::Email,
+                _ => MfaMode::Off,
+            };
             Some(auth)
         }
         _ => None,

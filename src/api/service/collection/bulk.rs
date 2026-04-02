@@ -71,7 +71,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
@@ -84,7 +84,7 @@ impl ContentService {
 
                 // Auth + read access (all on blocking thread)
                 let auth_user =
-                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                    ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
                 let read_access = ContentService::check_access_blocking(
                     def_owned.access.read.as_deref(),
                     &auth_user,
@@ -344,7 +344,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
@@ -363,7 +363,7 @@ impl ContentService {
 
                 // Auth + read access (all on blocking thread)
                 let auth_user =
-                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                    ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
                 let read_access = ContentService::check_access_blocking(
                     def_owned.access.read.as_deref(),
                     &auth_user,

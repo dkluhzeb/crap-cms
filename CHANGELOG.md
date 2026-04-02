@@ -84,6 +84,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   path_style = true
   ```
 
+- **Auth redesign: TokenProvider + PasswordProvider + strategy chain** —
+  Authentication infrastructure is now cleanly separated:
+
+  - **`TokenProvider` trait** — JWT token creation/validation.
+    Default: `JwtTokenProvider`. Rarely swapped.
+  - **`PasswordProvider` trait** — Argon2id password hashing/verification.
+    Default: `Argon2PasswordProvider`. Rarely swapped.
+  - **Strategy chain** — `local` (email+password) is the built-in
+    strategy. Per-collection Lua strategies are tried as fallback
+    when local auth fails or is disabled (`disable_local = true`).
+    No monolithic "auth provider" — authentication is orchestration
+    in handlers, not a trait.
+
+  This design supports OAuth2, Cloudflare Access, Active Directory,
+  API keys, and any custom auth via **Lua strategies** — without
+  the binary needing provider-specific code.
+
+- **Built-in email MFA** — Auth collections can enable email-based
+  multi-factor authentication:
+
+  ```lua
+  auth = {
+      mfa = "email",  -- sends 6-digit code after password verification
+  }
+  ```
+
+  After password/strategy authentication succeeds, a 6-digit code is
+  emailed to the user. The admin UI shows a code input form; the user
+  enters the code to complete login. Codes expire after 5 minutes and
+  are single-use.
+
+- **Auth callback route** — New catch-all route
+  `GET/POST /admin/auth/callback/{name}` dispatches to Lua hooks,
+  enabling OAuth2/OIDC callback flows implemented entirely in Lua:
+
+  ```lua
+  -- hooks/auth_callback/google.lua
+  function M.google(ctx)
+      local code = ctx.headers["_query_code"]
+      local tokens = exchange_code(code)
+      local userinfo = get_userinfo(tokens.access_token)
+      local users = crap.find("users", { where = { email = userinfo.email } })
+      if #users > 0 then return users[1] end
+      return crap.create("users", { email = userinfo.email })
+  end
+  ```
+
 - **Multi-server scheduler safety** — Job queue is now safe for
   multi-server deployments:
 

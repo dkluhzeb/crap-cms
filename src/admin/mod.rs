@@ -24,8 +24,13 @@ use serde_json::Value;
 use crate::{
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, email::EmailRenderer, email::SharedEmailProvider, event::EventBus,
-        rate_limit::LoginRateLimiter, upload::SharedStorage,
+        JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
+        email::EmailRenderer,
+        email::SharedEmailProvider,
+        event::EventBus,
+        rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -77,6 +82,10 @@ pub struct AdminState {
     pub csp_header: Option<String>,
     /// The storage backend for uploaded files.
     pub storage: SharedStorage,
+    /// The token provider for JWT creation and validation.
+    pub token_provider: SharedTokenProvider,
+    /// The password provider for hashing and verification.
+    pub password_provider: SharedPasswordProvider,
 }
 
 impl AdminState {

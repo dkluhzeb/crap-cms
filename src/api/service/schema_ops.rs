@@ -107,7 +107,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
@@ -120,7 +120,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def.access.read.as_deref(),
                 &auth_user,
@@ -206,7 +206,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let slug = req.slug.clone();
         let def_fields = def.fields.clone();
@@ -218,7 +218,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.update.as_deref(),
                 &auth_user,
@@ -467,7 +467,7 @@ impl ContentService {
         };
 
         let pool = self.pool.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let hook_runner = self.hook_runner.clone();
         let collections_req = req.collections;
@@ -479,7 +479,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
 
             let tx = conn.transaction().map_err(|e| {
@@ -642,7 +642,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
@@ -655,7 +655,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 access_read.as_deref(),
                 &auth_user,
@@ -715,7 +715,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let collection = req.collection.clone();
         let document_id = req.document_id.clone();
@@ -730,7 +730,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 access_update.as_deref(),
                 &auth_user,
@@ -793,7 +793,7 @@ impl ContentService {
         {
             let pool = self.pool.clone();
             let runner = self.hook_runner.clone();
-            let jwt_secret = self.jwt_secret.clone();
+            let token_provider = self.token_provider.clone();
             let registry = self.registry.clone();
             let def_fields = def.fields.clone();
             let metadata2 = metadata.clone();
@@ -804,7 +804,7 @@ impl ContentService {
                 })?;
                 let token = Self::extract_token(&metadata2);
                 let auth_user =
-                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                    ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
                 let tx = conn.transaction().map_err(|e| {
                     tracing::error!("Field access tx error: {}", e);
@@ -838,7 +838,7 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
 
         let pool = self.pool.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| {
@@ -846,7 +846,7 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
@@ -889,7 +889,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let data_json = req.data_json.unwrap_or_else(|| "{}".to_string());
         let slug = req.slug.clone();
@@ -901,7 +901,7 @@ impl ContentService {
 
             // Auth check first — before job lookup
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
@@ -962,7 +962,7 @@ impl ContentService {
         let req = request.into_inner();
 
         let pool = self.pool.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let id = req.id.clone();
         let run = tokio::task::spawn_blocking(move || -> Result<_, Status> {
@@ -972,7 +972,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
@@ -1003,7 +1003,7 @@ impl ContentService {
         let req = request.into_inner();
 
         let pool = self.pool.clone();
-        let jwt_secret = self.jwt_secret.clone();
+        let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let slug = req.slug.clone();
         let status = req.status.clone();
@@ -1016,7 +1016,7 @@ impl ContentService {
             })?;
 
             let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }

@@ -136,6 +136,12 @@ fn setup_service(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
+            ))
             .build(),
     );
 
@@ -206,6 +212,12 @@ fn setup_service_with_hook(collections: Vec<CollectionDefinition>, init_lua: &st
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
+            ))
             .build(),
     );
 

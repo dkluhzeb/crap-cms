@@ -40,7 +40,7 @@ use crate::{
     config::{CompressionMode, CrapConfig, LocaleConfig},
     core::{
         AuthUser, JwtSecret, Registry, Slug,
-        auth::{self, ClaimsBuilder},
+        auth::{self, ClaimsBuilder, SharedPasswordProvider, SharedTokenProvider},
         collection::Auth as CollectionAuth,
         email::{EmailRenderer, create_email_provider},
         event::EventBus,
@@ -72,6 +72,8 @@ pub struct AdminStartParams {
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     pub storage: SharedStorage,
+    pub token_provider: SharedTokenProvider,
+    pub password_provider: SharedPasswordProvider,
 }
 
 impl AdminStartParams {
@@ -102,6 +104,8 @@ pub async fn start(
         forgot_password_limiter,
         ip_forgot_password_limiter,
         storage,
+        token_provider,
+        password_provider,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
     let handlebars =
@@ -139,6 +143,8 @@ pub async fn start(
         max_sse_connections,
         csp_header,
         storage,
+        token_provider,
+        password_provider,
     };
 
     let h2c_enabled = state.config.server.h2c;
@@ -365,6 +371,14 @@ pub fn build_router(state: AdminState) -> Router {
             get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action),
         )
         .route("/admin/verify-email", get(auth_handlers::verify_email))
+        .route(
+            "/admin/mfa",
+            get(auth_handlers::mfa_page).post(auth_handlers::verify_mfa_action),
+        )
+        .route(
+            "/admin/auth/callback/{name}",
+            get(auth_handlers::auth_callback).post(auth_handlers::auth_callback),
+        )
         .merge(protected)
         .merge(if let Some(mcp) = mcp_route {
             Router::new().route("/mcp", mcp)

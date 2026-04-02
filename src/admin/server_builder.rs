@@ -5,7 +5,11 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, event::EventBus, rate_limit::LoginRateLimiter, upload::SharedStorage,
+        JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
+        event::EventBus,
+        rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -27,6 +31,8 @@ pub struct AdminStartParamsBuilder {
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
     storage: Option<SharedStorage>,
+    token_provider: Option<SharedTokenProvider>,
+    password_provider: Option<SharedPasswordProvider>,
 }
 
 impl AdminStartParamsBuilder {
@@ -44,6 +50,8 @@ impl AdminStartParamsBuilder {
             forgot_password_limiter: None,
             ip_forgot_password_limiter: None,
             storage: None,
+            token_provider: None,
+            password_provider: None,
         }
     }
 
@@ -107,6 +115,16 @@ impl AdminStartParamsBuilder {
         self
     }
 
+    pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
+        self.token_provider = Some(token_provider);
+        self
+    }
+
+    pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
+        self.password_provider = Some(password_provider);
+        self
+    }
+
     pub fn build(self) -> AdminStartParams {
         AdminStartParams {
             config: self.config.expect("config is required"),
@@ -125,6 +143,10 @@ impl AdminStartParamsBuilder {
                 .ip_forgot_password_limiter
                 .expect("ip_forgot_password_limiter is required"),
             storage: self.storage.expect("storage is required"),
+            token_provider: self.token_provider.expect("token_provider is required"),
+            password_provider: self
+                .password_provider
+                .expect("password_provider is required"),
         }
     }
 }

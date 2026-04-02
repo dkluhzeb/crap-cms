@@ -74,6 +74,28 @@ pub struct VerifyEmailQuery {
     pub token: String,
 }
 
+/// Query parameters for the MFA code entry page.
+#[derive(Debug, Deserialize, Default)]
+pub struct MfaQuery {
+    /// The collection slug for the user's auth collection.
+    pub collection: Option<String>,
+}
+
+/// Form data for the MFA code verification.
+#[derive(Deserialize)]
+pub struct MfaForm {
+    /// The 6-digit MFA code entered by the user.
+    pub code: String,
+}
+
+impl std::fmt::Debug for MfaForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MfaForm")
+            .field("code", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// Form data for saving the UI locale.
 #[derive(Debug, Deserialize)]
 pub struct LocaleForm {

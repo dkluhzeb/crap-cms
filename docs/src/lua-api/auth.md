@@ -40,3 +40,4 @@ end
 - Available in both init.lua and hooks.
 - Uses the same Argon2id implementation as the built-in auth system.
 - Useful for custom auth strategies or migrating users from external systems.
+- For custom authentication logic, use [auth strategies](../authentication/custom-strategies.md) or [auth callbacks](../authentication/custom-strategies.md#auth-callbacks).

@@ -109,6 +109,10 @@ pub fn setup_app_with_config(
             &crap_cms::config::UploadConfig::default(),
         )
         .unwrap(),
+        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
     };
 
     let router = build_router(state);
