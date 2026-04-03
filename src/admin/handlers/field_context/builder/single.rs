@@ -8,13 +8,15 @@ use crate::{
     admin::handlers::{
         field_context::{
             MAX_FIELD_DEPTH, add_timezone_context, builder::build_select_options,
-            collect_node_attr_errors, count_errors_in_fields, safe_template_id,
+            collect_node_attr_errors, count_errors_in_fields,
         },
         shared::auto_label_from_name,
     },
     core::field::{FieldDefinition, FieldType},
     db::query::helpers::utc_to_local,
 };
+
+use super::field_type_extras::{apply_row_props, apply_validation_props};
 
 /// Resolve the full form name for a field, accounting for layout transparency.
 fn resolve_full_name(field: &FieldDefinition, name_prefix: &str) -> String {
@@ -75,49 +77,34 @@ fn build_base_field_context(
         ctx["error"] = json!(err);
     }
 
-    // Validation properties
-    if let Some(ml) = field.min_length {
-        ctx["min_length"] = json!(ml);
-    }
-
-    if let Some(ml) = field.max_length {
-        ctx["max_length"] = json!(ml);
-    }
-
-    if let Some(v) = field.min {
-        ctx["min"] = json!(v);
-        ctx["has_min"] = json!(true);
-    }
-
-    if let Some(v) = field.max {
-        ctx["max"] = json!(v);
-        ctx["has_max"] = json!(true);
-    }
-
-    if field.field_type == FieldType::Number {
-        ctx["step"] = json!(field.admin.step.as_deref().unwrap_or("any"));
-    }
-
-    if field.field_type == FieldType::Textarea {
-        ctx["rows"] = json!(field.admin.rows.unwrap_or(8));
-        ctx["resizable"] = json!(field.admin.resizable);
-    }
-
-    if field.field_type == FieldType::Date {
-        if let Some(ref md) = field.min_date {
-            ctx["min_date"] = json!(md);
-        }
-
-        if let Some(ref md) = field.max_date {
-            ctx["max_date"] = json!(md);
-        }
-    }
-
-    if field.field_type == FieldType::Code {
-        ctx["language"] = json!(field.admin.language.as_deref().unwrap_or("json"));
-    }
+    apply_validation_props(field, &mut ctx);
 
     (ctx, full_name, value)
+}
+
+/// Build sub-fields for layout wrappers (Row, Collapsible, Tabs).
+/// Top-level wrappers use empty prefix, nested ones use the full_name.
+fn build_layout_sub_fields(
+    fields: &[FieldDefinition],
+    values: &HashMap<String, String>,
+    errors: &HashMap<String, String>,
+    name_prefix: &str,
+    full_name: &str,
+    non_default_locale: bool,
+    depth: usize,
+) -> Vec<Value> {
+    let prefix = if name_prefix.is_empty() {
+        ""
+    } else {
+        full_name
+    };
+
+    fields
+        .iter()
+        .map(|sf| {
+            build_single_field_context(sf, values, errors, prefix, non_default_locale, depth + 1)
+        })
+        .collect()
 }
 
 /// Build a field context for a single field definition, recursing into composite sub-fields.
@@ -141,40 +128,292 @@ pub fn build_single_field_context(
         return ctx;
     }
 
-    match &field.field_type {
-        FieldType::Select | FieldType::Radio => {
-            let (options, has_many) = build_select_options(field, &value);
+    let fc = SingleFieldCtx {
+        field,
+        value: &value,
+        values,
+        errors,
+        name_prefix,
+        full_name: &full_name,
+        non_default_locale,
+        depth,
+    };
 
-            ctx["options"] = json!(options);
+    apply_single_field_type(&mut ctx, &fc);
 
-            if has_many {
-                ctx["has_many"] = json!(true);
-            }
+    ctx
+}
+
+/// Common params for single-field type handlers.
+struct SingleFieldCtx<'a> {
+    field: &'a FieldDefinition,
+    value: &'a str,
+    values: &'a HashMap<String, String>,
+    errors: &'a HashMap<String, String>,
+    name_prefix: &'a str,
+    full_name: &'a str,
+    non_default_locale: bool,
+    depth: usize,
+}
+
+/// Dispatch type-specific context building to the appropriate handler.
+fn apply_single_field_type(ctx: &mut Value, fc: &SingleFieldCtx) {
+    match &fc.field.field_type {
+        FieldType::Select | FieldType::Radio => single_select(ctx, fc),
+        FieldType::Checkbox => single_checkbox(ctx, fc),
+        FieldType::Relationship => single_relationship(ctx, fc),
+        FieldType::Array => single_array(ctx, fc),
+        FieldType::Group => single_group(ctx, fc),
+        FieldType::Row => single_row(ctx, fc),
+        FieldType::Collapsible => single_collapsible(ctx, fc),
+        FieldType::Tabs => single_tabs(ctx, fc),
+        FieldType::Date => single_date(ctx, fc),
+        FieldType::Upload => single_upload(ctx, fc),
+        FieldType::Richtext => single_richtext(ctx, fc),
+        FieldType::Blocks => single_blocks(ctx, fc),
+        FieldType::Join => single_join(ctx, fc),
+        FieldType::Text | FieldType::Number if fc.field.has_many => single_tags(ctx, fc),
+        _ => {}
+    }
+}
+
+/// Build options list with selected state for Select/Radio fields.
+fn single_select(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let (options, has_many) = build_select_options(fc.field, fc.value);
+    ctx["options"] = json!(options);
+
+    if has_many {
+        ctx["has_many"] = json!(true);
+    }
+}
+
+/// Set the checked state for Checkbox fields.
+fn single_checkbox(ctx: &mut Value, fc: &SingleFieldCtx) {
+    ctx["checked"] = json!(matches!(fc.value, "1" | "true" | "on" | "yes"));
+}
+
+/// Add collection reference, has_many, polymorphic, and picker for Relationship fields.
+fn single_relationship(ctx: &mut Value, fc: &SingleFieldCtx) {
+    if let Some(ref rc) = fc.field.relationship {
+        ctx["relationship_collection"] = json!(rc.collection);
+        ctx["has_many"] = json!(rc.has_many);
+
+        if rc.is_polymorphic() {
+            ctx["polymorphic"] = json!(true);
+            ctx["collections"] = json!(rc.polymorphic);
         }
-        FieldType::Checkbox => {
-            let checked = matches!(value.as_str(), "1" | "true" | "on" | "yes");
+    }
 
-            ctx["checked"] = json!(checked);
-        }
-        FieldType::Relationship => {
-            if let Some(ref rc) = field.relationship {
-                ctx["relationship_collection"] = json!(rc.collection);
-                ctx["has_many"] = json!(rc.has_many);
+    if let Some(ref p) = fc.field.admin.picker {
+        ctx["picker"] = json!(p);
+    }
+}
 
-                if rc.is_polymorphic() {
-                    ctx["polymorphic"] = json!(true);
-                    ctx["collections"] = json!(rc.polymorphic);
-                }
+/// Build template sub-fields, row props, and label_field for Array fields.
+fn single_array(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let template_prefix = format!("{}[__INDEX__]", fc.full_name);
+    let sub_fields: Vec<_> = fc
+        .field
+        .fields
+        .iter()
+        .map(|sf| {
+            build_single_field_context(
+                sf,
+                &HashMap::new(),
+                &HashMap::new(),
+                &template_prefix,
+                fc.non_default_locale,
+                fc.depth + 1,
+            )
+        })
+        .collect();
+
+    ctx["sub_fields"] = json!(sub_fields);
+    apply_row_props(fc.field, ctx, fc.full_name);
+
+    if let Some(ref lf) = fc.field.admin.label_field {
+        ctx["label_field"] = json!(lf);
+    }
+}
+
+/// Recurse into Group sub-fields with `__` prefix naming and locale lock inheritance.
+fn single_group(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let prefix = if fc.name_prefix.is_empty() {
+        fc.field.name.clone()
+    } else {
+        fc.full_name.to_string()
+    };
+
+    let child_non_default_locale = if fc.field.localized {
+        false
+    } else {
+        fc.non_default_locale
+    };
+
+    let sub_fields: Vec<_> = fc
+        .field
+        .fields
+        .iter()
+        .map(|sf| {
+            build_single_field_context(
+                sf,
+                fc.values,
+                fc.errors,
+                &prefix,
+                child_non_default_locale,
+                fc.depth + 1,
+            )
+        })
+        .collect();
+
+    ctx["sub_fields"] = json!(sub_fields);
+    ctx["collapsed"] = json!(fc.field.admin.collapsed);
+}
+
+/// Build sub-fields for Row layout wrapper (transparent — no name added).
+fn single_row(ctx: &mut Value, fc: &SingleFieldCtx) {
+    ctx["sub_fields"] = json!(build_layout_sub_fields(
+        &fc.field.fields,
+        fc.values,
+        fc.errors,
+        fc.name_prefix,
+        fc.full_name,
+        fc.non_default_locale,
+        fc.depth,
+    ));
+}
+
+/// Build sub-fields for Collapsible layout wrapper with collapsed state.
+fn single_collapsible(ctx: &mut Value, fc: &SingleFieldCtx) {
+    ctx["sub_fields"] = json!(build_layout_sub_fields(
+        &fc.field.fields,
+        fc.values,
+        fc.errors,
+        fc.name_prefix,
+        fc.full_name,
+        fc.non_default_locale,
+        fc.depth,
+    ));
+    ctx["collapsed"] = json!(fc.field.admin.collapsed);
+}
+
+/// Build tab panels with sub-fields and per-tab error counts.
+fn single_tabs(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let tabs_ctx: Vec<_> = fc
+        .field
+        .tabs
+        .iter()
+        .map(|tab| {
+            let tab_sub_fields = build_layout_sub_fields(
+                &tab.fields,
+                fc.values,
+                fc.errors,
+                fc.name_prefix,
+                fc.full_name,
+                fc.non_default_locale,
+                fc.depth,
+            );
+
+            let error_count = count_errors_in_fields(&tab_sub_fields);
+            let mut tab_ctx = json!({
+                "label": &tab.label,
+                "sub_fields": tab_sub_fields,
+            });
+
+            if error_count > 0 {
+                tab_ctx["error_count"] = json!(error_count);
             }
 
-            if let Some(ref p) = field.admin.picker {
-                ctx["picker"] = json!(p);
+            if let Some(ref desc) = tab.description {
+                tab_ctx["description"] = json!(desc);
             }
+
+            tab_ctx
+        })
+        .collect();
+
+    ctx["tabs"] = json!(tabs_ctx);
+}
+
+/// Add picker appearance, UTC-to-local conversion, and timezone context for Date fields.
+fn single_date(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let appearance = fc.field.picker_appearance.as_deref().unwrap_or("dayOnly");
+    ctx["picker_appearance"] = json!(appearance);
+
+    let tz_key = format!("{}_tz", fc.full_name);
+    let tz_value = fc
+        .values
+        .get(&tz_key)
+        .map(|s| s.as_str())
+        .unwrap_or("")
+        .trim();
+
+    let display_value = if !tz_value.is_empty() && !fc.value.is_empty() {
+        utc_to_local(fc.value, tz_value).unwrap_or_else(|| fc.value.to_string())
+    } else {
+        fc.value.to_string()
+    };
+
+    match appearance {
+        "dayOnly" => {
+            ctx["date_only_value"] = json!(display_value.get(..10).unwrap_or(&display_value))
         }
-        FieldType::Array => {
-            // Build sub_field contexts for the <template> section (with __INDEX__ placeholder)
-            let template_prefix = format!("{}[__INDEX__]", full_name);
-            let sub_fields: Vec<_> = field
+        "dayAndTime" => {
+            ctx["datetime_local_value"] = json!(display_value.get(..16).unwrap_or(&display_value))
+        }
+        _ => {}
+    }
+
+    add_timezone_context(ctx, fc.field, tz_value, "");
+}
+
+/// Add collection reference, has_many, and picker for Upload fields.
+fn single_upload(ctx: &mut Value, fc: &SingleFieldCtx) {
+    if let Some(ref rc) = fc.field.relationship {
+        ctx["relationship_collection"] = json!(rc.collection);
+
+        if rc.has_many {
+            ctx["has_many"] = json!(true);
+        }
+    }
+
+    let picker = fc.field.admin.picker.as_deref().unwrap_or("drawer");
+
+    if picker != "none" {
+        ctx["picker"] = json!(picker);
+    }
+}
+
+/// Add features, format, node names, and node attr errors for Richtext fields.
+fn single_richtext(ctx: &mut Value, fc: &SingleFieldCtx) {
+    ctx["resizable"] = json!(fc.field.admin.resizable);
+
+    if !fc.field.admin.features.is_empty() {
+        ctx["features"] = json!(fc.field.admin.features);
+    }
+
+    ctx["richtext_format"] = json!(fc.field.admin.richtext_format.as_deref().unwrap_or("html"));
+
+    if !fc.field.admin.nodes.is_empty() {
+        ctx["_node_names"] = json!(fc.field.admin.nodes);
+    }
+
+    if ctx.get("error").is_none_or(|v| v.is_null())
+        && let Some(node_err) = collect_node_attr_errors(fc.errors, fc.full_name)
+    {
+        ctx["error"] = json!(node_err);
+    }
+}
+
+/// Build block type definitions with template sub-fields, row props, and picker.
+fn single_blocks(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let template_prefix = format!("{}[__INDEX__]", fc.full_name);
+    let block_defs: Vec<_> = fc
+        .field
+        .blocks
+        .iter()
+        .map(|bd| {
+            let block_fields: Vec<_> = bd
                 .fields
                 .iter()
                 .map(|sf| {
@@ -183,349 +422,61 @@ pub fn build_single_field_context(
                         &HashMap::new(),
                         &HashMap::new(),
                         &template_prefix,
-                        non_default_locale,
-                        depth + 1,
+                        fc.non_default_locale,
+                        fc.depth + 1,
                     )
                 })
                 .collect();
 
-            ctx["sub_fields"] = json!(sub_fields);
-            ctx["row_count"] = json!(0);
-            ctx["template_id"] = json!(safe_template_id(&full_name));
+            let mut def = json!({
+                "block_type": bd.block_type,
+                "label": bd.label.as_ref().map(|ls| ls.resolve_default()).unwrap_or(&bd.block_type),
+                "fields": block_fields,
+            });
 
-            if let Some(ref lf) = field.admin.label_field {
-                ctx["label_field"] = json!(lf);
+            if let Some(ref lf) = bd.label_field {
+                def["label_field"] = json!(lf);
+            }
+            if let Some(ref g) = bd.group {
+                def["group"] = json!(g);
+            }
+            if let Some(ref url) = bd.image_url {
+                def["image_url"] = json!(url);
             }
 
-            if let Some(max) = field.max_rows {
-                ctx["max_rows"] = json!(max);
-            }
+            def
+        })
+        .collect();
 
-            if let Some(min) = field.min_rows {
-                ctx["min_rows"] = json!(min);
-            }
+    ctx["block_definitions"] = json!(block_defs);
+    apply_row_props(fc.field, ctx, fc.full_name);
 
-            ctx["init_collapsed"] = json!(field.admin.collapsed);
-
-            if let Some(ref ls) = field.admin.labels_singular {
-                ctx["add_label"] = json!(ls.resolve_default());
-            }
-        }
-        FieldType::Group => {
-            // Use recursive path for both top-level and nested groups.
-            // resolve_full_name handles __ vs bracket naming and layout transparency.
-            let prefix = if name_prefix.is_empty() {
-                field.name.clone()
-            } else {
-                full_name.clone()
-            };
-
-            // If the group is localized, all children are editable in any locale.
-            let child_non_default_locale = if field.localized {
-                false
-            } else {
-                non_default_locale
-            };
-
-            let sub_fields: Vec<_> = field
-                .fields
-                .iter()
-                .map(|sf| {
-                    build_single_field_context(
-                        sf,
-                        values,
-                        errors,
-                        &prefix,
-                        child_non_default_locale,
-                        depth + 1,
-                    )
-                })
-                .collect();
-
-            ctx["sub_fields"] = json!(sub_fields);
-            ctx["collapsed"] = json!(field.admin.collapsed);
-        }
-        FieldType::Row => {
-            // Row is a layout-only container; sub-fields are promoted to top level.
-            // Top-level row promotes sub-fields to the same level as the parent,
-            // so we delegate to build_single_field_context with the same prefix.
-            // This correctly handles Group (double-underscore), Collapsible, etc.
-            let sub_fields: Vec<_> = if name_prefix.is_empty() {
-                field
-                    .fields
-                    .iter()
-                    .map(|sf| {
-                        build_single_field_context(
-                            sf,
-                            values,
-                            errors,
-                            "",
-                            non_default_locale,
-                            depth + 1,
-                        )
-                    })
-                    .collect()
-            } else {
-                // Nested row: use bracketed naming via recursion
-                field
-                    .fields
-                    .iter()
-                    .map(|sf| {
-                        build_single_field_context(
-                            sf,
-                            values,
-                            errors,
-                            &full_name,
-                            non_default_locale,
-                            depth + 1,
-                        )
-                    })
-                    .collect()
-            };
-
-            ctx["sub_fields"] = json!(sub_fields);
-        }
-        FieldType::Collapsible => {
-            // Collapsible is a layout-only container like Row but with a toggle header.
-            // Top-level collapsible promotes sub-fields to the same level as the parent,
-            // so we delegate to build_single_field_context with the same prefix.
-            // This correctly handles Group (double-underscore), Row, etc.
-            let sub_fields: Vec<_> = if name_prefix.is_empty() {
-                field
-                    .fields
-                    .iter()
-                    .map(|sf| {
-                        build_single_field_context(
-                            sf,
-                            values,
-                            errors,
-                            "",
-                            non_default_locale,
-                            depth + 1,
-                        )
-                    })
-                    .collect()
-            } else {
-                field
-                    .fields
-                    .iter()
-                    .map(|sf| {
-                        build_single_field_context(
-                            sf,
-                            values,
-                            errors,
-                            &full_name,
-                            non_default_locale,
-                            depth + 1,
-                        )
-                    })
-                    .collect()
-            };
-
-            ctx["sub_fields"] = json!(sub_fields);
-            ctx["collapsed"] = json!(field.admin.collapsed);
-        }
-        FieldType::Tabs => {
-            // Tabs is a layout-only container with multiple tab panels.
-            // Top-level tabs promote sub-fields to the same level as the parent,
-            // so we delegate to build_single_field_context with the same prefix.
-            // This correctly handles Group (double-underscore), Row, Collapsible, etc.
-            let tabs_ctx: Vec<_> = field
-                .tabs
-                .iter()
-                .map(|tab| {
-                    let tab_sub_fields: Vec<_> = if name_prefix.is_empty() {
-                        tab.fields
-                            .iter()
-                            .map(|sf| {
-                                build_single_field_context(
-                                    sf,
-                                    values,
-                                    errors,
-                                    "",
-                                    non_default_locale,
-                                    depth + 1,
-                                )
-                            })
-                            .collect()
-                    } else {
-                        tab.fields
-                            .iter()
-                            .map(|sf| {
-                                build_single_field_context(
-                                    sf,
-                                    values,
-                                    errors,
-                                    &full_name,
-                                    non_default_locale,
-                                    depth + 1,
-                                )
-                            })
-                            .collect()
-                    };
-
-                    let error_count = count_errors_in_fields(&tab_sub_fields);
-                    let mut tab_ctx = json!({
-                        "label": &tab.label,
-                        "sub_fields": tab_sub_fields,
-                    });
-
-                    if error_count > 0 {
-                        tab_ctx["error_count"] = json!(error_count);
-                    }
-
-                    if let Some(ref desc) = tab.description {
-                        tab_ctx["description"] = json!(desc);
-                    }
-
-                    tab_ctx
-                })
-                .collect();
-
-            ctx["tabs"] = json!(tabs_ctx);
-        }
-        FieldType::Date => {
-            let appearance = field.picker_appearance.as_deref().unwrap_or("dayOnly");
-
-            ctx["picker_appearance"] = json!(appearance);
-
-            let tz_key = format!("{}_tz", full_name);
-            let tz_value = values.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
-
-            // If a timezone is stored, convert UTC back to local time for display
-            let tz_value = tz_value.trim();
-            let display_value = if !tz_value.is_empty() && !value.is_empty() {
-                utc_to_local(&value, tz_value).unwrap_or_else(|| value.clone())
-            } else {
-                value.clone()
-            };
-
-            match appearance {
-                "dayOnly" => {
-                    let date_val = display_value.get(..10).unwrap_or(&display_value);
-                    ctx["date_only_value"] = json!(date_val);
-                }
-                "dayAndTime" => {
-                    let dt_val = display_value.get(..16).unwrap_or(&display_value);
-                    ctx["datetime_local_value"] = json!(dt_val);
-                }
-                _ => {}
-            }
-
-            add_timezone_context(&mut ctx, field, tz_value, "");
-        }
-        FieldType::Upload => {
-            if let Some(ref rc) = field.relationship {
-                ctx["relationship_collection"] = json!(rc.collection);
-
-                if rc.has_many {
-                    ctx["has_many"] = json!(true);
-                }
-            }
-
-            let picker = field.admin.picker.as_deref().unwrap_or("drawer");
-            if picker != "none" {
-                ctx["picker"] = json!(picker);
-            }
-        }
-        FieldType::Text | FieldType::Number if field.has_many => {
-            // Tag-style input: value is a JSON array like ["tag1","tag2"]
-            let tags: Vec<String> = from_str(&value).unwrap_or_default();
-
-            ctx["has_many"] = json!(true);
-            ctx["tags"] = json!(tags);
-            // Store comma-separated for the hidden input
-            ctx["value"] = json!(tags.join(","));
-        }
-        FieldType::Richtext => {
-            ctx["resizable"] = json!(field.admin.resizable);
-
-            if !field.admin.features.is_empty() {
-                ctx["features"] = json!(field.admin.features);
-            }
-
-            let fmt = field.admin.richtext_format.as_deref().unwrap_or("html");
-
-            ctx["richtext_format"] = json!(fmt);
-
-            // Store node names — full defs resolved in enrich_field_contexts
-            if !field.admin.nodes.is_empty() {
-                ctx["_node_names"] = json!(field.admin.nodes);
-            }
-
-            // Attach node attr validation errors (e.g. content[cta#0].text)
-            if ctx.get("error").is_none_or(|v| v.is_null())
-                && let Some(node_err) = collect_node_attr_errors(errors, &full_name)
-            {
-                ctx["error"] = json!(node_err);
-            }
-        }
-        FieldType::Blocks => {
-            let block_defs: Vec<_> = field.blocks.iter().map(|bd| {
-                // Build sub-field contexts for each block type's <template> section
-                let template_prefix = format!("{}[__INDEX__]", full_name);
-                let block_fields: Vec<_> = bd.fields.iter().map(|sf| {
-                    build_single_field_context(sf, &HashMap::new(), &HashMap::new(), &template_prefix, non_default_locale, depth + 1)
-                }).collect();
-                let mut def = json!({
-                    "block_type": bd.block_type,
-                    "label": bd.label.as_ref().map(|ls| ls.resolve_default()).unwrap_or(&bd.block_type),
-                    "fields": block_fields,
-                });
-
-                if let Some(ref lf) = bd.label_field {
-                    def["label_field"] = json!(lf);
-                }
-
-                if let Some(ref g) = bd.group {
-                    def["group"] = json!(g);
-                }
-
-                if let Some(ref url) = bd.image_url {
-                    def["image_url"] = json!(url);
-                }
-
-                def
-            }).collect();
-
-            ctx["block_definitions"] = json!(block_defs);
-            ctx["row_count"] = json!(0);
-            ctx["template_id"] = json!(safe_template_id(&full_name));
-
-            if let Some(ref lf) = field.admin.label_field {
-                ctx["label_field"] = json!(lf);
-            }
-
-            if let Some(max) = field.max_rows {
-                ctx["max_rows"] = json!(max);
-            }
-
-            if let Some(min) = field.min_rows {
-                ctx["min_rows"] = json!(min);
-            }
-
-            ctx["init_collapsed"] = json!(field.admin.collapsed);
-
-            if let Some(ref ls) = field.admin.labels_singular {
-                ctx["add_label"] = json!(ls.resolve_default());
-            }
-
-            if let Some(ref p) = field.admin.picker {
-                ctx["picker"] = json!(p);
-            }
-        }
-        FieldType::Join => {
-            if let Some(ref jc) = field.join {
-                ctx["join_collection"] = json!(jc.collection);
-                ctx["join_on"] = json!(jc.on);
-            }
-
-            ctx["readonly"] = json!(true);
-        }
-        _ => {}
+    if let Some(ref lf) = fc.field.admin.label_field {
+        ctx["label_field"] = json!(lf);
     }
 
-    ctx
+    if let Some(ref p) = fc.field.admin.picker {
+        ctx["picker"] = json!(p);
+    }
+}
+
+/// Add join collection/on reference for Join fields (always readonly).
+fn single_join(ctx: &mut Value, fc: &SingleFieldCtx) {
+    if let Some(ref jc) = fc.field.join {
+        ctx["join_collection"] = json!(jc.collection);
+        ctx["join_on"] = json!(jc.on);
+    }
+
+    ctx["readonly"] = json!(true);
+}
+
+/// Parse JSON array value into tag list for Text/Number has_many fields.
+fn single_tags(ctx: &mut Value, fc: &SingleFieldCtx) {
+    let tags: Vec<String> = from_str(fc.value).unwrap_or_default();
+
+    ctx["has_many"] = json!(true);
+    ctx["tags"] = json!(tags);
+    ctx["value"] = json!(tags.join(","));
 }
 
 #[cfg(test)]

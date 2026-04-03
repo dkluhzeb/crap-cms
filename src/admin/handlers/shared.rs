@@ -641,6 +641,41 @@ pub(crate) fn collect_condition_refs(fields: &[FieldDefinition]) -> HashSet<&str
     refs
 }
 
+/// Quick read-access check for dashboard/list visibility.
+/// Returns true if the user is allowed to see this collection or global.
+pub(crate) fn has_read_access(
+    state: &AdminState,
+    access_ref: Option<&str>,
+    user_doc: Option<&Document>,
+) -> bool {
+    if access_ref.is_none() {
+        return !state.config.access.default_deny;
+    }
+
+    let mut conn = match state.pool.get() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    let result = state
+        .hook_runner
+        .check_access(access_ref, user_doc, None, None, &tx);
+
+    if let Err(e) = tx.commit() {
+        tracing::warn!("tx commit failed: {e}");
+    }
+
+    matches!(
+        result,
+        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
