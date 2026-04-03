@@ -1,8 +1,10 @@
 //! Admin UI: Axum server, Handlebars templates, and HTMX-powered handlers.
 
+mod auth_middleware;
 pub mod context;
 pub mod context_builder;
 pub mod handlers;
+mod mcp_handler;
 pub mod server;
 pub mod server_builder;
 pub mod templates;

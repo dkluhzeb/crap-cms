@@ -6,17 +6,19 @@ use axum::Extension;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    admin::AdminState,
+    admin::{
+        AdminState,
+        context::{Breadcrumb, PageType, build_collection_context, build_global_context},
+        handlers::shared::has_read_access,
+    },
     config::LocaleConfig,
     core::{
         Document,
         auth::{AuthUser, Claims},
         collection::{CollectionDefinition, GlobalDefinition},
     },
-    db::query::{AccessResult, PaginationResult},
+    db::query::PaginationResult,
 };
-
-use crate::admin::context::{Breadcrumb, PageType, build_collection_context, build_global_context};
 
 /// Centralized builder for admin template contexts.
 pub struct ContextBuilder {
@@ -137,7 +139,7 @@ impl ContextBuilder {
                         .get(slug)
                         .and_then(|d| d.access.read.as_deref());
 
-                    has_nav_read_access(state, access_ref, user_doc)
+                    has_read_access(state, access_ref, user_doc)
                 });
             }
 
@@ -150,7 +152,7 @@ impl ContextBuilder {
                         .get(slug)
                         .and_then(|d| d.access.read.as_deref());
 
-                    has_nav_read_access(state, access_ref, user_doc)
+                    has_read_access(state, access_ref, user_doc)
                 });
             }
         }
@@ -396,40 +398,6 @@ fn build_nav_globals(state: &AdminState) -> Value {
     globals.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
 
     Value::Array(globals)
-}
-
-/// Quick read-access check for sidebar nav visibility.
-fn has_nav_read_access(
-    state: &AdminState,
-    access_ref: Option<&str>,
-    user_doc: Option<&Document>,
-) -> bool {
-    if access_ref.is_none() {
-        return !state.config.access.default_deny;
-    }
-
-    let mut conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let tx = match conn.transaction() {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, None, None, &tx);
-
-    if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
-    }
-
-    matches!(
-        result,
-        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
-    )
 }
 
 fn has_auth_collections(state: &AdminState) -> bool {

@@ -20,6 +20,7 @@ impl Translations {
         if let Ok(en) = serde_json::from_str::<HashMap<String, String>>(DEFAULT_EN) {
             locales.insert("en".to_string(), en);
         }
+
         if let Ok(de) = serde_json::from_str::<HashMap<String, String>>(DEFAULT_DE) {
             locales.insert("de".to_string(), de);
         }

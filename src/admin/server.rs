@@ -1,13 +1,21 @@
 //! Axum router setup, auth middleware, and admin server startup.
 
+// Auth middleware and user loading are in `auth_middleware.rs`.
+use super::auth_middleware::auth_middleware;
+pub(crate) use super::auth_middleware::load_auth_user;
+
 use std::{
-    collections::HashMap, future::Future, net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc,
+    future::Future,
+    net::SocketAddr,
+    path::PathBuf,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicUsize},
     time::Duration,
 };
 
 use anyhow::Result;
 use axum::{
-    Json, Router,
+    Router,
     body::{self, Body},
     error_handling::HandleErrorLayer,
     extract::{ConnectInfo, DefaultBodyLimit, State},
@@ -18,27 +26,25 @@ use axum::{
         },
     },
     middleware::{self, Next},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{MethodRouter, get, post},
 };
-use chrono::Utc;
+use hyper::service;
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto::Builder as AutoBuilder,
 };
 use nanoid::nanoid;
-use serde_json::Value;
 use subtle::ConstantTimeEq;
-use tokio::{net::TcpListener, select, time::sleep};
+use tokio::{net::TcpListener, select, spawn, time::sleep};
 use tokio_util::sync::CancellationToken;
-use tower::{Service, timeout::TimeoutLayer};
+use tower::{Service, ServiceBuilder, timeout::TimeoutLayer};
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
-use tracing::{debug, error, info, info_span, warn};
+use tracing::{info, info_span, warn};
 
 use crate::{
     admin::{
         AdminState, Translations,
-        context::ContextBuilder,
         handlers::{
             auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
         },
@@ -46,25 +52,17 @@ use crate::{
         templates,
     },
     api::upload::upload_router,
-    config::{CompressionMode, CrapConfig, LocaleConfig},
+    config::{CompressionMode, CrapConfig},
     core::{
-        AuthUser, JwtSecret, Registry, Slug,
-        auth::{self, ClaimsBuilder, SharedPasswordProvider, SharedTokenProvider},
-        collection::Auth as CollectionAuth,
+        JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
         email::{EmailRenderer, create_email_provider},
         event::EventBus,
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
-    db::{DbConnection, DbPool, query},
+    db::{DbConnection, DbPool},
     hooks::HookRunner,
-    mcp::{
-        McpServer,
-        protocol::{
-            INTERNAL_ERROR, INVALID_REQUEST, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
-            PARSE_ERROR,
-        },
-    },
 };
 
 /// Parameters for starting the admin HTTP server.
@@ -148,7 +146,7 @@ pub async fn start(
         has_auth,
         translations,
         shutdown: shutdown.clone(),
-        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections,
         csp_header,
         storage,
@@ -206,15 +204,18 @@ async fn serve_h2c(listener: TcpListener, app: Router, shutdown: CancellationTok
             result = listener.accept() => {
                 let (socket, addr) = result?;
                 let tower_service = app.clone();
-                tokio::spawn(async move {
-                    let hyper_service = hyper::service::service_fn(move |mut req| {
+
+                spawn(async move {
+                    let hyper_service = service::service_fn(move |mut req| {
                         // Insert ConnectInfo so extractors can read the client address
                         // (axum::serve does this automatically; h2c needs it manually)
                         req.extensions_mut()
                             .insert(ConnectInfo(addr));
                         tower_service.clone().call(req)
                     });
+
                     let io = TokioIo::new(socket);
+
                     AutoBuilder::new(TokioExecutor::new())
                         .serve_connection_with_upgrades(io, hyper_service)
                         .await
@@ -245,6 +246,7 @@ fn method_routers() -> (
     let globals = MethodRouter::new()
         .get(globals::edit_form)
         .post(globals::update_action);
+
     (slug, item, globals)
 }
 
@@ -449,7 +451,7 @@ pub fn build_router(state: AdminState) -> Router {
                 )
             })
             .on_response(
-                |resp: &axum::http::Response<_>, latency: Duration, _span: &tracing::Span| {
+                |resp: &Response<_>, latency: Duration, _span: &tracing::Span| {
                     info!(
                         status = resp.status().as_u16(),
                         latency_ms = latency.as_millis(),
@@ -463,7 +465,7 @@ pub fn build_router(state: AdminState) -> Router {
     // tower::timeout errors into 408 Request Timeout responses.
     let router = if let Some(timeout_secs) = state.config.server.request_timeout {
         router.layer(
-            tower::ServiceBuilder::new()
+            ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|_| async {
                     StatusCode::REQUEST_TIMEOUT
                 }))
@@ -703,331 +705,6 @@ fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, de
     }
 }
 
-/// Validate JWT from `crap_session` cookie and optionally load the full user document.
-#[cfg(not(tarpaulin_include))]
-fn validate_jwt_and_load_user(
-    state: &AdminState,
-    cookie_header: &str,
-) -> Option<(auth::Claims, Option<AuthUser>)> {
-    let token = extract_cookie(cookie_header, "crap_session")?;
-    let claims = match auth::validate_token(token, state.jwt_secret.as_ref()) {
-        Ok(c) => c,
-        Err(e) => {
-            debug!("JWT validation failed: {}", e);
-
-            return None;
-        }
-    };
-    let auth_user = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale);
-
-    // Reject locked users even if their JWT is still valid
-    if let Some(ref au) = auth_user {
-        let locked = au
-            .user_doc
-            .fields
-            .get("_locked")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-            != 0;
-        if locked {
-            return None;
-        }
-    }
-
-    Some((claims, auth_user))
-}
-
-/// Evaluate custom auth strategies in a blocking context (Lua + DB access).
-/// Tries each strategy across all auth collections until one succeeds.
-#[cfg(not(tarpaulin_include))]
-fn try_strategy_auth(
-    auth_defs: &[(Slug, CollectionAuth)],
-    headers: &HashMap<String, String>,
-    pool: &DbPool,
-    hook_runner: &HookRunner,
-) -> Option<auth::Claims> {
-    let mut conn = pool.get().ok()?;
-    let tx = conn.transaction().ok()?;
-    let mut result = None;
-
-    for (slug, auth_config) in auth_defs {
-        if result.is_some() {
-            break;
-        }
-        for strategy in &auth_config.strategies {
-            match hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, &tx) {
-                Ok(Some(user)) => {
-                    let user_email = user
-                        .fields
-                        .get("email")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let expiry = auth_config.token_expiry;
-                    let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
-                        .email(user_email)
-                        .exp((Utc::now().timestamp() as u64) + expiry)
-                        .build()
-                    {
-                        Ok(c) => c,
-                        Err(e) => {
-                            error!("Claims build error: {}", e);
-
-                            continue;
-                        }
-                    };
-                    result = Some(claims);
-                    break;
-                }
-                Ok(None) => continue,
-                Err(e) => {
-                    warn!(
-                        "Auth strategy '{}' error for {}: {}",
-                        strategy.name, slug, e
-                    );
-                    continue;
-                }
-            }
-        }
-    }
-
-    // Read-only access check — commit result is irrelevant, rollback on drop is safe
-    if let Err(e) = tx.commit() {
-        warn!("tx commit failed: {e}");
-    }
-    result
-}
-
-/// Build a login redirect response (HTMX-aware: uses HX-Redirect instead of 302).
-#[cfg(not(tarpaulin_include))]
-fn login_redirect(request: &Request<Body>) -> Response {
-    let is_htmx = request.headers().get("HX-Request").is_some();
-
-    if is_htmx {
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("HX-Redirect", "/admin/login")
-            .body(Body::empty())
-            .expect("static response builder")
-    } else {
-        Redirect::to("/admin/login").into_response()
-    }
-}
-
-/// Insert authenticated claims (and optionally user) into request extensions,
-/// checking the admin access gate first. Returns a gate-denied response if blocked.
-#[cfg(not(tarpaulin_include))]
-async fn apply_auth_to_request(
-    state: &AdminState,
-    request: &mut Request<Body>,
-    claims: auth::Claims,
-    auth_user: Option<AuthUser>,
-) -> Option<Response> {
-    if let Some(user) = auth_user {
-        if let Some(response) = check_admin_gate(state, &user).await {
-            return Some(response);
-        }
-
-        request.extensions_mut().insert(user);
-    }
-
-    request.extensions_mut().insert(claims);
-
-    None
-}
-
-/// Auth middleware — extracts JWT from `crap_session` cookie, validates it,
-/// and stores `Claims` in request extensions. If JWT is invalid/missing,
-/// tries custom auth strategies before redirecting to login.
-///
-/// Also enforces two admin access gates:
-/// 1. If no auth collections exist and `require_auth` is true, shows "setup required" page.
-/// 2. If `admin.access` is configured, checks the Lua function after authentication.
-// Excluded from coverage: async Axum middleware requiring full server state (pool, registry,
-// HookRunner, JWT secret) and spawned blocking tasks for Lua auth strategies.
-#[cfg(not(tarpaulin_include))]
-async fn auth_middleware(
-    State(state): State<AdminState>,
-    mut request: Request<Body>,
-    next: Next,
-) -> Response {
-    // Gate 1: No auth collections but require_auth is on → setup required
-    if !state.has_auth && state.config.admin.require_auth {
-        return auth_required_response(&state);
-    }
-
-    let cookie_header = request
-        .headers()
-        .get(COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    // Fast path: valid JWT cookie
-    if let Some((claims, auth_user)) = validate_jwt_and_load_user(&state, cookie_header) {
-        if let Some(response) = apply_auth_to_request(&state, &mut request, claims, auth_user).await
-        {
-            return response;
-        }
-
-        return next.run(request).await;
-    }
-
-    // Collect custom strategies from all auth collections
-    let auth_defs: Vec<_> = state
-        .registry
-        .collections
-        .values()
-        .filter(|d| d.is_auth_collection())
-        .filter(|d| {
-            d.auth
-                .as_ref()
-                .map(|a| !a.strategies.is_empty())
-                .unwrap_or(false)
-        })
-        .map(|d| (d.slug.clone(), d.auth.clone().expect("guarded by filter")))
-        .collect();
-
-    if !auth_defs.is_empty() {
-        let headers: HashMap<String, String> = request
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|v| (name.as_str().to_string(), v.to_string()))
-            })
-            .collect();
-
-        let pool = state.pool.clone();
-        let hook_runner = state.hook_runner.clone();
-
-        let strategy_result = tokio::task::spawn_blocking(move || {
-            try_strategy_auth(&auth_defs, &headers, &pool, &hook_runner)
-        })
-        .await;
-
-        if let Ok(Some(claims)) = strategy_result {
-            let auth_user =
-                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale);
-            if let Some(response) =
-                apply_auth_to_request(&state, &mut request, claims, auth_user).await
-            {
-                return response;
-            }
-            return next.run(request).await;
-        }
-    }
-
-    login_redirect(&request)
-}
-
-/// Gate 2: Check `admin.access` Lua function. Returns a 403 response if the user
-/// is denied, or None if access is allowed (or no access function is configured).
-// Excluded from coverage: requires HookRunner + DB pool for Lua access check.
-#[cfg(not(tarpaulin_include))]
-async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<Response> {
-    let access_ref = state.config.admin.access.as_deref()?;
-    let pool = state.pool.clone();
-    let hook_runner = state.hook_runner.clone();
-    let user_doc = auth_user.user_doc.clone();
-    let access_ref = access_ref.to_string();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = pool.get().ok()?;
-
-        Some(hook_runner.check_access(Some(&access_ref), Some(&user_doc), None, None, &conn))
-    })
-    .await;
-
-    match result {
-        Ok(Some(Ok(query::AccessResult::Denied))) => Some(admin_denied_response(state)),
-        Ok(Some(Err(e))) => {
-            error!("admin.access check failed: {}", e);
-
-            Some(admin_denied_response(state))
-        }
-        _ => None, // Allowed or Constrained — pass through
-    }
-}
-
-/// Render the "setup required" page (no auth collection exists, require_auth is on).
-fn auth_required_response(state: &AdminState) -> Response {
-    let data = ContextBuilder::auth(state).build();
-
-    match state.render("errors/auth_required", &data) {
-        Ok(html) => (StatusCode::SERVICE_UNAVAILABLE, Html(html)).into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Setup required: no auth collection configured",
-        )
-            .into_response(),
-    }
-}
-
-/// Render the "access denied" page (user authenticated but not authorized for admin).
-fn admin_denied_response(state: &AdminState) -> Response {
-    let data = ContextBuilder::auth(state).build();
-
-    match state.render("errors/admin_denied", &data) {
-        Ok(html) => (StatusCode::FORBIDDEN, Html(html)).into_response(),
-        Err(_) => (StatusCode::FORBIDDEN, "Access denied").into_response(),
-    }
-}
-
-/// Load the full user document for an authenticated user.
-/// Returns None if the user can't be found (e.g., deleted since JWT was issued).
-/// Also loads `ui_locale` from `_crap_user_settings`.
-// Excluded from coverage: requires full DB pool + SharedRegistry with auth collection definitions.
-// Tested indirectly through integration tests (admin login flow).
-#[cfg(not(tarpaulin_include))]
-pub(crate) fn load_auth_user(
-    pool: &DbPool,
-    registry: &Registry,
-    claims: &auth::Claims,
-    locale_config: &LocaleConfig,
-) -> Option<AuthUser> {
-    let def = registry.get_collection(&claims.collection)?.clone();
-    let locale_ctx = query::LocaleContext::from_locale_string(None, locale_config);
-
-    let conn = pool.get().ok()?;
-
-    let doc = query::find_by_id(
-        &conn,
-        &claims.collection,
-        &def,
-        &claims.sub,
-        locale_ctx.as_ref(),
-    )
-    .ok()??;
-
-    // Reject tokens with stale session version (password was changed).
-    // On DB error, reject the token — do not silently default to 0.
-    let db_session_version =
-        query::get_session_version(&conn, &claims.collection, &claims.sub).ok()?;
-
-    if claims.session_version != db_session_version {
-        return None;
-    }
-
-    // Load ui_locale from _crap_user_settings
-    let ui_locale = query::get_user_settings(&conn, &claims.sub)
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            v.get("ui_locale")
-                .and_then(|l| l.as_str())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| locale_config.default_locale.clone());
-
-    let mut auth = AuthUser::new(claims.clone(), doc);
-    auth.ui_locale = ui_locale;
-
-    Some(auth)
-}
-
 /// Extract a named cookie value from a Cookie header string.
 pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     for part in header.split(';') {
@@ -1043,92 +720,8 @@ pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str>
     None
 }
 
-/// MCP HTTP transport handler — receives JSON-RPC 2.0 over POST /mcp.
-/// Optionally validates API key from Authorization header.
-// Excluded from coverage: async Axum handler requiring full server state.
-#[cfg(not(tarpaulin_include))]
-async fn mcp_http_handler(State(state): State<AdminState>, request: Request<Body>) -> Response {
-    // Defense-in-depth: reject all requests when no API key is configured.
-    // The startup check in commands/serve.rs already bails if http=true and api_key is empty,
-    // but this guard protects against programmatic construction of AdminState without that check.
-    if state.config.mcp.api_key.is_empty() {
-        return Json(JsonRpcResponse::error(
-            None,
-            INVALID_REQUEST,
-            "MCP HTTP endpoint requires an API key — set mcp.api_key in crap.toml",
-        ))
-        .into_response();
-    }
-
-    // API key auth — constant-time comparison to prevent timing attacks
-    let auth_header = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let expected = format!("Bearer {}", state.config.mcp.api_key);
-    let is_valid = auth_header.as_bytes().ct_eq(expected.as_bytes());
-
-    if !bool::from(is_valid) {
-        return Json(JsonRpcResponse::error(
-            None,
-            INVALID_REQUEST,
-            "Invalid or missing API key",
-        ))
-        .into_response();
-    }
-
-    let body_bytes = match body::to_bytes(request.into_body(), 1024 * 1024).await {
-        Ok(b) => b,
-        Err(_) => {
-            return Json(JsonRpcResponse::error(
-                None,
-                PARSE_ERROR,
-                "Request body too large",
-            ))
-            .into_response();
-        }
-    };
-
-    let rpc_request: JsonRpcRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(r) => r,
-        Err(e) => {
-            let error_resp = JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id: None,
-                result: None,
-                error: Some(JsonRpcError {
-                    code: PARSE_ERROR,
-                    message: format!("Parse error: {}", e),
-                    data: None,
-                }),
-            };
-            return Json(error_resp).into_response();
-        }
-    };
-
-    let server = McpServer {
-        pool: state.pool.clone(),
-        registry: state.registry.clone(),
-        runner: state.hook_runner.clone(),
-        config: state.config.clone(),
-        config_dir: state.config_dir.clone(),
-    };
-
-    // Run handle_message in spawn_blocking — it does DB queries, Lua hooks, and filesystem I/O
-    let response =
-        match tokio::task::spawn_blocking(move || server.handle_message(rpc_request)).await {
-            Ok(resp) => resp,
-            Err(_) => JsonRpcResponse::error(None, INTERNAL_ERROR, "Internal error"),
-        };
-
-    // Notifications must not receive a response per JSON-RPC spec
-    if response.id.is_none() && response.result.is_none() && response.error.is_none() {
-        return StatusCode::NO_CONTENT.into_response();
-    }
-
-    Json(response).into_response()
-}
+// MCP HTTP handler is in `mcp_handler.rs`.
+use super::mcp_handler::mcp_http_handler;
 
 #[cfg(test)]
 mod tests {
