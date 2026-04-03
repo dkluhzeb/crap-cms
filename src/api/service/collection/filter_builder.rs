@@ -34,6 +34,7 @@ impl<'a> FilterBuilder<'a> {
     /// Set the optional `where` JSON string from the gRPC request.
     pub fn where_json(mut self, json: Option<&'a str>) -> Self {
         self.where_json = json;
+
         self
     }
 
@@ -42,6 +43,7 @@ impl<'a> FilterBuilder<'a> {
     pub fn draft_filter(mut self, has_drafts: bool, include_published_only: bool) -> Self {
         self.has_drafts = has_drafts;
         self.include_published_only = include_published_only;
+
         self
     }
 

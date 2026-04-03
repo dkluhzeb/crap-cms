@@ -15,8 +15,10 @@ use std::{
 #[cfg(unix)]
 use tokio::select;
 #[cfg(unix)]
-use tokio::signal::unix::{SignalKind, signal};
-use tokio::try_join;
+use tokio::{
+    signal::unix::{SignalKind, signal},
+    try_join,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -71,6 +73,7 @@ fn is_process_running(pid: u32) -> bool {
     let Ok(pid_i32) = i32::try_from(pid) else {
         return false;
     };
+
     unsafe { libc::kill(pid_i32, 0) == 0 }
 }
 
@@ -215,6 +218,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     while Instant::now() < deadline {
         if !is_process_running(pid) {
             remove_pid_file(config_dir);
+
             cli::success(&format!("Stopped crap-cms (PID {pid})"));
 
             return Ok(());
@@ -232,7 +236,9 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 
     // Brief wait for the force kill to take effect.
     thread::sleep(Duration::from_millis(500));
+
     remove_pid_file(config_dir);
+
     cli::success(&format!("Force-stopped crap-cms (PID {pid})"));
 
     Ok(())
@@ -607,12 +613,14 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     if cfg.server.grpc_rate_limit_requests == 0 {
         warn!("gRPC API rate limiting is disabled (grpc_rate_limit_requests = 0)");
     }
+
     if cfg.server.h2c && !cfg.server.trust_proxy {
         warn!(
             "h2c enabled but trust_proxy is false — \
              per-IP rate limiting will use the proxy's IP, not the client's"
         );
     }
+
     if !cfg.email.smtp_host.is_empty() && cfg.server.public_url.is_none() {
         warn!(
             "Email is configured (smtp_host set) but server.public_url is not set — \
@@ -667,9 +675,11 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     if run_admin {
         info!("Starting Admin UI on http://{}", admin_addr);
     }
+
     if run_api {
         info!("Starting gRPC API on {}", grpc_addr);
     }
+
     if !run_scheduler {
         info!("Background job scheduler disabled");
     }
@@ -680,6 +690,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     } else {
         &cfg.auth.rate_limit_redis_url
     };
+
     let rl_backend = create_rate_limit_backend(
         &cfg.auth.rate_limit_backend,
         rl_redis_url,
@@ -694,18 +705,21 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         cfg.auth.max_login_attempts,
         cfg.auth.login_lockout_seconds,
     ));
+
     let ip_login_limiter = Arc::new(LoginRateLimiter::with_backend(
         rl_backend.clone(),
         "ip_login",
         cfg.auth.max_ip_login_attempts,
         cfg.auth.login_lockout_seconds,
     ));
+
     let forgot_password_limiter = Arc::new(LoginRateLimiter::with_backend(
         rl_backend.clone(),
         "forgot",
         cfg.auth.max_forgot_password_attempts,
         cfg.auth.forgot_password_window_seconds,
     ));
+
     // Uses max_ip_login_attempts intentionally — shared per-IP budget for login
     // and forgot-password (same threat model: brute-force from a single IP).
     let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::with_backend(

@@ -17,8 +17,7 @@ pub mod password;
 /// Token provider trait + JWT implementation.
 pub mod token;
 
-use std::fmt;
-use std::sync::LazyLock;
+use std::{fmt, sync::LazyLock};
 
 use anyhow::{Context as _, Result, anyhow};
 use argon2::{
@@ -70,12 +69,14 @@ pub fn hash_password(password: &str) -> Result<HashedPassword> {
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| anyhow!("Password hashing failed: {}", e))?;
+
     Ok(HashedPassword::new(hash.to_string()))
 }
 
 /// Verify a password against a stored hash.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     let parsed = PasswordHash::new(hash).map_err(|e| anyhow!("Invalid password hash: {}", e))?;
+
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok())
@@ -108,6 +109,7 @@ impl AuthUser {
 /// Create a signed JWT token from claims.
 pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
     let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+
     jsonwebtoken::encode(&jsonwebtoken::Header::default(), claims, &key)
         .context("Failed to create JWT token")
 }
@@ -116,10 +118,13 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims> {
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::default();
+
     validation.required_spec_claims.clear();
     validation.validate_exp = true;
+
     let data =
         jsonwebtoken::decode::<Claims>(token, &key, &validation).context("Invalid JWT token")?;
+
     Ok(data.claims)
 }
 

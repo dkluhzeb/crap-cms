@@ -3,6 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
+    admin::server::AdminStartParams,
     config::CrapConfig,
     core::{
         JwtSecret, Registry,
@@ -14,8 +15,6 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
 };
-
-use crate::admin::server::AdminStartParams;
 
 /// Builder for [`AdminStartParams`]. Created via [`AdminStartParams::builder`].
 pub struct AdminStartParamsBuilder {
@@ -57,71 +56,85 @@ impl AdminStartParamsBuilder {
 
     pub fn config(mut self, config: CrapConfig) -> Self {
         self.config = Some(config);
+
         self
     }
 
     pub fn config_dir(mut self, config_dir: PathBuf) -> Self {
         self.config_dir = Some(config_dir);
+
         self
     }
 
     pub fn pool(mut self, pool: DbPool) -> Self {
         self.pool = Some(pool);
+
         self
     }
 
     pub fn registry(mut self, registry: Arc<Registry>) -> Self {
         self.registry = Some(registry);
+
         self
     }
 
     pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
         self.hook_runner = Some(hook_runner);
+
         self
     }
 
     pub fn jwt_secret(mut self, jwt_secret: impl Into<JwtSecret>) -> Self {
         self.jwt_secret = Some(jwt_secret.into());
+
         self
     }
 
     pub fn event_bus(mut self, event_bus: Option<EventBus>) -> Self {
         self.event_bus = event_bus;
+
         self
     }
 
     pub fn login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.login_limiter = Some(limiter);
+
         self
     }
 
     pub fn ip_login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_login_limiter = Some(limiter);
+
         self
     }
 
     pub fn forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.forgot_password_limiter = Some(limiter);
+
         self
     }
 
     pub fn ip_forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
         self.ip_forgot_password_limiter = Some(limiter);
+
         self
     }
 
     pub fn storage(mut self, storage: SharedStorage) -> Self {
         self.storage = Some(storage);
+
         self
     }
 
     pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
         self.token_provider = Some(token_provider);
+
         self
     }
 
     pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
         self.password_provider = Some(password_provider);
+
         self
     }
 

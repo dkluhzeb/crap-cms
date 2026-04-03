@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::SubFieldOpts;
+use crate::admin::handlers::field_context::enrich::SubFieldOpts;
 
 /// Builder for [`SubFieldOpts`].
 pub struct SubFieldOptsBuilder<'a> {

@@ -78,6 +78,7 @@ pub fn run(config_dir: &Path) -> Result<()> {
             "sqlite" => {
                 let db_path = cfg.db_path(&config_dir);
                 let db_size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+
                 cli::kv(
                     "Database",
                     &format!("{} ({})", db_path.display(), format_bytes(db_size)),
@@ -95,6 +96,7 @@ pub fn run(config_dir: &Path) -> Result<()> {
     if uploads_dir.is_dir() {
         let uploads_size = dir_size(&uploads_dir);
         let file_count: usize = walkdir_count(&uploads_dir);
+
         cli::kv(
             "Uploads",
             &format!("{} ({} file(s))", format_bytes(uploads_size), file_count),
@@ -117,6 +119,7 @@ pub fn run(config_dir: &Path) -> Result<()> {
             ),
         );
     }
+
     println!();
 
     // Collections with row counts
@@ -127,7 +130,9 @@ pub fn run(config_dir: &Path) -> Result<()> {
     } else {
         let mut table = Table::new(vec!["Collection", "Rows", "Tags"]);
         let mut slugs: Vec<_> = reg.collections.keys().collect();
+
         slugs.sort();
+
         for slug in slugs {
             let def = &reg.collections[slug];
             let count = query::count(&conn, slug, def, &[], None).unwrap_or(0);
@@ -136,21 +141,27 @@ pub fn run(config_dir: &Path) -> Result<()> {
             if def.is_auth_collection() {
                 tags.push("auth");
             }
+
             if def.is_upload_collection() {
                 tags.push("upload");
             }
+
             if def.has_versions() {
                 tags.push("versions");
             }
+
             let tag_str = if tags.is_empty() {
                 String::new()
             } else {
                 tags.join(", ")
             };
+
             table.row(vec![slug, &count.to_string(), &tag_str]);
         }
+
         table.print();
     }
+
     println!();
 
     // Globals
@@ -159,12 +170,16 @@ pub fn run(config_dir: &Path) -> Result<()> {
     } else {
         let mut table = Table::new(vec!["Global"]);
         let mut slugs: Vec<_> = reg.globals.keys().collect();
+
         slugs.sort();
+
         for slug in slugs {
             table.row(vec![slug]);
         }
+
         table.print();
     }
+
     println!();
 
     // Migrations
@@ -207,9 +222,11 @@ pub fn run(config_dir: &Path) -> Result<()> {
         if running > 0 {
             job_parts.push(format!("{} running", running));
         }
+
         if failed_24h > 0 {
             job_parts.push(format!("{} failed (24h)", failed_24h));
         }
+
         cli::kv("Jobs", &job_parts.join(", "));
     }
 
@@ -231,6 +248,7 @@ fn walkdir_count(path: &Path) -> usize {
             }
         }
     }
+
     count
 }
 

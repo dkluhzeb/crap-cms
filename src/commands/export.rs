@@ -39,10 +39,12 @@ pub fn export(
         if reg.get_collection(slug).is_none() {
             bail!("Collection '{}' not found", slug);
         }
+
         vec![slug.clone()]
     } else {
         let mut s: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
         s.sort();
+
         s
     };
 
@@ -74,8 +76,10 @@ pub fn export(
     match output {
         Some(path) => {
             let content = serde_json::to_string_pretty(&output_json)?;
+
             fs::write(&path, content)
                 .with_context(|| format!("Failed to write {}", path.display()))?;
+
             cli::success(&format!(
                 "Exported {} collection(s) to {}",
                 slugs.len(),
@@ -144,6 +148,7 @@ fn collect_import_columns(
             parent_cols.push("created_at".to_string());
             parent_vals.push(DbValue::Text(v.to_string()));
         }
+
         if let Some(v) = doc_obj.get("updated_at").and_then(|v| v.as_str()) {
             parent_cols.push("updated_at".to_string());
             parent_vals.push(DbValue::Text(v.to_string()));
@@ -174,6 +179,7 @@ fn collect_import_columns(
         if field.field_type == FieldType::Group {
             for sub in &field.fields {
                 let col_name = format!("{}__{}", field.name, sub.name);
+
                 // Try nested object first (hydrated export format)
                 let val = doc_obj
                     .get(&field.name)
@@ -242,6 +248,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
     let content =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
+
     let data: Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
     // Check version compatibility
@@ -266,6 +273,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         if !collections_obj.contains_key(slug) {
             bail!("Collection '{}' not found in import file", slug);
         }
+
         vec![slug.clone()]
     } else {
         collections_obj.keys().cloned().collect()
@@ -280,7 +288,6 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                 slug
             )
         })?;
-
         let docs_array = collections_obj
             .get(slug)
             .and_then(|v| v.as_array())

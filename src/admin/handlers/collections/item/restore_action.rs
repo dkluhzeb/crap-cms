@@ -1,5 +1,14 @@
 //! POST /admin/collections/{slug}/{id}/restore — restore a soft-deleted document.
 
+use axum::{
+    Extension,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use tokio::task;
+use tracing::{error, info};
+
 use crate::{
     admin::{
         AdminState,
@@ -9,14 +18,6 @@ use crate::{
     db::query::AccessResult,
     service,
 };
-
-use axum::{
-    Extension,
-    extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
-use tokio::task;
 
 /// POST /admin/collections/{slug}/{id}/restore — restore a soft-deleted item
 pub async fn restore_action(
@@ -57,11 +58,13 @@ pub async fn restore_action(
 
     match result {
         Ok(Ok(_doc)) => {
-            tracing::info!("Restored document {} in {}", id, slug);
+            info!("Restored document {} in {}", id, slug);
+
             htmx_redirect(&format!("/admin/collections/{}?trash=1", slug))
         }
         Ok(Err(e)) => {
-            tracing::error!("Restore error: {}", e);
+            error!("Restore error: {}", e);
+
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Restore failed: {}", e),
@@ -69,7 +72,8 @@ pub async fn restore_action(
                 .into_response()
         }
         Err(e) => {
-            tracing::error!("Restore task error: {}", e);
+            error!("Restore task error: {}", e);
+
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Restore failed: {}", e),

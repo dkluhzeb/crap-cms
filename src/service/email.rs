@@ -54,8 +54,7 @@ pub fn send_verification_email(
             return;
         }
 
-        let fallback = format!("http://{}:{}", server_config.host, server_config.admin_port);
-        let base_url = server_config.public_url.as_deref().unwrap_or(&fallback);
+        let base_url = server_config.base_url();
         let verify_url = format!("{}/admin/verify-email?token={}", base_url, token);
         let data = json!({ "verify_url": verify_url });
         let html = match email_renderer.render("verify_email", &data) {

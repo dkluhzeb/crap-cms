@@ -2,9 +2,12 @@
 
 use anyhow::Context as _;
 use serde_json::Value;
+use tokio::task;
 use tonic::{Request, Response, Status};
+use tracing::{error, warn};
 
 use crate::{
+    api::service::collection::{filter_builder::FilterBuilder, helpers::map_db_error},
     api::{
         content,
         service::{
@@ -20,8 +23,6 @@ use crate::{
     hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::PublishEventInput},
     service::{self, versions},
 };
-
-use super::{filter_builder::FilterBuilder, helpers::map_db_error};
 
 /// Safety limit for bulk operations to prevent unbounded queries.
 /// Bulk ops load all matching documents into memory; this caps the maximum.
@@ -46,6 +47,7 @@ impl ContentService {
             .as_ref()
             .map(prost_struct_to_json_map)
             .unwrap_or_default();
+
         let mut data = req
             .data
             .map(|s| prost_struct_to_hashmap(&s))
@@ -57,9 +59,11 @@ impl ContentService {
                 "Password updates are not supported in UpdateMany. Use Update for individual documents.",
             ));
         }
+
         // Defense in depth: strip password from join_data even though it shouldn't be there
         if def.is_auth_collection() {
             data.remove("password");
+
             join_data.remove("password");
         }
 
@@ -78,8 +82,9 @@ impl ContentService {
         let req_where = req.r#where.clone();
         let def_owned = def;
         let collection_for_event = req.collection.clone();
+
         let (modified, updated_ids) =
-            tokio::task::spawn_blocking(move || -> Result<(i64, Vec<String>), Status> {
+            task::spawn_blocking(move || -> Result<(i64, Vec<String>), Status> {
                 let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
                 // Auth + read access (all on blocking thread)
@@ -109,8 +114,10 @@ impl ContentService {
                     .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
 
                 let mut find_query = FindQuery::new();
+
                 find_query.filters = filters;
                 find_query.limit = Some(BULK_QUERY_LIMIT);
+
                 let docs = query::find(
                     &tx,
                     &collection,
@@ -131,6 +138,7 @@ impl ContentService {
                 // access function is configured — check_access respects default_deny)
                 {
                     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
                     for doc in &docs {
                         let result = hook_runner
                             .check_access(
@@ -141,7 +149,8 @@ impl ContentService {
                                 &tx,
                             )
                             .map_err(|e| {
-                                tracing::error!("Access check error: {}", e);
+                                error!("Access check error: {}", e);
+
                                 Status::internal("Internal error")
                             })?;
 
@@ -159,13 +168,16 @@ impl ContentService {
                     "update",
                     &tx,
                 );
+
                 for name in &denied {
                     data.remove(name);
+
                     join_data.remove(name);
                 }
 
                 let mut count = 0i64;
                 let mut ids = Vec::new();
+
                 for doc in &docs {
                     let hook_data = service::build_hook_data(&data, &join_data);
 
@@ -176,12 +188,14 @@ impl ContentService {
                             .data(hook_data)
                             .user(user_doc)
                             .build();
+
                         let val_ctx = ValidationCtx::builder(&tx, &collection)
                             .exclude_id(Some(&doc.id))
                             .locale_ctx(locale_ctx.as_ref())
                             .soft_delete(def_owned.soft_delete)
                             .draft(draft.unwrap_or(false))
                             .build();
+
                         let final_ctx = hook_runner
                             .run_before_write(
                                 &def_owned.hooks,
@@ -190,7 +204,9 @@ impl ContentService {
                                 &val_ctx,
                             )
                             .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
+
                         let final_data = final_ctx.to_string_map(&def_owned.fields);
+
                         (final_data, final_ctx.data)
                     } else {
                         (data.clone(), join_data.clone())
@@ -201,6 +217,7 @@ impl ContentService {
                         .as_ref()
                         .map(|lc| lc.config.clone())
                         .unwrap_or_default();
+
                     let old_refs = query::ref_count::snapshot_outgoing_refs(
                         &tx,
                         &collection,
@@ -219,6 +236,7 @@ impl ContentService {
                         locale_ctx.as_ref(),
                     )
                     .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+
                     query::save_join_table_data(
                         &tx,
                         &collection,
@@ -239,6 +257,7 @@ impl ContentService {
                         old_refs,
                     )
                     .map_err(|e| map_db_error(e, "UpdateMany ref count error", &db_kind))?;
+
                     if tx.supports_fts() {
                         query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))
                             .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
@@ -251,17 +270,21 @@ impl ContentService {
                                 .versions(def_owned.versions.as_ref())
                                 .has_drafts(def_owned.has_drafts())
                                 .build();
+
                         versions::create_version_snapshot(&tx, &vs_ctx, "published", &updated)
                             .map_err(|e| map_db_error(e, "UpdateMany version error", &db_kind))?;
                     }
 
                     if run_hooks {
                         let mut after_data = updated.fields.clone();
+
                         after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
+
                         let after_ctx = HookContext::builder(&collection, "update")
                             .data(after_data)
                             .user(user_doc)
                             .build();
+
                         hook_runner
                             .run_after_write(
                                 &def_owned.hooks,
@@ -274,26 +297,30 @@ impl ContentService {
                     }
 
                     ids.push(doc.id.to_string());
+
                     count += 1;
                 }
 
                 tx.commit()
                     .context("Commit transaction")
                     .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+
                 Ok((count, ids))
             })
             .await
             .map_err(|e| {
-                tracing::error!("Task error: {}", e);
+                error!("Task error: {}", e);
+
                 Status::internal("Internal error")
             })??;
 
         if let Err(e) = self.cache.clear() {
-            tracing::warn!("Cache clear failed: {:#}", e);
+            warn!("Cache clear failed: {:#}", e);
         }
 
         // Publish mutation events for Subscribe stream listeners
         let def = self.get_collection_def(&collection_for_event)?;
+
         for doc_id in &updated_ids {
             self.hook_runner.publish_event(
                 &self.event_bus,
@@ -358,12 +385,13 @@ impl ContentService {
         let collection_for_event = req.collection.clone();
 
         let (hard_count, soft_count, skipped_count, deleted_ids) =
-            tokio::task::spawn_blocking(move || -> Result<(i64, i64, i64, Vec<String>), Status> {
+            task::spawn_blocking(move || -> Result<(i64, i64, i64, Vec<String>), Status> {
                 let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
                 // Auth + read access (all on blocking thread)
                 let auth_user =
                     ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
+
                 let read_access = ContentService::check_access_blocking(
                     def_owned.access.read.as_deref(),
                     &auth_user,
@@ -388,8 +416,10 @@ impl ContentService {
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
                 let mut find_query = FindQuery::new();
+
                 find_query.filters = filters;
                 find_query.limit = Some(BULK_QUERY_LIMIT);
+
                 let docs = query::find(&tx, &collection, &def_owned, &find_query, None)
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
@@ -404,6 +434,7 @@ impl ContentService {
                 // access function is configured — check_access respects default_deny)
                 {
                     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
                     for doc in &docs {
                         let result = hook_runner
                             .check_access(
@@ -414,7 +445,8 @@ impl ContentService {
                                 &tx,
                             )
                             .map_err(|e| {
-                                tracing::error!("Access check error: {}", e);
+                                error!("Access check error: {}", e);
+
                                 Status::internal("Internal error")
                             })?;
 
@@ -438,14 +470,17 @@ impl ContentService {
                         let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
                             .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?
                             .unwrap_or(0);
+
                         if ref_count > 0 {
                             skipped_count += 1;
+
                             continue;
                         }
                     }
 
                     let mut hook_data: std::collections::HashMap<String, Value> =
                         [("id".to_string(), Value::String(doc.id.to_string()))].into();
+
                     if soft_delete {
                         hook_data.insert("soft_delete".to_string(), Value::Bool(true));
                     }
@@ -455,6 +490,7 @@ impl ContentService {
                             .data(hook_data.clone())
                             .user(user_doc)
                             .build();
+
                         hook_runner
                             .run_hooks_with_conn(
                                 &def_owned.hooks,
@@ -470,6 +506,7 @@ impl ContentService {
                     if soft_delete {
                         query::soft_delete(&tx, &collection, &doc.id)
                             .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+
                         soft_count += 1;
                     } else {
                         // Decrement ref counts on targets before hard deleting
@@ -484,7 +521,9 @@ impl ContentService {
 
                         query::delete(&tx, &collection, &doc.id)
                             .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+
                         hard_deleted_indices.push(idx);
+
                         hard_count += 1;
                     }
 
@@ -505,6 +544,7 @@ impl ContentService {
                             .data(hook_data)
                             .user(user_doc)
                             .build();
+
                         hook_runner
                             .run_hooks_with_conn(
                                 &def_owned.hooks,
@@ -532,12 +572,13 @@ impl ContentService {
             })
             .await
             .map_err(|e| {
-                tracing::error!("Task error: {}", e);
+                error!("Task error: {}", e);
+
                 Status::internal("Internal error")
             })??;
 
         if let Err(e) = self.cache.clear() {
-            tracing::warn!("Cache clear failed: {:#}", e);
+            warn!("Cache clear failed: {:#}", e);
         }
 
         // Publish mutation events for Subscribe stream listeners

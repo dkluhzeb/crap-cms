@@ -248,6 +248,7 @@ pub fn user_create(
     let password = match password {
         Some(p) => {
             cli::warning("Password provided via command line — it may be visible in shell history");
+
             p
         }
         None => Password::with_theme(&crap_theme())
@@ -269,15 +270,19 @@ pub fn user_create(
         if field.name == "email" {
             continue; // already handled above
         }
+
         if field.field_type == FieldType::Checkbox {
             continue; // absent checkbox = false, always valid
         }
+
         if data.contains_key(&field.name) {
             continue; // already provided via --field
         }
+
         if !field.required && field.default_value.is_none() {
             continue; // optional with no default — skip
         }
+
         // Use default_value if available and field is not required
         if !field.required
             && let Some(ref dv) = field.default_value
@@ -291,6 +296,7 @@ pub fn user_create(
 
             continue;
         }
+
         // Required field with a default — use it automatically
         if let Some(ref dv) = field.default_value {
             let val = match dv {
@@ -700,6 +706,7 @@ pub fn user_change_password(
     let password = match password {
         Some(p) => {
             cli::warning("Password provided via command line — it may be visible in shell history");
+
             p
         }
         None => Password::with_theme(&crap_theme())
@@ -713,6 +720,7 @@ pub fn user_change_password(
     password_policy.validate(&password)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
+
     query::update_password(&conn, collection, &doc.id, &password)
         .context("Failed to update password")?;
 

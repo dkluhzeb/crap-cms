@@ -1,3 +1,12 @@
+use axum::{
+    Extension,
+    extract::{Path, State},
+    http::HeaderMap,
+    response::Response,
+};
+use serde_json::json;
+use tracing::error;
+
 use crate::{
     admin::{
         AdminState,
@@ -10,14 +19,6 @@ use crate::{
     core::auth::{AuthUser, Claims},
     db::query::{self, AccessResult},
 };
-
-use axum::{
-    Extension,
-    extract::{Path, State},
-    http::HeaderMap,
-    response::Response,
-};
-use serde_json::json;
 
 /// GET /admin/globals/{slug}/versions/{version_id}/restore — confirmation page
 pub async fn restore_confirm(
@@ -55,7 +56,8 @@ pub async fn restore_confirm(
         Ok(Some(v)) => v,
         Ok(None) => return not_found(&state, "Version not found"),
         Err(e) => {
-            tracing::error!("Find version error: {}", e);
+            error!("Find version error: {}", e);
+
             return server_error(&state, "Database error");
         }
     };

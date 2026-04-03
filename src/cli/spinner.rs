@@ -1,6 +1,8 @@
 //! Progress spinner for long CLI operations.
 
-use console::style;
+use std::time::Duration;
+
+use console::{Term, style};
 use indicatif::{ProgressBar, ProgressStyle};
 
 /// A spinner for long-running CLI operations.
@@ -13,8 +15,9 @@ pub struct Spinner {
 impl Spinner {
     /// Create and start a new spinner with the given message.
     pub fn new(msg: &str) -> Self {
-        let bar = if console::Term::stdout().is_term() {
+        let bar = if Term::stdout().is_term() {
             let pb = ProgressBar::new_spinner();
+
             pb.set_style(
                 ProgressStyle::default_spinner()
                     .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
@@ -22,7 +25,8 @@ impl Spinner {
                     .expect("valid template"),
             );
             pb.set_message(msg.to_string());
-            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+            pb.enable_steady_tick(Duration::from_millis(80));
+
             pb
         } else {
             // Non-interactive: print the message and use a hidden bar

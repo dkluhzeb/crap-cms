@@ -1,17 +1,20 @@
+use std::collections::HashMap;
+
 use axum::{
     Extension,
     extract::{Form, Path, State},
     response::Response,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use tokio::task;
+use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
         handlers::{
-            collections::forms::{extract_join_data_from_form, transform_select_has_many},
+            forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
@@ -87,7 +90,7 @@ pub async fn update_action(
     let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
     let action_owned = action.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = task::spawn_blocking(move || {
         // Handle unpublish: run lifecycle hooks + set _status to 'draft' + create a version
         if action_owned == "unpublish" && def_owned.has_versions() {
             let doc = service::unpublish_global_document(
@@ -130,6 +133,7 @@ pub async fn update_action(
                     .edited_by(get_event_user(&auth_user))
                     .build(),
             );
+
             htmx_redirect(&format!("/admin/globals/{}", slug))
         }
         Ok(Err(e)) => {
@@ -181,12 +185,14 @@ pub async fn update_action(
 
                 html_with_toast(&state, "globals/edit", &data, toast_msg)
             } else {
-                tracing::error!("Global update error: {}", e);
+                error!("Global update error: {}", e);
+
                 redirect_response(&format!("/admin/globals/{}", slug))
             }
         }
         Err(e) => {
-            tracing::error!("Global update task error: {}", e);
+            error!("Global update task error: {}", e);
+
             redirect_response(&format!("/admin/globals/{}", slug))
         }
     }

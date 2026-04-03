@@ -1,12 +1,3 @@
-use crate::{
-    admin::{
-        AdminState,
-        handlers::shared::{check_access_or_forbid, forbidden, htmx_redirect, redirect_response},
-    },
-    core::auth::AuthUser,
-    db::query::{self, AccessResult},
-};
-
 use anyhow::{Error, anyhow};
 use axum::{
     Extension,
@@ -14,6 +5,49 @@ use axum::{
     response::Response,
 };
 use tokio::task;
+use tracing::error;
+
+use crate::{
+    admin::{
+        AdminState,
+        handlers::shared::{check_access_or_forbid, forbidden, htmx_redirect, redirect_response},
+    },
+    config::LocaleConfig,
+    core::{CollectionDefinition, Document, auth::AuthUser},
+    db::{DbPool, query, query::AccessResult},
+};
+
+/// Find the version snapshot and restore it inside a transaction.
+fn restore_from_version(
+    pool: &DbPool,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    version_id: &str,
+    locale_config: &LocaleConfig,
+) -> Result<Document, Error> {
+    let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| anyhow!("Start transaction: {}", e))?;
+
+    let version = query::find_version_by_id(&tx, slug, version_id)?
+        .ok_or_else(|| anyhow!("Version not found"))?;
+
+    let doc = query::restore_version(
+        &tx,
+        slug,
+        def,
+        id,
+        &version.snapshot,
+        "published",
+        locale_config,
+    )?;
+
+    tx.commit().map_err(|e| anyhow!("Commit: {}", e))?;
+
+    Ok(doc)
+}
 
 /// POST /admin/collections/{slug}/{id}/versions/{version_id}/restore — restore a version
 pub async fn restore_version(
@@ -30,7 +64,6 @@ pub async fn restore_version(
         return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
     }
 
-    // Check update access
     match check_access_or_forbid(
         &state,
         def.access.update.as_deref(),
@@ -45,46 +78,27 @@ pub async fn restore_version(
         _ => {}
     }
 
+    let redirect = format!("/admin/collections/{}/{}", slug, id);
     let pool = state.pool.clone();
-    let slug_owned = slug.clone();
-    let id_owned = id.clone();
     let def_owned = def.clone();
     let locale_config = state.config.locale.clone();
 
     let result = task::spawn_blocking(move || {
-        let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| anyhow!("Start transaction: {}", e))?;
-
-        let version = query::find_version_by_id(&tx, &slug_owned, &version_id)?
-            .ok_or_else(|| anyhow!("Version not found"))?;
-
-        let doc = query::restore_version(
-            &tx,
-            &slug_owned,
-            &def_owned,
-            &id_owned,
-            &version.snapshot,
-            "published",
-            &locale_config,
-        )?;
-
-        tx.commit().map_err(|e| anyhow!("Commit: {}", e))?;
-
-        Ok::<_, Error>(doc)
+        restore_from_version(&pool, &slug, &def_owned, &id, &version_id, &locale_config)
     })
     .await;
 
     match result {
-        Ok(Ok(_)) => htmx_redirect(&format!("/admin/collections/{}/{}", slug, id)),
+        Ok(Ok(_)) => htmx_redirect(&redirect),
         Ok(Err(e)) => {
-            tracing::error!("Restore version error: {}", e);
-            htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
+            error!("Restore version error: {}", e);
+
+            htmx_redirect(&redirect)
         }
         Err(e) => {
-            tracing::error!("Restore version task error: {}", e);
-            htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
+            error!("Restore version task error: {}", e);
+
+            htmx_redirect(&redirect)
         }
     }
 }

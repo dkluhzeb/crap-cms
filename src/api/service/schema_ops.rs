@@ -9,13 +9,26 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    task::{Context, Poll},
 };
 
+use tokio::task;
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
 use tonic::{Request, Response, Status};
+use tracing::{error, warn};
 
 use crate::{
-    api::content,
+    api::{
+        content,
+        service::{
+            ContentService,
+            collection::helpers::strip_denied_proto_fields,
+            convert::{
+                document_to_proto, field_def_to_proto, json_to_prost_value,
+                prost_struct_to_hashmap, prost_struct_to_json_map,
+            },
+        },
+    },
     core::{
         event::{EventOperation, EventTarget},
         job::JobRun,
@@ -26,15 +39,6 @@ use crate::{
     },
     hooks::lifecycle::{AfterReadCtx, PublishEventInput},
     service::{self, WriteInput},
-};
-
-use super::{
-    ContentService,
-    collection::helpers::strip_denied_proto_fields,
-    convert::{
-        document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
-        prost_struct_to_json_map,
-    },
 };
 
 /// Atomically try to acquire a Subscribe connection slot.
@@ -80,10 +84,7 @@ struct GuardedStream<S> {
 impl<S: Stream + Unpin> Stream for GuardedStream<S> {
     type Item = S::Item;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
     }
 }
@@ -113,9 +114,10 @@ impl ContentService {
         let def_fields = def.fields.clone();
         let fields = def_fields.clone();
         let slug = req.slug.clone();
-        let proto_doc = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| {
-                tracing::error!("GetGlobal pool error: {}", e);
+                error!("GetGlobal pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -137,11 +139,13 @@ impl ContentService {
             runner
                 .fire_before_read(&hooks, &slug, "get_global", HashMap::new())
                 .map_err(|e| {
-                    tracing::error!("GetGlobal hook error: {}", e);
+                    error!("GetGlobal hook error: {}", e);
+
                     Status::internal("Internal error")
                 })?;
             let doc = query::get_global(&conn, &slug, &def, locale_ctx.as_ref()).map_err(|e| {
-                tracing::error!("GetGlobal query error: {}", e);
+                error!("GetGlobal query error: {}", e);
+
                 Status::internal("Internal error")
             })?;
             let ar_ctx = AfterReadCtx {
@@ -157,20 +161,24 @@ impl ContentService {
             let mut proto_doc = document_to_proto(&doc, &slug);
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let tx = conn.transaction().map_err(|e| {
-                tracing::error!("Field access check tx error: {}", e);
+                error!("Field access check tx error: {}", e);
+
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+
             if let Err(e) = tx.commit() {
-                tracing::warn!("tx commit failed: {e}");
+                warn!("tx commit failed: {e}");
             }
+
             strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok(proto_doc)
         })
         .await
         .map_err(|e| {
-            tracing::error!("GetGlobal task error: {}", e);
+            error!("GetGlobal task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
@@ -211,9 +219,10 @@ impl ContentService {
         let slug = req.slug.clone();
         let def_fields = def.fields.clone();
         let def_owned = def;
-        let (proto_doc, auth_user) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+        let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| {
-                tracing::error!("UpdateGlobal pool error: {}", e);
+                error!("UpdateGlobal pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -236,13 +245,14 @@ impl ContentService {
             {
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
                 let tx = conn.transaction().map_err(|e| {
-                    tracing::error!("UpdateGlobal field access tx error: {}", e);
+                    error!("UpdateGlobal field access tx error: {}", e);
+
                     Status::internal("Internal error")
                 })?;
                 let denied =
                     runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
                 if let Err(e) = tx.commit() {
-                    tracing::warn!("tx commit failed: {e}");
+                    warn!("tx commit failed: {e}");
                 }
                 for name in &denied {
                     data.remove(name);
@@ -252,7 +262,9 @@ impl ContentService {
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+
             drop(conn);
+
             let (doc, _req_context) = service::update_global_document(
                 &pool,
                 &runner,
@@ -265,7 +277,8 @@ impl ContentService {
                 user_doc.as_ref(),
             )
             .map_err(|e| {
-                tracing::error!("UpdateGlobal error: {}", e);
+                error!("UpdateGlobal error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -273,29 +286,34 @@ impl ContentService {
             let mut proto_doc = document_to_proto(&doc, &slug);
             let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
             let mut conn2 = pool.get().map_err(|e| {
-                tracing::error!("UpdateGlobal field access pool error: {}", e);
+                error!("UpdateGlobal field access pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
             let tx = conn2.transaction().map_err(|e| {
-                tracing::error!("Field read access tx error: {}", e);
+                error!("Field read access tx error: {}", e);
+
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
+
             if let Err(e) = tx.commit() {
-                tracing::warn!("tx commit failed: {e}");
+                warn!("tx commit failed: {e}");
             }
+
             strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
         })
         .await
         .map_err(|e| {
-            tracing::error!("UpdateGlobal task error: {}", e);
+            error!("UpdateGlobal task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
         if let Err(e) = self.cache.clear() {
-            tracing::warn!("Cache clear failed: {:#}", e);
+            warn!("Cache clear failed: {:#}", e);
         }
 
         {
@@ -347,6 +365,7 @@ impl ContentService {
                 upload: def.is_upload_collection(),
             })
             .collect();
+
         collections.sort_by(|a, b| a.slug.cmp(&b.slug));
 
         let mut globals: Vec<content::GlobalInfo> = self
@@ -367,6 +386,7 @@ impl ContentService {
                     .map(|ls| ls.resolve_default().to_string()),
             })
             .collect();
+
         globals.sort_by(|a, b| a.slug.cmp(&b.slug));
 
         Ok(Response::new(content::ListCollectionsResponse {
@@ -384,41 +404,49 @@ impl ContentService {
 
         if req.is_global {
             let def = self.get_global_def(&req.slug)?;
+            let singular_label = def
+                .labels
+                .singular
+                .as_ref()
+                .map(|ls| ls.resolve_default().to_string());
+            let plural_label = def
+                .labels
+                .plural
+                .as_ref()
+                .map(|ls| ls.resolve_default().to_string());
+            let fields = def.fields.iter().map(field_def_to_proto).collect();
+
             Ok(Response::new(content::DescribeCollectionResponse {
                 slug: def.slug.to_string(),
-                singular_label: def
-                    .labels
-                    .singular
-                    .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
-                plural_label: def
-                    .labels
-                    .plural
-                    .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                singular_label,
+                plural_label,
                 timestamps: false,
                 auth: false,
-                fields: def.fields.iter().map(field_def_to_proto).collect(),
+                fields,
                 upload: false,
                 drafts: false,
             }))
         } else {
             let def = self.get_collection_def(&req.slug)?;
+            let singular_label = def
+                .labels
+                .singular
+                .as_ref()
+                .map(|ls| ls.resolve_default().to_string());
+            let plural_label = def
+                .labels
+                .plural
+                .as_ref()
+                .map(|ls| ls.resolve_default().to_string());
+            let fields = def.fields.iter().map(field_def_to_proto).collect();
+
             Ok(Response::new(content::DescribeCollectionResponse {
                 slug: def.slug.to_string(),
-                singular_label: def
-                    .labels
-                    .singular
-                    .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
-                plural_label: def
-                    .labels
-                    .plural
-                    .as_ref()
-                    .map(|ls| ls.resolve_default().to_string()),
+                singular_label,
+                plural_label,
                 timestamps: def.timestamps,
                 auth: def.is_auth_collection(),
-                fields: def.fields.iter().map(field_def_to_proto).collect(),
+                fields,
                 upload: def.is_upload_collection(),
                 drafts: def.has_drafts(),
             }))
@@ -435,14 +463,16 @@ impl ContentService {
     > {
         // Enforce Subscribe connection limit (race-free via compare_exchange)
         let max = self.max_subscribe_connections;
+
         if !try_acquire_subscribe_slot(&self.subscribe_connections, max) {
-            tracing::warn!(
+            warn!(
                 "Subscribe connection limit reached ({}/{}), rejecting",
-                max,
-                max
+                max, max
             );
+
             return Err(Status::resource_exhausted("Too many Subscribe streams"));
         }
+
         let subscribe_guard = SubscribeConnectionGuard {
             counter: self.subscribe_connections.clone(),
         };
@@ -472,9 +502,10 @@ impl ContentService {
         let hook_runner = self.hook_runner.clone();
         let collections_req = req.collections;
         let globals_req = req.globals;
-        let (allowed_collections, allowed_globals) = tokio::task::spawn_blocking(move || {
+        let (allowed_collections, allowed_globals) = task::spawn_blocking(move || {
             let mut conn = pool.get().map_err(|e| {
-                tracing::error!("Subscribe pool error: {}", e);
+                error!("Subscribe pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -483,7 +514,8 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
 
             let tx = conn.transaction().map_err(|e| {
-                tracing::error!("Subscribe tx error: {}", e);
+                error!("Subscribe tx error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -519,6 +551,7 @@ impl ContentService {
             };
 
             let mut allowed_globals: HashSet<String> = HashSet::new();
+
             for slug in &target_globals {
                 if let Some(def) = registry.get_global(slug) {
                     match hook_runner.check_access(
@@ -535,15 +568,17 @@ impl ContentService {
                     }
                 }
             }
+
             if let Err(e) = tx.commit() {
-                tracing::warn!("tx commit failed: {e}");
+                warn!("tx commit failed: {e}");
             }
 
             Ok::<_, Status>((allowed_collections, allowed_globals))
         })
         .await
         .map_err(|e| {
-            tracing::error!("Subscribe task error: {}", e);
+            error!("Subscribe task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
@@ -648,9 +683,10 @@ impl ContentService {
         let id = req.id.clone();
         let limit = req.limit;
         let access_read = def.access.read.clone();
-        let versions = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+        let versions = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| {
-                tracing::error!("ListVersions pool error: {}", e);
+                error!("ListVersions pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -670,13 +706,15 @@ impl ContentService {
             }
 
             query::list_versions(&conn, &collection, &id, limit, None).map_err(|e| {
-                tracing::error!("ListVersions error: {}", e);
+                error!("ListVersions error: {}", e);
+
                 Status::internal("Internal error")
             })
         })
         .await
         .map_err(|e| {
-            tracing::error!("ListVersions task error: {}", e);
+            error!("ListVersions task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
@@ -723,9 +761,10 @@ impl ContentService {
         let access_update = def.access.update.clone();
         let def_owned = def.clone();
         let locale_config = self.locale_config.clone();
-        let doc = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+        let doc = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| {
-                tracing::error!("RestoreVersion pool error: {}", e);
+                error!("RestoreVersion pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -745,13 +784,15 @@ impl ContentService {
             }
 
             let tx = conn.transaction_immediate().map_err(|e| {
-                tracing::error!("RestoreVersion tx error: {}", e);
+                error!("RestoreVersion tx error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
             let version = query::find_version_by_id(&tx, &collection, &version_id)
                 .map_err(|e| {
-                    tracing::error!("RestoreVersion error: {}", e);
+                    error!("RestoreVersion error: {}", e);
+
                     Status::internal("Internal error")
                 })?
                 .ok_or_else(|| Status::not_found(format!("Version '{}' not found", version_id)))?;
@@ -766,12 +807,14 @@ impl ContentService {
                 &locale_config,
             )
             .map_err(|e| {
-                tracing::error!("RestoreVersion error: {}", e);
+                error!("RestoreVersion error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
             tx.commit().map_err(|e| {
-                tracing::error!("RestoreVersion commit error: {}", e);
+                error!("RestoreVersion commit error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -779,12 +822,13 @@ impl ContentService {
         })
         .await
         .map_err(|e| {
-            tracing::error!("RestoreVersion task error: {}", e);
+            error!("RestoreVersion task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
         if let Err(e) = self.cache.clear() {
-            tracing::warn!("Cache clear failed: {:#}", e);
+            warn!("Cache clear failed: {:#}", e);
         }
 
         let mut proto_doc = document_to_proto(&doc, &req.collection);
@@ -797,9 +841,10 @@ impl ContentService {
             let registry = self.registry.clone();
             let def_fields = def.fields.clone();
             let metadata2 = metadata.clone();
-            let denied = tokio::task::spawn_blocking(move || -> Result<Vec<String>, Status> {
+            let denied = task::spawn_blocking(move || -> Result<Vec<String>, Status> {
                 let mut conn = pool.get().map_err(|e| {
-                    tracing::error!("RestoreVersion field access pool error: {}", e);
+                    error!("RestoreVersion field access pool error: {}", e);
+
                     Status::internal("Internal error")
                 })?;
                 let token = Self::extract_token(&metadata2);
@@ -807,20 +852,25 @@ impl ContentService {
                     ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
                 let tx = conn.transaction().map_err(|e| {
-                    tracing::error!("Field access tx error: {}", e);
+                    error!("Field access tx error: {}", e);
+
                     Status::internal("Internal error")
                 })?;
                 let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+
                 if let Err(e) = tx.commit() {
-                    tracing::warn!("tx commit failed: {e}");
+                    warn!("tx commit failed: {e}");
                 }
+
                 Ok(denied)
             })
             .await
             .map_err(|e| {
-                tracing::error!("RestoreVersion field access task error: {}", e);
+                error!("RestoreVersion field access task error: {}", e);
+
                 Status::internal("Internal error")
             })??;
+
             strip_denied_proto_fields(&mut proto_doc, &denied);
         }
 
@@ -840,21 +890,26 @@ impl ContentService {
         let pool = self.pool.clone();
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
-        tokio::task::spawn_blocking(move || {
+
+        task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| {
-                tracing::error!("ListJobs pool error: {}", e);
+                error!("ListJobs pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
+
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
+
             Ok::<_, Status>(())
         })
         .await
         .map_err(|e| {
-            tracing::error!("ListJobs task error: {}", e);
+            error!("ListJobs task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
@@ -893,9 +948,10 @@ impl ContentService {
         let registry = self.registry.clone();
         let data_json = req.data_json.unwrap_or_else(|| "{}".to_string());
         let slug = req.slug.clone();
-        let job_id = tokio::task::spawn_blocking(move || -> Result<String, Status> {
+        let job_id = task::spawn_blocking(move || -> Result<String, Status> {
             let mut conn = pool.get().map_err(|e| {
-                tracing::error!("TriggerJob pool error: {}", e);
+                error!("TriggerJob pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -937,7 +993,8 @@ impl ContentService {
                 &job_def.queue,
             )
             .map_err(|e| {
-                tracing::error!("Failed to queue job: {}", e);
+                error!("Failed to queue job: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
@@ -945,7 +1002,8 @@ impl ContentService {
         })
         .await
         .map_err(|e| {
-            tracing::error!("TriggerJob task error: {}", e);
+            error!("TriggerJob task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
@@ -965,28 +1023,32 @@ impl ContentService {
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let id = req.id.clone();
-        let run = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+        let run = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
-                tracing::error!("GetJobRun pool error: {}", e);
+                error!("GetJobRun pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
+
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
             jobs::get_job_run(&conn, &id)
                 .map_err(|e| {
-                    tracing::error!("GetJobRun query error: {}", e);
+                    error!("GetJobRun query error: {}", e);
+
                     Status::internal("Internal error")
                 })?
                 .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", id)))
         })
         .await
         .map_err(|e| {
-            tracing::error!("GetJobRun task error: {}", e);
+            error!("GetJobRun task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 
@@ -1009,28 +1071,32 @@ impl ContentService {
         let status = req.status.clone();
         let limit = req.limit.unwrap_or(50).min(1000);
         let offset = req.offset.unwrap_or(0);
-        let runs = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+        let runs = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
-                tracing::error!("ListJobRuns pool error: {}", e);
+                error!("ListJobRuns pool error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
+
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
             jobs::list_job_runs(&conn, slug.as_deref(), status.as_deref(), limit, offset).map_err(
                 |e| {
-                    tracing::error!("ListJobRuns query error: {}", e);
+                    error!("ListJobRuns query error: {}", e);
+
                     Status::internal("Internal error")
                 },
             )
         })
         .await
         .map_err(|e| {
-            tracing::error!("ListJobRuns task error: {}", e);
+            error!("ListJobRuns task error: {}", e);
+
             Status::internal("Internal error")
         })??;
 

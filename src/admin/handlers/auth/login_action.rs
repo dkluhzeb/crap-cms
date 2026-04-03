@@ -1,24 +1,34 @@
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::{ConnectInfo, Form, State},
-    http::{HeaderMap, header},
+    http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
+use chrono::Utc;
 use rand::Rng;
 use serde_json::json;
 use tokio::task;
+use tracing::{debug, error};
 
-use super::{LoginForm, client_ip, login_error, mfa_pending_cookie, session_cookies};
 use crate::{
-    admin::AdminState,
+    admin::{
+        AdminState,
+        handlers::auth::{
+            LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
+            login_error, mfa_pending_cookie, session_redirect,
+        },
+    },
+    config::EmailConfig,
     core::{
-        CollectionDefinition, Document, Slug,
+        CollectionDefinition, Document, DocumentId, Slug,
         auth::{ClaimsBuilder, SharedPasswordProvider, dummy_verify},
         collection::MfaMode,
         email,
+        email::EmailRenderer,
     },
-    db::{DbPool, query},
+    db::{BoxedConnection, DbPool, query},
+    hooks::HookRunner,
 };
 
 /// Successful login result containing the user document and session version.
@@ -36,8 +46,73 @@ struct VerifyParams {
     password: String,
     verify_email_flag: bool,
     disable_local: bool,
-    hook_runner: Option<crate::hooks::HookRunner>,
-    headers: std::collections::HashMap<String, String>,
+    hook_runner: Option<HookRunner>,
+    headers: HashMap<String, String>,
+}
+
+/// Try local email+password authentication. Returns the user document if
+/// credentials are valid, `None` otherwise.
+fn try_local_auth(
+    conn: &BoxedConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    email: &str,
+    password: &str,
+    password_provider: &SharedPasswordProvider,
+) -> anyhow::Result<Option<Document>> {
+    let Some(doc) = query::find_by_email(conn, slug, def, email)? else {
+        dummy_verify();
+        return Ok(None);
+    };
+
+    let verified = match query::get_password_hash(conn, slug, &doc.id)? {
+        Some(hash) => password_provider.verify_password(password, hash.as_ref())?,
+        None => false,
+    };
+
+    Ok(if verified { Some(doc) } else { None })
+}
+
+/// Try external auth strategies via Lua hooks. Returns the first successful
+/// match, or `None` if all strategies fail.
+fn try_strategy_auth(
+    conn: &BoxedConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    hook_runner: &HookRunner,
+    headers: &HashMap<String, String>,
+) -> Option<Document> {
+    let auth = def.auth.as_ref()?;
+
+    for strategy in &auth.strategies {
+        if let Ok(Some(doc)) =
+            hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, conn)
+        {
+            return Some(doc);
+        }
+    }
+
+    None
+}
+
+/// Check that the user account is not locked and (if required) email is verified.
+fn check_user_status(
+    conn: &BoxedConnection,
+    slug: &str,
+    user: &Document,
+    verify_email_flag: bool,
+) -> anyhow::Result<bool> {
+    if query::is_locked(conn, slug, &user.id)? {
+        debug!("Login denied for {}: account locked", user.id);
+        return Ok(false);
+    }
+
+    if verify_email_flag && !query::is_verified(conn, slug, &user.id)? {
+        debug!("Login denied for {}: email not verified", user.id);
+        return Ok(false);
+    }
+
+    Ok(true)
 }
 
 async fn verify_credentials(
@@ -49,39 +124,24 @@ async fn verify_credentials(
         let def = &params.def;
 
         // Try local email+password authentication unless disabled
-        let mut user = None;
-
-        if !params.disable_local {
-            if let Some(doc) = query::find_by_email(&conn, slug, def, &params.email)? {
-                let verified = match query::get_password_hash(&conn, slug, &doc.id)? {
-                    Some(hash) => params
-                        .password_provider
-                        .verify_password(&params.password, hash.as_ref())?,
-                    None => false,
-                };
-
-                if verified {
-                    user = Some(doc);
-                }
-            } else {
-                // User not found — burn CPU to prevent timing oracle
-                dummy_verify();
-            }
-        }
+        let mut user = if !params.disable_local {
+            try_local_auth(
+                &conn,
+                slug,
+                def,
+                &params.email,
+                &params.password,
+                &params.password_provider,
+            )?
+        } else {
+            None
+        };
 
         // Fallback: try auth strategies if local auth failed/skipped
         if user.is_none()
-            && let Some(auth) = &def.auth
             && let Some(runner) = &params.hook_runner
         {
-            for strategy in &auth.strategies {
-                if let Ok(Some(doc)) =
-                    runner.run_auth_strategy(&strategy.authenticate, slug, &params.headers, &conn)
-                {
-                    user = Some(doc);
-                    break;
-                }
-            }
+            user = try_strategy_auth(&conn, slug, def, runner, &params.headers);
         }
 
         let user = match user {
@@ -90,17 +150,12 @@ async fn verify_credentials(
                 if !params.disable_local {
                     dummy_verify();
                 }
+
                 return Ok(None);
             }
         };
 
-        if query::is_locked(&conn, slug, &user.id)? {
-            tracing::debug!("Login denied for {}: account locked", user.id);
-            return Ok(None);
-        }
-
-        if params.verify_email_flag && !query::is_verified(&conn, slug, &user.id)? {
-            tracing::debug!("Login denied for {}: email not verified", user.id);
+        if !check_user_status(&conn, slug, &user, params.verify_email_flag)? {
             return Ok(None);
         }
 
@@ -117,12 +172,69 @@ async fn verify_credentials(
 /// MFA pending token expiry in seconds (5 minutes).
 const MFA_PENDING_EXPIRY: u64 = 300;
 
+/// Everything needed to store the MFA code and send it by email.
+struct MfaCodeParams {
+    pool: DbPool,
+    slug: String,
+    user_id: DocumentId,
+    user_email: String,
+    email_config: EmailConfig,
+    email_renderer: Arc<EmailRenderer>,
+}
+
+/// Store a 6-digit MFA code in the DB and queue the verification email.
+///
+/// Runs inside `spawn_blocking`. Errors are logged but not propagated —
+/// the caller has already redirected to the MFA page.
+fn send_mfa_code(params: MfaCodeParams, code: &str) {
+    let conn = match params.pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("DB connection for MFA code: {}", e);
+            return;
+        }
+    };
+
+    let exp = Utc::now().timestamp() + MFA_PENDING_EXPIRY as i64;
+
+    if let Err(e) = query::set_mfa_code(&conn, &params.slug, &params.user_id, code, exp) {
+        error!("Failed to store MFA code: {}", e);
+        return;
+    }
+
+    let html = match params.email_renderer.render(
+        "mfa_code",
+        &json!({
+            "code": code,
+            "expiry_minutes": MFA_PENDING_EXPIRY / 60,
+            "from_name": params.email_config.from_name,
+        }),
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            error!("Failed to render MFA email: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = email::queue_email(
+        &conn,
+        &params.user_email,
+        "Your verification code",
+        &html,
+        None,
+        params.email_config.queue_retries + 1,
+        &params.email_config.queue_name,
+    ) {
+        error!("Failed to queue MFA email: {}", e);
+    }
+}
+
 /// Generate a 6-digit MFA code, store it, send it by email, and redirect to the MFA page.
 fn handle_mfa_challenge(
     state: &AdminState,
     user: &Document,
     form: &LoginForm,
-    _def: &CollectionDefinition,
     session_version: u64,
 ) -> Response {
     let user_email = user
@@ -135,13 +247,13 @@ fn handle_mfa_challenge(
     // Create a short-lived MFA pending token (5 min)
     let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
         .email(user_email.clone())
-        .exp((chrono::Utc::now().timestamp() as u64) + MFA_PENDING_EXPIRY)
+        .exp((Utc::now().timestamp() as u64) + MFA_PENDING_EXPIRY)
         .session_version(session_version)
         .build()
     {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("MFA pending claims error: {}", e);
+            error!("MFA pending claims error: {}", e);
             return login_error(state, "error_internal", &form.email);
         }
     };
@@ -149,74 +261,32 @@ fn handle_mfa_challenge(
     let mfa_token = match state.token_provider.create_token(&claims) {
         Ok(t) => t,
         Err(e) => {
-            tracing::error!("MFA pending token error: {}", e);
+            error!("MFA pending token error: {}", e);
             return login_error(state, "error_internal", &form.email);
         }
     };
 
     // Generate 6-digit code and queue email in background
     let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
-    let pool = state.pool.clone();
-    let slug = form.collection.clone();
-    let user_id = user.id.clone();
     let code_for_db = code.clone();
-    let email_config = state.config.email.clone();
-    let email_renderer = state.email_renderer.clone();
-    let expiry_minutes = MFA_PENDING_EXPIRY / 60;
 
-    task::spawn_blocking(move || {
-        let conn = match pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("DB connection for MFA code: {}", e);
-                return;
-            }
-        };
+    let params = MfaCodeParams {
+        pool: state.pool.clone(),
+        slug: form.collection.clone(),
+        user_id: user.id.clone(),
+        user_email,
+        email_config: state.config.email.clone(),
+        email_renderer: state.email_renderer.clone(),
+    };
 
-        let exp = chrono::Utc::now().timestamp() + MFA_PENDING_EXPIRY as i64;
-
-        if let Err(e) = query::set_mfa_code(&conn, &slug, &user_id, &code_for_db, exp) {
-            tracing::error!("Failed to store MFA code: {}", e);
-            return;
-        }
-
-        let html = match email_renderer.render(
-            "mfa_code",
-            &json!({
-                "code": code_for_db,
-                "expiry_minutes": expiry_minutes,
-                "from_name": email_config.from_name,
-            }),
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::error!("Failed to render MFA email: {}", e);
-                return;
-            }
-        };
-
-        if let Err(e) = email::queue_email(
-            &conn,
-            &user_email,
-            "Your verification code",
-            &html,
-            None,
-            email_config.queue_retries + 1,
-            &email_config.queue_name,
-        ) {
-            tracing::error!("Failed to queue MFA email: {}", e);
-        }
-    });
+    task::spawn_blocking(move || send_mfa_code(params, &code_for_db));
 
     // Set MFA pending cookie and redirect to MFA page
     let cookie = mfa_pending_cookie(&mfa_token, state.config.admin.dev_mode);
     let mut response =
         Redirect::to(&format!("/admin/mfa?collection={}", form.collection)).into_response();
 
-    response.headers_mut().append(
-        header::SET_COOKIE,
-        cookie.parse().expect("cookie header is valid ASCII"),
-    );
+    append_cookies(&mut response, &[cookie]);
 
     response
 }
@@ -226,7 +296,6 @@ fn build_session_response(
     state: &AdminState,
     user: &Document,
     form: &LoginForm,
-    def: &CollectionDefinition,
     session_version: u64,
 ) -> Response {
     let user_email = user
@@ -236,44 +305,21 @@ fn build_session_response(
         .unwrap_or(&form.email)
         .to_string();
 
-    let expiry = def
-        .auth
-        .as_ref()
-        .map(|a| a.token_expiry)
-        .unwrap_or(state.config.auth.token_expiry);
-
-    let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
-        .email(user_email)
-        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
-        .session_version(session_version)
-        .build()
-    {
-        Ok(c) => c,
+    let session = match create_session_token(
+        state,
+        user.id.to_string(),
+        &form.collection,
+        user_email,
+        session_version,
+    ) {
+        Ok(s) => s,
         Err(e) => {
-            tracing::error!("Claims build error: {}", e);
+            error!("{}", e);
             return login_error(state, "error_internal", &form.email);
         }
     };
 
-    let token = match state.token_provider.create_token(&claims) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("Token creation error: {}", e);
-            return login_error(state, "error_internal", &form.email);
-        }
-    };
-
-    let cookies = session_cookies(&token, expiry, claims.exp, state.config.admin.dev_mode);
-    let mut response = Redirect::to("/admin").into_response();
-
-    for cookie in cookies {
-        response.headers_mut().append(
-            header::SET_COOKIE,
-            cookie.parse().expect("cookie header is valid ASCII"),
-        );
-    }
-
-    response
+    session_redirect(&session, state.config.admin.dev_mode)
 }
 
 /// POST /admin/login — verify credentials, set cookie, redirect.
@@ -309,12 +355,6 @@ pub async fn login_action(
 
     let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
 
-    // Extract headers for strategy functions
-    let header_map: std::collections::HashMap<String, String> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
-        .collect();
-
     let result = verify_credentials(VerifyParams {
         pool: state.pool.clone(),
         password_provider: state.password_provider.clone(),
@@ -325,7 +365,7 @@ pub async fn login_action(
         verify_email_flag: verify_email,
         disable_local,
         hook_runner: Some(state.hook_runner.clone()),
-        headers: header_map,
+        headers: headers_to_map(&headers),
     })
     .await;
 
@@ -334,19 +374,23 @@ pub async fn login_action(
         Ok(Ok(Some(Err(msg)))) => {
             state.login_limiter.record_failure(&form.email);
             state.ip_login_limiter.record_failure(&ip);
+
             return login_error(&state, &msg, &form.email);
         }
         Ok(Ok(None)) => {
             state.login_limiter.record_failure(&form.email);
             state.ip_login_limiter.record_failure(&ip);
+
             return login_error(&state, "error_invalid_credentials", &form.email);
         }
         Ok(Err(e)) => {
-            tracing::error!("Login error: {}", e);
+            error!("Login error: {}", e);
+
             return login_error(&state, "error_internal", &form.email);
         }
         Err(e) => {
-            tracing::error!("Login task error: {}", e);
+            error!("Login task error: {}", e);
+
             return login_error(&state, "error_internal", &form.email);
         }
     };
@@ -361,15 +405,15 @@ pub async fn login_action(
     let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa == MfaMode::Email);
 
     if mfa_enabled {
-        return handle_mfa_challenge(&state, &login.user, &form, &def, login.session_version);
+        return handle_mfa_challenge(&state, &login.user, &form, login.session_version);
     }
 
-    build_session_response(&state, &login.user, &form, &def, login.session_version)
+    build_session_response(&state, &login.user, &form, login.session_version)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{thread::sleep, time::Duration};
 
     use crate::core::rate_limit::LoginRateLimiter;
 
@@ -412,7 +456,7 @@ mod tests {
         let limiter = LoginRateLimiter::new(2, 0);
         limiter.record_failure("1.2.3.4");
         limiter.record_failure("1.2.3.4");
-        std::thread::sleep(Duration::from_millis(10));
+        sleep(Duration::from_millis(10));
         assert!(!limiter.is_blocked("1.2.3.4"));
     }
 

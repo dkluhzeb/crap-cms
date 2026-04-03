@@ -3,8 +3,7 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::parsing::serde_duration;
-use crate::core::JwtSecret;
+use crate::{config::parsing::serde_duration, core::JwtSecret};
 
 /// JWT authentication settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]

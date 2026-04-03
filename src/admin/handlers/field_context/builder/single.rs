@@ -5,14 +5,16 @@ use std::collections::HashMap;
 use serde_json::{Value, from_str, json};
 
 use crate::{
-    admin::handlers::shared::auto_label_from_name,
+    admin::handlers::{
+        field_context::{
+            MAX_FIELD_DEPTH, add_timezone_context, builder::build_select_options,
+            collect_node_attr_errors, count_errors_in_fields, safe_template_id,
+        },
+        shared::auto_label_from_name,
+    },
     core::field::{FieldDefinition, FieldType},
+    db::query::helpers::utc_to_local,
 };
-
-use super::super::{
-    MAX_FIELD_DEPTH, collect_node_attr_errors, count_errors_in_fields, safe_template_id,
-};
-use super::build_select_options;
 
 /// Resolve the full form name for a field, accounting for layout transparency.
 fn resolve_full_name(field: &FieldDefinition, name_prefix: &str) -> String {
@@ -68,6 +70,7 @@ fn build_base_field_context(
     if let Some(ref pos) = field.admin.position {
         ctx["position"] = json!(pos);
     }
+
     if let Some(err) = errors.get(&full_name) {
         ctx["error"] = json!(err);
     }
@@ -76,32 +79,40 @@ fn build_base_field_context(
     if let Some(ml) = field.min_length {
         ctx["min_length"] = json!(ml);
     }
+
     if let Some(ml) = field.max_length {
         ctx["max_length"] = json!(ml);
     }
+
     if let Some(v) = field.min {
         ctx["min"] = json!(v);
         ctx["has_min"] = json!(true);
     }
+
     if let Some(v) = field.max {
         ctx["max"] = json!(v);
         ctx["has_max"] = json!(true);
     }
+
     if field.field_type == FieldType::Number {
         ctx["step"] = json!(field.admin.step.as_deref().unwrap_or("any"));
     }
+
     if field.field_type == FieldType::Textarea {
         ctx["rows"] = json!(field.admin.rows.unwrap_or(8));
         ctx["resizable"] = json!(field.admin.resizable);
     }
+
     if field.field_type == FieldType::Date {
         if let Some(ref md) = field.min_date {
             ctx["min_date"] = json!(md);
         }
+
         if let Some(ref md) = field.max_date {
             ctx["max_date"] = json!(md);
         }
     }
+
     if field.field_type == FieldType::Code {
         ctx["language"] = json!(field.admin.language.as_deref().unwrap_or("json"));
     }
@@ -133,19 +144,23 @@ pub fn build_single_field_context(
     match &field.field_type {
         FieldType::Select | FieldType::Radio => {
             let (options, has_many) = build_select_options(field, &value);
+
             ctx["options"] = json!(options);
+
             if has_many {
                 ctx["has_many"] = json!(true);
             }
         }
         FieldType::Checkbox => {
             let checked = matches!(value.as_str(), "1" | "true" | "on" | "yes");
+
             ctx["checked"] = json!(checked);
         }
         FieldType::Relationship => {
             if let Some(ref rc) = field.relationship {
                 ctx["relationship_collection"] = json!(rc.collection);
                 ctx["has_many"] = json!(rc.has_many);
+
                 if rc.is_polymorphic() {
                     ctx["polymorphic"] = json!(true);
                     ctx["collections"] = json!(rc.polymorphic);
@@ -380,8 +395,7 @@ pub fn build_single_field_context(
             // If a timezone is stored, convert UTC back to local time for display
             let tz_value = tz_value.trim();
             let display_value = if !tz_value.is_empty() && !value.is_empty() {
-                crate::db::query::helpers::utc_to_local(&value, tz_value)
-                    .unwrap_or_else(|| value.clone())
+                utc_to_local(&value, tz_value).unwrap_or_else(|| value.clone())
             } else {
                 value.clone()
             };
@@ -398,7 +412,7 @@ pub fn build_single_field_context(
                 _ => {}
             }
 
-            super::super::add_timezone_context(&mut ctx, field, tz_value, "");
+            add_timezone_context(&mut ctx, field, tz_value, "");
         }
         FieldType::Upload => {
             if let Some(ref rc) = field.relationship {

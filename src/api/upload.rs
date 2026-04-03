@@ -10,26 +10,34 @@ use std::collections::HashMap;
 use axum::{
     Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{
+        HeaderMap, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    },
     response::{IntoResponse, Response},
     routing::{delete, patch, post},
 };
 use serde_json::{Value, json};
+use tokio::task;
+use tracing::warn;
 
 use crate::{
     admin::{
         AdminState,
-        handlers::collections::forms::{extract_join_data_from_form, parse_multipart_form},
+        handlers::forms::{extract_join_data_from_form, parse_multipart_form},
         server::load_auth_user,
     },
     core::{
         auth::{self, AuthUser},
         event::{EventOperation, EventTarget, EventUser},
-        upload::{self, inject_upload_metadata},
+        upload::{
+            self, CleanupGuard, delete_upload_files, enqueue_conversions, inject_upload_metadata,
+            process_upload,
+        },
     },
-    db::{AccessResult, query},
+    db::{AccessResult, LocaleContext, query},
     hooks::lifecycle::PublishEventInput,
-    service::{self, WriteInput},
+    service::{self, WriteInput, delete_document, update_document},
 };
 
 /// Build the upload API router with all routes.
@@ -60,7 +68,7 @@ fn extract_bearer_user(
     state: &AdminState,
     headers: &HeaderMap,
 ) -> Result<Option<AuthUser>, Box<Response>> {
-    let auth_header = match headers.get(header::AUTHORIZATION) {
+    let auth_header = match headers.get(AUTHORIZATION) {
         Some(h) => match h.to_str() {
             Ok(s) => s,
             Err(_) => {
@@ -101,7 +109,7 @@ fn json_error(status: StatusCode, message: &str) -> Response {
     let body = json!({ "error": message });
     (
         status,
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        [(CONTENT_TYPE, "application/json; charset=utf-8")],
         body.to_string(),
     )
         .into_response()
@@ -122,7 +130,7 @@ fn classify_delete_error(msg: &str) -> StatusCode {
 fn json_ok(status: StatusCode, body: &Value) -> Response {
     (
         status,
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        [(CONTENT_TYPE, "application/json; charset=utf-8")],
         body.to_string(),
     )
         .into_response()
@@ -176,7 +184,7 @@ async fn create_upload(
                 .check_access(def.access.create.as_deref(), user_doc, None, None, &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         if let Err(e) = tx.commit() {
-            tracing::warn!("tx commit failed: {e}");
+            warn!("tx commit failed: {e}");
         }
 
         result
@@ -253,9 +261,10 @@ async fn create_upload(
                 state
                     .hook_runner
                     .check_field_write_access(&def.fields, user_doc, "create", &tx);
+
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
             if let Err(e) = tx.commit() {
-                tracing::warn!("tx commit failed: {e}");
+                warn!("tx commit failed: {e}");
             }
 
             for name in &denied {
@@ -284,7 +293,7 @@ async fn create_upload(
     let def_owned = def.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-    let result = tokio::task::spawn_blocking(move || {
+    let result = task::spawn_blocking(move || {
         service::create_document(
             &pool,
             &runner,
@@ -310,12 +319,13 @@ async fn create_upload(
                 && let Err(e) =
                     upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
             {
-                tracing::warn!("Failed to enqueue image conversions: {}", e);
+                warn!("Failed to enqueue image conversions: {}", e);
             }
 
             let edited_by = auth_user
                 .as_ref()
                 .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
+
             state.hook_runner.publish_event(
                 &state.event_bus,
                 &def.hooks,
@@ -331,12 +341,14 @@ async fn create_upload(
             // Strip field-level read-denied fields from response
             if let Ok(mut conn) = state.pool.get() {
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
                 if let Ok(tx) = conn.transaction() {
                     let denied =
                         state
                             .hook_runner
                             .check_field_read_access(&def.fields, user_doc, &tx);
                     let _ = tx.commit();
+
                     for name in &denied {
                         doc.fields.remove(name);
                     }
@@ -344,6 +356,7 @@ async fn create_upload(
             }
 
             let body = json!({ "document": doc });
+
             json_ok(StatusCode::CREATED, &body)
         }
         Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
@@ -402,10 +415,12 @@ async fn update_upload(
             None,
             &tx,
         );
+
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         if let Err(e) = tx.commit() {
-            tracing::warn!("tx commit failed: {e}");
+            warn!("tx commit failed: {e}");
         }
+
         result
     };
 
@@ -435,7 +450,7 @@ async fn update_upload(
 
     // Load old document to get file paths for cleanup
     let mut old_doc_fields: Option<HashMap<String, Value>> = None;
-    let locale_ctx = crate::db::LocaleContext::from_locale_string(None, &state.config.locale);
+    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
 
     if let Some(ref f) = file
         && !f.data.is_empty()
@@ -447,7 +462,7 @@ async fn update_upload(
 
     // Process upload if a new file was provided — runs on blocking thread
     let mut queued_conversions = Vec::new();
-    let mut upload_guard: Option<upload::CleanupGuard> = None;
+    let mut upload_guard: Option<CleanupGuard> = None;
 
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
@@ -455,8 +470,9 @@ async fn update_upload(
         let storage = state.storage.clone();
         let slug_for_upload = slug.clone();
         let global_max = state.config.upload.max_file_size;
-        match tokio::task::spawn_blocking(move || {
-            upload::process_upload(f, &upload_config, storage, &slug_for_upload, global_max)
+
+        match task::spawn_blocking(move || {
+            process_upload(f, &upload_config, storage, &slug_for_upload, global_max)
         })
         .await
         {
@@ -484,10 +500,12 @@ async fn update_upload(
                 state
                     .hook_runner
                     .check_field_write_access(&def.fields, user_doc, "update", &tx);
+
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
             if let Err(e) = tx.commit() {
-                tracing::warn!("tx commit failed: {e}");
+                warn!("tx commit failed: {e}");
             }
+
             for name in &denied {
                 form_data.remove(name);
             }
@@ -513,8 +531,8 @@ async fn update_upload(
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
 
-    let result = tokio::task::spawn_blocking(move || {
-        service::update_document(
+    let result = task::spawn_blocking(move || {
+        update_document(
             &pool,
             &runner,
             &slug_owned,
@@ -538,20 +556,21 @@ async fn update_upload(
 
             // Clean up old files on success
             if let Some(old_fields) = old_doc_fields {
-                upload::delete_upload_files(&*state.storage, &old_fields);
+                delete_upload_files(&*state.storage, &old_fields);
             }
 
             // Enqueue deferred image conversions if any
             if !queued_conversions.is_empty()
                 && let Ok(conn) = state.pool.get()
-                && let Err(e) = upload::enqueue_conversions(&conn, &slug, &id, &queued_conversions)
+                && let Err(e) = enqueue_conversions(&conn, &slug, &id, &queued_conversions)
             {
-                tracing::warn!("Failed to enqueue image conversions: {}", e);
+                warn!("Failed to enqueue image conversions: {}", e);
             }
 
             let edited_by = auth_user
                 .as_ref()
                 .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
+
             state.hook_runner.publish_event(
                 &state.event_bus,
                 &def.hooks,
@@ -566,14 +585,17 @@ async fn update_upload(
 
             // Strip field-level read-denied fields from response
             let mut doc = doc;
+
             if let Ok(mut conn) = state.pool.get() {
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
                 if let Ok(tx) = conn.transaction() {
                     let denied =
                         state
                             .hook_runner
                             .check_field_read_access(&def.fields, user_doc, &tx);
                     let _ = tx.commit();
+
                     for name in &denied {
                         doc.fields.remove(name);
                     }
@@ -646,11 +668,12 @@ async fn delete_upload(
 
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         if let Err(e) = tx.commit() {
-            tracing::warn!("tx commit failed: {e}");
+            warn!("tx commit failed: {e}");
         }
 
         result
     };
+
     match access {
         Ok(AccessResult::Denied) => {
             return json_error(StatusCode::FORBIDDEN, "Delete access denied");
@@ -692,8 +715,8 @@ async fn delete_upload(
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let storage = state.storage.clone();
     let locale_config = state.config.locale.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        service::delete_document(
+    let result = task::spawn_blocking(move || {
+        delete_document(
             &pool,
             &runner,
             &slug_owned,
@@ -728,6 +751,7 @@ async fn delete_upload(
         Ok(Err(e)) => {
             let msg = e.to_string();
             let status = classify_delete_error(&msg);
+
             json_error(status, &format!("Delete error: {}", msg))
         }
         Err(e) => json_error(

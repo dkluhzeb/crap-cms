@@ -42,8 +42,10 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
         MigrateAction::Up => {
             // Schema sync from Lua definitions
             let spin = Spinner::new("Syncing schema...");
+
             migrate::sync_all(&pool, &registry, &cfg.locale)
                 .context("Failed to sync database schema")?;
+
             spin.finish_success("Schema sync complete");
 
             // Run pending Lua data migrations
@@ -58,16 +60,22 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
                     .registry(registry.clone())
                     .config(&cfg)
                     .build()?;
+
                 for filename in &pending {
                     let path = migrations_dir.join(filename);
                     let mut conn = pool.get().context("Failed to get DB connection")?;
                     let tx = conn.transaction().context("Failed to begin transaction")?;
+
                     hook_runner.run_migration(&path, "up", &tx)?;
+
                     migrate::record_migration(&tx, filename)?;
+
                     tx.commit()
                         .with_context(|| format!("Failed to commit migration {}", filename))?;
+
                     cli::success(&format!("Applied: {}", filename));
                 }
+
                 cli::success(&format!("{} migration(s) applied.", pending.len()));
             }
         }
@@ -84,20 +92,27 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
                     .config(&cfg)
                     .build()?;
                 let migrations_dir = config_dir.join("migrations");
+
                 for filename in &to_rollback {
                     let path = migrations_dir.join(filename);
 
                     if !path.exists() {
                         bail!("Migration file not found: {}", path.display());
                     }
+
                     let mut conn = pool.get().context("Failed to get DB connection")?;
                     let tx = conn.transaction().context("Failed to begin transaction")?;
+
                     hook_runner.run_migration(&path, "down", &tx)?;
+
                     migrate::remove_migration(&tx, filename)?;
+
                     tx.commit()
                         .with_context(|| format!("Failed to commit rollback of {}", filename))?;
+
                     cli::success(&format!("Rolled back: {}", filename));
                 }
+
                 cli::success(&format!("{} migration(s) rolled back.", to_rollback.len()));
             }
         }
@@ -113,14 +128,17 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
                 ));
             } else {
                 let mut table = Table::new(vec!["Migration", "Status"]);
+
                 for f in &all_files {
                     let status = if applied.contains(f) {
                         "applied"
                     } else {
                         "pending"
                     };
+
                     table.row(vec![f, status]);
                 }
+
                 table.print();
             }
         }
@@ -133,12 +151,16 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
             }
 
             let spin = Spinner::new("Dropping all tables...");
+
             migrate::drop_all_tables(&pool)?;
+
             spin.finish_success("Tables dropped");
 
             let spin = Spinner::new("Recreating schema...");
+
             migrate::sync_all(&pool, &registry, &cfg.locale)
                 .context("Failed to sync database schema")?;
+
             spin.finish_success("Schema sync complete");
 
             // Run all migrations from scratch
@@ -151,16 +173,22 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
                     .registry(registry.clone())
                     .config(&cfg)
                     .build()?;
+
                 for filename in &all_files {
                     let path = migrations_dir.join(filename);
                     let mut conn = pool.get().context("Failed to get DB connection")?;
                     let tx = conn.transaction().context("Failed to begin transaction")?;
+
                     hook_runner.run_migration(&path, "up", &tx)?;
+
                     migrate::record_migration(&tx, filename)?;
+
                     tx.commit()
                         .with_context(|| format!("Failed to commit migration {}", filename))?;
+
                     cli::success(&format!("Applied: {}", filename));
                 }
+
                 cli::success(&format!("{} migration(s) applied.", all_files.len()));
             }
 
@@ -247,10 +275,13 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         let conn = pool
             .get()
             .context("Failed to get DB connection for backup")?;
+
         conn.vacuum_into(&backup_db_path)
             .context("VACUUM INTO failed")?;
     }
+
     let db_size = fs::metadata(&backup_db_path).map(|m| m.len()).unwrap_or(0);
+
     spin.finish_success(&format!(
         "Database snapshot: {} ({} bytes)",
         backup_db_path.display(),
@@ -275,9 +306,11 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
                     "uploads",
                 ])
                 .status();
+
             match status {
                 Ok(s) if s.success() => {
                     uploads_size = fs::metadata(&archive_path).map(|m| m.len()).ok();
+
                     spin.finish_success(&format!(
                         "Uploads archive: {} ({} bytes)",
                         archive_path.display(),
@@ -310,10 +343,12 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         "source_config": config_dir.to_string_lossy(),
     });
     let manifest_path = backup_dir.join("manifest.json");
+
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)
         .context("Failed to write manifest.json")?;
 
     cli::success(&format!("Backup complete: {}", backup_dir.display()));
+
     Ok(())
 }
 
@@ -348,6 +383,7 @@ pub fn restore(
     if !manifest_path.exists() {
         bail!("No manifest.json found in {}", backup_dir.display());
     }
+
     if !backup_db_path.exists() {
         bail!("No crap.db found in {}", backup_dir.display());
     }
@@ -359,6 +395,7 @@ pub fn restore(
         serde_json::from_str(&manifest_str).context("Failed to parse manifest.json")?;
 
     cli::header("Restoring from backup");
+
     cli::kv(
         "Version",
         manifest
@@ -366,6 +403,7 @@ pub fn restore(
             .and_then(|v| v.as_str())
             .unwrap_or("unknown"),
     );
+
     cli::kv(
         "Timestamp",
         manifest
@@ -373,6 +411,7 @@ pub fn restore(
             .and_then(|v| v.as_str())
             .unwrap_or("unknown"),
     );
+
     cli::kv(
         "DB size",
         &format!(
@@ -400,8 +439,10 @@ pub fn restore(
 
     // Replace database file
     let spin = Spinner::new("Restoring database...");
+
     fs::copy(&backup_db_path, &db_path)
         .with_context(|| format!("Failed to copy database to {}", db_path.display()))?;
+
     spin.finish_success("Database restored");
 
     // Remove sidecar files (e.g. WAL/SHM for SQLite) if they exist
@@ -409,6 +450,7 @@ pub fn restore(
         let pool =
             pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
         let conn = pool.get().context("Failed to get DB connection")?;
+
         for ext in conn.sidecar_extensions() {
             let sidecar = db_path.with_extension(ext);
             if sidecar.exists() {
@@ -431,6 +473,7 @@ pub fn restore(
                     &config_dir.to_string_lossy(),
                 ])
                 .status();
+
             match status {
                 Ok(s) if s.success() => {
                     spin.finish_success("Uploads restored");
@@ -451,6 +494,7 @@ pub fn restore(
     }
 
     cli::success("Restore complete.");
+
     Ok(())
 }
 
@@ -490,7 +534,9 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     }
 
     cli::warning("Orphan columns (not in Lua definitions):");
+
     println!();
+
     for (table, cols) in &orphans {
         for col in cols {
             cli::dim(&format!("  {}.{}", table, col));
@@ -498,7 +544,9 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     }
 
     let total: usize = orphans.iter().map(|(_, cols)| cols.len()).sum();
+
     println!();
+
     cli::info(&format!("{} orphan column(s) found.", total));
 
     if !confirm {
@@ -518,13 +566,16 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     for (table, cols) in &orphans {
         for col in cols {
             let sql = format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table, col);
+
             conn.execute(&sql, &[])
                 .with_context(|| format!("Failed to drop column {}.{}", table, col))?;
+
             cli::success(&format!("Dropped: {}.{}", table, col));
         }
     }
 
     cli::success(&format!("{} column(s) dropped.", total));
+
     Ok(())
 }
 
@@ -542,6 +593,7 @@ pub fn find_orphan_columns(
     let mut results = Vec::new();
 
     let mut slugs: Vec<_> = reg.collections.keys().collect();
+
     slugs.sort();
 
     for slug in slugs {

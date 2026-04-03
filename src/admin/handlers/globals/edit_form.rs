@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use axum::{
     Extension,
     extract::{Path, State},
     http::HeaderMap,
     response::Response,
 };
-
-use std::collections::HashMap;
+use serde_json::{Value, json};
+use tokio::task;
+use tracing::error;
 
 use crate::{
     admin::{
@@ -22,8 +25,6 @@ use crate::{
     core::auth::{AuthUser, Claims},
     db::{ops, query::AccessResult},
 };
-use serde_json::{Value, json};
-use tokio::task;
 
 /// GET /admin/globals/{slug} — show edit form for a global
 pub async fn edit_form(
@@ -71,6 +72,7 @@ pub async fn edit_form(
             ui_locale: user_ui_locale.as_deref(),
         };
         let doc = runner.apply_after_read(&ar_ctx, doc);
+
         Ok::<_, anyhow::Error>(doc)
     })
     .await;
@@ -78,11 +80,13 @@ pub async fn edit_form(
     let document = match read_result {
         Ok(Ok(doc)) => doc,
         Ok(Err(e)) => {
-            tracing::error!("Global read query error: {}", e);
+            error!("Global read query error: {}", e);
+
             return server_error(&state, "An internal error occurred.");
         }
         Err(e) => {
-            tracing::error!("Global read task error: {}", e);
+            error!("Global read task error: {}", e);
+
             return server_error(&state, "An internal error occurred.");
         }
     };

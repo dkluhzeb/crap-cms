@@ -2,11 +2,12 @@
 
 mod helpers;
 
-use std::{path::Path, sync::Arc};
+use std::{fs, path::Path, str, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
 use include_dir::{Dir, include_dir};
+use tracing::debug;
 
 use crate::admin::Translations;
 
@@ -47,8 +48,9 @@ fn register_embedded_dir(hbs: &mut Handlebars, dir: &Dir) -> Result<()> {
         let path = file.path();
         if path.extension().is_some_and(|ext| ext == "hbs") {
             let name_str = path.with_extension("").to_string_lossy().to_string();
-            let content = std::str::from_utf8(file.contents())
+            let content = str::from_utf8(file.contents())
                 .with_context(|| format!("Invalid UTF-8 in template: {}", name_str))?;
+
             hbs.register_template_string(&name_str, content)
                 .with_context(|| format!("Failed to register template: {}", name_str))?;
         }
@@ -63,11 +65,12 @@ fn register_embedded_dir(hbs: &mut Handlebars, dir: &Dir) -> Result<()> {
 
 fn register_dir_templates(hbs: &mut Handlebars, dir: &Path) -> Result<()> {
     register_dir_recursive(hbs, dir, dir)?;
+
     Ok(())
 }
 
 fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Result<()> {
-    let entries = std::fs::read_dir(dir)
+    let entries = fs::read_dir(dir)
         .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
 
     for entry in entries {
@@ -82,9 +85,11 @@ fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Resu
                 Err(_) => continue,
             };
             let name = relative.with_extension("").to_string_lossy().to_string();
-            let content = std::fs::read_to_string(&path)
+            let content = fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read template: {}", path.display()))?;
-            tracing::debug!("Overlay template: {}", name);
+
+            debug!("Overlay template: {}", name);
+
             hbs.register_template_string(&name, &content)
                 .with_context(|| format!("Failed to register overlay template: {}", name))?;
         }
@@ -122,8 +127,8 @@ mod tests {
     fn overlay_templates_override_compiled_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let templates_dir = tmp.path().join("templates").join("auth");
-        std::fs::create_dir_all(&templates_dir).unwrap();
-        std::fs::write(templates_dir.join("login.hbs"), "CUSTOM_LOGIN_PAGE").unwrap();
+        fs::create_dir_all(&templates_dir).unwrap();
+        fs::write(templates_dir.join("login.hbs"), "CUSTOM_LOGIN_PAGE").unwrap();
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
@@ -135,8 +140,8 @@ mod tests {
     fn overlay_templates_nested_subdirectory() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let nested_dir = tmp.path().join("templates").join("custom").join("deep");
-        std::fs::create_dir_all(&nested_dir).unwrap();
-        std::fs::write(nested_dir.join("page.hbs"), "DEEP_NESTED").unwrap();
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(nested_dir.join("page.hbs"), "DEEP_NESTED").unwrap();
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
@@ -148,9 +153,9 @@ mod tests {
     fn non_hbs_files_are_ignored_in_overlay() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let templates_dir = tmp.path().join("templates");
-        std::fs::create_dir_all(&templates_dir).unwrap();
-        std::fs::write(templates_dir.join("notes.txt"), "not a template").unwrap();
-        std::fs::write(templates_dir.join("custom.hbs"), "IS_TEMPLATE").unwrap();
+        fs::create_dir_all(&templates_dir).unwrap();
+        fs::write(templates_dir.join("notes.txt"), "not a template").unwrap();
+        fs::write(templates_dir.join("custom.hbs"), "IS_TEMPLATE").unwrap();
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");

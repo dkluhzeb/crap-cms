@@ -6,6 +6,56 @@ use crate::{
     db::query::{Filter, FilterClause, FilterOp},
 };
 
+/// Shared context for building list URLs — base path, search, sort, and filter params.
+///
+/// Used by `resolve_columns`, `compute_title_sort`, and pagination helpers
+/// to avoid passing the same 4 parameters everywhere.
+pub(crate) struct ListUrlContext<'a> {
+    pub base_url: &'a str,
+    pub search: Option<&'a str>,
+    pub sort: Option<&'a str>,
+    pub where_params: &'a str,
+}
+
+impl<'a> ListUrlContext<'a> {
+    /// Build a page-based list URL.
+    pub fn page_url(&self, page: i64) -> String {
+        build_list_url(
+            self.base_url,
+            page,
+            None,
+            self.search,
+            self.sort,
+            self.where_params,
+        )
+    }
+
+    /// Build a cursor-based list URL.
+    pub fn cursor_url(&self, cursor_param: &str, cursor_value: &str) -> String {
+        build_list_url_with_cursor(
+            self.base_url,
+            1,
+            None,
+            self.search,
+            self.sort,
+            self.where_params,
+            Some((cursor_param, cursor_value)),
+        )
+    }
+
+    /// Build a sort URL (page 1, with a specific sort override).
+    pub fn sort_url(&self, sort_field: &str) -> String {
+        build_list_url(
+            self.base_url,
+            1,
+            None,
+            self.search,
+            Some(sort_field),
+            self.where_params,
+        )
+    }
+}
+
 /// Parse `where[field][op]=value` parameters from a raw query string.
 /// Returns empty vec for malformed/invalid params. Best-effort parsing.
 pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) -> Vec<FilterClause> {

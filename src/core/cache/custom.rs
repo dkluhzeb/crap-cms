@@ -3,10 +3,10 @@
 //! Delegates all cache operations to user-provided Lua functions
 //! registered via `crap.cache.register({ get, set, delete, clear, has })`.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use mlua::{Function, Lua};
 
-use super::CacheBackend;
+use crate::core::cache::CacheBackend;
 
 /// Custom cache backend that delegates to Lua functions.
 ///
@@ -29,15 +29,15 @@ impl CustomCache {
             .lua
             .globals()
             .get("crap")
-            .map_err(|e| anyhow::anyhow!("crap global not found: {}", e))?;
+            .map_err(|e| anyhow!("crap global not found: {}", e))?;
 
         let cache: mlua::Table = crap
             .get("_cache")
-            .map_err(|e| anyhow::anyhow!("crap._cache not found: {}", e))?;
+            .map_err(|e| anyhow!("crap._cache not found: {}", e))?;
 
         cache
             .get(name)
-            .map_err(|e| anyhow::anyhow!("crap._cache.{} not found: {}", name, e))
+            .map_err(|e| anyhow!("crap._cache.{} not found: {}", name, e))
     }
 }
 
@@ -46,31 +46,34 @@ impl CacheBackend for CustomCache {
         let func = self.get_fn("get")?;
         let result: mlua::Value = func
             .call(key.to_string())
-            .map_err(|e| anyhow::anyhow!("custom cache get error: {:#}", e))?;
+            .map_err(|e| anyhow!("custom cache get error: {:#}", e))?;
 
         match result {
             mlua::Value::Nil => Ok(None),
             mlua::Value::String(s) => Ok(Some(s.as_bytes().to_vec())),
-            other => anyhow::bail!("custom cache get returned unexpected type: {:?}", other),
+            other => bail!("custom cache get returned unexpected type: {:?}", other),
         }
     }
 
     fn set(&self, key: &str, value: &[u8]) -> Result<()> {
         let func = self.get_fn("set")?;
+
         func.call::<()>((key.to_string(), self.lua.create_string(value)?))
-            .map_err(|e| anyhow::anyhow!("custom cache set error: {:#}", e))
+            .map_err(|e| anyhow!("custom cache set error: {:#}", e))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         let func = self.get_fn("delete")?;
+
         func.call::<()>(key.to_string())
-            .map_err(|e| anyhow::anyhow!("custom cache delete error: {:#}", e))
+            .map_err(|e| anyhow!("custom cache delete error: {:#}", e))
     }
 
     fn clear(&self) -> Result<()> {
         let func = self.get_fn("clear")?;
+
         func.call::<()>(())
-            .map_err(|e| anyhow::anyhow!("custom cache clear error: {:#}", e))
+            .map_err(|e| anyhow!("custom cache clear error: {:#}", e))
     }
 
     fn has(&self, key: &str) -> Result<bool> {
@@ -78,7 +81,7 @@ impl CacheBackend for CustomCache {
             Ok(func) => {
                 let result: bool = func
                     .call(key.to_string())
-                    .map_err(|e| anyhow::anyhow!("custom cache has error: {:#}", e))?;
+                    .map_err(|e| anyhow!("custom cache has error: {:#}", e))?;
                 Ok(result)
             }
             Err(_) => {

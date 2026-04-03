@@ -1,19 +1,21 @@
 //! Builds enriched child field contexts for layout wrappers (Row, Collapsible, Tabs)
 //! inside Array and Blocks rows.
 
+use std::collections::HashMap;
+
+use serde_json::{Value, json};
+
 use crate::{
     admin::handlers::{
         field_context::{
-            MAX_FIELD_DEPTH, builder::apply_field_type_extras, count_errors_in_fields,
+            MAX_FIELD_DEPTH,
+            builder::{FieldRecursionCtx, apply_field_type_extras},
+            count_errors_in_fields,
         },
         shared::auto_label_from_name,
     },
     core::field::{FieldDefinition, FieldType},
 };
-
-use serde_json::{Value, json};
-
-use std::collections::HashMap;
 
 /// Build enriched child field contexts from structured JSON data.
 /// Used by layout wrapper handlers (Tabs/Row/Collapsible) inside Array/Blocks
@@ -167,15 +169,11 @@ pub fn build_enriched_children_from_data(
                 }
                 _ => {
                     let empty = HashMap::new();
-                    let extras_ctx =
-                        crate::admin::handlers::field_context::builder::FieldRecursionCtx::builder(
-                            &empty,
-                            errors,
-                            &child_name,
-                        )
+                    let extras_ctx = FieldRecursionCtx::builder(&empty, errors, &child_name)
                         .non_default_locale(non_default_locale)
                         .depth(depth + 1)
                         .build();
+
                     apply_field_type_extras(child, &child_val, &mut child_ctx, &extras_ctx);
 
                     // Inject stored timezone value from parent row for Date fields

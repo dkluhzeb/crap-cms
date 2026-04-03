@@ -9,13 +9,17 @@ use std::{
 use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
+use tracing::error;
 
 use crate::{
-    api::content::{self, content_api_server::ContentApi},
+    api::{
+        content::{self, content_api_server::ContentApi},
+        service::ContentServiceDeps,
+    },
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
         AuthUser, CollectionDefinition, JwtSecret, Registry,
-        auth::{SharedPasswordProvider, SharedTokenProvider},
+        auth::{SharedPasswordProvider, SharedTokenProvider, TokenProvider},
         cache::SharedCache,
         collection::GlobalDefinition,
         email::EmailRenderer,
@@ -29,8 +33,6 @@ use crate::{
     },
     hooks::HookRunner,
 };
-
-use super::ContentServiceDeps;
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
 #[allow(dead_code)]
@@ -170,7 +172,7 @@ impl ContentService {
     /// Pure data lookup — safe to call inside `spawn_blocking`.
     pub(in crate::api::service) fn resolve_auth_user(
         token: Option<String>,
-        token_provider: &dyn crate::core::auth::TokenProvider,
+        token_provider: &dyn TokenProvider,
         registry: &Registry,
         conn: &dyn DbConnection,
     ) -> Result<Option<AuthUser>, Status> {
@@ -217,17 +219,21 @@ impl ContentService {
     ) -> Result<AccessResult, Status> {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
         let tx = conn.transaction().map_err(|e| {
-            tracing::error!("Access check tx error: {}", e);
+            error!("Access check tx error: {}", e);
+
             Status::internal("Internal error")
         })?;
         let result = hook_runner
             .check_access(access_ref, user_doc, id, data, &tx)
             .map_err(|e| {
-                tracing::error!("Access check error: {}", e);
+                error!("Access check error: {}", e);
+
                 Status::internal("Internal error")
             })?;
+
         tx.commit().map_err(|e| {
-            tracing::error!("Access check commit error: {}", e);
+            error!("Access check commit error: {}", e);
+
             Status::internal("Internal error")
         })?;
         Ok(result)

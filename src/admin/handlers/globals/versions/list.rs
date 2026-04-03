@@ -1,3 +1,11 @@
+use axum::{
+    Extension,
+    extract::{Path, Query, State},
+    http::HeaderMap,
+    response::Response,
+};
+use serde_json::{Value, json};
+
 use crate::{
     admin::{
         AdminState,
@@ -13,14 +21,6 @@ use crate::{
     },
     db::query::{self, AccessResult},
 };
-
-use axum::{
-    Extension,
-    extract::{Path, Query, State},
-    http::HeaderMap,
-    response::Response,
-};
-use serde_json::{Value, json};
 
 /// GET /admin/globals/{slug}/versions — dedicated version history page
 pub async fn list_versions_page(
@@ -50,12 +50,7 @@ pub async fn list_versions_page(
     }
 
     let global_table = format!("_global_{}", slug);
-    let page = params.page.unwrap_or(1).max(1);
-    let per_page = params
-        .per_page
-        .unwrap_or(state.config.pagination.default_limit)
-        .clamp(1, state.config.pagination.max_limit);
-    let offset = (page - 1) * per_page;
+    let pg = params.resolve(&state.config.pagination);
 
     let conn = match state.pool.get() {
         Ok(c) => c,
@@ -67,8 +62,8 @@ pub async fn list_versions_page(
         &conn,
         &global_table,
         "default",
-        Some(per_page),
-        Some(offset),
+        Some(pg.per_page),
+        Some(pg.offset),
     )
     .unwrap_or_default()
     .into_iter()
@@ -90,14 +85,14 @@ pub async fn list_versions_page(
             json!(format!("/admin/globals/{}", slug)),
         )
         .with_pagination(
-            &query::PaginationResult::builder(&[] as &[Document], total, per_page)
-                .page(page, offset),
+            &query::PaginationResult::builder(&[] as &[Document], total, pg.per_page)
+                .page(pg.page, pg.offset),
             format!(
                 "/admin/globals/{}/versions?page={}",
                 slug,
-                page.saturating_sub(1).max(1)
+                pg.page.saturating_sub(1).max(1)
             ),
-            format!("/admin/globals/{}/versions?page={}", slug, page + 1),
+            format!("/admin/globals/{}/versions?page={}", slug, pg.page + 1),
         )
         .breadcrumbs(vec![
             Breadcrumb::link("dashboard", "/admin"),

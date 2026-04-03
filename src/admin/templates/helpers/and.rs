@@ -26,14 +26,7 @@ impl HelperDef for AndHelper {
 mod tests {
     use serde_json::json;
 
-    fn test_hbs() -> handlebars::Handlebars<'static> {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let translations =
-            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
-        let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
-            .expect("create_handlebars");
-        (*hbs).clone()
-    }
+    use crate::admin::templates::helpers::test_helpers::test_hbs;
 
     #[test]
     fn and_bools() {

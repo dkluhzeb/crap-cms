@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::TrashAction;
 use crate::{
@@ -21,6 +21,7 @@ fn init_stack(config_dir: &Path) -> Result<(CrapConfig, SharedRegistry, DbPool)>
     let cfg = CrapConfig::load(&config_dir)?;
     let registry = hooks::init_lua(&config_dir, &cfg)?;
     let pool = pool::create_pool(&config_dir, &cfg)?;
+
     migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
     Ok((cfg, registry, pool))
@@ -40,7 +41,7 @@ fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Resul
             .ok_or_else(|| anyhow!("Collection '{}' not found", slug))?;
 
         if !def.soft_delete {
-            anyhow::bail!("Collection '{}' does not have soft_delete enabled", slug);
+            bail!("Collection '{}' does not have soft_delete enabled", slug);
         }
 
         return Ok(vec![slug.to_string()]);
@@ -88,6 +89,7 @@ fn run_list(
         };
 
         let mut fq = query::FindQuery::new();
+
         fq.include_deleted = true;
         fq.filters = vec![query::FilterClause::Single(query::Filter {
             field: "_deleted_at".to_string(),
@@ -162,6 +164,7 @@ fn run_purge(
 
     if slugs.is_empty() {
         cli::info("No collections with soft_delete enabled.");
+
         return Ok(());
     }
 
@@ -174,6 +177,7 @@ fn run_purge(
                 older_than
             )
         })?;
+
         Some(secs)
     };
 
@@ -200,7 +204,9 @@ fn run_purge(
             for id in &ids {
                 cli::info(&format!("Would purge: {} / {}", slug, id));
             }
+
             total += ids.len() as u64;
+
             continue;
         }
 
@@ -218,6 +224,7 @@ fn run_purge(
         }
 
         tx.commit().context("Commit purge")?;
+
         total += ids.len() as u64;
 
         // Re-acquire connection after commit (tx consumed it)
@@ -281,7 +288,7 @@ fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &
         .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
 
     if !def.soft_delete {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' does not have soft_delete enabled",
             collection
         );
@@ -293,7 +300,7 @@ fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &
     let restored = query::restore(&tx, collection, id)?;
 
     if !restored {
-        anyhow::bail!("Document '{}' not found or not in trash", id);
+        bail!("Document '{}' not found or not in trash", id);
     }
 
     // Re-sync FTS index (FTS row was deleted on soft-delete)
@@ -329,7 +336,7 @@ fn run_empty(
         .clone();
 
     if !def.soft_delete {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' does not have soft_delete enabled",
             collection
         );
@@ -342,6 +349,7 @@ fn run_empty(
 
     // Count trashed docs first
     let mut fq = query::FindQuery::new();
+
     fq.include_deleted = true;
     fq.filters = vec![query::FilterClause::Single(query::Filter {
         field: "_deleted_at".to_string(),

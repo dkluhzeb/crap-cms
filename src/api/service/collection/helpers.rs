@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
+use anyhow::Error as AnyhowError;
 use tonic::Status;
+use tracing::{error, warn};
 
 use crate::{api::content, config::PasswordPolicy};
 
@@ -13,7 +15,7 @@ use crate::{api::content, config::PasswordPolicy};
 ///
 /// `db_kind` selects backend-specific error patterns (`"sqlite"`, `"postgres"`).
 pub(in crate::api::service::collection) fn map_db_error(
-    e: anyhow::Error,
+    e: AnyhowError,
     prefix: &str,
     db_kind: &str,
 ) -> Status {
@@ -34,6 +36,7 @@ pub(in crate::api::service::collection) fn map_db_error(
             }
             _ => false,
         };
+
     // Hook/validation errors are user-facing — pass the message through.
     let is_hook_error = msg.contains("hook error:")
         || msg.contains("validation error:")
@@ -49,13 +52,16 @@ pub(in crate::api::service::collection) fn map_db_error(
         };
 
     if is_transient {
-        tracing::warn!("{}: {}", prefix, msg);
+        warn!("{}: {}", prefix, msg);
+
         Status::unavailable("Service temporarily unavailable, please retry")
     } else if is_hook_error {
-        tracing::warn!("{}: {}", prefix, msg);
+        warn!("{}: {}", prefix, msg);
+
         Status::invalid_argument(sanitize_constraint_error(&msg))
     } else {
-        tracing::error!("{}: {}", prefix, msg);
+        error!("{}: {}", prefix, msg);
+
         Status::internal("Internal error")
     }
 }
@@ -70,8 +76,10 @@ fn sanitize_constraint_error(msg: &str) -> String {
         && let Some(dot_pos) = rest.find('.')
     {
         let column = &rest[dot_pos + 1..];
+
         return format!("Unique constraint violated for field '{}'", column);
     }
+
     // PostgreSQL: "duplicate key value violates unique constraint" — already generic enough,
     // but we could sanitize further if needed. For now, pass through.
     msg.to_string()
@@ -92,16 +100,20 @@ pub(in crate::api::service) fn extract_auth_password(
     if !is_auth {
         return Ok(None);
     }
+
     let password = data.remove("password");
     let Some(pw) = password else {
         return Ok(None);
     };
+
     if allow_empty && pw.is_empty() {
         return Ok(None);
     }
+
     policy
         .validate(&pw)
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
     Ok(Some(pw))
 }
 
@@ -119,9 +131,10 @@ pub(in crate::api::service) fn strip_denied_proto_fields(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use anyhow::anyhow;
+    use tonic::Code;
+
+    use super::*;
 
     // ── SQLite patterns ─────────────────────────────────────────────
 
@@ -129,28 +142,28 @@ mod tests {
     fn map_db_error_transient_locked_sqlite() {
         let e = anyhow!("database is locked");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
     fn map_db_error_transient_busy_sqlite() {
         let e = anyhow!("SQLITE_BUSY error");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
     fn map_db_error_transient_pool() {
         let e = anyhow!("Timed out waiting for connection pool");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
     fn map_db_error_hook_error_sqlite() {
         let e = anyhow!("hook error: title is required");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.code(), Code::InvalidArgument);
         assert!(status.message().contains("hook error:"));
     }
 
@@ -158,14 +171,14 @@ mod tests {
     fn map_db_error_validation_error() {
         let e = anyhow!("Validation failed: email invalid");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.code(), Code::InvalidArgument);
     }
 
     #[test]
     fn map_db_error_unique_constraint_sqlite() {
         let e = anyhow!("UNIQUE constraint failed: posts.slug");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(
             status.message(),
             "Unique constraint violated for field 'slug'",
@@ -177,7 +190,7 @@ mod tests {
     fn map_db_error_unknown() {
         let e = anyhow!("something unexpected happened");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.code(), Code::Internal);
         assert_eq!(status.message(), "Internal error");
     }
 
@@ -187,42 +200,42 @@ mod tests {
     fn map_db_error_transient_connection_refused_postgres() {
         let e = anyhow!("connection refused");
         let status = map_db_error(e, "test", "postgres");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
     fn map_db_error_transient_too_many_clients_postgres() {
         let e = anyhow!("too many clients already");
         let status = map_db_error(e, "test", "postgres");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
     fn map_db_error_transient_reserved_slots_postgres() {
         let e = anyhow!("remaining connection slots are reserved");
         let status = map_db_error(e, "test", "postgres");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
     fn map_db_error_duplicate_key_postgres() {
         let e = anyhow!("duplicate key value violates unique constraint");
         let status = map_db_error(e, "test", "postgres");
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.code(), Code::InvalidArgument);
     }
 
     #[test]
     fn map_db_error_foreign_key_postgres() {
         let e = anyhow!("violates foreign key constraint");
         let status = map_db_error(e, "test", "postgres");
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.code(), Code::InvalidArgument);
     }
 
     #[test]
     fn map_db_error_pool_timeout_postgres() {
         let e = anyhow!("Timed out waiting for connection pool");
         let status = map_db_error(e, "test", "postgres");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     // ── Unknown backend — only generic patterns match ───────────────
@@ -231,7 +244,7 @@ mod tests {
     fn map_db_error_unknown_backend_pool_timeout() {
         let e = anyhow!("Timed out waiting for connection pool");
         let status = map_db_error(e, "test", "unknown");
-        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.code(), Code::Unavailable);
     }
 
     #[test]
@@ -239,7 +252,7 @@ mod tests {
         let e = anyhow!("SQLITE_BUSY error");
         let status = map_db_error(e, "test", "unknown");
         // Backend-specific pattern should NOT match for unknown backend
-        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.code(), Code::Internal);
     }
 
     // ── extract_auth_password tests ───────────────────────────────────
@@ -387,7 +400,7 @@ mod tests {
     fn map_db_error_unique_constraint_sanitized_message() {
         let e = anyhow!("UNIQUE constraint failed: users.email");
         let status = map_db_error(e, "test", "sqlite");
-        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.code(), Code::InvalidArgument);
         assert!(
             !status.message().contains("users.email"),
             "should not leak table.column"

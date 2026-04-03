@@ -6,18 +6,78 @@
 
 use std::{collections::HashMap, net::SocketAddr};
 
+use anyhow::anyhow;
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
+use tokio::task;
+use tracing::error;
 
-use super::{helpers::client_ip, session::session_cookies};
 use crate::{
-    admin::AdminState,
-    core::{Slug, auth::ClaimsBuilder},
+    admin::{
+        AdminState,
+        handlers::auth::{
+            client_ip, create_session_token, extract_user_email, find_auth_collection,
+            headers_to_map, session_redirect,
+        },
+    },
+    core::Document,
     db::query,
 };
+
+/// Run the Lua auth callback hook in a blocking task.
+///
+/// Returns `Ok(Some(doc))` on success, `Ok(None)` if the hook returned nil or
+/// had an application error (caller should rate-limit), `Err` on system failure
+/// (task panic — caller should NOT rate-limit).
+async fn run_auth_callback_hook(
+    state: &AdminState,
+    name: &str,
+    headers: &HeaderMap,
+    params: &HashMap<String, String>,
+    collection: &str,
+) -> Result<Option<Document>, ()> {
+    let hook_ref = format!("auth_callback.{}", name);
+    let pool = state.pool.clone();
+    let hook_runner = state.hook_runner.clone();
+    let collection = collection.to_string();
+
+    let mut ctx = headers_to_map(headers);
+
+    for (k, v) in params {
+        ctx.insert(format!("_query_{}", k), v.clone());
+    }
+
+    let result = task::spawn_blocking(move || {
+        let conn = pool.get()?;
+
+        hook_runner
+            .run_auth_strategy(&hook_ref, &collection, &ctx, &conn)
+            .map_err(|e| anyhow!("Auth callback hook error: {:#}", e))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(doc)) => Ok(doc),
+        Ok(Err(e)) => {
+            error!("Auth callback error: {:#}", e);
+            Ok(None)
+        }
+        Err(e) => {
+            error!("Auth callback task error: {}", e);
+            Err(())
+        }
+    }
+}
+
+/// Fetch the session version for a user, returning `None` on DB errors.
+fn fetch_session_version(state: &AdminState, slug: &str, user_id: &str) -> Option<u64> {
+    let conn = state.pool.get().ok()?;
+
+    Some(query::get_session_version(&conn, slug, user_id).unwrap_or(0))
+}
 
 /// GET/POST `/admin/auth/callback/{name}` — dispatch to Lua auth callback hook.
 ///
@@ -37,130 +97,46 @@ pub async fn auth_callback(
 ) -> Response {
     let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
 
-    // Rate limit callback attempts by IP
     if state.ip_login_limiter.is_blocked(&ip) {
         return Redirect::to("/admin/login").into_response();
     }
 
-    let header_map: HashMap<String, String> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
-        .collect();
-
-    let hook_ref = format!("auth_callback.{}", name);
-    let pool = state.pool.clone();
-    let hook_runner = state.hook_runner.clone();
-    let registry = state.registry.clone();
-
-    // Find the first auth collection for callback context
-    let auth_collection = registry
-        .collections
-        .iter()
-        .find(|(_, d)| d.is_auth_collection())
-        .map(|(slug, _)| slug.to_string());
-
-    let collection = match auth_collection {
+    let collection = match find_auth_collection(&state.registry) {
         Some(c) => c,
         None => return Redirect::to("/admin/login").into_response(),
     };
 
-    let collection_for_hook = collection.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let conn = pool.get()?;
-
-        // Merge query params and headers into context
-        let mut ctx = header_map;
-        for (k, v) in &params {
-            ctx.insert(format!("_query_{}", k), v.clone());
-        }
-
-        hook_runner
-            .run_auth_strategy(&hook_ref, &collection_for_hook, &ctx, &conn)
-            .map_err(|e| anyhow::anyhow!("Auth callback hook error: {:#}", e))
-    })
-    .await;
-
-    let user = match result {
-        Ok(Ok(Some(doc))) => doc,
-        Ok(Ok(None)) => {
+    let user = match run_auth_callback_hook(&state, &name, &headers, &params, &collection).await {
+        Ok(Some(doc)) => doc,
+        Ok(None) => {
             state.ip_login_limiter.record_failure(&ip);
             return Redirect::to("/admin/login").into_response();
         }
-        Ok(Err(e)) => {
-            tracing::error!("Auth callback error: {:#}", e);
-            state.ip_login_limiter.record_failure(&ip);
-            return Redirect::to("/admin/login").into_response();
-        }
-        Err(e) => {
-            tracing::error!("Auth callback task error: {}", e);
-            return Redirect::to("/admin/login").into_response();
-        }
+        Err(()) => return Redirect::to("/admin/login").into_response(),
     };
 
-    // Get the collection definition for token expiry
-    let def = match state.registry.get_collection(&collection) {
-        Some(d) => d.clone(),
+    let session_version = match fetch_session_version(&state, &collection, &user.id) {
+        Some(v) => v,
         None => return Redirect::to("/admin/login").into_response(),
     };
 
-    let slug = collection;
+    let email = extract_user_email(&user);
 
-    // Get session version
-    let session_version = {
-        let conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(_) => return Redirect::to("/admin/login").into_response(),
-        };
-        query::get_session_version(&conn, &slug, &user.id).unwrap_or(0)
-    };
-
-    let user_email = user
-        .fields
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let expiry = def
-        .auth
-        .as_ref()
-        .map(|a| a.token_expiry)
-        .unwrap_or(state.config.auth.token_expiry);
-
-    let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&slug))
-        .email(user_email)
-        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
-        .session_version(session_version)
-        .build()
-    {
-        Ok(c) => c,
+    let session = match create_session_token(
+        &state,
+        user.id.to_string(),
+        &collection,
+        email,
+        session_version,
+    ) {
+        Ok(s) => s,
         Err(e) => {
-            tracing::error!("Auth callback claims error: {}", e);
+            error!("Auth callback: {}", e);
             return Redirect::to("/admin/login").into_response();
         }
     };
 
-    let token = match state.token_provider.create_token(&claims) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("Auth callback token error: {}", e);
-            return Redirect::to("/admin/login").into_response();
-        }
-    };
-
-    // Clear rate limit on success
     state.ip_login_limiter.clear(&ip);
 
-    let cookies = session_cookies(&token, expiry, claims.exp, state.config.admin.dev_mode);
-    let mut response = Redirect::to("/admin").into_response();
-
-    for cookie in cookies {
-        response.headers_mut().append(
-            axum::http::header::SET_COOKIE,
-            cookie.parse().expect("cookie header is valid ASCII"),
-        );
-    }
-
-    response
+    session_redirect(&session, state.config.admin.dev_mode)
 }

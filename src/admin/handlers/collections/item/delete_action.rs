@@ -1,13 +1,14 @@
-use crate::{
-    admin::{AdminState, handlers::collections::shared::delete_action_impl},
-    core::auth::AuthUser,
-};
 use axum::{
     Extension,
     body::Bytes,
     extract::{Path, State},
     http::HeaderMap,
     response::IntoResponse,
+};
+
+use crate::{
+    admin::{AdminState, handlers::collections::shared::delete_action_impl},
+    core::auth::AuthUser,
 };
 
 /// DELETE /admin/collections/{slug}/{id} — delete an item.

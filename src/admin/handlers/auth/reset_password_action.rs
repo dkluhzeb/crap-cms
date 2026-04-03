@@ -8,15 +8,16 @@ use axum::{
 use chrono::Utc;
 use serde_json::json;
 use tokio::task;
+use tracing::error;
 
-use super::{ResetPasswordForm, client_ip};
 use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
+        handlers::auth::{ResetPasswordForm, client_ip},
     },
-    core::auth::ResetTokenError,
-    db::query,
+    core::{Registry, auth::ResetTokenError},
+    db::{DbPool, query},
 };
 
 /// Render a reset password error page with the given error key and optional token.
@@ -34,11 +35,64 @@ fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> R
     match state.render("auth/reset_password", &data) {
         Ok(html) => Html(html).into_response(),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
                 .into_response()
         }
     }
+}
+
+/// Find the reset token across all auth collections, validate it, and update the password.
+///
+/// Searches every auth collection (with local auth enabled) for the token.
+/// On success the password is updated and the token cleared inside a transaction.
+fn consume_reset_token(
+    pool: &DbPool,
+    registry: &Registry,
+    token: &str,
+    password: &str,
+) -> anyhow::Result<()> {
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
+
+    for def in registry.collections.values() {
+        if !def.is_auth_collection() {
+            continue;
+        }
+
+        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+            continue;
+        }
+
+        let Some((user, exp)) = query::find_by_reset_token(&tx, &def.slug, def, token)? else {
+            continue;
+        };
+
+        // Locked accounts must not reset their password.
+        // Return NotFound to avoid leaking that the account exists but is locked.
+        if query::is_locked(&tx, &def.slug, &user.id)? {
+            query::clear_reset_token(&tx, &def.slug, &user.id)?;
+            tx.commit()?;
+
+            return Err(ResetTokenError::NotFound.into());
+        }
+
+        if Utc::now().timestamp() >= exp {
+            query::clear_reset_token(&tx, &def.slug, &user.id)?;
+            tx.commit()?;
+
+            return Err(ResetTokenError::Expired.into());
+        }
+
+        query::update_password(&tx, &def.slug, &user.id, password)?;
+        query::clear_reset_token(&tx, &def.slug, &user.id)?;
+        tx.commit()?;
+
+        return Ok(());
+    }
+
+    Err(ResetTokenError::NotFound.into())
 }
 
 /// POST /admin/reset-password — validate token, update password, redirect to login.
@@ -70,46 +124,9 @@ pub async fn reset_password_action(
     let token = form.token.clone();
     let password = form.password.clone();
 
-    let result = task::spawn_blocking(move || -> anyhow::Result<()> {
-        let mut conn = pool.get()?;
-        let tx = conn.transaction()?;
-
-        // Search all auth collections for the token
-        for def in registry.collections.values() {
-            if !def.is_auth_collection() {
-                continue;
-            }
-            if def.auth.as_ref().is_some_and(|a| a.disable_local) {
-                continue;
-            }
-
-            if let Some((user, exp)) = query::find_by_reset_token(&tx, &def.slug, def, &token)? {
-                // Locked accounts must not be able to reset their password.
-                // Return NotFound to avoid leaking that the account exists but is locked.
-                if query::is_locked(&tx, &def.slug, &user.id)? {
-                    query::clear_reset_token(&tx, &def.slug, &user.id)?;
-                    tx.commit()?;
-                    return Err(ResetTokenError::NotFound.into());
-                }
-
-                if Utc::now().timestamp() >= exp {
-                    query::clear_reset_token(&tx, &def.slug, &user.id)?;
-                    tx.commit()?;
-                    return Err(ResetTokenError::Expired.into());
-                }
-
-                // Update password and clear token
-                query::update_password(&tx, &def.slug, &user.id, &password)?;
-                query::clear_reset_token(&tx, &def.slug, &user.id)?;
-                tx.commit()?;
-
-                return Ok(());
-            }
-        }
-
-        Err(ResetTokenError::NotFound.into())
-    })
-    .await;
+    let result =
+        task::spawn_blocking(move || consume_reset_token(&pool, &registry, &token, &password))
+            .await;
 
     match result {
         Ok(Ok(())) => Redirect::to("/admin/login?success=success_password_reset").into_response(),
@@ -121,10 +138,12 @@ pub async fn reset_password_action(
                 Some(ResetTokenError::Expired) => "error_reset_link_expired",
                 _ => "error_reset_link_invalid",
             };
+
             render_reset_error(&state, None, msg)
         }
         Err(e) => {
-            tracing::error!("Reset password task error: {}", e);
+            error!("Reset password task error: {}", e);
+
             render_reset_error(&state, None, "error_internal")
         }
     }

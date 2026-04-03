@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use super::CacheBackend;
+use crate::core::cache::CacheBackend;
 
 /// No-op cache that never stores or returns data.
 ///

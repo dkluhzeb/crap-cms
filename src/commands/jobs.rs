@@ -4,9 +4,9 @@ use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
 use std::path::Path;
 
-use super::JobsAction;
 use crate::{
     cli::{self, Table},
+    commands::JobsAction,
     config::{CrapConfig, parse_duration_string},
     core::{SharedRegistry, job::JobStatus},
     db::{DbPool, migrate, pool, query},
@@ -21,6 +21,7 @@ fn init_stack(config_dir: &Path) -> Result<(CrapConfig, SharedRegistry, DbPool)>
     let cfg = CrapConfig::load(&config_dir)?;
     let registry = hooks::init_lua(&config_dir, &cfg)?;
     let pool = pool::create_pool(&config_dir, &cfg)?;
+
     migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
     Ok((cfg, registry, pool))
@@ -73,15 +74,19 @@ fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
             if completed > 0 {
                 parts.push(format!("{}ok", completed));
             }
+
             if failed > 0 {
                 parts.push(format!("{}fail", failed));
             }
+
             if pending > 0 {
                 parts.push(format!("{}pend", pending));
             }
+
             if running > 0 {
                 parts.push(format!("{}run", running));
             }
+
             parts.join("/")
         };
 
@@ -100,6 +105,7 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
     if let Some(run_id) = id {
         let run = query::jobs::get_job_run(&conn, &run_id)?
             .ok_or_else(|| anyhow!("Job run '{}' not found", run_id))?;
+
         cli::kv("ID", &run.id);
         cli::kv("Job", &run.slug);
         cli::kv("Status", run.status.as_str());
@@ -113,9 +119,11 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
         if !run.data.is_empty() {
             cli::kv("Data", &run.data);
         }
+
         if let Some(ref result) = run.result {
             cli::kv("Result", &result.to_string());
         }
+
         if let Some(ref error) = run.error {
             cli::kv("Error", &error.to_string());
         }
@@ -217,6 +225,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
 
     if stale_count > 0 {
         cli::header("Stale jobs");
+
         for job in &stale_jobs {
             cli::warning(&format!(
                 "{} ({}): started {}, last heartbeat {}",
@@ -252,6 +261,7 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
                 .ok_or_else(|| anyhow!("Job '{}' not defined", slug))?;
 
             let data_json = data.as_deref().unwrap_or("{}");
+
             serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
@@ -271,6 +281,7 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
         }
         JobsAction::Status { id, slug, limit } => {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;
+
             run_status(&pool, id, slug, limit)
         }
         JobsAction::Cancel { slug } => {
@@ -281,10 +292,12 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
             let pool = pool::create_pool(&config_dir, &cfg)?;
             let conn = pool.get().context("Failed to get DB connection")?;
             let deleted = query::jobs::cancel_pending_jobs(&conn, slug.as_deref())?;
+
             match slug {
                 Some(s) => cli::success(&format!("Cancelled {} pending '{}' job(s)", deleted, s)),
                 None => cli::success(&format!("Cancelled {} pending job(s)", deleted)),
             }
+
             Ok(())
         }
         JobsAction::Purge { older_than } => {
@@ -302,12 +315,14 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
 
             let conn = pool.get().context("Failed to get DB connection")?;
             let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
+
             cli::success(&format!("Purged {} old job run(s)", deleted));
 
             Ok(())
         }
         JobsAction::Healthcheck => {
             let (cfg, registry, pool) = init_stack(config_dir)?;
+
             run_healthcheck(&cfg, &registry, &pool)
         }
     }

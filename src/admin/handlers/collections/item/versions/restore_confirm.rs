@@ -1,3 +1,11 @@
+use axum::{
+    Extension,
+    extract::{Path, State},
+    http::HeaderMap,
+    response::Response,
+};
+use serde_json::json;
+
 use crate::{
     admin::{
         AdminState,
@@ -7,17 +15,38 @@ use crate::{
             render_or_error, server_error,
         },
     },
-    core::auth::{AuthUser, Claims},
-    db::query::{AccessResult, find_missing_relations, find_version_by_id},
+    core::{
+        FieldDefinition, Registry,
+        auth::{AuthUser, Claims},
+        document::VersionSnapshot,
+    },
+    db::{
+        BoxedConnection,
+        query::{AccessResult, MissingRelation, find_missing_relations, find_version_by_id},
+    },
 };
 
-use axum::{
-    Extension,
-    extract::{Path, State},
-    http::HeaderMap,
-    response::Response,
-};
-use serde_json::json;
+/// Look up the version snapshot and find any missing relation targets.
+fn load_version_with_missing_relations(
+    conn: &BoxedConnection,
+    registry: &Registry,
+    slug: &str,
+    version_id: &str,
+    fields: &[FieldDefinition],
+) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
+    let version = match find_version_by_id(conn, slug, version_id) {
+        Ok(Some(v)) => v,
+        Ok(None) => return Err("Version not found"),
+        Err(e) => {
+            tracing::error!("Find version error: {}", e);
+            return Err("Database error");
+        }
+    };
+
+    let missing = find_missing_relations(conn, registry, &version.snapshot, fields);
+
+    Ok((version, missing))
+}
 
 /// GET /admin/collections/{slug}/{id}/versions/{version_id}/restore — confirmation page
 pub async fn restore_confirm(
@@ -57,16 +86,16 @@ pub async fn restore_confirm(
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let version = match find_version_by_id(&conn, &slug, &version_id) {
-        Ok(Some(v)) => v,
-        Ok(None) => return not_found(&state, "Version not found"),
-        Err(e) => {
-            tracing::error!("Find version error: {}", e);
-            return server_error(&state, "Database error");
-        }
+    let (version, missing) = match load_version_with_missing_relations(
+        &conn,
+        &state.registry,
+        &slug,
+        &version_id,
+        &def.fields,
+    ) {
+        Ok(data) => data,
+        Err(msg) => return server_error(&state, msg),
     };
-
-    let missing = find_missing_relations(&conn, &state.registry, &version.snapshot, &def.fields);
 
     let restore_url = format!(
         "/admin/collections/{}/{}/versions/{}/restore",

@@ -47,9 +47,11 @@ pub use forms::{
     ResetPasswordForm, ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
-    all_disable_local, client_ip, get_auth_collections, login_error, render_forgot_success,
+    all_disable_local, client_ip, create_session_token, extract_user_email, find_auth_collection,
+    get_auth_collections, headers_to_map, login_error, render_forgot_success, session_redirect,
     show_forgot_password,
 };
 pub(super) use session::{
-    clear_mfa_pending_cookie, clear_session_cookies, mfa_pending_cookie, session_cookies,
+    append_cookies, clear_mfa_pending_cookie, clear_session_cookies, mfa_pending_cookie,
+    session_cookies,
 };

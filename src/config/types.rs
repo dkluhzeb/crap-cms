@@ -1,13 +1,15 @@
 //! Top-level `CrapConfig` struct and its loading/validation logic.
 
-use anyhow::{Context as _, Result, bail};
-use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
-use super::{
+use anyhow::{Context as _, Result, bail};
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
+
+use crate::config::{
     auth::AuthConfig,
     cors::CorsConfig,
     env::substitute_in_value,
@@ -77,18 +79,24 @@ impl CrapConfig {
             // This avoids errors from `${VAR}` patterns in comments.
             let mut value: toml::Value = toml::from_str(&contents)
                 .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+
             substitute_in_value(&mut value)?;
+
             let config: CrapConfig = value
                 .try_into()
                 .with_context(|| format!("Failed to deserialize {}", config_path.display()))?;
+
             config
                 .locale
                 .validate()
                 .context("Invalid locale configuration")?;
+
             config.validate().context("Invalid configuration")?;
+
             Ok(config)
         } else {
-            tracing::info!("No crap.toml found, using defaults");
+            info!("No crap.toml found, using defaults");
+
             Ok(CrapConfig::default())
         }
     }
@@ -115,14 +123,12 @@ impl CrapConfig {
 
         // Warning: no jobs will execute
         if self.jobs.max_concurrent == 0 {
-            tracing::warn!("jobs.max_concurrent = 0 — no jobs will be executed");
+            warn!("jobs.max_concurrent = 0 — no jobs will be executed");
         }
 
         // Warning: weak JWT signing key (when explicitly set)
         if !self.auth.secret.is_empty() && self.auth.secret.len() < 32 {
-            tracing::warn!(
-                "auth.secret is shorter than 32 characters — consider using a stronger key"
-            );
+            warn!("auth.secret is shorter than 32 characters — consider using a stronger key");
         }
 
         // Fatal: port 0 is not a valid listen port
@@ -165,15 +171,14 @@ impl CrapConfig {
 
         // Warning: max_depth = 0 means no population will ever work
         if self.depth.max_depth == 0 {
-            tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
+            warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
         }
 
         // Warning: default_depth exceeds max_depth
         if self.depth.default_depth > self.depth.max_depth {
-            tracing::warn!(
+            warn!(
                 "depth.default_depth ({}) exceeds depth.max_depth ({}) — requests will be capped",
-                self.depth.default_depth,
-                self.depth.max_depth
+                self.depth.default_depth, self.depth.max_depth
             );
         }
 
@@ -205,7 +210,7 @@ impl CrapConfig {
 
         // Warning: cache max_entries = 0 effectively disables caching
         if self.cache.backend == "memory" && self.cache.max_entries == 0 {
-            tracing::warn!(
+            warn!(
                 "cache.max_entries = 0 with memory backend — cache will never store entries (equivalent to backend = \"none\")"
             );
         }
@@ -217,18 +222,18 @@ impl CrapConfig {
 
         // Warning: max_files = 0 means all old logs are deleted on every startup
         if self.logging.file && self.logging.max_files == 0 {
-            tracing::warn!(
-                "logging.max_files = 0 — all rotated log files will be deleted on startup"
-            );
+            warn!("logging.max_files = 0 — all rotated log files will be deleted on startup");
         }
 
         // Fatal: zero scheduler intervals cause busy loops
         if self.jobs.poll_interval == 0 {
             bail!("jobs.poll_interval must be > 0");
         }
+
         if self.jobs.cron_interval == 0 {
             bail!("jobs.cron_interval must be > 0");
         }
+
         if self.jobs.heartbeat_interval == 0 {
             bail!("jobs.heartbeat_interval must be > 0");
         }

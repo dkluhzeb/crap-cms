@@ -50,6 +50,7 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
                 };
                 let id_display: String = e.id.chars().take(22).collect();
                 let doc_display: String = e.document_id.chars().take(10).collect();
+
                 table.row(vec![
                     &id_display,
                     &e.collection,
@@ -104,7 +105,9 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
                 if !confirm {
                     bail!("Use -y to confirm retrying all failed entries");
                 }
+
                 let count = query::images::retry_all_failed_images(&conn)?;
+
                 cli::success(&format!("Reset {} failed entry/entries to pending", count));
             } else if let Some(entry_id) = id {
                 let found = query::images::retry_image_entry(&conn, &entry_id)?;
@@ -135,6 +138,7 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
 
             let conn = pool.get().context("Failed to get DB connection")?;
             let deleted = query::images::purge_old_image_entries(&conn, secs)?;
+
             cli::success(&format!("Purged {} old queue entry/entries", deleted));
 
             Ok(())

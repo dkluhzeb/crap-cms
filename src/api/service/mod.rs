@@ -1,5 +1,7 @@
 //! Tonic gRPC service implementing all ContentAPI RPCs.
 
+use std::{path::PathBuf, sync::Arc};
+
 mod auth;
 mod collection;
 mod convert;
@@ -9,9 +11,6 @@ mod service_impl;
 
 pub use deps_builder::ContentServiceDepsBuilder;
 pub use service_impl::ContentService;
-
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::{
     config::CrapConfig,

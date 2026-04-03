@@ -5,9 +5,9 @@ use dialoguer::{Confirm, Input};
 use nanoid::nanoid;
 use std::path::PathBuf;
 
-use super::{load_config_and_sync, make::make_collection_command, user::user_create};
 use crate::{
     cli::{self, crap_theme},
+    commands::{load_config_and_sync, make::make_collection_command, user::user_create},
     config::CrapConfig,
     scaffold,
 };
@@ -47,11 +47,13 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
         scaffold::make_collection(&config_dir, "media", None, &upload_opts)?;
 
         println!();
+
         cli::success("Project created!");
         cli::hint(&format!(
             "Start the server: crap-cms serve {}",
             config_dir.display()
         ));
+
         return Ok(());
     }
 
@@ -98,6 +100,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
             .context("Failed to read additional locales")?;
 
         let mut all_locales = vec![default.clone()];
+
         for l in extra.split(',') {
             let l = l.trim().to_string();
 
@@ -105,6 +108,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
                 all_locales.push(l);
             }
         }
+
         (default, all_locales)
     } else {
         ("en".to_string(), vec![])
@@ -181,6 +185,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
         {
             let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
             let (pool, registry) = load_config_and_sync(&config_dir)?;
+
             match user_create(
                 &pool,
                 &registry,
@@ -263,6 +268,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
         {
             break;
         }
+
         make_collection_command(
             &config_dir,
             None,
@@ -273,6 +279,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
     }
 
     println!();
+
     cli::success("Project created!");
     cli::hint(&format!(
         "Start the server: crap-cms serve {}",

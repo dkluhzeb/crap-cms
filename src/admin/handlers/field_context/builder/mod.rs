@@ -6,6 +6,9 @@ use serde_json::{Value, from_str, json};
 
 use crate::core::FieldDefinition;
 
+pub use field_type_extras::{FieldRecursionCtx, apply_field_type_extras};
+pub use single::build_single_field_context;
+
 mod field_type_extras;
 mod single;
 
@@ -44,9 +47,6 @@ pub(super) fn build_select_options(field: &FieldDefinition, value: &str) -> (Vec
         (options, false)
     }
 }
-
-pub use field_type_extras::{FieldRecursionCtx, apply_field_type_extras};
-pub use single::build_single_field_context;
 
 /// Build field context objects for template rendering.
 ///

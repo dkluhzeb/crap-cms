@@ -7,7 +7,10 @@ use crate::{
         context::{ContextBuilder, PageType},
         handlers::shared::{extract_editor_locale, get_user_doc, render_or_error},
     },
-    core::auth::{AuthUser, Claims},
+    core::{
+        Document,
+        auth::{AuthUser, Claims},
+    },
     db::query::AccessResult,
 };
 
@@ -55,7 +58,7 @@ pub async fn list_collections(
 fn has_list_read_access(
     state: &AdminState,
     access_ref: Option<&str>,
-    user_doc: Option<&crate::core::Document>,
+    user_doc: Option<&Document>,
 ) -> bool {
     if access_ref.is_none() {
         return !state.config.access.default_deny;

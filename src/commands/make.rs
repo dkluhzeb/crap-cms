@@ -4,9 +4,9 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use dialoguer::{Confirm, Input, Select};
 use std::path::Path;
 
-use super::MakeAction;
 use crate::{
     cli::crap_theme,
+    commands::MakeAction,
     config::CrapConfig,
     core::{FieldType, SharedRegistry},
     hooks,
@@ -34,6 +34,7 @@ pub fn run(config_dir: &Path, action: MakeAction) -> Result<()> {
                 versions,
                 force,
             };
+
             make_collection_command(config_dir, slug, fields, !no_input, &opts)
         }
         MakeAction::Global {
@@ -55,6 +56,7 @@ pub fn run(config_dir: &Path, action: MakeAction) -> Result<()> {
                 let parsed = fields
                     .map(|s| scaffold::parse_fields_shorthand(&s))
                     .transpose()?;
+
                 scaffold::make_global(config_dir, &slug, parsed.as_deref(), force)
             }
         }
@@ -86,6 +88,7 @@ pub fn run(config_dir: &Path, action: MakeAction) -> Result<()> {
                     .interact_text()
                     .context("Failed to read job slug")?,
             };
+
             scaffold::make_job(
                 config_dir,
                 &slug,
@@ -117,15 +120,18 @@ pub(crate) fn make_collection_command(
                 if input.is_empty() {
                     return Err("Slug cannot be empty".into());
                 }
+
                 if !input
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
                 {
                     return Err("Use lowercase letters, digits, and underscores only".into());
                 }
+
                 if input.starts_with('_') {
                     return Err("Slug cannot start with underscore".into());
                 }
+
                 Ok(())
             })
             .interact_text()
@@ -169,6 +175,7 @@ pub(crate) fn make_collection_command(
             } else {
                 "filename/mime_type/size are included automatically"
             };
+
             if Confirm::with_theme(&crap_theme())
                 .with_prompt(format!("Add custom fields? ({})", hint))
                 .default(false)
@@ -183,6 +190,7 @@ pub(crate) fn make_collection_command(
         }
         None if interactive => {
             let f = scaffold::interactive_field_wizard(has_locales_enabled(config_dir))?;
+
             if f.is_empty() { None } else { Some(f) }
         }
         None => None, // non-interactive, use defaults
@@ -197,6 +205,7 @@ pub(crate) fn make_collection_command(
             .default(true)
             .interact()
             .context("Failed to read timestamps preference")?;
+
         !timestamps
     } else {
         false
@@ -222,6 +231,7 @@ pub(crate) fn make_collection_command(
         versions,
         force: opts.force,
     };
+
     scaffold::make_collection(config_dir, &slug, parsed_fields.as_deref(), &final_opts)
 }
 
@@ -252,6 +262,7 @@ fn make_hook_command(
                 .default(0)
                 .interact()
                 .context("Failed to read hook type selection")?;
+
             match selection {
                 0 => HookType::Collection,
                 1 => HookType::Field,
@@ -273,6 +284,7 @@ fn make_hook_command(
                 .and_then(|r| r.read().ok())
                 .map(|reg| reg.globals.contains_key(c.as_str()))
                 .unwrap_or(false);
+
             (c, is_global)
         }
         None => {
@@ -282,9 +294,13 @@ fn make_hook_command(
                 .map(|reg| {
                     let mut cs: Vec<String> =
                         reg.collections.keys().map(|s| s.to_string()).collect();
+
                     cs.sort();
+
                     let mut gs: Vec<String> = reg.globals.keys().map(|s| s.to_string()).collect();
+
                     gs.sort();
+
                     (cs, gs)
                 })
                 .unwrap_or_default();
@@ -314,6 +330,7 @@ fn make_hook_command(
                     .with_prompt("Collection slug")
                     .interact_text()
                     .context("Failed to read collection slug")?;
+
                 (slug, false)
             }
         }
@@ -330,6 +347,7 @@ fn make_hook_command(
                     hook_type.valid_positions().join(", ")
                 );
             }
+
             p
         }
         None => {
@@ -350,6 +368,7 @@ fn make_hook_command(
                     .default(0)
                     .interact()
                     .context("Failed to read position selection")?;
+
                 positions[selection].to_string()
             }
         }
@@ -395,6 +414,7 @@ fn make_hook_command(
         Some(n) => n,
         None => {
             let default = position.clone();
+
             Input::with_theme(&crap_theme())
                 .with_prompt("Hook name")
                 .default(default)
@@ -410,6 +430,7 @@ fn make_hook_command(
             .and_then(|r| r.read().ok())
             .and_then(|reg| {
                 let def = reg.get_collection(&collection)?;
+
                 Some(
                     def.fields
                         .iter()
@@ -463,6 +484,7 @@ fn make_hook_command(
                 .default(0)
                 .interact()
                 .context("Failed to read field selection")?;
+
             Some(infos[selection].clone())
         } else {
             None
@@ -497,6 +519,7 @@ pub fn has_locales_enabled(config_dir: &Path) -> bool {
 pub fn try_load_registry(config_dir: &Path) -> Option<SharedRegistry> {
     let config_dir = config_dir.canonicalize().ok()?;
     let cfg = CrapConfig::load(&config_dir).ok()?;
+
     hooks::init_lua(&config_dir, &cfg).ok()
 }
 
@@ -505,7 +528,9 @@ pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let registry = try_load_registry(config_dir)?;
     let reg = registry.read().ok()?;
     let mut slugs: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
+
     slugs.sort();
+
     Some(slugs)
 }
 
@@ -514,6 +539,7 @@ pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<S
     let registry = try_load_registry(config_dir)?;
     let reg = registry.read().ok()?;
     let def = reg.get_collection(collection)?;
+
     Some(def.fields.iter().map(|f| f.name.clone()).collect())
 }
 
@@ -525,6 +551,7 @@ pub fn try_load_field_infos(
     let registry = try_load_registry(config_dir)?;
     let reg = registry.read().ok()?;
     let def = reg.get_collection(collection)?;
+
     Some(
         def.fields
             .iter()

@@ -1,10 +1,14 @@
 use serde_json::json;
 
-use super::super::{MAX_FIELD_DEPTH, safe_template_id};
 use super::*;
 
-use crate::core::field::{
-    BlockDefinition, FieldDefinition, FieldType, LocalizedString, SelectOption,
+use crate::{
+    admin::handlers::field_context::{
+        MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id, split_sidebar_fields,
+    },
+    core::field::{
+        BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString, SelectOption,
+    },
 };
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
@@ -361,7 +365,7 @@ fn split_sidebar_fields_separates_by_position() {
         json!({"name": "body", "field_type": "richtext"}),
         json!({"name": "status", "field_type": "select", "position": "sidebar"}),
     ];
-    let (main, sidebar) = super::super::split_sidebar_fields(fields);
+    let (main, sidebar) = split_sidebar_fields(fields);
     assert_eq!(main.len(), 2);
     assert_eq!(sidebar.len(), 2);
     assert_eq!(main[0]["name"], "title");
@@ -376,7 +380,7 @@ fn split_sidebar_fields_no_sidebar() {
         json!({"name": "title", "field_type": "text"}),
         json!({"name": "body", "field_type": "richtext"}),
     ];
-    let (main, sidebar) = super::super::split_sidebar_fields(fields);
+    let (main, sidebar) = split_sidebar_fields(fields);
     assert_eq!(main.len(), 2);
     assert!(sidebar.is_empty());
 }
@@ -387,14 +391,14 @@ fn split_sidebar_fields_all_sidebar() {
         json!({"name": "a", "position": "sidebar"}),
         json!({"name": "b", "position": "sidebar"}),
     ];
-    let (main, sidebar) = super::super::split_sidebar_fields(fields);
+    let (main, sidebar) = split_sidebar_fields(fields);
     assert!(main.is_empty());
     assert_eq!(sidebar.len(), 2);
 }
 
 #[test]
 fn split_sidebar_fields_empty() {
-    let (main, sidebar) = super::super::split_sidebar_fields(vec![]);
+    let (main, sidebar) = split_sidebar_fields(vec![]);
     assert!(main.is_empty());
     assert!(sidebar.is_empty());
 }
@@ -1029,7 +1033,7 @@ fn apply_extras_unknown_type_is_noop() {
 
 #[test]
 fn count_errors_empty_fields() {
-    assert_eq!(super::super::count_errors_in_fields(&[]), 0);
+    assert_eq!(count_errors_in_fields(&[]), 0);
 }
 
 #[test]
@@ -1038,7 +1042,7 @@ fn count_errors_no_errors() {
         json!({"name": "title", "value": "hello"}),
         json!({"name": "body", "value": "world"}),
     ];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 0);
+    assert_eq!(count_errors_in_fields(&fields), 0);
 }
 
 #[test]
@@ -1048,7 +1052,7 @@ fn count_errors_direct_errors() {
         json!({"name": "body", "value": "ok"}),
         json!({"name": "email", "error": "Invalid email"}),
     ];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 2);
+    assert_eq!(count_errors_in_fields(&fields), 2);
 }
 
 #[test]
@@ -1060,7 +1064,7 @@ fn count_errors_nested_in_sub_fields() {
             {"name": "nested2", "value": "ok"},
         ]
     })];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 1);
+    assert_eq!(count_errors_in_fields(&fields), 1);
 }
 
 #[test]
@@ -1083,7 +1087,7 @@ fn count_errors_nested_in_tabs() {
             }
         ]
     })];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 2);
+    assert_eq!(count_errors_in_fields(&fields), 2);
 }
 
 #[test]
@@ -1105,19 +1109,17 @@ fn count_errors_nested_in_array_rows() {
             }
         ]
     })];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 1);
+    assert_eq!(count_errors_in_fields(&fields), 1);
 }
 
 #[test]
 fn count_errors_null_error_not_counted() {
     let fields = vec![json!({"name": "title", "error": null})];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 0);
+    assert_eq!(count_errors_in_fields(&fields), 0);
 }
 
 #[test]
 fn tabs_field_context_includes_error_count() {
-    use crate::core::field::FieldTab;
-
     let mut tabs_field = make_field("settings", FieldType::Tabs);
     tabs_field.tabs = vec![
         FieldTab::new(

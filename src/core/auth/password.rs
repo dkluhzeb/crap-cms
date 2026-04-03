@@ -8,7 +8,7 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 
-use super::HashedPassword;
+use crate::core::auth::HashedPassword;
 
 /// Thread-safe shared reference to a password provider.
 pub type SharedPasswordProvider = Arc<dyn PasswordProvider>;
@@ -39,6 +39,7 @@ static DUMMY_HASH: LazyLock<HashedPassword> = LazyLock::new(|| {
     let hash = argon2
         .hash_password(b"__crap_dummy_timing__", &salt)
         .expect("dummy hash");
+
     HashedPassword::new(hash.to_string())
 });
 
@@ -52,12 +53,14 @@ impl PasswordProvider for Argon2PasswordProvider {
         let hash = argon2
             .hash_password(password.as_bytes(), &salt)
             .map_err(|e| anyhow!("Password hashing failed: {}", e))?;
+
         Ok(HashedPassword::new(hash.to_string()))
     }
 
     fn verify_password(&self, password: &str, hash: &str) -> Result<bool> {
         let parsed =
             PasswordHash::new(hash).map_err(|e| anyhow!("Invalid password hash: {}", e))?;
+
         Ok(Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
             .is_ok())

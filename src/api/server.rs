@@ -1,24 +1,33 @@
 //! gRPC server startup and parameters.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use tokio::select;
+use tokio::{select, spawn, time::interval};
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
+use tracing::warn;
 
 use crate::{
+    api::{
+        content::{FILE_DESCRIPTOR_SET, content_api_server::ContentApiServer},
+        rate_limit::GrpcRateLimitLayer,
+        server_builder::GrpcStartParamsBuilder,
+        service::{ContentService, ContentServiceDeps},
+    },
     config::CrapConfig,
     core::{
         JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
+        cache::SharedCache,
         email::EmailRenderer,
         event::EventBus,
-        rate_limit::{GrpcRateLimiter, LoginRateLimiter},
+        rate_limit::{GrpcRateLimiter, LoginRateLimiter, SharedRateLimitBackend},
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
 };
-
-use super::{content, rate_limit, service};
 
 /// Parameters for starting the gRPC API server.
 pub struct GrpcStartParams {
@@ -33,28 +42,24 @@ pub struct GrpcStartParams {
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
-    pub storage: crate::core::upload::SharedStorage,
-    pub cache: crate::core::cache::SharedCache,
-    pub token_provider: crate::core::auth::SharedTokenProvider,
-    pub password_provider: crate::core::auth::SharedPasswordProvider,
-    pub rate_limit_backend: crate::core::rate_limit::SharedRateLimitBackend,
+    pub storage: SharedStorage,
+    pub cache: SharedCache,
+    pub token_provider: SharedTokenProvider,
+    pub password_provider: SharedPasswordProvider,
+    pub rate_limit_backend: SharedRateLimitBackend,
 }
 
 impl GrpcStartParams {
     /// Create a builder for `GrpcStartParams`.
-    pub fn builder() -> super::server_builder::GrpcStartParamsBuilder {
-        super::server_builder::GrpcStartParamsBuilder::new()
+    pub fn builder() -> GrpcStartParamsBuilder {
+        GrpcStartParamsBuilder::new()
     }
 }
 
 /// Start the gRPC server. Reflection is enabled by default but can be
 /// disabled via `config.server.grpc_reflection`.
 #[cfg(not(tarpaulin_include))]
-pub async fn start(
-    addr: &str,
-    params: GrpcStartParams,
-    shutdown: tokio_util::sync::CancellationToken,
-) -> Result<()> {
+pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationToken) -> Result<()> {
     let addr = addr.parse()?;
 
     let email_renderer = Arc::new(EmailRenderer::new(&params.config_dir)?);
@@ -67,8 +72,8 @@ pub async fn start(
     let grpc_max_msg = params.config.server.grpc_max_message_size as usize;
     let cors_layer = params.config.cors.build_layer();
 
-    let content_service = service::ContentService::new(
-        service::ContentServiceDeps::builder()
+    let content_service = ContentService::new(
+        ContentServiceDeps::builder()
             .pool(params.pool)
             .registry(params.registry)
             .hook_runner(params.hook_runner)
@@ -93,14 +98,17 @@ pub async fn start(
         let cache = content_service.cache_handle();
         let interval_secs = cache_max_age;
         let cache_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+
+        spawn(async move {
+            let mut interval = interval(Duration::from_secs(interval_secs));
+
             interval.tick().await; // skip first immediate tick
+
             loop {
                 select! {
                     _ = interval.tick() => {
                         if let Err(e) = cache.clear() {
-                            tracing::warn!("Periodic cache clear failed: {:#}", e);
+                            warn!("Periodic cache clear failed: {:#}", e);
                         }
                     },
                     _ = cache_shutdown.cancelled() => break,
@@ -114,16 +122,17 @@ pub async fn start(
         grpc_rate_requests,
         grpc_rate_window,
     ));
-    let rate_limit_layer = rate_limit::GrpcRateLimitLayer::new(grpc_limiter);
+    let rate_limit_layer = GrpcRateLimitLayer::new(grpc_limiter);
 
-    let content_svc = content::content_api_server::ContentApiServer::new(content_service)
+    let content_svc = ContentApiServer::new(content_service)
         .max_decoding_message_size(grpc_max_msg)
         .max_encoding_message_size(grpc_max_msg);
 
     // gRPC health service (grpc.health.v1.Health)
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
+
     health_reporter
-        .set_serving::<content::content_api_server::ContentApiServer<service::ContentService>>()
+        .set_serving::<ContentApiServer<ContentService>>()
         .await;
 
     let shutdown_signal = shutdown.cancelled_owned();
@@ -131,7 +140,7 @@ pub async fn start(
     let reflection_service = if grpc_reflection {
         Some(
             tonic_reflection::server::Builder::configure()
-                .register_encoded_file_descriptor_set(content::FILE_DESCRIPTOR_SET)
+                .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
                 .build_v1()?,
         )
     } else {
@@ -144,7 +153,7 @@ pub async fn start(
 
     // Apply gRPC timeout if configured (applies to all RPCs including Subscribe)
     if let Some(timeout_secs) = grpc_timeout {
-        builder = builder.timeout(std::time::Duration::from_secs(timeout_secs));
+        builder = builder.timeout(Duration::from_secs(timeout_secs));
     }
 
     builder

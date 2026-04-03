@@ -8,6 +8,7 @@ pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
     let (key, value) = s
         .split_once('=')
         .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
+
     Ok((key.to_string(), value.to_string()))
 }
 

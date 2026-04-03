@@ -5,7 +5,12 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use crate::{
-    admin::AdminState,
+    admin::{
+        AdminState,
+        handlers::field_context::enrich::{
+            EnrichCtx, EnrichOptions, enrich_types, nested::enrich_nested_fields,
+        },
+    },
     core::{
         Registry,
         field::{FieldDefinition, FieldType, RelationshipConfig},
@@ -15,8 +20,6 @@ use crate::{
         query::{self, LocaleContext},
     },
 };
-
-use super::{EnrichCtx, EnrichOptions, enrich_types, nested::enrich_nested_fields};
 
 /// Build selected_items for a polymorphic relationship field.
 ///

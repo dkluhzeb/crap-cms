@@ -2,12 +2,24 @@
 //!
 //! Split from `field_types.rs` which contains the `sub_*` helpers for sub-field contexts.
 
-use super::{enrich_nested_fields, enrich_polymorphic_selected};
+use std::collections::HashMap;
+
+use serde_json::{Value, json};
+
 use crate::{
-    admin::handlers::shared::compute_row_label,
+    admin::handlers::{
+        field_context::{
+            enrich::{
+                EnrichCtx, SubFieldOpts, build_enriched_sub_field_context, enrich_nested_fields,
+                enrich_polymorphic_selected,
+            },
+            inject_timezone_values_from_row,
+        },
+        shared::compute_row_label,
+    },
     core::{
         Document,
-        field::{FieldDefinition, FieldType},
+        field::{FieldDefinition, FieldType, to_title_case},
         registry::Registry,
         upload,
     },
@@ -16,10 +28,6 @@ use crate::{
         query::{self, LocaleContext},
     },
 };
-
-use std::collections::HashMap;
-
-use serde_json::{Value, json};
 
 /// Enrich a top-level Relationship field context with selected items from DB.
 pub(super) fn enrich_relationship(
@@ -109,7 +117,7 @@ pub(super) fn enrich_array(
     ctx: &mut Value,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
-    enrich: &super::EnrichCtx,
+    enrich: &EnrichCtx,
 ) {
     let state = enrich.state;
     let non_default_locale = enrich.non_default_locale;
@@ -118,6 +126,7 @@ pub(super) fn enrich_array(
     let reg = enrich.reg;
     let rel_locale_ctx = enrich.rel_locale_ctx;
     let locale_locked = non_default_locale && !field_def.localized;
+
     let rows: Vec<Value> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
             .iter()
@@ -137,12 +146,13 @@ pub(super) fn enrich_array(
                             row_obj.and_then(|m| m.get(&sf.name))
                         };
 
-                        let sub_opts = super::SubFieldOpts::builder(errors)
+                        let sub_opts = SubFieldOpts::builder(errors)
                             .locale_locked(locale_locked)
                             .non_default_locale(non_default_locale)
                             .depth(1)
                             .build();
-                        super::build_enriched_sub_field_context(
+
+                        build_enriched_sub_field_context(
                             sf,
                             raw_value,
                             &field_def.name,
@@ -152,11 +162,7 @@ pub(super) fn enrich_array(
                     })
                     .collect();
 
-                crate::admin::handlers::field_context::inject_timezone_values_from_row(
-                    &mut sub_values,
-                    &field_def.fields,
-                    row_obj,
-                );
+                inject_timezone_values_from_row(&mut sub_values, &field_def.fields, row_obj);
 
                 let row_has_errors = sub_values
                     .iter()
@@ -343,7 +349,7 @@ pub(super) fn enrich_blocks(
     ctx: &mut Value,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
-    enrich: &super::EnrichCtx,
+    enrich: &EnrichCtx,
 ) {
     let state = enrich.state;
     let non_default_locale = enrich.non_default_locale;
@@ -352,6 +358,7 @@ pub(super) fn enrich_blocks(
     let reg = enrich.reg;
     let rel_locale_ctx = enrich.rel_locale_ctx;
     let locale_locked = non_default_locale && !field_def.localized;
+
     let rows: Vec<Value> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
             .iter()
@@ -387,12 +394,13 @@ pub(super) fn enrich_blocks(
                                     row_obj.and_then(|m| m.get(&sf.name))
                                 };
 
-                                let sub_opts = super::SubFieldOpts::builder(errors)
+                                let sub_opts = SubFieldOpts::builder(errors)
                                     .locale_locked(locale_locked)
                                     .non_default_locale(non_default_locale)
                                     .depth(1)
                                     .build();
-                                super::build_enriched_sub_field_context(
+
+                                build_enriched_sub_field_context(
                                     sf,
                                     raw_value,
                                     &field_def.name,
@@ -405,16 +413,13 @@ pub(super) fn enrich_blocks(
                     .unwrap_or_default();
 
                 if let Some(bd) = block_def {
-                    crate::admin::handlers::field_context::inject_timezone_values_from_row(
-                        &mut sub_values,
-                        &bd.fields,
-                        row_obj,
-                    );
+                    inject_timezone_values_from_row(&mut sub_values, &bd.fields, row_obj);
                 }
 
                 let row_has_errors = sub_values
                     .iter()
                     .any(|sf_ctx| sf_ctx.get("error").is_some());
+
                 let mut row_json = json!({
                     "index": idx,
                     "_block_type": block_type,
@@ -517,8 +522,6 @@ pub(super) fn enrich_join(
 
 /// Enrich a top-level Richtext field context with custom node definitions from registry.
 pub(super) fn enrich_richtext(ctx: &mut Value, reg: &Registry) {
-    use crate::core::field::to_title_case;
-
     if let Some(node_names) = ctx.get("_node_names").cloned() {
         if let Some(names) = node_names.as_array() {
             let node_defs: Vec<_> = names

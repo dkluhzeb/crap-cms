@@ -5,10 +5,10 @@
 
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
-use redis::{Client, Commands, ConnectionLike};
+use anyhow::{Context, Result, anyhow};
+use redis::{Client, Commands};
 
-use super::CacheBackend;
+use crate::core::cache::CacheBackend;
 
 /// Redis-backed cache with key prefixing and connection reuse.
 ///
@@ -65,7 +65,7 @@ impl RedisCache {
         let mut guard = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Redis mutex poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Redis mutex poisoned: {}", e))?;
 
         // Try the operation first
         match f(&mut guard) {
@@ -90,6 +90,7 @@ impl CacheBackend for RedisCache {
 
         self.with_conn(|conn| {
             let result: Option<Vec<u8>> = conn.get(&pkey).context("Redis GET failed")?;
+
             Ok(result)
         })
     }
@@ -109,6 +110,7 @@ impl CacheBackend for RedisCache {
             } else {
                 conn.set(&pkey, value).context("Redis SET failed")?;
             }
+
             Ok(())
         })
     }
@@ -118,6 +120,7 @@ impl CacheBackend for RedisCache {
 
         self.with_conn(|conn| {
             conn.del(&pkey).context("Redis DEL failed")?;
+
             Ok(())
         })
     }
@@ -149,6 +152,7 @@ impl CacheBackend for RedisCache {
                 }
 
                 cursor = next_cursor;
+
                 if cursor == 0 {
                     break;
                 }
@@ -163,6 +167,7 @@ impl CacheBackend for RedisCache {
 
         self.with_conn(|conn| {
             let exists: bool = conn.exists(&pkey).context("Redis EXISTS failed")?;
+
             Ok(exists)
         })
     }

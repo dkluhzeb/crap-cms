@@ -1,5 +1,7 @@
 //! Shared helper functions for admin handlers (collections + globals).
 
+use std::collections::{HashMap, HashSet};
+
 use axum::{
     Extension,
     http::{HeaderMap, StatusCode, header},
@@ -7,8 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-
-use std::collections::HashMap;
+use tracing::{error, warn};
 
 use crate::{
     admin::{
@@ -18,7 +19,7 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        AuthUser, Document, FieldAdmin, FieldDefinition, document::VersionSnapshot,
+        AuthUser, Document, FieldAdmin, FieldDefinition, FieldType, document::VersionSnapshot,
         event::EventUser, field, richtext::renderer::html_escape, validate::ValidationError,
     },
     db::{AccessResult, DbPool, LocaleContext, query},
@@ -33,8 +34,8 @@ pub(super) use crate::admin::handlers::field_context::{
 
 // Re-export query utilities from the dedicated module.
 pub(crate) use super::query_utils::{
-    build_list_url, build_list_url_with_cursor, extract_where_params, is_column_eligible,
-    parse_where_params, url_decode, validate_sort,
+    ListUrlContext, extract_where_params, is_column_eligible, parse_where_params, url_decode,
+    validate_sort,
 };
 
 /// Query parameters for paginated collection list views.
@@ -54,6 +55,34 @@ pub struct PaginationParams {
     pub before_cursor: Option<String>,
     /// When "1", show the trash view (soft-deleted documents only).
     pub trash: Option<String>,
+}
+
+/// Resolved pagination values ready for use in queries.
+pub struct Pagination {
+    /// The current page number (1-indexed, clamped to >= 1).
+    pub page: i64,
+    /// The number of items per page (clamped to config bounds).
+    pub per_page: i64,
+    /// The offset for SQL queries.
+    pub offset: i64,
+}
+
+impl PaginationParams {
+    /// Resolve raw query parameters into clamped, ready-to-use pagination values.
+    pub fn resolve(&self, config: &crate::config::PaginationConfig) -> Pagination {
+        let page = self.page.unwrap_or(1).max(1);
+        let per_page = self
+            .per_page
+            .unwrap_or(config.default_limit)
+            .clamp(1, config.max_limit);
+        let offset = (page - 1) * per_page;
+
+        Pagination {
+            page,
+            per_page,
+            offset,
+        }
+    }
 }
 
 /// Extract the editor locale from the `crap_editor_locale` cookie.
@@ -132,7 +161,8 @@ pub(crate) fn check_access_or_forbid(
         .hook_runner
         .check_access(access_ref, user_doc, id, data, &tx)
         .map_err(|e| {
-            tracing::error!("Access check error: {}", e);
+            error!("Access check error: {}", e);
+
             Box::new(forbidden(state, "Access check failed").into_response())
         })?;
 
@@ -267,6 +297,17 @@ pub(crate) fn fetch_version_sidebar_data(
     }
 }
 
+/// O(1) ref count lookup for delete protection UI.
+/// Returns 0 on DB errors (fail-open for display only — actual delete protection
+/// is enforced by the DELETE handler).
+pub(crate) fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
+    pool.get()
+        .ok()
+        .and_then(|conn| query::ref_count::get_ref_count(&conn, slug, id).ok())
+        .flatten()
+        .unwrap_or(0)
+}
+
 /// Translate validation errors using the translation system.
 /// If a FieldError has a `key`, resolve it through `Translations::get_interpolated`;
 /// otherwise use the raw English `message` (custom Lua validator messages).
@@ -302,12 +343,14 @@ pub(crate) fn compute_denied_read_fields(
     let user_doc = get_user_doc(auth_user);
 
     let mut conn = state.pool.get().map_err(|e| {
-        tracing::error!("Field access check pool error: {}", e);
+        error!("Field access check pool error: {}", e);
+
         Box::new(server_error(state, "Database error"))
     })?;
 
     let tx = conn.transaction().map_err(|e| {
-        tracing::error!("Field access check tx error: {}", e);
+        error!("Field access check tx error: {}", e);
+
         Box::new(server_error(state, "Database error"))
     })?;
 
@@ -317,7 +360,7 @@ pub(crate) fn compute_denied_read_fields(
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
     if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
+        warn!("tx commit failed: {e}");
     }
 
     Ok(denied)
@@ -344,12 +387,14 @@ pub(crate) fn strip_write_denied_string_fields(
     let user_doc = get_user_doc(auth_user);
 
     let mut conn = state.pool.get().map_err(|e| {
-        tracing::error!("Field access check pool error: {}", e);
+        error!("Field access check pool error: {}", e);
+
         Box::new(server_error(state, "Database error"))
     })?;
 
     let tx = conn.transaction().map_err(|e| {
-        tracing::error!("Field access check tx error: {}", e);
+        error!("Field access check tx error: {}", e);
+
         Box::new(server_error(state, "Database error"))
     })?;
 
@@ -359,7 +404,7 @@ pub(crate) fn strip_write_denied_string_fields(
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
     if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
+        warn!("tx commit failed: {e}");
     }
 
     for name in &denied {
@@ -382,7 +427,7 @@ pub(crate) fn flatten_document_values(
             if let Value::Object(obj) = v
                 && field_defs
                     .iter()
-                    .any(|f| f.name == *k && f.field_type == field::FieldType::Group)
+                    .any(|f| f.name == *k && f.field_type == FieldType::Group)
             {
                 let mut out = Vec::new();
                 flatten_group_value(k, obj, &mut out);
@@ -500,7 +545,8 @@ pub(crate) fn html_with_toast(
             resp
         }
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
                 .into_response()
         }
@@ -528,7 +574,8 @@ pub(crate) fn render_or_error(state: &AdminState, template: &str, data: &Value) 
     match state.render(template, data) {
         Ok(html) => Html(html),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
         }
     }
@@ -569,9 +616,35 @@ pub(crate) fn server_error(state: &AdminState, message: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, html).into_response()
 }
 
+/// Recursively collect all `admin.condition` function refs from field definitions.
+pub(crate) fn collect_condition_refs(fields: &[FieldDefinition]) -> HashSet<&str> {
+    let mut refs = HashSet::new();
+
+    for field in fields {
+        if let Some(ref cond) = field.admin.condition {
+            refs.insert(cond.as_str());
+        }
+
+        match field.field_type {
+            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+                refs.extend(collect_condition_refs(&field.fields));
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    refs.extend(collect_condition_refs(&tab.fields));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    refs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::field::{FieldAdmin, FieldDefinition, FieldType};
 
     // --- auto_label_from_name tests ---
 
@@ -669,8 +742,6 @@ mod tests {
     }
 
     // --- compute_row_label tests ---
-
-    use crate::core::field::FieldAdmin;
 
     #[test]
     fn compute_row_label_from_label_field() {
@@ -788,8 +859,6 @@ mod tests {
     }
 
     // --- flatten_document_values tests ---
-
-    use crate::core::field::{FieldDefinition, FieldType};
 
     #[test]
     fn flatten_document_values_simple_fields() {

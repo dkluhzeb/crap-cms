@@ -2,23 +2,27 @@
 //!
 //! Top-level enrichment helpers that require DB access live in `enrich_types.rs`.
 
-use super::{
-    children::build_enriched_children_from_data, nested::build_enriched_sub_field_context,
-};
+use std::collections::{HashMap, HashSet};
+
+use serde_json::{Value, from_str, json};
+
 use crate::{
     admin::handlers::{
         field_context::{
-            builder::{apply_field_type_extras, build_single_field_context},
-            count_errors_in_fields, safe_template_id,
+            add_timezone_context,
+            builder::{FieldRecursionCtx, apply_field_type_extras, build_single_field_context},
+            count_errors_in_fields,
+            enrich::{
+                SubFieldOpts, children::build_enriched_children_from_data,
+                nested::build_enriched_sub_field_context,
+            },
+            inject_timezone_values_from_row, safe_template_id,
         },
         shared::auto_label_from_name,
     },
     core::field::{FieldDefinition, FieldType},
+    db::query::helpers::utc_to_local,
 };
-
-use std::collections::{HashMap, HashSet};
-
-use serde_json::{Value, from_str, json};
 
 // ── build_enriched_sub_field_context helpers ─────────────────────────
 
@@ -73,7 +77,7 @@ pub(super) fn sub_date(sub_ctx: &mut Value, sf: &FieldDefinition, val: &str, tz_
 
     // Convert UTC back to local time for display if timezone is stored
     let display_value = if !tz_value.is_empty() && !val.is_empty() {
-        crate::db::query::helpers::utc_to_local(val, tz_value).unwrap_or_else(|| val.to_string())
+        utc_to_local(val, tz_value).unwrap_or_else(|| val.to_string())
     } else {
         val.to_string()
     };
@@ -90,7 +94,7 @@ pub(super) fn sub_date(sub_ctx: &mut Value, sf: &FieldDefinition, val: &str, tz_
         _ => {}
     }
 
-    crate::admin::handlers::field_context::add_timezone_context(sub_ctx, sf, tz_value, "");
+    add_timezone_context(sub_ctx, sf, tz_value, "");
 }
 
 /// Enrich a Relationship sub-field context.
@@ -133,9 +137,9 @@ pub(super) fn sub_array(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    opts: &super::SubFieldOpts,
+    opts: &SubFieldOpts,
 ) {
-    let nested_opts = super::SubFieldOpts::builder(opts.errors)
+    let nested_opts = SubFieldOpts::builder(opts.errors)
         .locale_locked(opts.locale_locked)
         .non_default_locale(opts.non_default_locale)
         .depth(opts.depth + 1)
@@ -170,11 +174,7 @@ pub(super) fn sub_array(
                     })
                     .collect();
 
-                crate::admin::handlers::field_context::inject_timezone_values_from_row(
-                    &mut nested_sub_values,
-                    &sf.fields,
-                    nested_row_obj,
-                );
+                inject_timezone_values_from_row(&mut nested_sub_values, &sf.fields, nested_row_obj);
 
                 let row_has_errors = nested_sub_values
                     .iter()
@@ -237,9 +237,9 @@ pub(super) fn sub_blocks(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    opts: &super::SubFieldOpts,
+    opts: &SubFieldOpts,
 ) {
-    let nested_opts = super::SubFieldOpts::builder(opts.errors)
+    let nested_opts = SubFieldOpts::builder(opts.errors)
         .locale_locked(opts.locale_locked)
         .non_default_locale(opts.non_default_locale)
         .depth(opts.depth + 1)
@@ -293,7 +293,7 @@ pub(super) fn sub_blocks(
                     .unwrap_or_default();
 
                 if let Some(bd) = block_def {
-                    crate::admin::handlers::field_context::inject_timezone_values_from_row(
+                    inject_timezone_values_from_row(
                         &mut nested_sub_values,
                         &bd.fields,
                         nested_row_obj,
@@ -398,7 +398,7 @@ pub(super) fn sub_group(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    opts: &super::SubFieldOpts,
+    opts: &SubFieldOpts,
 ) {
     let locale_locked = opts.locale_locked;
     let non_default_locale = opts.non_default_locale;
@@ -491,15 +491,11 @@ pub(super) fn sub_group(
                 }
                 _ => {
                     let empty_vals = HashMap::new();
-                    let extras_ctx =
-                        crate::admin::handlers::field_context::builder::FieldRecursionCtx::builder(
-                            &empty_vals,
-                            errors,
-                            &nested_name,
-                        )
+                    let extras_ctx = FieldRecursionCtx::builder(&empty_vals, errors, &nested_name)
                         .non_default_locale(non_default_locale)
                         .depth(depth + 1)
                         .build();
+
                     apply_field_type_extras(nested_sf, &nested_val, &mut nested_ctx, &extras_ctx);
 
                     // Inject stored timezone value from parent group data for Date fields
@@ -532,7 +528,7 @@ pub(super) fn sub_row_collapsible(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    opts: &super::SubFieldOpts,
+    opts: &SubFieldOpts,
 ) {
     let nested_sub_fields = build_enriched_children_from_data(
         &sf.fields,
@@ -557,7 +553,7 @@ pub(super) fn sub_tabs(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    opts: &super::SubFieldOpts,
+    opts: &SubFieldOpts,
 ) {
     let tabs_ctx: Vec<_> = sf
         .tabs

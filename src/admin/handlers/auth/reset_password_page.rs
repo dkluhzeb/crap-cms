@@ -5,48 +5,51 @@ use axum::{
 use chrono::Utc;
 use serde_json::json;
 use tokio::task;
+use tracing::error;
 
-use super::ResetPasswordQuery;
 use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
+        handlers::auth::ResetPasswordQuery,
     },
-    db::query,
+    core::Registry,
+    db::{DbPool, query},
 };
+
+/// Check whether a reset token exists and is not expired across all auth collections.
+fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool {
+    let conn = match pool.get() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    for def in registry.collections.values() {
+        if !def.is_auth_collection() {
+            continue;
+        }
+
+        match query::find_by_reset_token(&conn, &def.slug, def, token) {
+            Ok(Some((_, exp))) => return Utc::now().timestamp() < exp,
+            _ => continue,
+        }
+    }
+
+    false
+}
 
 /// GET /admin/reset-password?token=xxx — validate token, show reset form.
 pub async fn reset_password_page(
     State(state): State<AdminState>,
     Query(query): Query<ResetPasswordQuery>,
 ) -> Html<String> {
-    // Validate the token exists and isn't expired
     let pool = state.pool.clone();
     let registry = state.registry.clone();
     let token = query.token.clone();
 
-    let valid = task::spawn_blocking(move || {
-        let conn = match pool.get() {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-
-        for def in registry.collections.values() {
-            if !def.is_auth_collection() {
-                continue;
-            }
-
-            match query::find_by_reset_token(&conn, &def.slug, def, &token) {
-                Ok(Some((_, exp))) => {
-                    return Utc::now().timestamp() < exp;
-                }
-                _ => continue,
-            }
-        }
-        false
-    })
-    .await
-    .unwrap_or(false);
+    let valid = task::spawn_blocking(move || is_valid_reset_token(&pool, &registry, &token))
+        .await
+        .unwrap_or(false);
 
     let mut builder =
         ContextBuilder::auth(&state).page(PageType::AuthReset, "reset_password_page_title");
@@ -63,7 +66,8 @@ pub async fn reset_password_page(
     match state.render("auth/reset_password", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
         }
     }

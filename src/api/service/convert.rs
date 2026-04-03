@@ -2,7 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde_json::{Map, Number, Value};
+use prost_types::{Struct, Value, value::Kind};
+use serde_json::{Map, Number, Value as JsonValue};
 
 use crate::{
     api::content,
@@ -12,7 +13,7 @@ use crate::{
 
 /// Convert a core `Document` to a protobuf `Document`, mapping all fields to a prost Struct.
 pub(super) fn document_to_proto(doc: &Document, collection: &str) -> content::Document {
-    let mut fields = prost_types::Struct {
+    let mut fields = Struct {
         fields: BTreeMap::new(),
     };
 
@@ -29,57 +30,51 @@ pub(super) fn document_to_proto(doc: &Document, collection: &str) -> content::Do
     }
 }
 
-/// Convert a `serde_json::Value` to a `prost_types::Value` for protobuf serialization.
-pub(super) fn json_to_prost_value(v: &Value) -> prost_types::Value {
+/// Convert a `serde_json::Value` to a `Value` for protobuf serialization.
+pub(super) fn json_to_prost_value(v: &JsonValue) -> Value {
     match v {
-        Value::Null => prost_types::Value {
-            kind: Some(prost_types::value::Kind::NullValue(0)),
+        JsonValue::Null => Value {
+            kind: Some(Kind::NullValue(0)),
         },
-        Value::Bool(b) => prost_types::Value {
-            kind: Some(prost_types::value::Kind::BoolValue(*b)),
+        JsonValue::Bool(b) => Value {
+            kind: Some(Kind::BoolValue(*b)),
         },
-        Value::Number(n) => prost_types::Value {
-            kind: Some(prost_types::value::Kind::NumberValue(
-                n.as_f64().unwrap_or_else(|| {
-                    tracing::warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
-                    0.0
-                }),
-            )),
+        JsonValue::Number(n) => Value {
+            kind: Some(Kind::NumberValue(n.as_f64().unwrap_or_else(|| {
+                tracing::warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
+                0.0
+            }))),
         },
-        Value::String(s) => prost_types::Value {
-            kind: Some(prost_types::value::Kind::StringValue(s.clone())),
+        JsonValue::String(s) => Value {
+            kind: Some(Kind::StringValue(s.clone())),
         },
-        Value::Array(arr) => {
+        JsonValue::Array(arr) => {
             let values: Vec<_> = arr.iter().map(json_to_prost_value).collect();
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::ListValue(
-                    prost_types::ListValue { values },
-                )),
+            Value {
+                kind: Some(Kind::ListValue(prost_types::ListValue { values })),
             }
         }
-        Value::Object(map) => {
+        JsonValue::Object(map) => {
             let mut fields = BTreeMap::new();
             for (k, v) in map {
                 fields.insert(k.clone(), json_to_prost_value(v));
             }
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::StructValue(prost_types::Struct {
-                    fields,
-                })),
+            Value {
+                kind: Some(Kind::StructValue(Struct { fields })),
             }
         }
     }
 }
 
 /// Convert a prost Struct to a flat `HashMap<String, String>`, coercing all values to strings.
-pub(super) fn prost_struct_to_hashmap(s: &prost_types::Struct) -> HashMap<String, String> {
+pub(super) fn prost_struct_to_hashmap(s: &Struct) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for (k, v) in &s.fields {
         let value_str = match &v.kind {
-            Some(prost_types::value::Kind::StringValue(s)) => s.clone(),
-            Some(prost_types::value::Kind::NumberValue(n)) => n.to_string(),
-            Some(prost_types::value::Kind::BoolValue(b)) => b.to_string(),
-            Some(prost_types::value::Kind::NullValue(_)) => String::new(),
+            Some(Kind::StringValue(s)) => s.clone(),
+            Some(Kind::NumberValue(n)) => n.to_string(),
+            Some(Kind::BoolValue(b)) => b.to_string(),
+            Some(Kind::NullValue(_)) => String::new(),
             _ => String::from("null"),
         };
         map.insert(k.clone(), value_str);
@@ -89,41 +84,45 @@ pub(super) fn prost_struct_to_hashmap(s: &prost_types::Struct) -> HashMap<String
 
 /// Convert a prost Struct to a JSON Value map, preserving arrays and nested objects.
 /// Used for extracting join table data (has-many relationships and arrays).
-pub(super) fn prost_struct_to_json_map(s: &prost_types::Struct) -> HashMap<String, Value> {
+pub(super) fn prost_struct_to_json_map(s: &Struct) -> HashMap<String, JsonValue> {
     let mut map = HashMap::new();
+
     for (k, v) in &s.fields {
         map.insert(k.clone(), prost_value_to_json(v));
     }
+
     map
 }
 
-/// Convert a `prost_types::Value` back to a `serde_json::Value`.
-pub(super) fn prost_value_to_json(v: &prost_types::Value) -> Value {
+/// Convert a `Value` back to a `serde_json::Value`.
+pub(super) fn prost_value_to_json(v: &Value) -> JsonValue {
     match &v.kind {
-        Some(prost_types::value::Kind::NullValue(_)) => Value::Null,
-        Some(prost_types::value::Kind::BoolValue(b)) => Value::Bool(*b),
-        Some(prost_types::value::Kind::NumberValue(n)) => {
-            Number::from_f64(*n).map(Value::Number).unwrap_or_else(|| {
-                tracing::warn!(
-                    "Non-finite float {} in gRPC response, converting to null",
-                    n
-                );
-                Value::Null
-            })
+        Some(Kind::NullValue(_)) => JsonValue::Null,
+        Some(Kind::BoolValue(b)) => JsonValue::Bool(*b),
+        Some(Kind::NumberValue(n)) => {
+            Number::from_f64(*n)
+                .map(JsonValue::Number)
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "Non-finite float {} in gRPC response, converting to null",
+                        n
+                    );
+                    JsonValue::Null
+                })
         }
-        Some(prost_types::value::Kind::StringValue(s)) => Value::String(s.clone()),
-        Some(prost_types::value::Kind::ListValue(list)) => {
-            Value::Array(list.values.iter().map(prost_value_to_json).collect())
+        Some(Kind::StringValue(s)) => JsonValue::String(s.clone()),
+        Some(Kind::ListValue(list)) => {
+            JsonValue::Array(list.values.iter().map(prost_value_to_json).collect())
         }
-        Some(prost_types::value::Kind::StructValue(s)) => {
-            let obj: Map<String, Value> = s
+        Some(Kind::StructValue(s)) => {
+            let obj: Map<String, JsonValue> = s
                 .fields
                 .iter()
                 .map(|(k, v)| (k.clone(), prost_value_to_json(v)))
                 .collect();
-            Value::Object(obj)
+            JsonValue::Object(obj)
         }
-        None => Value::Null,
+        None => JsonValue::Null,
     }
 }
 
@@ -180,7 +179,7 @@ pub(super) fn field_def_to_proto(field: &FieldDefinition) -> content::FieldInfo 
 /// Parse a JSON `where` clause into `Vec<FilterClause>`.
 /// Format: `{ "field": { "op": "value" }, "field2": "simple_value" }`
 pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
-    let obj: Value =
+    let obj: JsonValue =
         serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
 
     let map = obj
@@ -194,31 +193,35 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                 .as_array()
                 .ok_or_else(|| "'or' must be an array".to_string())?;
             let mut groups = Vec::new();
+
             for element in arr {
                 let obj = element
                     .as_object()
                     .ok_or_else(|| "'or' elements must be objects".to_string())?;
                 let mut group = Vec::new();
+
                 for (f, v) in obj {
                     match v {
-                        Value::String(s) => {
+                        JsonValue::String(s) => {
                             group.push(Filter {
                                 field: f.clone(),
                                 op: FilterOp::Equals(s.clone()),
                             });
                         }
-                        Value::Number(_) | Value::Bool(_) => {
+                        JsonValue::Number(_) | JsonValue::Bool(_) => {
                             let s = value_to_string(v)
                                 .map_err(|e| format!("or field '{}': {}", f, e))?;
+
                             group.push(Filter {
                                 field: f.clone(),
                                 op: FilterOp::Equals(s),
                             });
                         }
-                        Value::Object(ops) => {
+                        JsonValue::Object(ops) => {
                             for (op_name, op_value) in ops {
                                 let op = parse_filter_op(op_name, op_value)
                                     .map_err(|e| format!("or field '{}': {}", f, e))?;
+
                                 group.push(Filter {
                                     field: f.clone(),
                                     op,
@@ -235,25 +238,27 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                 }
                 groups.push(group);
             }
+
             clauses.push(FilterClause::Or(groups));
+
             continue;
         }
 
         match value {
-            Value::String(s) => {
+            JsonValue::String(s) => {
                 clauses.push(FilterClause::Single(Filter {
                     field: field.clone(),
                     op: FilterOp::Equals(s.clone()),
                 }));
             }
-            Value::Number(_) | Value::Bool(_) => {
+            JsonValue::Number(_) | JsonValue::Bool(_) => {
                 let s = value_to_string(value).map_err(|e| format!("field '{}': {}", field, e))?;
                 clauses.push(FilterClause::Single(Filter {
                     field: field.clone(),
                     op: FilterOp::Equals(s),
                 }));
             }
-            Value::Object(ops) => {
+            JsonValue::Object(ops) => {
                 for (op_name, op_value) in ops {
                     let op = parse_filter_op(op_name, op_value)
                         .map_err(|e| format!("field '{}': {}", field, e))?;
@@ -275,7 +280,7 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
 }
 
 /// Parse a filter operator name (e.g. "equals", "greater_than") and its JSON value into a `FilterOp`.
-pub(super) fn parse_filter_op(op_name: &str, value: &Value) -> Result<FilterOp, String> {
+pub(super) fn parse_filter_op(op_name: &str, value: &JsonValue) -> Result<FilterOp, String> {
     match op_name {
         "equals" => Ok(FilterOp::Equals(value_to_string(value)?)),
         "not_equals" => Ok(FilterOp::NotEquals(value_to_string(value)?)),
@@ -290,6 +295,7 @@ pub(super) fn parse_filter_op(op_name: &str, value: &Value) -> Result<FilterOp, 
                 .as_array()
                 .ok_or_else(|| "'in' operator requires an array".to_string())?;
             let vals: Result<Vec<String>, String> = arr.iter().map(value_to_string).collect();
+
             Ok(FilterOp::In(vals?))
         }
         "not_in" => {
@@ -297,6 +303,7 @@ pub(super) fn parse_filter_op(op_name: &str, value: &Value) -> Result<FilterOp, 
                 .as_array()
                 .ok_or_else(|| "'not_in' operator requires an array".to_string())?;
             let vals: Result<Vec<String>, String> = arr.iter().map(value_to_string).collect();
+
             Ok(FilterOp::NotIn(vals?))
         }
         "exists" => Ok(FilterOp::Exists),
@@ -306,11 +313,11 @@ pub(super) fn parse_filter_op(op_name: &str, value: &Value) -> Result<FilterOp, 
 }
 
 /// Convert a JSON value to its string representation. Only supports string, number, and boolean.
-pub(super) fn value_to_string(v: &Value) -> Result<String, String> {
+pub(super) fn value_to_string(v: &JsonValue) -> Result<String, String> {
     match v {
-        Value::String(s) => Ok(s.clone()),
-        Value::Number(n) => Ok(n.to_string()),
-        Value::Bool(b) => Ok(b.to_string()),
+        JsonValue::String(s) => Ok(s.clone()),
+        JsonValue::Number(n) => Ok(n.to_string()),
+        JsonValue::Bool(b) => Ok(b.to_string()),
         _ => Err("value must be string, number, or boolean".to_string()),
     }
 }
@@ -384,7 +391,7 @@ mod tests {
 
     #[test]
     fn prost_value_to_json_none_kind() {
-        let prost_val = prost_types::Value { kind: None };
+        let prost_val = Value { kind: None };
         let back = prost_value_to_json(&prost_val);
         assert_eq!(back, json!(null));
     }
@@ -396,29 +403,29 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert(
             "name".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::StringValue("Alice".to_string())),
+            Value {
+                kind: Some(Kind::StringValue("Alice".to_string())),
             },
         );
         fields.insert(
             "age".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::NumberValue(30.0)),
+            Value {
+                kind: Some(Kind::NumberValue(30.0)),
             },
         );
         fields.insert(
             "active".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::BoolValue(true)),
+            Value {
+                kind: Some(Kind::BoolValue(true)),
             },
         );
         fields.insert(
             "nothing".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::NullValue(0)),
+            Value {
+                kind: Some(Kind::NullValue(0)),
             },
         );
-        let s = prost_types::Struct { fields };
+        let s = Struct { fields };
         let map = prost_struct_to_hashmap(&s);
 
         assert_eq!(map.get("name").unwrap(), "Alice");
@@ -433,13 +440,11 @@ mod tests {
         // A list value should map to "null" in the hashmap
         fields.insert(
             "list".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::ListValue(
-                    prost_types::ListValue { values: vec![] },
-                )),
+            Value {
+                kind: Some(Kind::ListValue(prost_types::ListValue { values: vec![] })),
             },
         );
-        let s = prost_types::Struct { fields };
+        let s = Struct { fields };
         let map = prost_struct_to_hashmap(&s);
         assert_eq!(map.get("list").unwrap(), "null");
     }
@@ -451,39 +456,37 @@ mod tests {
         let mut inner_fields = BTreeMap::new();
         inner_fields.insert(
             "x".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::NumberValue(10.0)),
+            Value {
+                kind: Some(Kind::NumberValue(10.0)),
             },
         );
 
         let mut fields = BTreeMap::new();
         fields.insert(
             "tags".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::ListValue(
-                    prost_types::ListValue {
-                        values: vec![
-                            prost_types::Value {
-                                kind: Some(prost_types::value::Kind::StringValue("a".to_string())),
-                            },
-                            prost_types::Value {
-                                kind: Some(prost_types::value::Kind::StringValue("b".to_string())),
-                            },
-                        ],
-                    },
-                )),
+            Value {
+                kind: Some(Kind::ListValue(prost_types::ListValue {
+                    values: vec![
+                        Value {
+                            kind: Some(Kind::StringValue("a".to_string())),
+                        },
+                        Value {
+                            kind: Some(Kind::StringValue("b".to_string())),
+                        },
+                    ],
+                })),
             },
         );
         fields.insert(
             "nested".to_string(),
-            prost_types::Value {
-                kind: Some(prost_types::value::Kind::StructValue(prost_types::Struct {
+            Value {
+                kind: Some(Kind::StructValue(Struct {
                     fields: inner_fields,
                 })),
             },
         );
 
-        let s = prost_types::Struct { fields };
+        let s = Struct { fields };
         let map = prost_struct_to_json_map(&s);
 
         assert_eq!(map.get("tags").unwrap(), &json!(["a", "b"]));
@@ -509,12 +512,10 @@ mod tests {
 
         let fields = proto.fields.unwrap();
         let title = &fields.fields["title"];
-        assert!(
-            matches!(&title.kind, Some(prost_types::value::Kind::StringValue(s)) if s == "Hello")
-        );
+        assert!(matches!(&title.kind, Some(Kind::StringValue(s)) if s == "Hello"));
         let count = &fields.fields["count"];
         assert!(
-            matches!(&count.kind, Some(prost_types::value::Kind::NumberValue(n)) if (*n - 42.0).abs() < f64::EPSILON)
+            matches!(&count.kind, Some(Kind::NumberValue(n)) if (*n - 42.0).abs() < f64::EPSILON)
         );
     }
 

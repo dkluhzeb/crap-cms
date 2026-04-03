@@ -3,7 +3,7 @@
 use anyhow::Result;
 use dashmap::DashMap;
 
-use super::CacheBackend;
+use crate::core::cache::CacheBackend;
 
 /// In-memory cache backed by a concurrent `DashMap`.
 ///
@@ -40,11 +40,13 @@ impl CacheBackend for MemoryCache {
 
     fn delete(&self, key: &str) -> Result<()> {
         self.store.remove(key);
+
         Ok(())
     }
 
     fn clear(&self) -> Result<()> {
         self.store.clear();
+
         Ok(())
     }
 

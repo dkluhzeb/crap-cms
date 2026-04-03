@@ -13,6 +13,9 @@ use crate::{
     },
 };
 
+/// Parsed form result: field data and optional uploaded file.
+pub(crate) type ParsedForm = (HashMap<String, String>, Option<UploadedFile>);
+
 /// Extract join table data from form submission for has-many relationships and array fields.
 /// Returns a map suitable for `query::save_join_table_data`.
 pub(crate) fn extract_join_data_from_form(
@@ -20,7 +23,9 @@ pub(crate) fn extract_join_data_from_form(
     field_defs: &[FieldDefinition],
 ) -> HashMap<String, Value> {
     let mut join_data = HashMap::new();
+
     extract_join_data_recursive(form, field_defs, "", &mut join_data);
+
     join_data
 }
 
@@ -115,6 +120,7 @@ fn transform_has_many_recursive(
                             .map(|s| s.trim())
                             .filter(|s| !s.is_empty())
                             .collect();
+
                         json!(values).to_string()
                     };
                     updates.push((full_name, json_val));
@@ -215,6 +221,7 @@ fn parse_composite_form_data(
 
                 // Reconstruct a form-like HashMap with the base_key as prefix
                 let mut sub_form = HashMap::new();
+
                 for (rest, value) in &nested_entries {
                     // rest is like "[1][caption]" — reconstruct full key as "base_key[1][caption]"
                     sub_form.insert(format!("{}{}", base_key, rest), value.clone());
@@ -237,6 +244,7 @@ fn parse_composite_form_data(
                 if is_composite {
                     let nested_rows =
                         parse_composite_form_data(&sub_form, &base_key, nested_sub_defs);
+
                     // For group/row fields, the "rows" are actually a single object
                     if sf_def
                         .map(|sf| {
@@ -293,6 +301,7 @@ pub(crate) async fn parse_multipart_form(
                 .bytes()
                 .await
                 .map_err(|e| anyhow!("Failed to read file data: {}", e))?;
+
             if !data.is_empty() {
                 file = Some(
                     UploadedFileBuilder::new(filename, content_type)
@@ -305,11 +314,31 @@ pub(crate) async fn parse_multipart_form(
                 .text()
                 .await
                 .map_err(|e| anyhow!("Failed to read form field '{}': {}", name, e))?;
+
             form_data.insert(name, text);
         }
     }
 
     Ok((form_data, file))
+}
+
+/// Parse form data — multipart for upload collections, regular form otherwise.
+pub(crate) async fn parse_form(
+    request: axum::extract::Request,
+    state: &AdminState,
+    def: &crate::core::CollectionDefinition,
+) -> Result<ParsedForm, String> {
+    if def.is_upload_collection() {
+        parse_multipart_form(request, state)
+            .await
+            .map_err(|e| format!("Multipart parse error: {}", e))
+    } else {
+        let form = axum::extract::Form::<HashMap<String, String>>::from_request(request, state)
+            .await
+            .map_err(|e| format!("Form parse error: {}", e))?;
+
+        Ok((form.0, None))
+    }
 }
 
 #[cfg(test)]

@@ -1,9 +1,10 @@
 //! Environment variable substitution in TOML config values.
 
-use anyhow::{Context as _, Result};
-use regex::Regex;
 use std::env;
 use std::sync::LazyLock;
+
+use anyhow::{Context as _, Result};
+use regex::Regex;
 
 static ENV_VAR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("env var regex"));
@@ -40,6 +41,7 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
 
     for cap in ENV_VAR_RE.captures_iter(input) {
         let full_match = cap.get(0).expect("regex group 0 always exists");
+
         result.push_str(&input[last_end..full_match.start()]);
 
         let inner = &cap[1];
@@ -57,6 +59,7 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
                     inner, inner
                 )
             })?;
+
             result.push_str(&val);
         }
 

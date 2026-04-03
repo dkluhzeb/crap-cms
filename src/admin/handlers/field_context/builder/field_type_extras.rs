@@ -4,11 +4,15 @@ use std::collections::HashMap;
 
 use serde_json::{Value, from_str, json};
 
-use crate::core::{FieldDefinition, FieldType};
-
-use super::super::{MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id};
-use super::build_select_options;
-use super::single::build_single_field_context;
+use crate::{
+    admin::handlers::field_context::{
+        MAX_FIELD_DEPTH, add_timezone_context,
+        builder::{build_select_options, single::build_single_field_context},
+        count_errors_in_fields, safe_template_id,
+    },
+    core::{FieldDefinition, FieldType},
+    db::query::helpers::utc_to_local,
+};
 
 /// Parameters for recursive child-field building inside composite types
 /// (Group, Array, Blocks, Tabs, etc.).
@@ -144,11 +148,14 @@ pub fn apply_field_type_extras(
     match &sf.field_type {
         FieldType::Checkbox => {
             let checked = matches!(value, "1" | "true" | "on" | "yes");
+
             sub_ctx["checked"] = json!(checked);
         }
         FieldType::Select | FieldType::Radio => {
             let (options, has_many) = build_select_options(sf, value);
+
             sub_ctx["options"] = json!(options);
+
             if has_many {
                 sub_ctx["has_many"] = json!(true);
             }
@@ -163,8 +170,7 @@ pub fn apply_field_type_extras(
 
             // Convert UTC back to local time for display if timezone is stored
             let display_value = if !tz_value.is_empty() && !value.is_empty() {
-                crate::db::query::helpers::utc_to_local(value, tz_value)
-                    .unwrap_or_else(|| value.to_string())
+                utc_to_local(value, tz_value).unwrap_or_else(|| value.to_string())
             } else {
                 value.to_string()
             };
@@ -172,16 +178,18 @@ pub fn apply_field_type_extras(
             match appearance {
                 "dayOnly" => {
                     let date_val = display_value.get(..10).unwrap_or(&display_value);
+
                     sub_ctx["date_only_value"] = json!(date_val);
                 }
                 "dayAndTime" => {
                     let dt_val = display_value.get(..16).unwrap_or(&display_value);
+
                     sub_ctx["datetime_local_value"] = json!(dt_val);
                 }
                 _ => {}
             }
 
-            super::super::add_timezone_context(sub_ctx, sf, tz_value, "");
+            add_timezone_context(sub_ctx, sf, tz_value, "");
         }
         FieldType::Array => {
             let template_prefix = format!("{}[__INDEX__]", name_prefix);
@@ -408,16 +416,19 @@ pub fn apply_field_type_extras(
             }
 
             let picker = sf.admin.picker.as_deref().unwrap_or("drawer");
+
             if picker != "none" {
                 sub_ctx["picker"] = json!(picker);
             }
         }
         FieldType::Code => {
             let lang = sf.admin.language.as_deref().unwrap_or("json");
+
             sub_ctx["language"] = json!(lang);
         }
         FieldType::Text | FieldType::Number if sf.has_many => {
             let tags: Vec<String> = from_str(value).unwrap_or_default();
+
             sub_ctx["has_many"] = json!(true);
             sub_ctx["tags"] = json!(tags);
             sub_ctx["value"] = json!(tags.join(","));

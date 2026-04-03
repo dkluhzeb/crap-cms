@@ -2,8 +2,6 @@
 
 /// Collection-related API handlers.
 pub mod api;
-/// Collection form handlers.
-pub mod forms;
 /// Handlers for individual collection items.
 pub mod item;
 /// Handlers for collection item lists and creation.
@@ -17,8 +15,9 @@ pub mod shared;
 // Re-export common handlers for the router
 pub use api::save_user_settings::save_user_settings;
 pub use api::search::search_collection;
+pub use item::back_references::back_references;
 pub use item::delete_action::delete_action;
-pub use item::delete_confirm::{back_references, delete_confirm};
+pub use item::delete_confirm::delete_confirm;
 pub use item::edit_form::edit_form;
 pub use item::restore_action::restore_action;
 pub use item::update_action::update_action;

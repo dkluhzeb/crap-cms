@@ -9,22 +9,31 @@ use anyhow::Result;
 use axum::{
     Json, Router,
     body::{self, Body},
-    extract::{DefaultBodyLimit, State},
+    error_handling::HandleErrorLayer,
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{
         Method, Request, StatusCode,
-        header::{self, HeaderName, HeaderValue},
+        header::{
+            AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, COOKIE, HeaderName, HeaderValue, SET_COOKIE,
+        },
     },
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{MethodRouter, get, post},
 };
-use hyper_util::{rt::TokioIo, server::conn::auto::Builder as AutoBuilder};
+use chrono::Utc;
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder as AutoBuilder,
+};
+use nanoid::nanoid;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
-use tokio::select;
+use tokio::{net::TcpListener, select, time::sleep};
 use tokio_util::sync::CancellationToken;
-use tower::Service;
+use tower::{Service, timeout::TimeoutLayer};
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
+use tracing::{debug, error, info, info_span, warn};
 
 use crate::{
     admin::{
@@ -150,11 +159,12 @@ pub async fn start(
     let h2c_enabled = state.config.server.h2c;
     let app = build_router(state);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(addr).await?;
     let shutdown_timeout = shutdown.clone();
 
     let server_future: Pin<Box<dyn Future<Output = Result<()>> + Send>> = if h2c_enabled {
-        tracing::info!("Admin server: h2c (HTTP/2 cleartext) enabled");
+        info!("Admin server: h2c (HTTP/2 cleartext) enabled");
+
         Box::pin(serve_h2c(listener, app, shutdown))
     } else {
         Box::pin(async move {
@@ -164,6 +174,7 @@ pub async fn start(
             )
             .with_graceful_shutdown(shutdown.cancelled_owned())
             .await?;
+
             Ok(())
         })
     };
@@ -174,9 +185,10 @@ pub async fn start(
         result = server_future => { result?; }
         _ = async {
             shutdown_timeout.cancelled().await;
-            tokio::time::sleep(Duration::from_secs(10)).await;
+
+            sleep(Duration::from_secs(10)).await;
         } => {
-            tracing::warn!("Admin server: graceful shutdown timed out after 10s");
+            warn!("Admin server: graceful shutdown timed out after 10s");
         }
     }
 
@@ -188,11 +200,7 @@ pub async fn start(
 /// on the same port. Reverse proxies can speak HTTP/2 to the backend
 /// without TLS; browsers fall back to HTTP/1.1 gracefully.
 #[cfg(not(tarpaulin_include))]
-async fn serve_h2c(
-    listener: tokio::net::TcpListener,
-    app: Router,
-    shutdown: CancellationToken,
-) -> Result<()> {
+async fn serve_h2c(listener: TcpListener, app: Router, shutdown: CancellationToken) -> Result<()> {
     loop {
         select! {
             result = listener.accept() => {
@@ -203,11 +211,11 @@ async fn serve_h2c(
                         // Insert ConnectInfo so extractors can read the client address
                         // (axum::serve does this automatically; h2c needs it manually)
                         req.extensions_mut()
-                            .insert(axum::extract::ConnectInfo(addr));
+                            .insert(ConnectInfo(addr));
                         tower_service.clone().call(req)
                     });
                     let io = TokioIo::new(socket);
-                    AutoBuilder::new(hyper_util::rt::TokioExecutor::new())
+                    AutoBuilder::new(TokioExecutor::new())
                         .serve_connection_with_upgrades(io, hyper_service)
                         .await
                         .ok(); // Connection errors are expected (client disconnect)
@@ -302,6 +310,10 @@ fn protected_routes(
             post(collections::save_user_settings),
         )
         .route("/admin/globals/{slug}", globals_methods)
+        .route(
+            "/admin/globals/{slug}/evaluate-conditions",
+            post(globals::evaluate_conditions),
+        )
         .route(
             "/admin/globals/{slug}/validate",
             post(globals::validate::validate_global),
@@ -427,8 +439,9 @@ pub fn build_router(state: AdminState) -> Router {
     let router = router.layer(
         TraceLayer::new_for_http()
             .make_span_with(|req: &Request<_>| {
-                let request_id = nanoid::nanoid!(12);
-                tracing::info_span!(
+                let request_id = nanoid!(12);
+
+                info_span!(
                     "http",
                     method = %req.method(),
                     path = %req.uri().path(),
@@ -437,7 +450,7 @@ pub fn build_router(state: AdminState) -> Router {
             })
             .on_response(
                 |resp: &axum::http::Response<_>, latency: Duration, _span: &tracing::Span| {
-                    tracing::info!(
+                    info!(
                         status = resp.status().as_u16(),
                         latency_ms = latency.as_millis(),
                         "response"
@@ -451,12 +464,10 @@ pub fn build_router(state: AdminState) -> Router {
     let router = if let Some(timeout_secs) = state.config.server.request_timeout {
         router.layer(
             tower::ServiceBuilder::new()
-                .layer(axum::error_handling::HandleErrorLayer::new(|_| async {
+                .layer(HandleErrorLayer::new(|_| async {
                     StatusCode::REQUEST_TIMEOUT
                 }))
-                .layer(tower::timeout::TimeoutLayer::new(Duration::from_secs(
-                    timeout_secs,
-                ))),
+                .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs))),
         )
     } else {
         router
@@ -491,18 +502,22 @@ async fn security_headers(
 ) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+
     headers.insert(
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("DENY"),
     );
+
     headers.insert(
         HeaderName::from_static("x-content-type-options"),
         HeaderValue::from_static("nosniff"),
     );
+
     headers.insert(
         HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
+
     headers.insert(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -534,12 +549,12 @@ async fn security_headers(
 async fn html_cache_control(request: Request<Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
 
-    if let Some(ct) = response.headers().get(header::CONTENT_TYPE)
+    if let Some(ct) = response.headers().get(CONTENT_TYPE)
         && ct.to_str().unwrap_or("").starts_with("text/html")
     {
         response
             .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
 
     response
@@ -569,7 +584,7 @@ async fn validate_csrf_mutation(
     // Fall back: check _csrf in URL-encoded form body
     let content_type = request
         .headers()
-        .get(header::CONTENT_TYPE)
+        .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
@@ -616,7 +631,7 @@ async fn csrf_middleware(
     // by browsers, so CSRF is irrelevant for them.
     let has_bearer = request
         .headers()
-        .get(header::AUTHORIZATION)
+        .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("Bearer "));
 
@@ -626,10 +641,11 @@ async fn csrf_middleware(
 
     let cookie_header = request
         .headers()
-        .get(header::COOKIE)
+        .get(COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
+
     let csrf_cookie = extract_cookie(&cookie_header, "crap_csrf").map(|s| s.to_string());
 
     // On mutating methods, validate CSRF token
@@ -651,7 +667,9 @@ async fn csrf_middleware(
         match validate_csrf_mutation(request, cookie_value).await {
             Ok(request) => {
                 let mut response = next.run(request).await;
+
                 ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
+
                 return response;
             }
             Err(response) => return response,
@@ -660,7 +678,9 @@ async fn csrf_middleware(
 
     // Non-mutating method — pass through and set cookie if needed
     let mut response = next.run(request).await;
+
     ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
+
     response
 }
 
@@ -671,7 +691,7 @@ fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, de
         return;
     }
 
-    let token = nanoid::nanoid!(32);
+    let token = nanoid!(32);
     let secure = if dev_mode { "" } else { "; Secure" };
     let cookie = format!(
         "crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400{}",
@@ -679,7 +699,7 @@ fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, de
     );
 
     if let Ok(value) = cookie.parse() {
-        response.headers_mut().append(header::SET_COOKIE, value);
+        response.headers_mut().append(SET_COOKIE, value);
     }
 }
 
@@ -693,7 +713,8 @@ fn validate_jwt_and_load_user(
     let claims = match auth::validate_token(token, state.jwt_secret.as_ref()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::debug!("JWT validation failed: {}", e);
+            debug!("JWT validation failed: {}", e);
+
             return None;
         }
     };
@@ -745,12 +766,13 @@ fn try_strategy_auth(
                     let expiry = auth_config.token_expiry;
                     let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
                         .email(user_email)
-                        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+                        .exp((Utc::now().timestamp() as u64) + expiry)
                         .build()
                     {
                         Ok(c) => c,
                         Err(e) => {
-                            tracing::error!("Claims build error: {}", e);
+                            error!("Claims build error: {}", e);
+
                             continue;
                         }
                     };
@@ -759,11 +781,9 @@ fn try_strategy_auth(
                 }
                 Ok(None) => continue,
                 Err(e) => {
-                    tracing::warn!(
+                    warn!(
                         "Auth strategy '{}' error for {}: {}",
-                        strategy.name,
-                        slug,
-                        e
+                        strategy.name, slug, e
                     );
                     continue;
                 }
@@ -773,7 +793,7 @@ fn try_strategy_auth(
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
     if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
+        warn!("tx commit failed: {e}");
     }
     result
 }
@@ -807,9 +827,12 @@ async fn apply_auth_to_request(
         if let Some(response) = check_admin_gate(state, &user).await {
             return Some(response);
         }
+
         request.extensions_mut().insert(user);
     }
+
     request.extensions_mut().insert(claims);
+
     None
 }
 
@@ -835,7 +858,7 @@ async fn auth_middleware(
 
     let cookie_header = request
         .headers()
-        .get(header::COOKIE)
+        .get(COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
@@ -845,6 +868,7 @@ async fn auth_middleware(
         {
             return response;
         }
+
         return next.run(request).await;
     }
 
@@ -911,6 +935,7 @@ async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<Re
 
     let result = tokio::task::spawn_blocking(move || {
         let conn = pool.get().ok()?;
+
         Some(hook_runner.check_access(Some(&access_ref), Some(&user_doc), None, None, &conn))
     })
     .await;
@@ -918,7 +943,8 @@ async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<Re
     match result {
         Ok(Some(Ok(query::AccessResult::Denied))) => Some(admin_denied_response(state)),
         Ok(Some(Err(e))) => {
-            tracing::error!("admin.access check failed: {}", e);
+            error!("admin.access check failed: {}", e);
+
             Some(admin_denied_response(state))
         }
         _ => None, // Allowed or Constrained — pass through
@@ -1037,7 +1063,7 @@ async fn mcp_http_handler(State(state): State<AdminState>, request: Request<Body
     // API key auth — constant-time comparison to prevent timing attacks
     let auth_header = request
         .headers()
-        .get(header::AUTHORIZATION)
+        .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = format!("Bearer {}", state.config.mcp.api_key);

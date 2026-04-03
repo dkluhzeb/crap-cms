@@ -77,6 +77,7 @@ fn tail(log_dir: &Path, follow: bool, lines: usize) -> Result<()> {
         .with_context(|| format!("Failed to open {}", log_file.display()))?;
 
     let tail_content = tail_lines(&file, lines)?;
+
     print!("{tail_content}");
 
     if follow {
@@ -127,7 +128,9 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
         }
 
         reader.seek(SeekFrom::Start(read_start))?;
+
         let mut buf = vec![0u8; read_len];
+
         reader.read_exact(&mut buf)?;
 
         newline_count += buf.iter().filter(|&&b| b == b'\n').count();
@@ -151,6 +154,7 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
         Ok(format!("{}\n", all_lines.join("\n")))
     } else {
         let start = all_lines.len() - n;
+
         Ok(format!("{}\n", all_lines[start..].join("\n")))
     }
 }
@@ -158,12 +162,14 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
 /// Follow a log file, printing new content as it arrives.
 fn follow_file(path: &Path, file: fs::File) -> Result<()> {
     let mut reader = BufReader::new(file);
+
     reader.seek(SeekFrom::End(0))?;
 
     let mut line = String::new();
 
     loop {
         line.clear();
+
         match reader.read_line(&mut line) {
             Ok(0) => {
                 // No new data — check if file was rotated (new file with same prefix).
@@ -177,6 +183,7 @@ fn follow_file(path: &Path, file: fs::File) -> Result<()> {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::MetadataExt;
+
                         if new_meta.ino() != cur_meta.ino() {
                             // File was rotated — reopen.
                             let new_file = fs::File::open(path)?;

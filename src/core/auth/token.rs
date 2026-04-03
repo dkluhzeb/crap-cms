@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
-use super::Claims;
+use crate::core::Claims;
 
 /// Thread-safe shared reference to a token provider.
 pub type SharedTokenProvider = Arc<dyn TokenProvider>;
@@ -48,10 +48,13 @@ impl TokenProvider for JwtTokenProvider {
     fn validate_token(&self, token: &str) -> Result<Claims> {
         let key = jsonwebtoken::DecodingKey::from_secret(self.secret.as_bytes());
         let mut validation = jsonwebtoken::Validation::default();
+
         validation.required_spec_claims.clear();
         validation.validate_exp = true;
+
         let data = jsonwebtoken::decode::<Claims>(token, &key, &validation)
             .context("Invalid JWT token")?;
+
         Ok(data.claims)
     }
 

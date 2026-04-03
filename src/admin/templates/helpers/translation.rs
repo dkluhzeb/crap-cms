@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::Value;
@@ -33,9 +33,10 @@ impl HelperDef for TranslationHelper {
         let hash = h.hash();
         if hash.is_empty() {
             let translated = self.translations.get(locale, key);
+
             Ok(ScopedJson::Derived(Value::String(translated.to_string())))
         } else {
-            let mut params = std::collections::HashMap::new();
+            let mut params = HashMap::new();
             for (k, v) in hash {
                 let val = match v.value() {
                     Value::String(s) => s.clone(),
@@ -43,9 +44,12 @@ impl HelperDef for TranslationHelper {
                     Value::Bool(b) => b.to_string(),
                     other => other.to_string(),
                 };
+
                 params.insert(k.to_string(), val);
             }
+
             let translated = self.translations.get_interpolated(locale, key, &params);
+
             Ok(ScopedJson::Derived(Value::String(translated)))
         }
     }
@@ -53,6 +57,8 @@ impl HelperDef for TranslationHelper {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::json;
 
     fn test_hbs_with_translations(config_dir: &std::path::Path) -> handlebars::Handlebars<'static> {
@@ -67,8 +73,8 @@ mod tests {
     fn simple_key() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations_dir = tmp.path().join("translations");
-        std::fs::create_dir_all(&translations_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&translations_dir).unwrap();
+        fs::write(
             translations_dir.join("en.json"),
             r#"{"hello": "Hello World"}"#,
         )
@@ -85,8 +91,8 @@ mod tests {
     fn with_interpolation() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations_dir = tmp.path().join("translations");
-        std::fs::create_dir_all(&translations_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&translations_dir).unwrap();
+        fs::write(
             translations_dir.join("en.json"),
             r#"{"greeting": "Hello {{name}}, you have {{count}} items"}"#,
         )
@@ -103,8 +109,8 @@ mod tests {
     fn interpolation_with_bool() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations_dir = tmp.path().join("translations");
-        std::fs::create_dir_all(&translations_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&translations_dir).unwrap();
+        fs::write(
             translations_dir.join("en.json"),
             r#"{"status": "Active: {{active}}"}"#,
         )

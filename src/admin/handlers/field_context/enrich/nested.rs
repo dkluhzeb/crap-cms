@@ -1,9 +1,14 @@
 //! Builds enriched sub-field contexts for array/blocks rows and recursively
 //! enriches nested relationship/upload fields with DB-fetched options.
 
+use serde_json::{Value, json};
+
 use crate::{
     admin::handlers::{
-        field_context::{MAX_FIELD_DEPTH, collect_node_attr_errors},
+        field_context::{
+            MAX_FIELD_DEPTH, collect_node_attr_errors,
+            enrich::{SubFieldOpts, field_types},
+        },
         shared::auto_label_from_name,
     },
     core::{
@@ -16,10 +21,6 @@ use crate::{
         query::{self, LocaleContext},
     },
 };
-
-use serde_json::{Value, json};
-
-use super::{SubFieldOpts, field_types};
 
 /// Build an enriched sub-field context for a single field within an array/blocks row.
 ///

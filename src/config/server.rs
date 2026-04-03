@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::parsing::{serde_duration, serde_duration_ms, serde_duration_option, serde_filesize};
+use crate::config::parsing::{
+    serde_duration, serde_duration_ms, serde_duration_option, serde_filesize,
+};
 
 /// Response compression mode for the admin HTTP server.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
@@ -95,6 +97,22 @@ impl Default for ServerConfig {
             request_timeout: None,
             grpc_timeout: None,
             grpc_max_message_size: default_grpc_max_message_size(),
+        }
+    }
+}
+
+impl ServerConfig {
+    /// Return the public-facing base URL for generated links (password reset emails, etc.).
+    ///
+    /// Uses `public_url` if set, otherwise falls back to `http://{host}:{admin_port}`.
+    /// Special-cases `0.0.0.0` → `localhost` since `0.0.0.0` is a bind address, not reachable.
+    pub fn base_url(&self) -> String {
+        if let Some(ref url) = self.public_url {
+            url.trim_end_matches('/').to_string()
+        } else if self.host == "0.0.0.0" {
+            format!("http://localhost:{}", self.admin_port)
+        } else {
+            format!("http://{}:{}", self.host, self.admin_port)
         }
     }
 }

@@ -11,7 +11,7 @@ mod redis;
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use tracing::info;
 
 pub use custom::CustomCache;
@@ -55,18 +55,23 @@ impl CacheBackend for CustomPlaceholder {
     fn get(&self, _key: &str) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
+
     fn set(&self, _key: &str, _value: &[u8]) -> Result<()> {
         Ok(())
     }
+
     fn delete(&self, _key: &str) -> Result<()> {
         Ok(())
     }
+
     fn clear(&self) -> Result<()> {
         Ok(())
     }
+
     fn has(&self, _key: &str) -> Result<bool> {
         Ok(false)
     }
+
     fn kind(&self) -> &'static str {
         "custom"
     }
@@ -80,15 +85,18 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
                 max_entries = config.max_entries,
                 "Using memory cache backend"
             );
+
             Ok(Arc::new(MemoryCache::new(config.max_entries)))
         }
         "none" => {
             info!("Using no-op cache backend");
+
             Ok(Arc::new(NoneCache))
         }
         #[cfg(feature = "redis")]
         "redis" => {
             info!(url = %config.redis_url, prefix = %config.prefix, "Using Redis cache backend");
+
             Ok(Arc::new(redis::RedisCache::new(
                 &config.redis_url,
                 &config.prefix,
@@ -97,16 +105,17 @@ pub fn create_cache(config: &CacheConfig) -> Result<SharedCache> {
         }
         #[cfg(not(feature = "redis"))]
         "redis" => {
-            anyhow::bail!(
+            bail!(
                 "Redis cache backend requires the `redis` feature. \
                  Rebuild with `--features redis`."
             );
         }
         "custom" => {
             info!("Custom cache backend selected — waiting for Lua init");
+
             Ok(Arc::new(CustomPlaceholder))
         }
-        other => anyhow::bail!("Unknown cache backend: '{}'", other),
+        other => bail!("Unknown cache backend: '{}'", other),
     }
 }
 

@@ -3,15 +3,21 @@
 use std::collections::HashMap;
 
 use axum::{
-    Json,
+    Extension, Json,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tracing::error;
 
 use crate::{
-    admin::{Translations, handlers::shared::translate_validation_errors},
-    core::validate::ValidationError,
+    admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
+    core::{
+        Document, FieldDefinition, auth::AuthUser, collection::Hooks, validate::ValidationError,
+    },
+    db::{DbPool, query::LocaleContext},
+    hooks::{HookContext, HookRunner, ValidationCtx},
+    service,
 };
 
 /// JSON request body for validation endpoints.
@@ -61,6 +67,101 @@ pub fn values_to_string_map(data: &HashMap<String, Value>) -> HashMap<String, St
             (k.clone(), s)
         })
         .collect()
+}
+
+/// Quick error response for non-validation failures.
+pub fn validation_error_response_simple(msg: &str) -> Response {
+    Json(json!({
+        "valid": false,
+        "errors": { "_form": msg },
+    }))
+    .into_response()
+}
+
+/// Parameters for a validation run.
+pub struct RunValidationParams<'a> {
+    pub pool: &'a DbPool,
+    pub runner: &'a HookRunner,
+    pub hooks: &'a Hooks,
+    pub fields: &'a [FieldDefinition],
+    pub slug: &'a str,
+    pub table_name: &'a str,
+    pub operation: &'a str,
+    pub exclude_id: Option<&'a str>,
+    pub form_data: &'a HashMap<String, String>,
+    pub join_data: &'a HashMap<String, Value>,
+    pub is_draft: bool,
+    pub soft_delete: bool,
+    pub locale_ctx: Option<&'a LocaleContext>,
+    pub user_doc: Option<&'a Document>,
+}
+
+/// Run the before_validate → validate pipeline inside a rolled-back transaction.
+///
+/// Used by both collection and global validation endpoints. The `table_name`
+/// parameter allows globals to pass `_global_{slug}` while collections pass
+/// the collection slug directly.
+pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
+    let mut conn = p.pool.get()?;
+    let tx = conn.transaction()?;
+
+    let hook_data = service::build_hook_data(p.form_data, p.join_data);
+
+    let hook_ctx = HookContext::builder(p.slug, p.operation)
+        .data(hook_data)
+        .locale(p.locale_ctx.and_then(|ctx| {
+            if let crate::db::query::LocaleMode::Single(l) = &ctx.mode {
+                Some(l.clone())
+            } else {
+                None
+            }
+        }))
+        .draft(p.is_draft)
+        .user(p.user_doc)
+        .build();
+
+    let val_ctx = ValidationCtx::builder(&tx, p.table_name)
+        .exclude_id(p.exclude_id)
+        .draft(p.is_draft)
+        .locale_ctx(p.locale_ctx)
+        .soft_delete(p.soft_delete)
+        .build();
+
+    p.runner
+        .run_before_write(p.hooks, p.fields, hook_ctx, &val_ctx)?;
+
+    // Always rollback — this is validation only
+    drop(tx);
+
+    Ok(())
+}
+
+/// Handle the result of a validation run, returning the appropriate JSON response.
+pub fn handle_validation_result(
+    result: Result<anyhow::Result<()>, tokio::task::JoinError>,
+    auth_user: &Option<Extension<AuthUser>>,
+    state: &AdminState,
+) -> Response {
+    match result {
+        Ok(Ok(())) => validation_ok_response(),
+        Ok(Err(e)) => {
+            if let Some(ve) = e.downcast_ref::<ValidationError>() {
+                let locale = auth_user
+                    .as_ref()
+                    .map(|Extension(au)| au.ui_locale.as_str())
+                    .unwrap_or("en");
+
+                validation_error_response(ve, &state.translations, locale)
+            } else {
+                error!("Validation error: {:#}", e);
+                validation_error_response_simple("Validation failed")
+            }
+        }
+        Err(e) => {
+            error!("Validate task error: {}", e);
+            validation_error_response_simple("Internal error")
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,7 @@
 //! Collection item individual handlers.
 
+/// Handler for lazy-loading back-references on the delete page.
+pub mod back_references;
 /// Handler for deleting a collection item.
 pub mod delete_action;
 /// Handler for the delete confirmation page.

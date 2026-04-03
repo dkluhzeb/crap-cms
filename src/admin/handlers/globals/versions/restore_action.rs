@@ -1,3 +1,12 @@
+use anyhow::{Error, anyhow};
+use axum::{
+    Extension,
+    extract::{Path, State},
+    response::Response,
+};
+use tokio::task;
+use tracing::error;
+
 use crate::{
     admin::{
         AdminState,
@@ -6,14 +15,6 @@ use crate::{
     core::auth::AuthUser,
     db::query::{self, AccessResult},
 };
-
-use anyhow::{Error, anyhow};
-use axum::{
-    Extension,
-    extract::{Path, State},
-    response::Response,
-};
-use tokio::task;
 
 /// POST /admin/globals/{slug}/versions/{version_id}/restore
 pub async fn restore_version(
@@ -74,11 +75,13 @@ pub async fn restore_version(
     match result {
         Ok(Ok(_)) => htmx_redirect(&format!("/admin/globals/{}", slug)),
         Ok(Err(e)) => {
-            tracing::error!("Restore global version error: {}", e);
+            error!("Restore global version error: {}", e);
+
             htmx_redirect(&format!("/admin/globals/{}", slug))
         }
         Err(e) => {
-            tracing::error!("Restore global version task error: {}", e);
+            error!("Restore global version task error: {}", e);
+
             htmx_redirect(&format!("/admin/globals/{}", slug))
         }
     }

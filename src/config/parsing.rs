@@ -10,13 +10,16 @@ pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
+
     // Bare number (no suffix) treated as seconds
     if let Ok(secs) = s.parse::<u64>() {
         return Some(secs);
     }
+
     let suffix = s.chars().last()?;
     let num_str = &s[..s.len() - suffix.len_utf8()];
     let num: u64 = num_str.parse().ok()?;
+
     match suffix {
         's' => Some(num),
         'm' => Some(num * 60),
@@ -37,11 +40,14 @@ pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
+
     // Only ASCII characters are valid in file size strings
     if !s.is_ascii() {
         return None;
     }
+
     let upper = s.to_ascii_uppercase();
+
     // Try two-char suffix first (KB, MB, GB), then one-char (B)
     if upper.len() >= 3 {
         let (num_str, suffix) = upper.split_at(upper.len() - 2);
@@ -52,11 +58,13 @@ pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
             _ => {}
         }
     }
+
     if upper.ends_with('B') {
         let num_str = &upper[..upper.len() - 1];
 
         return num_str.parse::<u64>().ok();
     }
+
     None
 }
 

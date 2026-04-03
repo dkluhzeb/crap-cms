@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use std::path::Path;
+use tracing::warn;
 
 use crate::{
     config::CrapConfig,
@@ -20,7 +21,7 @@ pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, SharedRegistry
 
     // Check crap_version compatibility
     if let Some(warning) = cfg.check_version() {
-        tracing::warn!("{}", warning);
+        warn!("{}", warning);
     }
 
     let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;

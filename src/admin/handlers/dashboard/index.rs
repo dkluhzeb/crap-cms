@@ -2,6 +2,7 @@
 
 use axum::{Extension, extract::State, http::HeaderMap, response::Html};
 use serde_json::{Value, json};
+use tracing::{error, warn};
 
 use crate::{
     admin::{
@@ -104,7 +105,8 @@ pub async fn index(
     match state.render("dashboard/index", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
         }
     }
@@ -136,7 +138,7 @@ fn has_read_access(
         .check_access(access_ref, user_doc, None, None, &tx);
 
     if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
+        warn!("tx commit failed: {e}");
     }
 
     matches!(

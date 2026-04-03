@@ -3,25 +3,27 @@
 //! Used in multi-server deployments where app servers run `serve --no-scheduler`
 //! and one or more dedicated workers run `work`.
 
-use std::path::Path;
-use std::process;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-
-use crate::cli;
+use tracing::{debug, info, warn};
 
 use crate::{
+    cli,
+    commands::logs::prune_old_logs,
     config::CrapConfig,
     core::{email::create_email_provider, upload::create_storage},
     db::{migrate, pool},
     hooks::{self, HookRunner},
     scheduler::{self, SchedulerParamsBuilder},
 };
-
-use std::fs;
-use std::path::PathBuf;
 
 /// PID file for the worker process (separate from server's crap.pid).
 fn pid_file_path(config_dir: &Path) -> PathBuf {
@@ -31,13 +33,16 @@ fn pid_file_path(config_dir: &Path) -> PathBuf {
 fn write_pid_file(config_dir: &Path, pid: u32) -> Result<()> {
     let path = pid_file_path(config_dir);
     let _ = fs::create_dir_all(path.parent().expect("pid path has parent"));
+
     fs::write(&path, pid.to_string())
         .with_context(|| format!("Failed to write worker PID file: {}", path.display()))?;
+
     Ok(())
 }
 
 fn remove_pid_file(config_dir: &Path) {
     let path = pid_file_path(config_dir);
+
     if path.exists() {
         let _ = fs::remove_file(&path);
     }
@@ -46,6 +51,7 @@ fn remove_pid_file(config_dir: &Path) {
 #[cfg(unix)]
 fn read_pid(config_dir: &Path) -> Option<u32> {
     let path = pid_file_path(config_dir);
+
     fs::read_to_string(path)
         .ok()
         .and_then(|s| s.trim().parse().ok())
@@ -56,6 +62,7 @@ fn is_process_running(pid: u32) -> bool {
     let Ok(pid_i32) = i32::try_from(pid) else {
         return false;
     };
+
     unsafe { libc::kill(pid_i32, 0) == 0 }
 }
 
@@ -69,7 +76,8 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 
     if !is_process_running(pid) {
         remove_pid_file(config_dir);
-        anyhow::bail!(
+
+        bail!(
             "Worker process {} is not running (stale PID file removed)",
             pid
         );
@@ -77,23 +85,32 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 
     unsafe { libc::kill(i32::try_from(pid).unwrap(), libc::SIGTERM) };
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    while Instant::now() < deadline {
         if !is_process_running(pid) {
             remove_pid_file(config_dir);
+
             cli::success(&format!("Stopped worker (PID {pid})"));
+
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        sleep(Duration::from_millis(100));
     }
 
     cli::warning(&format!(
         "Worker {pid} did not stop within 10s, sending SIGKILL"
     ));
+
     unsafe { libc::kill(i32::try_from(pid).unwrap(), libc::SIGKILL) };
-    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    sleep(Duration::from_millis(500));
+
     remove_pid_file(config_dir);
+
     cli::success(&format!("Force-stopped worker (PID {pid})"));
+
     Ok(())
 }
 
@@ -108,12 +125,13 @@ pub fn restart(
     if let Some(pid) = read_pid(config_dir) {
         if is_process_running(pid) {
             if let Err(e) = stop(config_dir) {
-                tracing::debug!("stop() during restart: {e}");
+                debug!("stop() during restart: {e}");
             }
         } else {
             remove_pid_file(config_dir);
         }
     }
+
     detach(config_dir, queues, concurrency, no_cron)
 }
 
@@ -124,17 +142,21 @@ pub fn status(config_dir: &Path) -> Result<()> {
         Some(pid) => pid,
         None => {
             cli::info("Worker not running (no PID file)");
+
             return Ok(());
         }
     };
 
     if !is_process_running(pid) {
         remove_pid_file(config_dir);
+
         cli::info("Worker not running (stale PID file removed)");
+
         return Ok(());
     }
 
     cli::success(&format!("Worker running (PID {pid})"));
+
     Ok(())
 }
 
@@ -153,7 +175,7 @@ pub fn detach(
     if let Some(pid) = read_pid(config_dir)
         && is_process_running(pid)
     {
-        tracing::warn!(
+        warn!(
             "Worker PID file exists with PID {} — another worker may be running",
             pid
         );
@@ -164,14 +186,17 @@ pub fn detach(
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let mut cmd = process::Command::new(&exe);
+
     cmd.arg("-C").arg(&config_dir).arg("work");
 
     if let Some(ref q) = queues {
         cmd.arg("--queues").arg(q.join(","));
     }
+
     if let Some(c) = concurrency {
         cmd.arg("--concurrency").arg(c.to_string());
     }
+
     if no_cron {
         cmd.arg("--no-cron");
     }
@@ -186,7 +211,9 @@ pub fn detach(
         .context("Failed to spawn detached worker")?;
 
     let pid = child.id();
+
     write_pid_file(&config_dir, pid)?;
+
     cli::success(&format!("Started worker in background (PID {})", pid));
 
     Ok(())
@@ -201,21 +228,23 @@ pub async fn run(
     no_cron: bool,
 ) -> Result<()> {
     let cfg = CrapConfig::load(config_dir)?;
+
     cfg.validate()?;
 
     // Check crap_version compatibility
     if let Some(warning) = cfg.check_version() {
-        tracing::warn!("{}", warning);
+        warn!("{}", warning);
     }
 
     // Prune old log files if file logging is enabled
     if cfg.logging.file {
         let log_dir = cfg.log_dir(config_dir);
+
         if log_dir.exists() {
-            match super::logs::prune_old_logs(&log_dir, cfg.logging.max_files) {
+            match prune_old_logs(&log_dir, cfg.logging.max_files) {
                 Ok(0) => {}
                 Ok(n) => info!("Pruned {n} old log file(s)"),
-                Err(e) => tracing::warn!("Failed to prune old log files: {e}"),
+                Err(e) => warn!("Failed to prune old log files: {e}"),
             }
         }
     }
@@ -225,6 +254,7 @@ pub async fn run(
 
     // Initialize database + sync schema
     let db_pool = pool::create_pool(config_dir, &cfg).context("Failed to create database pool")?;
+
     migrate::sync_all(&db_pool, &registry, &cfg.locale)
         .context("Failed to sync database schema")?;
 
@@ -238,11 +268,14 @@ pub async fn run(
     // Run on_init hooks (synchronous — failure aborts startup)
     if !cfg.hooks.on_init.is_empty() {
         info!("Running on_init hooks...");
+
         let mut conn = db_pool.get().context("DB connection for on_init")?;
         let tx = conn.transaction().context("Transaction for on_init")?;
+
         hook_runner
             .run_system_hooks_with_conn(&cfg.hooks.on_init, &tx)
             .context("on_init hooks failed")?;
+
         tx.commit().context("Commit on_init transaction")?;
     }
 
@@ -251,6 +284,7 @@ pub async fn run(
 
     // PID file management
     write_pid_file(config_dir, process::id())?;
+
     let pid_config_dir = config_dir.to_path_buf();
 
     let shutdown = CancellationToken::new();
@@ -258,13 +292,16 @@ pub async fn run(
     // Two-stage shutdown: first signal → graceful, second → force exit
     {
         let shutdown_clone = shutdown.clone();
+
         tokio::spawn(async move {
             // First signal: graceful shutdown
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{SignalKind, signal};
+
                 let mut sigterm =
                     signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
                         info!("Received SIGINT, shutting down worker gracefully...");
@@ -287,14 +324,16 @@ pub async fn run(
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{SignalKind, signal};
+
                 let mut sigterm =
                     signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
-                        tracing::warn!("Received second SIGINT, forcing exit");
+                        warn!("Received second SIGINT, forcing exit");
                     }
                     _ = sigterm.recv() => {
-                        tracing::warn!("Received second SIGTERM, forcing exit");
+                        warn!("Received second SIGTERM, forcing exit");
                     }
                 }
             }
@@ -302,7 +341,8 @@ pub async fn run(
             #[cfg(not(unix))]
             {
                 let _ = tokio::signal::ctrl_c().await;
-                tracing::warn!("Received second shutdown signal, forcing exit");
+
+                warn!("Received second shutdown signal, forcing exit");
             }
 
             std::process::exit(1);

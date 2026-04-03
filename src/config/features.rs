@@ -5,7 +5,7 @@ use std::{collections::HashMap, thread};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{
+use crate::config::{
     McpApiKey, SmtpPassword,
     parsing::{serde_duration, serde_duration_option, serde_filesize},
 };
@@ -353,9 +353,11 @@ impl LocaleConfig {
     /// interpolated into DDL during migrations.
     pub fn validate(&self) -> Result<()> {
         Self::validate_locale_code(&self.default_locale)?;
+
         for locale in &self.locales {
             Self::validate_locale_code(locale)?;
         }
+
         // When locales are enabled, the default locale must be in the list
         if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
             bail!(
@@ -364,6 +366,7 @@ impl LocaleConfig {
                 self.locales
             );
         }
+
         Ok(())
     }
 
@@ -371,6 +374,7 @@ impl LocaleConfig {
         if code.is_empty() {
             bail!("Locale code must not be empty");
         }
+
         if !code
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -380,6 +384,7 @@ impl LocaleConfig {
                 code
             );
         }
+
         Ok(())
     }
 }

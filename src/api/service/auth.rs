@@ -1,11 +1,20 @@
 //! Auth RPCs: login, me, forgot_password, reset_password, verify_email.
 
-use anyhow::Context as _;
+use std::collections::HashMap;
+
+use anyhow::{Context as _, Error as AnyhowError};
+use chrono::Utc;
+use nanoid::nanoid;
 use serde_json::json;
+use tokio::task;
 use tonic::{Request, Response, Status};
+use tracing::{error, warn};
 
 use crate::{
-    api::content,
+    api::{
+        content,
+        service::{ContentService, convert::document_to_proto},
+    },
     core::{
         Slug,
         auth::{ClaimsBuilder, ResetTokenError, dummy_verify},
@@ -13,8 +22,6 @@ use crate::{
     },
     db::query,
 };
-
-use super::{ContentService, convert::document_to_proto};
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/grpc_integration.rs.
@@ -65,93 +72,98 @@ impl ContentService {
         let password_provider = self.password_provider.clone();
         let hook_runner = self.hook_runner.clone();
 
-        let login_result: Result<Option<_>, &'static str> =
-            tokio::task::spawn_blocking(move || {
-                let conn = pool.get().context("DB connection")?;
+        let login_result: Result<Option<_>, &'static str> = task::spawn_blocking(move || {
+            let conn = pool.get().context("DB connection")?;
 
-                // Try local email+password authentication unless disabled
-                let mut user = None;
+            // Try local email+password authentication unless disabled
+            let mut user = None;
 
-                if !disable_local {
-                    if let Some(doc) = query::find_by_email(&conn, &slug, &def_owned, &email)? {
-                        let verified = match query::get_password_hash(&conn, &slug, &doc.id)? {
-                            Some(hash) => {
-                                password_provider.verify_password(&password, hash.as_ref())?
-                            }
-                            None => false,
-                        };
-
-                        if verified {
-                            user = Some(doc);
+            if !disable_local {
+                if let Some(doc) = query::find_by_email(&conn, &slug, &def_owned, &email)? {
+                    let verified = match query::get_password_hash(&conn, &slug, &doc.id)? {
+                        Some(hash) => {
+                            password_provider.verify_password(&password, hash.as_ref())?
                         }
-                    } else {
+                        None => false,
+                    };
+
+                    if verified {
+                        user = Some(doc);
+                    }
+                } else {
+                    dummy_verify();
+                }
+            }
+
+            // Fallback: try auth strategies
+            if user.is_none()
+                && let Some(auth) = &def_owned.auth
+            {
+                for strategy in &auth.strategies {
+                    if let Ok(Some(doc)) = hook_runner.run_auth_strategy(
+                        &strategy.authenticate,
+                        &slug,
+                        &HashMap::new(),
+                        &conn,
+                    ) {
+                        user = Some(doc);
+                        break;
+                    }
+                }
+            }
+
+            let doc = match user {
+                Some(d) => d,
+                None => {
+                    if !disable_local {
                         dummy_verify();
                     }
+
+                    return Ok(Ok(None));
                 }
+            };
 
-                // Fallback: try auth strategies
-                if user.is_none()
-                    && let Some(auth) = &def_owned.auth
-                {
-                    for strategy in &auth.strategies {
-                        if let Ok(Some(doc)) = hook_runner.run_auth_strategy(
-                            &strategy.authenticate,
-                            &slug,
-                            &std::collections::HashMap::new(),
-                            &conn,
-                        ) {
-                            user = Some(doc);
-                            break;
-                        }
-                    }
-                }
+            // Check locked and email verification
+            if query::is_locked(&conn, &slug, &doc.id)? {
+                return Ok(Err("This account has been locked"));
+            }
+            if check_verify_email && !query::is_verified(&conn, &slug, &doc.id)? {
+                return Ok(Err("Please verify your email before logging in"));
+            }
 
-                let doc = match user {
-                    Some(d) => d,
-                    None => {
-                        if !disable_local {
-                            dummy_verify();
-                        }
-                        return Ok(Ok(None));
-                    }
-                };
+            let session_version = query::get_session_version(&conn, &slug, &doc.id)?;
 
-                // Check locked and email verification
-                if query::is_locked(&conn, &slug, &doc.id)? {
-                    return Ok(Err("This account has been locked"));
-                }
-                if check_verify_email && !query::is_verified(&conn, &slug, &doc.id)? {
-                    return Ok(Err("Please verify your email before logging in"));
-                }
+            Ok::<_, AnyhowError>(Ok(Some((doc, session_version))))
+        })
+        .await
+        .map_err(|e| {
+            error!("Login task error: {}", e);
 
-                let session_version = query::get_session_version(&conn, &slug, &doc.id)?;
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            error!("Login error: {}", e);
 
-                Ok::<_, anyhow::Error>(Ok(Some((doc, session_version))))
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!("Login task error: {}", e);
-                Status::internal("Internal error")
-            })?
-            .map_err(|e| {
-                tracing::error!("Login error: {}", e);
-                Status::internal("Internal error")
-            })?;
+            Status::internal("Internal error")
+        })?;
 
         let (user, session_version) = match login_result {
             Ok(Some(u)) => u,
             Ok(None) => {
                 self.login_limiter.record_failure(&req.email);
                 self.ip_login_limiter.record_failure(&ip);
+
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
             Err(msg) => {
                 // Log the actual reason for observability, but return the same
                 // generic error as wrong-password to prevent attackers from
                 // confirming password correctness on locked/unverified accounts.
-                tracing::warn!("Login denied for '{}': {}", req.email, msg);
+                warn!("Login denied for '{}': {}", req.email, msg);
+
                 self.login_limiter.record_failure(&req.email);
                 self.ip_login_limiter.record_failure(&ip);
+
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
         };
@@ -167,16 +179,18 @@ impl ContentService {
 
         let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)
-            .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+            .exp((Utc::now().timestamp() as u64) + expiry)
             .session_version(session_version)
             .build()
             .map_err(|e| {
-                tracing::error!("Claims build error: {}", e);
+                error!("Claims build error: {}", e);
+
                 Status::internal("Internal error")
             })?;
 
         let token = self.token_provider.create_token(&claims).map_err(|e| {
-            tracing::error!("Token creation error: {}", e);
+            error!("Token creation error: {}", e);
+
             Status::internal("Internal error")
         })?;
 
@@ -217,23 +231,28 @@ impl ContentService {
         let id = claims.sub.clone();
         let session_version = claims.session_version;
 
-        let (doc, db_session_version, is_locked) = tokio::task::spawn_blocking(move || {
+        let (doc, db_session_version, is_locked) = task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             let mut doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
+
             if let Some(ref mut d) = doc {
                 query::hydrate_document(&conn, &collection, &def.fields, d, None, None)?;
             }
+
             let sv = query::get_session_version(&conn, &collection, &id)?;
             let locked = query::is_locked(&conn, &collection, &id)?;
-            Ok::<_, anyhow::Error>((doc, sv, locked))
+
+            Ok::<_, AnyhowError>((doc, sv, locked))
         })
         .await
         .map_err(|e| {
-            tracing::error!("Me task error: {}", e);
+            error!("Me task error: {}", e);
+
             Status::internal("Internal error")
         })?
         .map_err(|e| {
-            tracing::error!("Me query error: {}", e);
+            error!("Me query error: {}", e);
+
             Status::internal("Internal error")
         })?;
 
@@ -305,12 +324,13 @@ impl ContentService {
         let email_renderer = self.email_renderer.clone();
         let server_config = self.server_config.clone();
         let reset_expiry = self.reset_token_expiry;
+
         // Fire and forget -- always return success
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let conn = match pool.get() {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("DB connection for forgot password: {}", e);
+                    error!("DB connection for forgot password: {}", e);
 
                     return;
                 }
@@ -320,17 +340,17 @@ impl ContentService {
                 Ok(Some(u)) => u,
                 Ok(None) => return,
                 Err(e) => {
-                    tracing::error!("Forgot password lookup: {}", e);
+                    error!("Forgot password lookup: {}", e);
 
                     return;
                 }
             };
 
-            let token = nanoid::nanoid!();
-            let exp = chrono::Utc::now().timestamp() + reset_expiry as i64;
+            let token = nanoid!();
+            let exp = Utc::now().timestamp() + reset_expiry as i64;
 
             if let Err(e) = query::set_reset_token(&conn, &slug, &user.id, &token, exp) {
-                tracing::error!("Failed to set reset token: {}", e);
+                error!("Failed to set reset token: {}", e);
 
                 return;
             }
@@ -354,7 +374,7 @@ impl ContentService {
             ) {
                 Ok(h) => h,
                 Err(e) => {
-                    tracing::error!("Failed to render reset email: {}", e);
+                    error!("Failed to render reset email: {}", e);
 
                     return;
                 }
@@ -369,7 +389,7 @@ impl ContentService {
                 email_config.queue_retries + 1,
                 &email_config.queue_name,
             ) {
-                tracing::error!("Failed to queue reset email: {}", e);
+                error!("Failed to queue reset email: {}", e);
             }
         });
 
@@ -423,7 +443,7 @@ impl ContentService {
         let password = req.new_password.clone();
         let def_owned = def;
 
-        let result: Result<(), anyhow::Error> = tokio::task::spawn_blocking(move || {
+        let result: Result<(), AnyhowError> = task::spawn_blocking(move || {
             let mut conn = pool.get().context("DB connection")?;
             let tx = conn.transaction().context("Start transaction")?;
             let (user, exp) = query::find_by_reset_token(&tx, &slug, &def_owned, &token)?
@@ -433,12 +453,15 @@ impl ContentService {
             // Return NotFound to avoid leaking that the account exists but is locked.
             if query::is_locked(&tx, &slug, &user.id)? {
                 query::clear_reset_token(&tx, &slug, &user.id)?;
+
                 tx.commit()?;
+
                 return Err(ResetTokenError::NotFound.into());
             }
 
-            if chrono::Utc::now().timestamp() >= exp {
+            if Utc::now().timestamp() >= exp {
                 query::clear_reset_token(&tx, &slug, &user.id)?;
+
                 tx.commit()?;
 
                 return Err(ResetTokenError::Expired.into());
@@ -446,12 +469,15 @@ impl ContentService {
 
             query::update_password(&tx, &slug, &user.id, &password)?;
             query::clear_reset_token(&tx, &slug, &user.id)?;
+
             tx.commit()?;
+
             Ok(())
         })
         .await
         .map_err(|e| {
-            tracing::error!("Reset password task error: {}", e);
+            error!("Reset password task error: {}", e);
+
             Status::internal("Internal error")
         })?;
 
@@ -466,7 +492,8 @@ impl ContentService {
                 match e.downcast_ref::<ResetTokenError>() {
                     Some(_) => Err(Status::invalid_argument(e.to_string())),
                     None => {
-                        tracing::error!("Reset password error: {}", e);
+                        error!("Reset password error: {}", e);
+
                         Err(Status::internal("Internal error"))
                     }
                 }
@@ -500,21 +527,27 @@ impl ContentService {
         let token = req.token.clone();
         let def_owned = def;
 
-        let found = tokio::task::spawn_blocking(move || {
+        let found = task::spawn_blocking(move || {
             let mut conn = pool.get().context("DB connection")?;
             let tx = conn.transaction().context("Start transaction")?;
+
             match query::find_by_verification_token(&tx, &slug, &def_owned, &token)? {
                 Some((user, exp)) => {
-                    if chrono::Utc::now().timestamp() >= exp {
+                    if Utc::now().timestamp() >= exp {
                         // Clean up expired token
                         if let Err(e) = query::clear_verification_token(&tx, &slug, &user.id) {
-                            tracing::warn!("Failed to clear expired verification token: {}", e);
+                            warn!("Failed to clear expired verification token: {}", e);
                         }
+
                         tx.commit()?;
+
                         return Ok(false); // Token expired
                     }
+
                     query::mark_verified(&tx, &slug, &user.id)?;
+
                     tx.commit()?;
+
                     Ok(true)
                 }
                 None => Ok(false),
@@ -522,11 +555,13 @@ impl ContentService {
         })
         .await
         .map_err(|e| {
-            tracing::error!("Verify email task error: {}", e);
+            error!("Verify email task error: {}", e);
+
             Status::internal("Internal error")
         })?
         .map_err(|e: anyhow::Error| {
-            tracing::error!("Verify email error: {}", e);
+            error!("Verify email error: {}", e);
+
             Status::internal("Internal error")
         })?;
 

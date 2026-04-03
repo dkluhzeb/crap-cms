@@ -13,11 +13,16 @@ use std::{
     time::Duration,
 };
 
-use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Extension, extract::State};
+use axum::{
+    Extension,
+    extract::State,
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+};
 use serde_json::json;
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
 use tokio_util::sync::WaitForCancellationFutureOwned;
+use tracing::warn;
 
 use crate::{
     admin::AdminState,
@@ -59,6 +64,7 @@ impl Stream for CancellableStream {
         // Check shutdown first
         if self.shutdown.as_mut().poll(cx).is_ready() {
             self.done = true;
+
             return Poll::Ready(None);
         }
         self.inner.as_mut().poll_next(cx)
@@ -98,12 +104,14 @@ fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
 pub async fn sse_handler(
     State(state): State<AdminState>,
     auth_user: Option<Extension<AuthUser>>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, axum::http::StatusCode> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
     // Enforce connection limit (race-free via compare_exchange)
     let max = state.max_sse_connections;
+
     if !try_acquire_sse_slot(&state.sse_connections, max) {
-        tracing::warn!("SSE connection limit reached ({}/{}), rejecting", max, max);
-        return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        warn!("SSE connection limit reached ({}/{}), rejecting", max, max);
+
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
     let guard = SseConnectionGuard {
@@ -154,9 +162,10 @@ pub async fn sse_handler(
                         _ => {}
                     }
                 }
+
                 // Read-only access check — commit result is irrelevant, rollback on drop is safe
                 if let Err(e) = tx.commit() {
-                    tracing::warn!("tx commit failed: {e}");
+                    warn!("tx commit failed: {e}");
                 }
             }
         }
@@ -172,6 +181,7 @@ pub async fn sse_handler(
                         EventTarget::Collection => allowed_collections.contains(&event.collection),
                         EventTarget::Global => allowed_globals.contains(&event.collection),
                     };
+
                     if !allowed {
                         return None;
                     }
@@ -204,6 +214,7 @@ pub async fn sse_handler(
 
                     Some(Ok::<_, Infallible>(sse_event))
                 }
+
                 Err(_) => None, // lagged — skip
             }
         });

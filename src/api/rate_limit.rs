@@ -1,10 +1,14 @@
 //! Per-IP gRPC rate limiting as a tower Layer/Service.
 
 use std::{
+    future::Future,
+    pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
 
+use axum::http::{Request, Response};
+use tonic::{Status, transport::server::TcpConnectInfo};
 use tower::{Layer, Service};
 
 use crate::core::rate_limit::GrpcRateLimiter;
@@ -40,55 +44,58 @@ pub struct GrpcRateLimitService<S> {
     limiter: Arc<GrpcRateLimiter>,
 }
 
-impl<S, ReqBody, ResBody> Service<axum::http::Request<ReqBody>> for GrpcRateLimitService<S>
+impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for GrpcRateLimitService<S>
 where
-    S: Service<axum::http::Request<ReqBody>, Response = axum::http::Response<ResBody>>
-        + Clone
-        + Send
-        + 'static,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
     ResBody: Default + Send + 'static,
     ReqBody: Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
-    >;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: axum::http::Request<ReqBody>) -> Self::Future {
+    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
         // Extract IP from TcpConnectInfo (set by tonic's TCP acceptor).
         let ip = req
             .extensions()
-            .get::<tonic::transport::server::TcpConnectInfo>()
+            .get::<TcpConnectInfo>()
             .and_then(|info| info.remote_addr())
             .map(|addr| addr.ip().to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
         if !self.limiter.check_and_record(&ip) {
-            let status = tonic::Status::resource_exhausted("rate limit exceeded");
+            let status = Status::resource_exhausted("rate limit exceeded");
             let response = status.into_http();
 
             return Box::pin(async move { Ok(response) });
         }
 
         let mut inner = self.inner.clone();
+
         Box::pin(async move { inner.call(req).await })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::sync::Arc;
+    use std::{
+        convert::Infallible,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll},
+    };
 
-    use axum::body::Body;
-    use axum::http::{Request, Response, StatusCode};
+    use axum::{
+        body::Body,
+        http::{Request, Response, StatusCode},
+    };
+    use tonic::transport::server::TcpConnectInfo;
     use tower::{Layer, Service, ServiceExt};
 
     use super::{GrpcRateLimitLayer, GrpcRateLimitService};
@@ -109,15 +116,10 @@ mod tests {
     impl Service<Request<Body>> for OkService {
         type Response = Response<Body>;
         type Error = Infallible;
-        type Future = std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
-        >;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-        fn poll_ready(
-            &mut self,
-            _cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::task::Poll::Ready(Ok(()))
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, _req: Request<Body>) -> Self::Future {
@@ -136,7 +138,7 @@ mod tests {
     /// middleware can extract the client IP.
     fn request_with_ip(ip: Ipv4Addr) -> Request<Body> {
         let addr = SocketAddr::new(IpAddr::V4(ip), 12345);
-        let connect_info = tonic::transport::server::TcpConnectInfo {
+        let connect_info = TcpConnectInfo {
             local_addr: None,
             remote_addr: Some(addr),
         };
