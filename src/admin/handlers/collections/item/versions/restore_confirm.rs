@@ -11,42 +11,14 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden, not_found, redirect_response,
-            render_or_error, server_error,
+            check_access_or_forbid, extract_editor_locale, forbidden,
+            load_version_with_missing_relations, not_found, redirect_response, render_or_error,
+            server_error,
         },
     },
-    core::{
-        FieldDefinition, Registry,
-        auth::{AuthUser, Claims},
-        document::VersionSnapshot,
-    },
-    db::{
-        BoxedConnection,
-        query::{AccessResult, MissingRelation, find_missing_relations, find_version_by_id},
-    },
+    core::auth::{AuthUser, Claims},
+    db::query::AccessResult,
 };
-
-/// Look up the version snapshot and find any missing relation targets.
-fn load_version_with_missing_relations(
-    conn: &BoxedConnection,
-    registry: &Registry,
-    slug: &str,
-    version_id: &str,
-    fields: &[FieldDefinition],
-) -> Result<(VersionSnapshot, Vec<MissingRelation>), &'static str> {
-    let version = match find_version_by_id(conn, slug, version_id) {
-        Ok(Some(v)) => v,
-        Ok(None) => return Err("Version not found"),
-        Err(e) => {
-            tracing::error!("Find version error: {}", e);
-            return Err("Database error");
-        }
-    };
-
-    let missing = find_missing_relations(conn, registry, &version.snapshot, fields);
-
-    Ok((version, missing))
-}
 
 /// GET /admin/collections/{slug}/{id}/versions/{version_id}/restore — confirmation page
 pub async fn restore_confirm(

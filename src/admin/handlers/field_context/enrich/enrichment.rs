@@ -21,6 +21,63 @@ use crate::{
     },
 };
 
+/// Parse a "collection/id" composite string into a (collection, id) pair.
+fn parse_composite_ref(s: &str) -> Option<(String, String)> {
+    let (col, id) = s.split_once('/')?;
+
+    if col.is_empty() || id.is_empty() {
+        return None;
+    }
+
+    Some((col.to_string(), id.to_string()))
+}
+
+/// Extract polymorphic "collection/id" refs from a field value.
+fn extract_polymorphic_refs(
+    doc_fields: &HashMap<String, Value>,
+    field_name: &str,
+    has_many: bool,
+) -> Vec<(String, String)> {
+    if has_many {
+        match doc_fields.get(field_name) {
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str().and_then(parse_composite_ref))
+                .collect(),
+            _ => Vec::new(),
+        }
+    } else {
+        match doc_fields.get(field_name) {
+            Some(Value::String(s)) if !s.is_empty() => parse_composite_ref(s).into_iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Resolve a single polymorphic ref to a JSON item with id, label, and collection.
+fn resolve_polymorphic_ref(
+    col: &str,
+    id: &str,
+    reg: &Registry,
+    conn: &dyn DbConnection,
+    locale_ctx: Option<&LocaleContext>,
+) -> Option<Value> {
+    let related_def = reg.get_collection(col)?;
+    let title_field = related_def.title_field().map(|s| s.to_string());
+
+    let doc = query::find_by_id(conn, col, related_def, id, locale_ctx)
+        .ok()
+        .flatten()?;
+
+    let label = title_field
+        .as_ref()
+        .and_then(|f| doc.get_str(f))
+        .unwrap_or(&doc.id)
+        .to_string();
+
+    Some(json!({ "id": format!("{}/{}", col, doc.id), "label": label, "collection": col }))
+}
+
 /// Build selected_items for a polymorphic relationship field.
 ///
 /// Polymorphic values are stored as "collection/id" composites. Each item is
@@ -33,58 +90,86 @@ pub fn enrich_polymorphic_selected(
     conn: &dyn DbConnection,
     locale_ctx: Option<&LocaleContext>,
 ) -> Vec<Value> {
-    // Parse "collection/id" refs
-    let refs: Vec<(String, String)> = if rc.has_many {
-        match doc_fields.get(field_name) {
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .filter_map(|v| {
-                    v.as_str().and_then(|s| {
-                        let (col, id) = s.split_once('/')?;
-                        if col.is_empty() || id.is_empty() {
-                            return None;
-                        }
-                        Some((col.to_string(), id.to_string()))
-                    })
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    } else {
-        match doc_fields.get(field_name) {
-            Some(Value::String(s)) if !s.is_empty() => {
-                if let Some((col, id)) = s.split_once('/') {
-                    if !col.is_empty() && !id.is_empty() {
-                        vec![(col.to_string(), id.to_string())]
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
-        }
-    };
+    let refs = extract_polymorphic_refs(doc_fields, field_name, rc.has_many);
 
     refs.iter()
-        .filter_map(|(col, id)| {
-            let related_def = reg.get_collection(col)?;
-            let title_field = related_def.title_field().map(|s| s.to_string());
-
-            query::find_by_id(conn, col, related_def, id, locale_ctx)
-            .ok()
-            .flatten()
-            .map(|doc| {
-                let label = title_field.as_ref()
-                    .and_then(|f| doc.get_str(f))
-                    .unwrap_or(&doc.id)
-                    .to_string();
-                // Include collection in the id so JS knows which collection this item belongs to
-                json!({ "id": format!("{}/{}", col, doc.id), "label": label, "collection": col })
-            })
-        })
+        .filter_map(|(col, id)| resolve_polymorphic_ref(col, id, reg, conn, locale_ctx))
         .collect()
+}
+
+/// Dispatch enrichment for a single field context based on its type.
+fn enrich_single_field(
+    ctx: &mut Value,
+    field_def: &FieldDefinition,
+    doc_fields: &HashMap<String, Value>,
+    state: &AdminState,
+    opts: &EnrichOptions,
+    enrich_ctx: &EnrichCtx,
+) {
+    let conn = enrich_ctx.conn;
+    let reg = enrich_ctx.reg;
+    let rel_locale_ctx = enrich_ctx.rel_locale_ctx;
+
+    match field_def.field_type {
+        FieldType::Relationship => {
+            enrich_types::enrich_relationship(
+                ctx,
+                field_def,
+                doc_fields,
+                conn,
+                reg,
+                rel_locale_ctx,
+            );
+        }
+        FieldType::Upload => {
+            enrich_types::enrich_upload(ctx, field_def, doc_fields, conn, reg, rel_locale_ctx);
+        }
+        FieldType::Array => {
+            enrich_types::enrich_array(ctx, field_def, doc_fields, enrich_ctx);
+        }
+        FieldType::Blocks => {
+            enrich_types::enrich_blocks(ctx, field_def, doc_fields, enrich_ctx);
+        }
+        FieldType::Row | FieldType::Collapsible => {
+            if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                enrich_field_contexts(sub_arr, &field_def.fields, doc_fields, state, opts);
+            }
+        }
+        FieldType::Group => {
+            if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
+            }
+        }
+        FieldType::Tabs => {
+            enrich_tabs(ctx, field_def, doc_fields, state, opts);
+        }
+        FieldType::Join => {
+            enrich_types::enrich_join(ctx, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
+        }
+        FieldType::Richtext => {
+            enrich_types::enrich_richtext(ctx, reg);
+        }
+        _ => {}
+    }
+}
+
+/// Recursively enrich sub-fields within each tab.
+fn enrich_tabs(
+    ctx: &mut Value,
+    field_def: &FieldDefinition,
+    doc_fields: &HashMap<String, Value>,
+    state: &AdminState,
+    opts: &EnrichOptions,
+) {
+    let Some(tabs_arr) = ctx.get_mut("tabs").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+
+    for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
+        if let Some(sub_arr) = tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+            enrich_field_contexts(sub_arr, &tab_def.fields, doc_fields, state, opts);
+        }
+    }
 }
 
 /// Enrich field contexts with data that requires DB access:
@@ -99,11 +184,6 @@ pub fn enrich_field_contexts(
     state: &AdminState,
     opts: &EnrichOptions,
 ) {
-    let filter_hidden = opts.filter_hidden;
-    let non_default_locale = opts.non_default_locale;
-    let errors = opts.errors;
-    let doc_id = opts.doc_id;
-
     let reg = &state.registry;
     let conn = match state.pool.get() {
         Ok(c) => c,
@@ -114,94 +194,20 @@ pub fn enrich_field_contexts(
 
     let enrich_ctx = EnrichCtx {
         state,
-        non_default_locale,
-        errors,
+        non_default_locale: opts.non_default_locale,
+        errors: opts.errors,
         conn: &conn as &dyn DbConnection,
         reg,
         rel_locale_ctx: rel_locale_ctx.as_ref(),
     };
 
-    let defs_iter: Box<dyn Iterator<Item = &FieldDefinition>> = if filter_hidden {
+    let defs_iter: Box<dyn Iterator<Item = &FieldDefinition>> = if opts.filter_hidden {
         Box::new(field_defs.iter().filter(|f| !f.admin.hidden))
     } else {
         Box::new(field_defs.iter())
     };
 
     for (ctx, field_def) in fields.iter_mut().zip(defs_iter) {
-        match field_def.field_type {
-            FieldType::Relationship => {
-                enrich_types::enrich_relationship(
-                    ctx,
-                    field_def,
-                    doc_fields,
-                    &conn as &dyn DbConnection,
-                    reg,
-                    rel_locale_ctx.as_ref(),
-                );
-            }
-            FieldType::Array => {
-                enrich_types::enrich_array(ctx, field_def, doc_fields, &enrich_ctx);
-            }
-            FieldType::Upload => {
-                enrich_types::enrich_upload(
-                    ctx,
-                    field_def,
-                    doc_fields,
-                    &conn as &dyn DbConnection,
-                    reg,
-                    rel_locale_ctx.as_ref(),
-                );
-            }
-            FieldType::Blocks => {
-                enrich_types::enrich_blocks(ctx, field_def, doc_fields, &enrich_ctx);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                    enrich_field_contexts(sub_arr, &field_def.fields, doc_fields, state, opts);
-                }
-            }
-            FieldType::Group => {
-                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                    enrich_nested_fields(
-                        sub_arr,
-                        &field_def.fields,
-                        &conn as &dyn DbConnection,
-                        reg,
-                        rel_locale_ctx.as_ref(),
-                    );
-                }
-            }
-            FieldType::Tabs => {
-                if let Some(tabs_arr) = ctx.get_mut("tabs").and_then(|v| v.as_array_mut()) {
-                    for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
-                        if let Some(sub_arr) =
-                            tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
-                        {
-                            enrich_field_contexts(
-                                sub_arr,
-                                &tab_def.fields,
-                                doc_fields,
-                                state,
-                                opts,
-                            );
-                        }
-                    }
-                }
-            }
-            FieldType::Join => {
-                enrich_types::enrich_join(
-                    ctx,
-                    field_def,
-                    &conn as &dyn DbConnection,
-                    reg,
-                    rel_locale_ctx.as_ref(),
-                    doc_id,
-                );
-            }
-            FieldType::Richtext => {
-                enrich_types::enrich_richtext(ctx, reg);
-            }
-            _ => {}
-        }
+        enrich_single_field(ctx, field_def, doc_fields, state, opts, &enrich_ctx);
     }
 }

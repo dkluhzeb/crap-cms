@@ -68,3 +68,7 @@ pub fn build_field_contexts(
     iter.map(|field| build_single_field_context(field, values, errors, "", non_default_locale, 0))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

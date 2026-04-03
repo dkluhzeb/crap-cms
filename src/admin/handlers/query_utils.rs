@@ -56,63 +56,56 @@ impl<'a> ListUrlContext<'a> {
     }
 }
 
+/// Parse an operator string and value into a `FilterOp`.
+fn parse_filter_op(op_str: &str, value: String) -> Option<FilterOp> {
+    match op_str {
+        "equals" => Some(FilterOp::Equals(value)),
+        "not_equals" => Some(FilterOp::NotEquals(value)),
+        "contains" => Some(FilterOp::Contains(value)),
+        "like" => Some(FilterOp::Like(value)),
+        "gt" => Some(FilterOp::GreaterThan(value)),
+        "lt" => Some(FilterOp::LessThan(value)),
+        "gte" => Some(FilterOp::GreaterThanOrEqual(value)),
+        "lte" => Some(FilterOp::LessThanOrEqual(value)),
+        "exists" => Some(FilterOp::Exists),
+        "not_exists" => Some(FilterOp::NotExists),
+        _ => None,
+    }
+}
+
+/// Parse a single `where[field][op]=value` key-value pair into field name, op string, and value.
+fn parse_where_key(key: &str, value: &str) -> Option<(String, String, String)> {
+    let key = url_decode(key);
+    let rest = key.strip_prefix("where[")?;
+    let (field, rest) = rest.split_once("][")?;
+    let op_str = rest.strip_suffix(']')?;
+
+    Some((field.to_string(), op_str.to_string(), url_decode(value)))
+}
+
 /// Parse `where[field][op]=value` parameters from a raw query string.
 /// Returns empty vec for malformed/invalid params. Best-effort parsing.
 pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) -> Vec<FilterClause> {
-    let mut filters = Vec::new();
     let system_cols = ["id", "created_at", "updated_at", "_status"];
 
-    for part in raw_query.split('&') {
-        let Some((key, value)) = part.split_once('=') else {
-            continue;
-        };
+    raw_query
+        .split('&')
+        .filter_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            let (field, op_str, value) = parse_where_key(key, value)?;
 
-        let value = url_decode(value);
+            let field_valid =
+                system_cols.contains(&field.as_str()) || def.fields.iter().any(|f| f.name == field);
 
-        // Match where[field][op]
-        let key = url_decode(key);
+            if !field_valid {
+                return None;
+            }
 
-        let Some(rest) = key.strip_prefix("where[") else {
-            continue;
-        };
+            let op = parse_filter_op(&op_str, value)?;
 
-        let Some((field, rest)) = rest.split_once("][") else {
-            continue;
-        };
-
-        let Some(op_str) = rest.strip_suffix(']') else {
-            continue;
-        };
-
-        // Validate field exists
-        let field_valid =
-            system_cols.contains(&field) || def.fields.iter().any(|f| f.name == field);
-
-        if !field_valid {
-            continue;
-        }
-
-        let op = match op_str {
-            "equals" => FilterOp::Equals(value),
-            "not_equals" => FilterOp::NotEquals(value),
-            "contains" => FilterOp::Contains(value),
-            "like" => FilterOp::Like(value),
-            "gt" => FilterOp::GreaterThan(value),
-            "lt" => FilterOp::LessThan(value),
-            "gte" => FilterOp::GreaterThanOrEqual(value),
-            "lte" => FilterOp::LessThanOrEqual(value),
-            "exists" => FilterOp::Exists,
-            "not_exists" => FilterOp::NotExists,
-            _ => continue,
-        };
-
-        filters.push(FilterClause::Single(Filter {
-            field: field.to_string(),
-            op,
-        }));
-    }
-
-    filters
+            Some(FilterClause::Single(Filter { field, op }))
+        })
+        .collect()
 }
 
 /// Simple percent-decoding for URL query values.

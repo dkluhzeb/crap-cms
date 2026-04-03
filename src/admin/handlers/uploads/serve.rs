@@ -27,6 +27,49 @@ use crate::{
     db::AccessResult,
 };
 
+/// Check if a path segment contains traversal characters.
+fn has_path_traversal(segment: &str) -> bool {
+    segment.contains("..") || segment.contains('/') || segment.contains('\\')
+}
+
+/// Check collection read access, returning the cache policy to use.
+/// Returns `None` if access is denied.
+async fn check_upload_access(
+    state: &AdminState,
+    collection_slug: &str,
+    auth_user: Option<AuthUser>,
+) -> Option<&'static str> {
+    let access_ref = state
+        .registry
+        .get_collection(collection_slug)
+        .and_then(|def| def.access.read.clone());
+
+    let Some(func_ref) = access_ref else {
+        return Some("public, max-age=31536000, immutable");
+    };
+
+    let user_doc = auth_user.map(|u| u.user_doc);
+    let pool = state.pool.clone();
+    let hook_runner = state.hook_runner.clone();
+
+    let access = task::spawn_blocking(move || {
+        let conn = pool.get()?;
+        hook_runner.check_access(Some(&func_ref), user_doc.as_ref(), None, None, &conn)
+    })
+    .await;
+
+    let allowed = matches!(
+        access,
+        Ok(Ok(AccessResult::Allowed)) | Ok(Ok(AccessResult::Constrained(_)))
+    );
+
+    if allowed {
+        Some("private, no-store")
+    } else {
+        None
+    }
+}
+
 /// Serve an uploaded file, checking collection read access if configured.
 ///
 /// Supports content negotiation for images: if the browser Accept header includes
@@ -37,89 +80,42 @@ pub async fn serve_upload(
     Path((collection_slug, filename)): Path<(String, String)>,
     request: Request<Body>,
 ) -> Response {
-    // Reject path traversal
-    if collection_slug.contains("..")
-        || collection_slug.contains('/')
-        || collection_slug.contains('\\')
-        || filename.contains("..")
-        || filename.contains('/')
-        || filename.contains('\\')
-    {
+    if has_path_traversal(&collection_slug) || has_path_traversal(&filename) {
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    // Parse Accept header for content negotiation
     let accept = request
         .headers()
         .get(ACCEPT)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let accepts_avif = accept.contains("image/avif");
-    let accepts_webp = accept.contains("image/webp");
+        .unwrap_or("")
+        .to_string();
 
-    // Look up collection access.read
-    let access_read = state
-        .registry
-        .get_collection(&collection_slug)
-        .map(|def| def.access.read.clone());
+    let auth_user = extract_auth_user(&request, &state);
 
-    // Determine access ref: None means public (collection not found or no access.read)
-    let access_ref = match access_read {
-        Some(Some(ref r)) => Some(r.clone()),
-        _ => None,
+    let Some(cache_control) = check_upload_access(&state, &collection_slug, auth_user).await else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
-    if let Some(func_ref) = access_ref {
-        // Extract auth user from cookie or Bearer token
-        let auth_user = extract_auth_user(&request, &state);
-
-        let user_doc = auth_user.map(|u| u.user_doc);
-        let pool = state.pool.clone();
-        let hook_runner = state.hook_runner.clone();
-
-        let access = task::spawn_blocking(move || {
-            let conn = pool.get()?;
-            hook_runner.check_access(Some(&func_ref), user_doc.as_ref(), None, None, &conn)
-        })
-        .await;
-
-        let allowed = matches!(
-            access,
-            Ok(Ok(AccessResult::Allowed)) | Ok(Ok(AccessResult::Constrained(_)))
-        );
-
-        if !allowed {
-            return StatusCode::NOT_FOUND.into_response();
-        }
-
-        // Serve with private cache headers
-        return serve_file(
-            &state,
-            &collection_slug,
-            &filename,
-            "private, no-store",
-            accepts_avif,
-            accepts_webp,
-            request,
-        )
-        .await;
-    }
-
-    // Public: no access.read set
     serve_file(
         &state,
         &collection_slug,
         &filename,
-        "public, max-age=31536000, immutable",
-        accepts_avif,
-        accepts_webp,
+        cache_control,
+        accept.contains("image/avif"),
+        accept.contains("image/webp"),
         request,
     )
     .await
 }
 
+/// Try to authenticate from a raw token string (cookie value or Bearer token).
+fn auth_from_token(token: &str, state: &AdminState) -> Option<AuthUser> {
+    let claims = validate_token(token, state.jwt_secret.as_ref()).ok()?;
+    load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+}
+
 fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<AuthUser> {
-    // Try cookie first
     let cookie_header = request
         .headers()
         .get(COOKIE)
@@ -127,26 +123,19 @@ fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<Auth
         .unwrap_or("");
 
     if let Some(token) = extract_cookie(cookie_header, "crap_session")
-        && let Ok(claims) = validate_token(token, state.jwt_secret.as_ref())
-        && let Some(auth_user) =
-            load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+        && let Some(user) = auth_from_token(token, state)
     {
-        return Some(auth_user);
+        return Some(user);
     }
 
-    // Try Bearer token
     let auth_header = request
         .headers()
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if let Some(token) = auth_header.strip_prefix("Bearer ")
-        && let Ok(claims) = validate_token(token, state.jwt_secret.as_ref())
-        && let Some(auth_user) =
-            load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
-    {
-        return Some(auth_user);
+    if let Some(token) = auth_header.strip_prefix("Bearer ") {
+        return auth_from_token(token, state);
     }
 
     None
@@ -269,6 +258,47 @@ fn build_serve_request(headers: &ConditionalHeaders) -> Request<Body> {
     builder.body(Body::empty()).expect("static request builder")
 }
 
+/// Determine Content-Disposition for a file based on its MIME type.
+///
+/// Images (except SVG) are inline. SVGs and non-image files get attachment
+/// to prevent stored XSS. If a filename is provided, it's included for
+/// download naming (nanoid prefix is stripped).
+fn content_disposition(mime: &str, filename: Option<&str>) -> String {
+    if mime.starts_with("image/") && mime != "image/svg+xml" {
+        return "inline".to_string();
+    }
+
+    let original = filename
+        .and_then(|n| n.find('_').map(|pos| &n[pos + 1..]))
+        .filter(|n| !n.is_empty());
+
+    match original {
+        Some(name) => format!("attachment; filename=\"{}\"", name.replace('"', "_")),
+        None => "attachment".to_string(),
+    }
+}
+
+/// Apply shared security/caching headers to a response.
+fn apply_response_headers(response: &mut Response, cache_control: &str, mime: &str, varied: bool) {
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        cache_control.parse().expect("valid cache-control"),
+    );
+
+    if mime == "image/svg+xml" {
+        response.headers_mut().insert(
+            CONTENT_SECURITY_POLICY,
+            "sandbox; default-src 'none'".parse().expect("valid csp"),
+        );
+    }
+
+    if varied {
+        response
+            .headers_mut()
+            .insert(VARY, "Accept".parse().expect("valid vary"));
+    }
+}
+
 /// Serve a file via `tower_http::services::ServeFile` with custom headers.
 /// Provides Range, ETag, Last-Modified, and conditional GET support for free.
 async fn serve_with_headers(
@@ -284,77 +314,34 @@ async fn serve_with_headers(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    // Override Cache-Control for our needs
-    response.headers_mut().insert(
-        CACHE_CONTROL,
-        cache_control.parse().expect("valid cache-control"),
-    );
-
-    // SVGs get attachment + CSP sandbox to prevent stored XSS.
-    // Non-image files include the original filename for proper download naming.
-    let disposition = if mime.starts_with("image/") && mime != "image/svg+xml" {
-        "inline".to_string()
-    } else {
-        // Extract original filename: strip nanoid prefix (format: "nanoid_originalname.ext")
-        let original = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.find('_').map(|pos| &n[pos + 1..]))
-            .filter(|n| !n.is_empty());
-        match original {
-            Some(name) => format!("attachment; filename=\"{}\"", name.replace('"', "_")),
-            None => "attachment".to_string(),
-        }
-    };
+    let filename = path.file_name().and_then(|n| n.to_str());
+    let disposition = content_disposition(mime, filename);
 
     response.headers_mut().insert(
         CONTENT_DISPOSITION,
         disposition.parse().expect("valid disposition"),
     );
 
-    if mime == "image/svg+xml" {
-        response.headers_mut().insert(
-            CONTENT_SECURITY_POLICY,
-            "sandbox; default-src 'none'".parse().expect("valid csp"),
-        );
-    }
-
-    if varied {
-        response
-            .headers_mut()
-            .insert(VARY, "Accept".parse().expect("valid vary"));
-    }
-
+    apply_response_headers(&mut response, cache_control, mime, varied);
     response
 }
 
 /// Build a response from in-memory bytes (for non-local storage backends).
 fn serve_bytes(data: Vec<u8>, cache_control: &str, varied: bool, mime: &str) -> Response {
-    let mut builder = Response::builder()
+    let disposition = content_disposition(mime, None);
+
+    let builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, mime)
-        .header(CACHE_CONTROL, cache_control);
+        .header(CACHE_CONTROL, cache_control)
+        .header(CONTENT_DISPOSITION, disposition);
 
-    // Content-Disposition: SVGs and non-image files use attachment to prevent
-    // stored XSS. Images (except SVG) use inline.
-    let disposition = if mime.starts_with("image/") && mime != "image/svg+xml" {
-        "inline"
-    } else {
-        "attachment"
-    };
-    builder = builder.header(CONTENT_DISPOSITION, disposition);
-
-    if mime == "image/svg+xml" {
-        builder = builder.header(CONTENT_SECURITY_POLICY, "sandbox; default-src 'none'");
-    }
-
-    if varied {
-        builder = builder.header(VARY, "Accept");
-    }
-
-    builder
+    let mut response = builder
         .body(Body::from(data))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+
+    apply_response_headers(&mut response, cache_control, mime, varied);
+    response
 }
 
 #[cfg(test)]

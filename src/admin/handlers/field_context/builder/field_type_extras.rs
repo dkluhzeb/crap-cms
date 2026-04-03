@@ -430,3 +430,201 @@ pub fn apply_field_type_extras(
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        admin::handlers::field_context::MAX_FIELD_DEPTH,
+        core::field::{
+            BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
+            SelectOption,
+        },
+    };
+
+    fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
+        FieldDefinition::builder(name, ft).build()
+    }
+
+    #[test]
+    fn checkbox_checked() {
+        let sf = make_field("active", FieldType::Checkbox);
+        let mut ctx = json!({"name": "group__active"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
+        apply_field_type_extras(&sf, "true", &mut ctx, &extras);
+        assert_eq!(ctx["checked"], true);
+    }
+
+    #[test]
+    fn checkbox_unchecked() {
+        let sf = make_field("active", FieldType::Checkbox);
+        let mut ctx = json!({"name": "group__active"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
+        apply_field_type_extras(&sf, "0", &mut ctx, &extras);
+        assert_eq!(ctx["checked"], false);
+    }
+
+    #[test]
+    fn select_marks_selected() {
+        let mut sf = make_field("color", FieldType::Select);
+        sf.options = vec![
+            SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+            SelectOption::new(LocalizedString::Plain("Green".to_string()), "green"),
+        ];
+        let mut ctx = json!({"name": "group__color"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__color").build();
+        apply_field_type_extras(&sf, "green", &mut ctx, &extras);
+        let opts = ctx["options"].as_array().unwrap();
+        assert_eq!(opts[0]["selected"], false);
+        assert_eq!(opts[1]["selected"], true);
+    }
+
+    #[test]
+    fn date_day_only() {
+        let sf = make_field("d", FieldType::Date);
+        let mut ctx = json!({"name": "group__d"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
+        apply_field_type_extras(&sf, "2026-01-15T12:00:00Z", &mut ctx, &extras);
+        assert_eq!(ctx["picker_appearance"], "dayOnly");
+        assert_eq!(ctx["date_only_value"], "2026-01-15");
+    }
+
+    #[test]
+    fn date_day_and_time() {
+        let mut sf = make_field("d", FieldType::Date);
+        sf.picker_appearance = Some("dayAndTime".to_string());
+        let mut ctx = json!({"name": "group__d"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
+        apply_field_type_extras(&sf, "2026-01-15T09:30:00Z", &mut ctx, &extras);
+        assert_eq!(ctx["picker_appearance"], "dayAndTime");
+        assert_eq!(ctx["datetime_local_value"], "2026-01-15T09:30");
+    }
+
+    #[test]
+    fn date_short_values() {
+        let sf = make_field("d", FieldType::Date);
+        let mut ctx = json!({"name": "g__d"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "g__d").build();
+        apply_field_type_extras(&sf, "short", &mut ctx, &extras);
+        assert_eq!(ctx["date_only_value"], "short");
+    }
+
+    #[test]
+    fn relationship() {
+        let mut sf = make_field("author", FieldType::Relationship);
+        sf.relationship = Some(RelationshipConfig::new("users", true));
+        let mut ctx = json!({"name": "group__author"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__author").build();
+        apply_field_type_extras(&sf, "", &mut ctx, &extras);
+        assert_eq!(ctx["relationship_collection"], "users");
+        assert_eq!(ctx["has_many"], true);
+    }
+
+    #[test]
+    fn upload() {
+        let mut sf = make_field("image", FieldType::Upload);
+        sf.relationship = Some(RelationshipConfig::new("media", false));
+        let mut ctx = json!({"name": "group__image"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__image").build();
+        apply_field_type_extras(&sf, "", &mut ctx, &extras);
+        assert_eq!(ctx["relationship_collection"], "media");
+        assert_eq!(ctx["picker"], "drawer");
+    }
+
+    #[test]
+    fn array_in_group() {
+        let mut arr = make_field("tags", FieldType::Array);
+        arr.fields = vec![make_field("name", FieldType::Text)];
+        arr.min_rows = Some(1);
+        arr.max_rows = Some(3);
+        arr.admin.collapsed = true;
+        arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
+        arr.admin.label_field = Some("name".to_string());
+        let mut ctx = json!({"name": "group__tags"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__tags").build();
+        apply_field_type_extras(&arr, "", &mut ctx, &extras);
+        assert!(ctx["sub_fields"].as_array().is_some());
+        assert_eq!(ctx["row_count"], 0);
+        assert_eq!(ctx["min_rows"], 1);
+        assert_eq!(ctx["max_rows"], 3);
+        assert_eq!(ctx["init_collapsed"], true);
+        assert_eq!(ctx["add_label"], "Tag");
+        assert_eq!(ctx["label_field"], "name");
+    }
+
+    #[test]
+    fn group_in_group() {
+        let mut inner = make_field("meta", FieldType::Group);
+        inner.fields = vec![make_field("author", FieldType::Text)];
+        inner.admin.collapsed = true;
+        let mut ctx = json!({"name": "outer__meta"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "outer__meta").build();
+        apply_field_type_extras(&inner, "", &mut ctx, &extras);
+        assert!(ctx["sub_fields"].as_array().is_some());
+        assert_eq!(ctx["collapsed"], true);
+    }
+
+    #[test]
+    fn blocks_in_group() {
+        let mut blk = make_field("sections", FieldType::Blocks);
+        blk.blocks = vec![{
+            let mut bd = BlockDefinition::new("text", vec![make_field("body", FieldType::Text)]);
+            bd.label_field = Some("body".to_string());
+            bd
+        }];
+        blk.min_rows = Some(0);
+        blk.max_rows = Some(5);
+        blk.admin.collapsed = true;
+        blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
+        let mut ctx = json!({"name": "group__sections"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__sections").build();
+        apply_field_type_extras(&blk, "", &mut ctx, &extras);
+        assert!(ctx["block_definitions"].as_array().is_some());
+        assert_eq!(ctx["row_count"], 0);
+        assert_eq!(ctx["min_rows"], 0);
+        assert_eq!(ctx["max_rows"], 5);
+        assert_eq!(ctx["init_collapsed"], true);
+        assert_eq!(ctx["add_label"], "Section");
+        let bd = ctx["block_definitions"].as_array().unwrap();
+        assert_eq!(bd[0]["label_field"], "body");
+    }
+
+    #[test]
+    fn max_depth_stops_recursion() {
+        let mut arr = make_field("deep", FieldType::Array);
+        arr.fields = vec![make_field("leaf", FieldType::Text)];
+        let mut ctx = json!({"name": "group__deep"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__deep")
+            .depth(MAX_FIELD_DEPTH)
+            .build();
+        apply_field_type_extras(&arr, "", &mut ctx, &extras);
+        assert!(ctx.get("sub_fields").is_none());
+    }
+
+    #[test]
+    fn unknown_type_is_noop() {
+        let sf = make_field("body", FieldType::Richtext);
+        let mut ctx = json!({"name": "group__body", "field_type": "richtext"});
+        let (vals, errs) = (HashMap::new(), HashMap::new());
+        let extras = FieldRecursionCtx::builder(&vals, &errs, "group__body").build();
+        apply_field_type_extras(&sf, "hello", &mut ctx, &extras);
+        assert!(ctx.get("options").is_none());
+        assert!(ctx.get("checked").is_none());
+    }
+}

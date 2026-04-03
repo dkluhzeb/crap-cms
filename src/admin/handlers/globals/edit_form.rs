@@ -17,14 +17,97 @@ use crate::{
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
-            enrich_field_contexts, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
-            server_error, split_sidebar_fields, strip_denied_fields,
+            enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            fetch_version_sidebar_data, flatten_document_values, forbidden, is_non_default_locale,
+            not_found, render_or_error, server_error, split_sidebar_fields, strip_denied_fields,
         },
     },
-    core::auth::{AuthUser, Claims},
-    db::{ops, query::AccessResult},
+    core::{
+        Document, FieldDefinition,
+        auth::{AuthUser, Claims},
+        collection::{GlobalDefinition, Hooks},
+    },
+    db::{DbPool, ops, query::AccessResult},
+    hooks::HookRunner,
 };
+
+/// Parameters for the blocking global-read task.
+struct ReadParams {
+    pool: DbPool,
+    runner: HookRunner,
+    hooks: Hooks,
+    fields: Vec<FieldDefinition>,
+    slug: String,
+    def: GlobalDefinition,
+    locale_ctx: Option<crate::db::query::LocaleContext>,
+    user_doc: Option<Document>,
+    user_ui_locale: Option<String>,
+}
+
+/// Fetch the global document and run lifecycle hooks.
+fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
+    params
+        .runner
+        .fire_before_read(&params.hooks, &params.slug, "get_global", HashMap::new())?;
+
+    let doc = ops::get_global(
+        &params.pool,
+        &params.slug,
+        &params.def,
+        params.locale_ctx.as_ref(),
+    )?;
+
+    let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+        hooks: &params.hooks,
+        fields: &params.fields,
+        collection: &params.slug,
+        operation: "get_global",
+        user: params.user_doc.as_ref(),
+        ui_locale: params.user_ui_locale.as_deref(),
+    };
+
+    Ok(params.runner.apply_after_read(&ar_ctx, doc))
+}
+
+/// Build, enrich, and split the field contexts for the global edit form.
+fn prepare_edit_fields(
+    state: &AdminState,
+    def: &GlobalDefinition,
+    doc_fields: &HashMap<String, Value>,
+    editor_locale: Option<&str>,
+) -> (Vec<Value>, Vec<Value>) {
+    let values = flatten_document_values(doc_fields, &def.fields);
+    let non_default_locale = is_non_default_locale(state, editor_locale);
+
+    let mut fields = build_field_contexts(
+        &def.fields,
+        &values,
+        &HashMap::new(),
+        false,
+        non_default_locale,
+    );
+
+    enrich_field_contexts(
+        &mut fields,
+        &def.fields,
+        doc_fields,
+        state,
+        &EnrichOptions::builder(&HashMap::new())
+            .non_default_locale(non_default_locale)
+            .build(),
+    );
+
+    let form_data_json = json!(doc_fields);
+    apply_display_conditions(
+        &mut fields,
+        &def.fields,
+        &form_data_json,
+        &state.hook_runner,
+        false,
+    );
+
+    split_sidebar_fields(fields)
+}
 
 /// GET /admin/globals/{slug} — show edit form for a global
 pub async fn edit_form(
@@ -39,7 +122,6 @@ pub async fn edit_form(
         None => return not_found(&state, &format!("Global '{}' not found", slug)),
     };
 
-    // Check read access
     match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to view this global");
@@ -51,47 +133,32 @@ pub async fn edit_form(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let hooks = def.hooks.clone();
-    let fields = def.fields.clone();
-    let slug_owned = slug.clone();
-    let def_owned = def.clone();
-    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
-    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
+    let read_params = ReadParams {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        hooks: def.hooks.clone(),
+        fields: def.fields.clone(),
+        slug: slug.clone(),
+        def: def.clone(),
+        locale_ctx,
+        user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
+        user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
+    };
 
-    let read_result = task::spawn_blocking(move || {
-        runner.fire_before_read(&hooks, &slug_owned, "get_global", HashMap::new())?;
-        let doc = ops::get_global(&pool, &slug_owned, &def_owned, locale_ctx.as_ref())?;
-        let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
-            hooks: &hooks,
-            fields: &fields,
-            collection: &slug_owned,
-            operation: "get_global",
-            user: user_doc.as_ref(),
-            ui_locale: user_ui_locale.as_deref(),
-        };
-        let doc = runner.apply_after_read(&ar_ctx, doc);
-
-        Ok::<_, anyhow::Error>(doc)
-    })
-    .await;
+    let read_result = task::spawn_blocking(move || read_global_document(read_params)).await;
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
         Ok(Err(e)) => {
             error!("Global read query error: {}", e);
-
             return server_error(&state, "An internal error occurred.");
         }
         Err(e) => {
             error!("Global read task error: {}", e);
-
             return server_error(&state, "An internal error occurred.");
         }
     };
 
-    // Strip field-level read-denied fields
     let mut doc_fields = document.fields.clone();
     let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
         Ok(d) => d,
@@ -99,63 +166,21 @@ pub async fn edit_form(
     };
     strip_denied_fields(&mut doc_fields, &denied);
 
-    let values = flatten_document_values(&doc_fields, &def.fields);
-
-    let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
-
-    let mut fields = build_field_contexts(
-        &def.fields,
-        &values,
-        &HashMap::new(),
-        false,
-        non_default_locale,
-    );
-
-    enrich_field_contexts(
-        &mut fields,
-        &def.fields,
-        &doc_fields,
-        &state,
-        &EnrichOptions::builder(&HashMap::new())
-            .non_default_locale(non_default_locale)
-            .build(),
-    );
-
-    let form_data_json = json!(doc_fields);
-
-    apply_display_conditions(
-        &mut fields,
-        &def.fields,
-        &form_data_json,
-        &state.hook_runner,
-        false,
-    );
-
-    let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
+    let (main_fields, sidebar_fields) =
+        prepare_edit_fields(&state, &def, &doc_fields, editor_locale.as_deref());
 
     let has_versions = def.has_versions();
     let has_drafts = def.has_drafts();
-
-    let doc_status = if has_drafts {
-        document
-            .fields
-            .get("_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("published")
-            .to_string()
-    } else {
-        String::new()
-    };
+    let doc_status = extract_doc_status(&document, has_drafts);
 
     let global_table = format!("_global_{}", slug);
-    let (versions, total_versions): (Vec<Value>, i64) = if has_versions {
+    let (versions, total_versions) = if has_versions {
         fetch_version_sidebar_data(&state.pool, &global_table, "default")
     } else {
         (vec![], 0)
     };
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .filter_nav_by_access(&state, &auth_user)

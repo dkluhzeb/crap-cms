@@ -11,16 +11,42 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden, not_found,
-            redirect_response, render_or_error, server_error, version_to_json,
+            Pagination, PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden,
+            not_found, redirect_response, render_or_error, server_error, version_to_json,
         },
     },
     core::{
         Document,
         auth::{AuthUser, Claims},
     },
-    db::query::{self, AccessResult},
+    db::{
+        BoxedConnection,
+        query::{self, AccessResult},
+    },
 };
+
+/// Fetch paginated version list for a global.
+fn fetch_version_data(
+    conn: &BoxedConnection,
+    global_table: &str,
+    pg: &Pagination,
+) -> (Vec<Value>, i64) {
+    let total = query::count_versions(conn, global_table, "default").unwrap_or(0);
+
+    let versions = query::list_versions(
+        conn,
+        global_table,
+        "default",
+        Some(pg.per_page),
+        Some(pg.offset),
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .map(version_to_json)
+    .collect();
+
+    (versions, total)
+}
 
 /// GET /admin/globals/{slug}/versions — dedicated version history page
 pub async fn list_versions_page(
@@ -40,7 +66,6 @@ pub async fn list_versions_page(
         return redirect_response(&format!("/admin/globals/{}", slug));
     }
 
-    // Check read access
     match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to view this global");
@@ -49,26 +74,14 @@ pub async fn list_versions_page(
         _ => {}
     }
 
-    let global_table = format!("_global_{}", slug);
-    let pg = params.resolve(&state.config.pagination);
-
     let conn = match state.pool.get() {
         Ok(c) => c,
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let total = query::count_versions(&conn, &global_table, "default").unwrap_or(0);
-    let versions: Vec<Value> = query::list_versions(
-        &conn,
-        &global_table,
-        "default",
-        Some(pg.per_page),
-        Some(pg.offset),
-    )
-    .unwrap_or_default()
-    .into_iter()
-    .map(version_to_json)
-    .collect();
+    let global_table = format!("_global_{}", slug);
+    let pg = params.resolve(&state.config.pagination);
+    let (versions, total) = fetch_version_data(&conn, &global_table, &pg);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);

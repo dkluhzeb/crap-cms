@@ -12,9 +12,45 @@ use crate::{
         AdminState,
         handlers::shared::{check_access_or_forbid, forbidden, htmx_redirect, redirect_response},
     },
-    core::auth::AuthUser,
-    db::query::{self, AccessResult},
+    config::LocaleConfig,
+    core::{Document, auth::AuthUser, collection::GlobalDefinition},
+    db::{
+        DbPool,
+        query::{self, AccessResult},
+    },
 };
+
+/// Find the version snapshot and restore it inside a transaction.
+fn restore_from_version(
+    pool: &DbPool,
+    slug: &str,
+    def: &GlobalDefinition,
+    version_id: &str,
+    locale_config: &LocaleConfig,
+) -> Result<Document, Error> {
+    let global_table = format!("_global_{}", slug);
+
+    let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| anyhow!("Start transaction: {}", e))?;
+
+    let version = query::find_version_by_id(&tx, &global_table, version_id)?
+        .ok_or_else(|| anyhow!("Version not found"))?;
+
+    let doc = query::restore_global_version(
+        &tx,
+        slug,
+        def,
+        &version.snapshot,
+        "published",
+        locale_config,
+    )?;
+
+    tx.commit().map_err(|e| anyhow!("Commit: {}", e))?;
+
+    Ok(doc)
+}
 
 /// POST /admin/globals/{slug}/versions/{version_id}/restore
 pub async fn restore_version(
@@ -31,7 +67,6 @@ pub async fn restore_version(
         return redirect_response(&format!("/admin/globals/{}", slug));
     }
 
-    // Check update access
     match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to update this global");
@@ -40,49 +75,25 @@ pub async fn restore_version(
         _ => {}
     }
 
+    let redirect = format!("/admin/globals/{}", slug);
     let pool = state.pool.clone();
-    let slug_owned = slug.clone();
     let def_owned = def.clone();
     let locale_config = state.config.locale.clone();
 
     let result = task::spawn_blocking(move || {
-        let global_table = format!("_global_{}", slug_owned);
-
-        let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
-
-        let tx = conn
-            .transaction()
-            .map_err(|e| anyhow!("Start transaction: {}", e))?;
-
-        let version = query::find_version_by_id(&tx, &global_table, &version_id)?
-            .ok_or_else(|| anyhow!("Version not found"))?;
-
-        let doc = query::restore_global_version(
-            &tx,
-            &slug_owned,
-            &def_owned,
-            &version.snapshot,
-            "published",
-            &locale_config,
-        )?;
-
-        tx.commit().map_err(|e| anyhow!("Commit: {}", e))?;
-
-        Ok::<_, Error>(doc)
+        restore_from_version(&pool, &slug, &def_owned, &version_id, &locale_config)
     })
     .await;
 
     match result {
-        Ok(Ok(_)) => htmx_redirect(&format!("/admin/globals/{}", slug)),
+        Ok(Ok(_)) => htmx_redirect(&redirect),
         Ok(Err(e)) => {
             error!("Restore global version error: {}", e);
-
-            htmx_redirect(&format!("/admin/globals/{}", slug))
+            htmx_redirect(&redirect)
         }
         Err(e) => {
             error!("Restore global version task error: {}", e);
-
-            htmx_redirect(&format!("/admin/globals/{}", slug))
+            htmx_redirect(&redirect)
         }
     }
 }

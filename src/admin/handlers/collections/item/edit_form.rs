@@ -18,9 +18,10 @@ use crate::{
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
-            enrich_field_contexts, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, lookup_ref_count, not_found,
-            render_or_error, server_error, split_sidebar_fields, strip_denied_fields,
+            enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            fetch_version_sidebar_data, flatten_document_values, forbidden, is_non_default_locale,
+            lookup_ref_count, not_found, render_or_error, server_error, split_sidebar_fields,
+            strip_denied_fields,
         },
     },
     core::{
@@ -352,16 +353,7 @@ pub async fn edit_form(
     let has_drafts = def.has_drafts();
     let has_versions = def.has_versions();
 
-    let doc_status = if has_drafts {
-        document
-            .fields
-            .get("_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("published")
-            .to_string()
-    } else {
-        String::new()
-    };
+    let doc_status = extract_doc_status(&document, has_drafts);
 
     let (versions, total_versions) = if has_versions {
         fetch_version_sidebar_data(&state.pool, &slug, &document.id)

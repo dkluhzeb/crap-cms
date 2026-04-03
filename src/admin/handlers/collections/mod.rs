@@ -27,11 +27,10 @@ pub use item::versions::restore_confirm::restore_confirm;
 pub use items::create_action::create_action;
 pub use items::create_form::create_form;
 pub use items::empty_trash::empty_trash_action;
-pub use items::evaluate_conditions::evaluate_conditions;
+pub(crate) use items::evaluate_conditions::evaluate_conditions;
 pub use items::list::list_items;
 pub use list_collections::list_collections;
 
 // Re-export shared types for super/server
 pub use crate::admin::handlers::shared::PaginationParams;
 pub use api::search::SearchQuery;
-pub use items::evaluate_conditions::EvaluateConditionsRequest;

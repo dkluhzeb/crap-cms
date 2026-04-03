@@ -5,19 +5,19 @@ use axum::{
     response::Response,
 };
 use serde_json::json;
-use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden, not_found, redirect_response,
-            render_or_error, server_error,
+            check_access_or_forbid, extract_editor_locale, forbidden,
+            load_version_with_missing_relations, not_found, redirect_response, render_or_error,
+            server_error,
         },
     },
     core::auth::{AuthUser, Claims},
-    db::query::{self, AccessResult},
+    db::query::AccessResult,
 };
 
 /// GET /admin/globals/{slug}/versions/{version_id}/restore — confirmation page
@@ -45,25 +45,23 @@ pub async fn restore_confirm(
         _ => {}
     }
 
-    let global_table = format!("_global_{}", slug);
-
     let conn = match state.pool.get() {
         Ok(c) => c,
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let version = match query::find_version_by_id(&conn, &global_table, &version_id) {
-        Ok(Some(v)) => v,
-        Ok(None) => return not_found(&state, "Version not found"),
-        Err(e) => {
-            error!("Find version error: {}", e);
+    let global_table = format!("_global_{}", slug);
 
-            return server_error(&state, "Database error");
-        }
+    let (version, missing) = match load_version_with_missing_relations(
+        &conn,
+        &state.registry,
+        &global_table,
+        &version_id,
+        &def.fields,
+    ) {
+        Ok(data) => data,
+        Err(msg) => return server_error(&state, msg),
     };
-
-    let missing =
-        query::find_missing_relations(&conn, &state.registry, &version.snapshot, &def.fields);
 
     let restore_url = format!("/admin/globals/{}/versions/{}/restore", slug, version_id);
     let back_url = format!("/admin/globals/{}", slug);

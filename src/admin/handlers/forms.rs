@@ -1,7 +1,7 @@
 //! Form parsing helpers: multipart, array fields, upload metadata.
 
 use anyhow::anyhow;
-use axum::extract::{FromRequest, Multipart};
+use axum::extract::{Form, FromRequest, Multipart, Request, multipart::Field};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 
@@ -148,6 +148,96 @@ fn transform_has_many_recursive(
     }
 }
 
+/// Collect form entries into indexed rows, splitting each key into sub-key + value.
+fn collect_indexed_rows(
+    form: &HashMap<String, String>,
+    prefix: &str,
+) -> BTreeMap<usize, Vec<(String, String)>> {
+    let mut rows: BTreeMap<usize, Vec<(String, String)>> = BTreeMap::new();
+
+    for (key, value) in form {
+        let Some(rest) = key.strip_prefix(prefix) else {
+            continue;
+        };
+
+        if let Some((idx_str, after)) = rest.split_once(']')
+            && let Ok(idx) = idx_str.parse::<usize>()
+            && let Some(remaining) = after.strip_prefix('[')
+            && let Some((sub_key, tail)) = remaining.split_once(']')
+        {
+            let entry_key = if tail.is_empty() {
+                sub_key.to_string()
+            } else {
+                format!("{}{}", sub_key, tail)
+            };
+
+            rows.entry(idx)
+                .or_default()
+                .push((entry_key, value.clone()));
+        }
+    }
+
+    rows
+}
+
+/// Nested entries grouped by base key, each with remaining bracket suffix + value.
+type NestedEntries = HashMap<String, Vec<(String, String)>>;
+
+/// Separate row entries into leaf values (flat keys) and nested groups (keys with brackets).
+fn partition_entries(entries: Vec<(String, String)>) -> (Map<String, Value>, NestedEntries) {
+    let mut leaves = Map::new();
+    let mut nested: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+    for (key, value) in entries {
+        if let Some((base_key, rest_after_bracket)) = key.split_once('[') {
+            let rest = format!("[{rest_after_bracket}");
+            nested
+                .entry(base_key.to_string())
+                .or_default()
+                .push((rest, value));
+        } else {
+            leaves.insert(key, Value::String(value));
+        }
+    }
+
+    (leaves, nested)
+}
+
+/// Resolve a nested key group into a JSON value by recursively parsing composite form data.
+fn resolve_nested_key(
+    base_key: &str,
+    nested_entries: &[(String, String)],
+    flat_defs: &[&FieldDefinition],
+) -> Value {
+    let sf_def = flat_defs.iter().find(|sf| sf.name == base_key).copied();
+    let nested_sub_defs = sf_def.map(|sf| sf.fields.as_slice()).unwrap_or(&[]);
+
+    let sub_form: HashMap<String, String> = nested_entries
+        .iter()
+        .map(|(rest, value)| (format!("{}{}", base_key, rest), value.clone()))
+        .collect();
+
+    let nested_rows = parse_composite_form_data(&sub_form, base_key, nested_sub_defs);
+
+    let is_single_object = sf_def
+        .map(|sf| {
+            matches!(
+                sf.field_type,
+                FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+            )
+        })
+        .unwrap_or(false);
+
+    if is_single_object {
+        nested_rows
+            .into_iter()
+            .next()
+            .unwrap_or(Value::Object(Map::new()))
+    } else {
+        Value::Array(nested_rows)
+    }
+}
+
 /// Recursively parse composite form data from flat form keys.
 ///
 /// Handles arbitrarily nested keys like `content[0][items][1][title]`.
@@ -161,111 +251,16 @@ fn parse_composite_form_data(
     sub_field_defs: &[FieldDefinition],
 ) -> Vec<Value> {
     let prefix = format!("{}[", field_name);
-    let mut rows: BTreeMap<usize, Vec<(String, String)>> = BTreeMap::new();
-
-    // Collect all form keys that start with this field's prefix
-    for (key, value) in form {
-        if let Some(rest) = key.strip_prefix(&prefix) {
-            // rest looks like "0][title]" or "0][items][1][caption]"
-            if let Some((idx_str, after)) = rest.split_once(']')
-                && let Ok(idx) = idx_str.parse::<usize>()
-                && let Some(remaining) = after.strip_prefix('[')
-            {
-                // remaining is "title]" or "items][1][caption]"
-                // Find the first sub-field name
-                if let Some((sub_key, tail)) = remaining.split_once(']') {
-                    if tail.is_empty() {
-                        // Leaf: simple key like "title]" → key="title", value=form value
-                        rows.entry(idx)
-                            .or_default()
-                            .push((sub_key.to_string(), value.clone()));
-                    } else {
-                        // Nested: "items][1][caption]" → reconstruct the deeper key
-                        // Store as sub_key + tail so we can re-parse recursively
-                        let deep_key = format!("{}{}", sub_key, tail);
-                        rows.entry(idx).or_default().push((deep_key, value.clone()));
-                    }
-                }
-            }
-        }
-    }
+    let rows = collect_indexed_rows(form, &prefix);
+    let flat_defs = flatten_array_sub_fields(sub_field_defs);
 
     rows.into_values()
         .map(|entries| {
-            let mut obj = Map::new();
-
-            // Separate leaf entries from nested entries
-            let mut nested_keys: HashMap<String, Vec<(String, String)>> = HashMap::new();
-
-            for (key, value) in entries {
-                if let Some((base_key, rest_after_bracket)) = key.split_once('[') {
-                    // This is a nested key like "items[1][caption]"
-                    let rest = format!("[{rest_after_bracket}"); // "[1][caption]"
-                    nested_keys
-                        .entry(base_key.to_string())
-                        .or_default()
-                        .push((rest, value));
-                } else {
-                    // Simple leaf key
-                    obj.insert(key, serde_json::Value::String(value));
-                }
-            }
-
-            // Process nested keys recursively
-            let flat_defs = flatten_array_sub_fields(sub_field_defs);
+            let (mut obj, nested_keys) = partition_entries(entries);
 
             for (base_key, nested_entries) in nested_keys {
-                // Look up the field definition for this sub-field to determine type
-                let sf_def = flat_defs.iter().find(|sf| sf.name == base_key).copied();
-                let nested_sub_defs = sf_def.map(|sf| sf.fields.as_slice()).unwrap_or(&[]);
-
-                // Reconstruct a form-like HashMap with the base_key as prefix
-                let mut sub_form = HashMap::new();
-
-                for (rest, value) in &nested_entries {
-                    // rest is like "[1][caption]" — reconstruct full key as "base_key[1][caption]"
-                    sub_form.insert(format!("{}{}", base_key, rest), value.clone());
-                }
-
-                let is_composite = sf_def
-                    .map(|sf| {
-                        matches!(
-                            sf.field_type,
-                            FieldType::Array
-                                | FieldType::Blocks
-                                | FieldType::Group
-                                | FieldType::Row
-                                | FieldType::Collapsible
-                                | FieldType::Tabs
-                        )
-                    })
-                    .unwrap_or(false);
-
-                if is_composite {
-                    let nested_rows =
-                        parse_composite_form_data(&sub_form, &base_key, nested_sub_defs);
-
-                    // For group/row fields, the "rows" are actually a single object
-                    if sf_def
-                        .map(|sf| {
-                            sf.field_type == FieldType::Group
-                                || sf.field_type == FieldType::Row
-                                || sf.field_type == FieldType::Collapsible
-                                || sf.field_type == FieldType::Tabs
-                        })
-                        .unwrap_or(false)
-                    {
-                        if let Some(first) = nested_rows.into_iter().next() {
-                            obj.insert(base_key, first);
-                        }
-                    } else {
-                        obj.insert(base_key, Value::Array(nested_rows));
-                    }
-                } else {
-                    // Unknown nested field — try to parse as array of string values
-                    let nested_rows = parse_composite_form_data(&sub_form, &base_key, &[]);
-                    obj.insert(base_key, Value::Array(nested_rows));
-                }
+                let value = resolve_nested_key(&base_key, &nested_entries, &flat_defs);
+                obj.insert(base_key, value);
             }
 
             Value::Object(obj)
@@ -273,9 +268,33 @@ fn parse_composite_form_data(
         .collect()
 }
 
+/// Extract an uploaded file from a multipart field.
+async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, anyhow::Error> {
+    let filename = field.file_name().unwrap_or("").to_string();
+    let content_type = field
+        .content_type()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let data = field
+        .bytes()
+        .await
+        .map_err(|e| anyhow!("Failed to read file data: {}", e))?;
+
+    if data.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        UploadedFileBuilder::new(filename, content_type)
+            .data(data.to_vec())
+            .build(),
+    ))
+}
+
 /// Parse a multipart form request, extracting form fields and an optional file upload.
 pub(crate) async fn parse_multipart_form(
-    request: axum::extract::Request,
+    request: Request,
     state: &AdminState,
 ) -> Result<(HashMap<String, String>, Option<UploadedFile>), anyhow::Error> {
     let mut multipart = Multipart::from_request(request, state)
@@ -291,24 +310,9 @@ pub(crate) async fn parse_multipart_form(
         .map_err(|e| anyhow!("Failed to read multipart field: {}", e))?
     {
         let name = field.name().unwrap_or("").to_string();
-        if name == "_file" && field.file_name().is_some() {
-            let filename = field.file_name().unwrap_or("").to_string();
-            let content_type = field
-                .content_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| anyhow!("Failed to read file data: {}", e))?;
 
-            if !data.is_empty() {
-                file = Some(
-                    UploadedFileBuilder::new(filename, content_type)
-                        .data(data.to_vec())
-                        .build(),
-                );
-            }
+        if name == "_file" && field.file_name().is_some() {
+            file = extract_upload_field(field).await?;
         } else {
             let text = field
                 .text()
@@ -324,7 +328,7 @@ pub(crate) async fn parse_multipart_form(
 
 /// Parse form data — multipart for upload collections, regular form otherwise.
 pub(crate) async fn parse_form(
-    request: axum::extract::Request,
+    request: Request,
     state: &AdminState,
     def: &crate::core::CollectionDefinition,
 ) -> Result<ParsedForm, String> {
@@ -333,7 +337,7 @@ pub(crate) async fn parse_form(
             .await
             .map_err(|e| format!("Multipart parse error: {}", e))
     } else {
-        let form = axum::extract::Form::<HashMap<String, String>>::from_request(request, state)
+        let form = Form::<HashMap<String, String>>::from_request(request, state)
             .await
             .map_err(|e| format!("Form parse error: {}", e))?;
 

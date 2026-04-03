@@ -8,6 +8,3 @@ pub use context::build_field_contexts;
 pub(super) use context::build_select_options;
 pub use field_type_extras::{FieldRecursionCtx, apply_field_type_extras};
 pub use single::build_single_field_context;
-
-#[cfg(test)]
-mod tests;
