@@ -1,7 +1,7 @@
 //! Subscribe handler — real-time mutation event streaming.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
     sync::{
         Arc,
@@ -21,7 +21,7 @@ use crate::{
         service::{ContentService, convert::json_to_prost_value},
     },
     core::event::{EventOperation, EventTarget},
-    db::AccessResult,
+    db::{AccessResult, FilterClause, query::filter::memory::matches_constraints},
 };
 
 /// Atomically try to acquire a Subscribe connection slot.
@@ -70,6 +70,19 @@ impl<S: Stream + Unpin> Stream for GuardedStream<S> {
     }
 }
 
+/// Resolved subscribe access: allowed slugs, denied fields, row-level constraints, modes, and user.
+struct SubscribeAccess {
+    allowed_collections: HashSet<String>,
+    allowed_globals: HashSet<String>,
+    denied_fields: HashMap<String, Vec<String>>,
+    /// Row-level access constraints per collection (from `Constrained` access results).
+    constraints: HashMap<String, Vec<FilterClause>>,
+    /// Per-collection event delivery mode.
+    modes: HashMap<String, crate::core::collection::LiveMode>,
+    /// The subscriber's user document (for per-user after_read hooks).
+    user_doc: Option<crate::core::Document>,
+}
+
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Subscribe to real-time mutation events (server streaming).
@@ -113,17 +126,28 @@ impl ContentService {
             req.operations.into_iter().collect()
         };
 
-        let (allowed_collections, allowed_globals) = self
+        let access = self
             .resolve_subscribe_access(token, req.collections, req.globals)
             .await?;
 
-        if allowed_collections.is_empty() && allowed_globals.is_empty() {
+        if access.allowed_collections.is_empty() && access.allowed_globals.is_empty() {
             return Err(Status::permission_denied(
                 "No accessible collections or globals",
             ));
         }
 
         let rx = event_bus.subscribe();
+        let SubscribeAccess {
+            allowed_collections,
+            allowed_globals,
+            denied_fields,
+            constraints,
+            modes,
+            user_doc,
+        } = access;
+
+        let hook_runner = self.hook_runner.clone();
+        let registry = self.registry.clone();
 
         let stream = BroadcastStream::new(rx).filter_map(move |result| match result {
             Ok(event) => {
@@ -150,11 +174,52 @@ impl ContentService {
                     return None;
                 }
 
-                let fields: BTreeMap<String, prost_types::Value> = event
-                    .data
-                    .iter()
-                    .map(|(k, v)| (k.clone(), json_to_prost_value(v)))
-                    .collect();
+                // Row-level constraint check: skip events the subscriber can't access
+                let slug_str: &str = event.collection.as_ref();
+
+                if let Some(filters) = constraints.get(slug_str)
+                    && !matches_constraints(&event.data, filters)
+                {
+                    return None;
+                }
+
+                // Apply mode: full = after_read hooks + data, metadata = no data
+                use crate::core::collection::LiveMode;
+
+                let mode = modes.get(slug_str).copied().unwrap_or_default();
+
+                let fields: BTreeMap<String, prost_types::Value> = if mode == LiveMode::Full {
+                    // Run after_read hooks to transform data (same as Find)
+                    let (hooks, field_defs) = match event.target {
+                        EventTarget::Collection => registry
+                            .get_collection(slug_str)
+                            .map(|d| (d.hooks.clone(), d.fields.clone())),
+                        EventTarget::Global => registry
+                            .get_global(slug_str)
+                            .map(|d| (d.hooks.clone(), d.fields.clone())),
+                    }
+                    .unwrap_or_default();
+
+                    let processed_data = hook_runner.apply_after_read_for_event(
+                        slug_str,
+                        &hooks,
+                        &field_defs,
+                        event.document_id.as_ref(),
+                        &event.data,
+                        user_doc.as_ref(),
+                    );
+
+                    // Strip field-level read-denied fields
+                    let denied = denied_fields.get(slug_str);
+
+                    processed_data
+                        .iter()
+                        .filter(|(k, _)| denied.is_none_or(|d| !d.iter().any(|name| name == *k)))
+                        .map(|(k, v)| (k.clone(), json_to_prost_value(v)))
+                        .collect()
+                } else {
+                    BTreeMap::new() // metadata mode: no data
+                };
 
                 let target_str = match event.target {
                     EventTarget::Collection => "collection",
@@ -188,13 +253,14 @@ impl ContentService {
             >))
     }
 
-    /// Resolve which collections and globals the caller has read access to.
+    /// Resolve which collections and globals the caller has read access to,
+    /// and cache field-level read-denied fields per collection for stream filtering.
     async fn resolve_subscribe_access(
         &self,
         token: Option<String>,
         collections_req: Vec<String>,
         globals_req: Vec<String>,
-    ) -> Result<(HashSet<String>, HashSet<String>), Status> {
+    ) -> Result<SubscribeAccess, Status> {
         let pool = self.pool.clone();
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
@@ -222,22 +288,39 @@ impl ContentService {
             };
 
             let mut allowed_collections: HashSet<String> = HashSet::new();
+            let mut denied_fields: HashMap<String, Vec<String>> = HashMap::new();
+            let mut constraints: HashMap<String, Vec<FilterClause>> = HashMap::new();
+            let mut modes: HashMap<String, crate::core::collection::LiveMode> = HashMap::new();
 
             for slug in &target_collections {
-                if let Some(def) = registry.get_collection(slug)
-                    && matches!(
-                        hook_runner.check_access(
-                            def.access.read.as_deref(),
-                            user_doc,
-                            None,
-                            None,
-                            &tx
-                        ),
-                        Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_))
-                    )
-                {
-                    allowed_collections.insert(slug.clone());
+                let Some(def) = registry.get_collection(slug) else {
+                    continue;
+                };
+
+                match hook_runner.check_access(
+                    def.access.read.as_deref(),
+                    user_doc,
+                    None,
+                    None,
+                    &tx,
+                ) {
+                    Ok(AccessResult::Allowed) => {
+                        allowed_collections.insert(slug.clone());
+                    }
+                    Ok(AccessResult::Constrained(filters)) => {
+                        allowed_collections.insert(slug.clone());
+                        constraints.insert(slug.clone(), filters);
+                    }
+                    _ => continue,
                 }
+
+                let denied = hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+
+                if !denied.is_empty() {
+                    denied_fields.insert(slug.clone(), denied);
+                }
+
+                modes.insert(slug.clone(), def.live_mode);
             }
 
             let target_globals: Vec<String> = if globals_req.is_empty() {
@@ -249,27 +332,50 @@ impl ContentService {
             let mut allowed_globals: HashSet<String> = HashSet::new();
 
             for slug in &target_globals {
-                if let Some(def) = registry.get_global(slug)
-                    && matches!(
-                        hook_runner.check_access(
-                            def.access.read.as_deref(),
-                            user_doc,
-                            None,
-                            None,
-                            &tx
-                        ),
-                        Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_))
-                    )
-                {
-                    allowed_globals.insert(slug.clone());
+                let Some(def) = registry.get_global(slug) else {
+                    continue;
+                };
+
+                match hook_runner.check_access(
+                    def.access.read.as_deref(),
+                    user_doc,
+                    None,
+                    None,
+                    &tx,
+                ) {
+                    Ok(AccessResult::Allowed) => {
+                        allowed_globals.insert(slug.clone());
+                    }
+                    Ok(AccessResult::Constrained(filters)) => {
+                        allowed_globals.insert(slug.clone());
+                        constraints.insert(slug.clone(), filters);
+                    }
+                    _ => continue,
                 }
+
+                let denied = hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+
+                if !denied.is_empty() {
+                    denied_fields.insert(slug.clone(), denied);
+                }
+
+                modes.insert(slug.clone(), def.live_mode);
             }
 
             if let Err(e) = tx.commit() {
                 warn!("tx commit failed: {e}");
             }
 
-            Ok((allowed_collections, allowed_globals))
+            let user_doc = auth_user.map(|au| au.user_doc);
+
+            Ok(SubscribeAccess {
+                allowed_collections,
+                allowed_globals,
+                denied_fields,
+                modes,
+                constraints,
+                user_doc,
+            })
         })
         .await
         .map_err(|e| {

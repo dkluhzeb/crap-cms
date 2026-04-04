@@ -8,6 +8,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Event delivery modes** — per-collection `live` setting now supports a
+  `mode` field (`"metadata"` or `"full"`) that controls what data events
+  carry. `metadata` (default) sends only event metadata (sequence,
+  operation, collection, document_id) with zero hook overhead — clients
+  re-fetch via `FindByID` if needed. `full` mode sends complete document
+  data processed through `after_read` hooks and field-level access
+  stripping, matching the exact same data a `Find` call returns. Configure
+  per collection: `live = { mode = "full" }`. Global default configurable
+  via `[live] default_mode` in `crap.toml`.
+
+- **Event stream access control** — SSE and gRPC Subscribe streams now
+  enforce the same access rules as normal read operations:
+  - Collection-level access (cached at connection time)
+  - Row-level constrained access (in-memory filter evaluation per event,
+    using the same constraint filters as `Find` SQL WHERE clauses)
+  - Field-level read access stripping (in `full` mode, per subscriber)
+  - `after_read` hooks (in `full` mode, per subscriber)
+
+- **SSE events now include `data` field** — SSE mutation events now carry
+  document data (respecting the collection's delivery mode and access
+  control). Previously SSE sent metadata only. This enables custom admin
+  UI themes to use real-time document data without re-fetching.
+
+- **In-memory filter evaluation** — new `matches_constraints()` function
+  evaluates `FilterClause` types against `HashMap<String, Value>` data
+  in-memory. Supports all filter operators (Equals, NotEquals, Contains,
+  Like, GreaterThan/LessThan, In/NotIn, Exists/NotExists, Or groups).
+  Used by event streams for row-level access control without DB queries.
+
+### Fixed
+
+- **Event stream data leak** — gRPC Subscribe previously sent full
+  document data without applying field-level read access checks. Events
+  now respect the same field access rules as `Find` and `FindByID`.
+
+- **Upload API event data ordering** — upload create/update handlers now
+  strip field-level read-denied fields before publishing events, ensuring
+  event data never contains fields the publishing user's access would deny.
+
+### Changed
+
+- **Internal code quality refactoring** — large files split into focused
+  modules following one-handler-per-file and no-logic-in-mod.rs rules.
+  Key restructurings:
+  - `admin/handlers/shared.rs` → `shared/` module (access, document,
+    locale, pagination, response, versions)
+  - `admin/server.rs` → extracted `auth_middleware.rs` and `mcp_handler.rs`
+  - `admin/templates/mod.rs` → extracted `registry.rs`
+  - `api/service/schema_ops.rs` → split into `globals/`, `schema/`,
+    `subscribe.rs`, `collection/versions/`, `jobs/`
+  - `api/service/collection/{read,write,bulk}.rs` → split into module
+    folders with one handler per file
+  - `api/service/auth.rs` → split into per-handler files
+  - `api/upload.rs` → split into `upload/` module with shared helpers
+  - Extracted shared helpers: `evaluate_condition_results`,
+    `extract_doc_status`, `load_version_with_missing_relations`,
+    `publish_mutation_event`, `strip_read_denied_proto_fields`
+  - Eliminated duplicated access check, event publishing, and field
+    stripping patterns across admin and API handlers
+
 - **Optional PostgreSQL backend** — Crap CMS now supports PostgreSQL as
   an alternative database backend, available via the `postgres` Cargo
   feature flag. SQLite remains the default and recommended backend for

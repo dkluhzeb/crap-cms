@@ -19,5 +19,6 @@ pub use global_definition::GlobalDefinition;
 pub use global_definition_builder::GlobalDefinitionBuilder;
 pub use hooks_builder::HooksBuilder;
 pub use shared::{
-    Access, AdminConfig, Hooks, IndexDefinition, Labels, LiveSetting, McpConfig, VersionsConfig,
+    Access, AdminConfig, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting, McpConfig,
+    VersionsConfig,
 };

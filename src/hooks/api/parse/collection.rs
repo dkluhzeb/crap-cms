@@ -7,8 +7,8 @@ use crate::{
     core::{
         CollectionDefinition, FieldAdmin, FieldDefinition, FieldType, LocalizedString,
         collection::{
-            Access, AdminConfig, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveSetting,
-            McpConfig, VersionsConfig,
+            Access, AdminConfig, GlobalDefinition, Hooks, IndexDefinition, Labels, LiveMode,
+            LiveSetting, McpConfig, VersionsConfig,
         },
     },
     db::query,
@@ -176,7 +176,8 @@ pub fn parse_collection_definition(
     def.upload = upload;
     def.access = access;
     def.mcp = mcp;
-    def.live = live;
+    def.live = live.setting;
+    def.live_mode = live.mode;
     def.versions = versions;
     def.indexes = indexes;
     def.soft_delete = soft_delete;
@@ -245,30 +246,83 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
     def.hooks = hooks;
     def.access = access;
     def.mcp = mcp;
-    def.live = live;
+    def.live = live.setting;
+    def.live_mode = live.mode;
     def.versions = versions;
     Ok(def)
 }
 
-/// Parse the `live` setting from a collection/global Lua config table.
-/// - Absent / `true` -> `None` (broadcast all events)
-/// - `false` -> `Some(LiveSetting::Disabled)`
-/// - String -> `Some(LiveSetting::Function(ref))`
-pub(super) fn parse_live_setting(config: &Table) -> Option<LiveSetting> {
-    let val: Value = config.get("live").ok()?;
-    match val {
-        Value::Boolean(false) => Some(LiveSetting::Disabled),
-        Value::Boolean(true) | Value::Nil => None,
-        Value::String(s) => {
-            let func_ref = s.to_str().ok()?.to_string();
+/// Parse result for the `live` config field.
+#[derive(Debug)]
+pub(super) struct LiveConfig {
+    pub setting: Option<LiveSetting>,
+    pub mode: LiveMode,
+}
 
-            if func_ref.is_empty() {
-                None
-            } else {
-                Some(LiveSetting::Function(func_ref))
+pub(super) fn parse_live_setting(config: &Table) -> LiveConfig {
+    let val: Value = match config.get("live").ok() {
+        Some(v) => v,
+        None => {
+            return LiveConfig {
+                setting: None,
+                mode: LiveMode::default(),
+            };
+        }
+    };
+
+    match val {
+        Value::Boolean(false) => LiveConfig {
+            setting: Some(LiveSetting::Disabled),
+            mode: LiveMode::default(),
+        },
+        Value::Boolean(true) | Value::Nil => LiveConfig {
+            setting: None,
+            mode: LiveMode::default(),
+        },
+        Value::String(s) => {
+            let func_ref = s.to_str().map(|s| s.to_string()).unwrap_or_default();
+
+            LiveConfig {
+                setting: if func_ref.is_empty() {
+                    None
+                } else {
+                    Some(LiveSetting::Function(func_ref))
+                },
+                mode: LiveMode::default(),
             }
         }
-        _ => None,
+        Value::Table(tbl) => {
+            let mode = tbl
+                .get::<Value>("mode")
+                .ok()
+                .and_then(|v| match v {
+                    Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
+                    _ => None,
+                })
+                .map(|s| match s.as_str() {
+                    "full" => LiveMode::Full,
+                    _ => LiveMode::Metadata,
+                })
+                .unwrap_or_default();
+
+            let filter = tbl
+                .get::<Value>("filter")
+                .ok()
+                .and_then(|v| match v {
+                    Value::String(s) => s.to_str().ok().map(|s| s.to_string()),
+                    _ => None,
+                })
+                .filter(|s| !s.is_empty());
+
+            LiveConfig {
+                setting: filter.map(LiveSetting::Function),
+                mode,
+            }
+        }
+        _ => LiveConfig {
+            setting: None,
+            mode: LiveMode::default(),
+        },
     }
 }
 
@@ -404,7 +458,7 @@ mod tests {
     fn test_parse_live_setting_absent() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        assert!(parse_live_setting(&tbl).is_none());
+        assert!(parse_live_setting(&tbl).setting.is_none());
     }
 
     #[test]
@@ -412,7 +466,9 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", true).unwrap();
-        assert!(parse_live_setting(&tbl).is_none());
+        let result = parse_live_setting(&tbl);
+        assert!(result.setting.is_none());
+        assert_eq!(result.mode, LiveMode::Metadata);
     }
 
     #[test]
@@ -421,7 +477,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("live", false).unwrap();
         let result = parse_live_setting(&tbl);
-        assert!(matches!(result, Some(LiveSetting::Disabled)));
+        assert!(matches!(result.setting, Some(LiveSetting::Disabled)));
     }
 
     #[test]
@@ -430,12 +486,13 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("live", "hooks.live.filter_published").unwrap();
         let result = parse_live_setting(&tbl);
-        match result {
+        match result.setting {
             Some(LiveSetting::Function(ref s)) => {
                 assert_eq!(s, "hooks.live.filter_published");
             }
             other => panic!("Expected Function, got {:?}", other),
         }
+        assert_eq!(result.mode, LiveMode::Metadata);
     }
 
     #[test]
@@ -443,7 +500,34 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", "").unwrap();
-        assert!(parse_live_setting(&tbl).is_none());
+        assert!(parse_live_setting(&tbl).setting.is_none());
+    }
+
+    #[test]
+    fn test_parse_live_setting_table_full_mode() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        live_tbl.set("mode", "full").unwrap();
+        tbl.set("live", live_tbl).unwrap();
+        let result = parse_live_setting(&tbl);
+        assert!(result.setting.is_none());
+        assert_eq!(result.mode, LiveMode::Full);
+    }
+
+    #[test]
+    fn test_parse_live_setting_table_with_filter() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let live_tbl = lua.create_table().unwrap();
+        live_tbl.set("mode", "full").unwrap();
+        live_tbl.set("filter", "hooks.live.check").unwrap();
+        tbl.set("live", live_tbl).unwrap();
+        let result = parse_live_setting(&tbl);
+        assert!(
+            matches!(result.setting, Some(LiveSetting::Function(ref s)) if s == "hooks.live.check")
+        );
+        assert_eq!(result.mode, LiveMode::Full);
     }
 
     #[test]
@@ -556,7 +640,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("live", 42i64).unwrap();
-        assert!(parse_live_setting(&tbl).is_none());
+        assert!(parse_live_setting(&tbl).setting.is_none());
     }
 
     #[test]

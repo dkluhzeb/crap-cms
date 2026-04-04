@@ -1,6 +1,6 @@
-//! SQL filter/WHERE clause building, locale column resolution, and subquery
-//! generation for array/block/relationship sub-field filtering.
+//! Filter clause building (SQL WHERE) and in-memory evaluation.
 
+pub mod memory;
 mod operators;
 mod resolve;
 mod where_clause;

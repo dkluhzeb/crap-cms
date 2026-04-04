@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::core::{
     FieldDefinition, Slug,
     collection::{
-        Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveSetting, McpConfig,
-        VersionsConfig,
+        Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting,
+        McpConfig, VersionsConfig,
     },
     upload::CollectionUpload,
 };
@@ -50,6 +50,9 @@ pub struct CollectionDefinition {
     /// Real-time update settings for this collection.
     #[serde(default)]
     pub live: Option<LiveSetting>,
+    /// Controls what data events carry (metadata-only or full with after_read hooks).
+    #[serde(default)]
+    pub live_mode: LiveMode,
     /// Versioning and draft configuration.
     #[serde(default)]
     pub versions: Option<VersionsConfig>,
@@ -79,6 +82,7 @@ impl Default for CollectionDefinition {
             access: Access::default(),
             mcp: McpConfig::default(),
             live: None,
+            live_mode: LiveMode::default(),
             versions: None,
             indexes: Vec::new(),
             soft_delete: false,

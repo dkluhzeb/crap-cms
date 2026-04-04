@@ -1,5 +1,7 @@
 //! Shared helpers for upload API handlers: auth, JSON responses, error classification.
 
+use std::collections::HashMap;
+
 use axum::{
     http::{
         HeaderMap, StatusCode,
@@ -11,7 +13,13 @@ use serde_json::{Value, json};
 
 use crate::{
     admin::{AdminState, server::load_auth_user},
-    core::auth::{self, AuthUser},
+    core::{
+        CollectionDefinition, Document, FieldDefinition,
+        auth::{self, AuthUser},
+        event::{EventOperation, EventTarget, EventUser},
+    },
+    db::AccessResult,
+    hooks::lifecycle::PublishEventInput,
 };
 
 /// Extract Bearer token string from an Authorization header value.
@@ -106,7 +114,7 @@ pub fn json_ok(status: StatusCode, body: &Value) -> Response {
 pub fn check_upload_access(
     state: &AdminState,
     access_ref: Option<&str>,
-    user_doc: Option<&crate::core::Document>,
+    user_doc: Option<&Document>,
     id: Option<&str>,
     deny_msg: &str,
 ) -> Result<(), Box<Response>> {
@@ -133,9 +141,7 @@ pub fn check_upload_access(
     }
 
     match result {
-        Ok(crate::db::AccessResult::Denied) => {
-            Err(Box::new(json_error(StatusCode::FORBIDDEN, deny_msg)))
-        }
+        Ok(AccessResult::Denied) => Err(Box::new(json_error(StatusCode::FORBIDDEN, deny_msg))),
         Err(e) => Err(Box::new(json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Access check error: {}", e),
@@ -148,10 +154,10 @@ pub fn check_upload_access(
 #[cfg(not(tarpaulin_include))]
 pub fn strip_write_denied_fields(
     state: &AdminState,
-    fields: &[crate::core::FieldDefinition],
-    user_doc: Option<&crate::core::Document>,
+    fields: &[FieldDefinition],
+    user_doc: Option<&Document>,
     operation: &str,
-    form_data: &mut std::collections::HashMap<String, String>,
+    form_data: &mut HashMap<String, String>,
 ) {
     if let Ok(mut conn) = state.pool.get()
         && let Ok(tx) = conn.transaction()
@@ -174,9 +180,9 @@ pub fn strip_write_denied_fields(
 #[cfg(not(tarpaulin_include))]
 pub fn strip_read_denied_doc_fields(
     state: &AdminState,
-    fields: &[crate::core::FieldDefinition],
-    auth_user: &Option<crate::core::auth::AuthUser>,
-    doc_fields: &mut std::collections::HashMap<String, serde_json::Value>,
+    fields: &[FieldDefinition],
+    auth_user: &Option<AuthUser>,
+    doc_fields: &mut HashMap<String, Value>,
 ) {
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
@@ -199,16 +205,13 @@ pub fn strip_read_denied_doc_fields(
 #[cfg(not(tarpaulin_include))]
 pub fn publish_upload_event(
     state: &AdminState,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     collection: impl Into<String>,
     doc_id: impl Into<String>,
-    operation: crate::core::event::EventOperation,
-    data: Option<std::collections::HashMap<String, serde_json::Value>>,
-    auth_user: &Option<crate::core::auth::AuthUser>,
+    operation: EventOperation,
+    data: Option<HashMap<String, Value>>,
+    auth_user: &Option<AuthUser>,
 ) {
-    use crate::core::event::{EventTarget, EventUser};
-    use crate::hooks::lifecycle::PublishEventInput;
-
     let edited_by = auth_user
         .as_ref()
         .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));

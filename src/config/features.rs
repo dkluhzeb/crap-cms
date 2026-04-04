@@ -433,6 +433,9 @@ impl Default for JobsConfig {
 pub struct LiveConfig {
     /// Enable live event streaming (SSE + gRPC Subscribe). Default: true.
     pub enabled: bool,
+    /// Default event delivery mode for collections/globals that don't specify one.
+    /// `"metadata"` (default) = id/operation only, `"full"` = after_read hooks + data.
+    pub default_mode: String,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
     /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
@@ -445,6 +448,7 @@ impl Default for LiveConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            default_mode: "metadata".to_string(),
             channel_capacity: 1024,
             max_sse_connections: 1000,
             max_subscribe_connections: 1000,
