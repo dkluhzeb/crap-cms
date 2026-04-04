@@ -88,6 +88,7 @@ impl RateLimitBackend for MemoryRateLimitBackend {
         }
 
         times.push(now);
+
         Ok(true)
     }
 

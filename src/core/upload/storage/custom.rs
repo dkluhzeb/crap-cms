@@ -3,8 +3,8 @@
 //! Delegates all storage operations to user-provided Lua functions
 //! registered via `crap.storage.register({ put, get, delete, url })`.
 
-use anyhow::Result;
-use mlua::{Function, Lua};
+use anyhow::{Result, anyhow};
+use mlua::{Function, Lua, Table};
 
 use super::StorageBackend;
 
@@ -25,19 +25,19 @@ impl CustomStorage {
 
     /// Get a registered storage function from the Lua state.
     fn get_fn(&self, name: &str) -> Result<Function> {
-        let crap: mlua::Table = self
+        let crap: Table = self
             .lua
             .globals()
             .get("crap")
-            .map_err(|e| anyhow::anyhow!("crap global not found: {}", e))?;
+            .map_err(|e| anyhow!("crap global not found: {}", e))?;
 
-        let storage: mlua::Table = crap
+        let storage: Table = crap
             .get("_storage")
-            .map_err(|e| anyhow::anyhow!("crap._storage not found: {}", e))?;
+            .map_err(|e| anyhow!("crap._storage not found: {}", e))?;
 
         storage
             .get(name)
-            .map_err(|e| anyhow::anyhow!("crap._storage.{} not found: {}", name, e))
+            .map_err(|e| anyhow!("crap._storage.{} not found: {}", name, e))
     }
 }
 

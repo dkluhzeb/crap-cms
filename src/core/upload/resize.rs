@@ -1,10 +1,15 @@
-use std::io::Cursor;
+use std::{collections::HashMap, io::Cursor};
 #[cfg(test)]
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::core::upload::{ImageFit, ImageSize};
+use crate::core::upload::{
+    CollectionUpload, FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversionBuilder,
+    SharedStorage, SizeResult, SizeResultBuilder,
+};
+
+use super::process::CleanupGuard;
 
 /// Resize an image according to the given size definition and fit mode.
 ///
@@ -137,6 +142,191 @@ pub fn process_image_entry_with_storage(
         .with_context(|| format!("Failed to save converted image: {}", target_key))?;
 
     Ok(())
+}
+
+/// Save a resized image to storage and return `(size_key, size_url)`.
+pub(super) fn save_resized_image(
+    resized: &image::DynamicImage,
+    stem: &str,
+    ext: &str,
+    size_name: &str,
+    collection_slug: &str,
+    storage: &SharedStorage,
+    guard: &mut CleanupGuard,
+) -> Result<(String, String)> {
+    let size_filename = format!("{}_{}.{}", stem, size_name, ext);
+    let size_key = format!("{}/{}", collection_slug, size_filename);
+
+    let mut buf = Cursor::new(Vec::new());
+
+    resized
+        .write_to(
+            &mut buf,
+            image::ImageFormat::from_extension(ext).unwrap_or(image::ImageFormat::Png),
+        )
+        .with_context(|| format!("Failed to encode resized image: {}", size_key))?;
+
+    let size_mime = mime_guess::from_path(&size_filename)
+        .first_or_octet_stream()
+        .to_string();
+
+    storage
+        .put(&size_key, &buf.into_inner(), &size_mime)
+        .with_context(|| format!("Failed to save resized image: {}", size_key))?;
+
+    guard.push(size_key.clone());
+
+    let size_url = format!("/uploads/{}", size_key);
+
+    Ok((size_key, size_url))
+}
+
+/// Context for processing a format variant of a resized image.
+pub(super) struct FormatVariantCtx<'a> {
+    pub resized: &'a image::DynamicImage,
+    pub format_name: &'a str,
+    pub opts: &'a FormatQuality,
+    pub stem: &'a str,
+    pub size_name: &'a str,
+    pub size_key: &'a str,
+    pub collection_slug: &'a str,
+    pub storage: &'a SharedStorage,
+}
+
+/// Process a format variant (WebP or AVIF) for a resized image.
+/// Either saves immediately or queues for async conversion.
+pub(super) fn process_format_variant(
+    ctx: &FormatVariantCtx<'_>,
+    guard: &mut CleanupGuard,
+    formats: &mut HashMap<String, FormatResult>,
+    queued: &mut Vec<crate::core::upload::QueuedConversion>,
+) -> Result<()> {
+    let variant_filename = format!("{}_{}.{}", ctx.stem, ctx.size_name, ctx.format_name);
+    let variant_key = format!("{}/{}", ctx.collection_slug, variant_filename);
+    let variant_url = format!("/uploads/{}", variant_key);
+
+    if ctx.opts.queue {
+        let source_path = ctx
+            .storage
+            .local_path(ctx.size_key)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ctx.size_key.to_string());
+        let target_path = ctx
+            .storage
+            .local_path(&variant_key)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| variant_key.clone());
+
+        queued.push(
+            QueuedConversionBuilder::new(source_path, target_path)
+                .format(ctx.format_name)
+                .quality(ctx.opts.quality)
+                .url_column(format!("{}_{}_url", ctx.size_name, ctx.format_name))
+                .url_value(variant_url)
+                .build(),
+        );
+    } else {
+        let data = match ctx.format_name {
+            "webp" => webp_to_bytes(ctx.resized, ctx.opts.quality),
+            "avif" => avif_to_bytes(ctx.resized, ctx.opts.quality)?,
+            _ => bail!("Unknown format: {}", ctx.format_name),
+        };
+
+        let mime = format!("image/{}", ctx.format_name);
+
+        ctx.storage
+            .put(&variant_key, &data, &mime)
+            .with_context(|| format!("Failed to save {}: {}", ctx.format_name, variant_key))?;
+
+        guard.push(variant_key);
+        formats.insert(ctx.format_name.to_string(), FormatResult::new(variant_url));
+    }
+
+    Ok(())
+}
+
+/// Process all image sizes and their format variants.
+pub(super) fn process_image_sizes(
+    img: &image::DynamicImage,
+    unique_filename: &str,
+    collection_slug: &str,
+    upload_config: &CollectionUpload,
+    storage: &SharedStorage,
+    guard: &mut CleanupGuard,
+) -> Result<(
+    HashMap<String, SizeResult>,
+    Vec<crate::core::upload::QueuedConversion>,
+)> {
+    let mut sizes = HashMap::new();
+    let mut queued_conversions = Vec::new();
+
+    let (stem, ext) = unique_filename
+        .rsplit_once('.')
+        .unwrap_or((unique_filename, "bin"));
+
+    for size_def in &upload_config.image_sizes {
+        let resized = match resize_image(img, size_def) {
+            Some(r) => r,
+            None => {
+                tracing::warn!(
+                    "Skipping size '{}' — source image has zero dimensions",
+                    size_def.name
+                );
+                continue;
+            }
+        };
+
+        let (size_key, size_url) = save_resized_image(
+            &resized,
+            stem,
+            ext,
+            &size_def.name,
+            collection_slug,
+            storage,
+            guard,
+        )?;
+
+        let mut formats = HashMap::new();
+
+        if let Some(ref webp_opts) = upload_config.format_options.webp {
+            let ctx = FormatVariantCtx {
+                resized: &resized,
+                format_name: "webp",
+                opts: webp_opts,
+                stem,
+                size_name: &size_def.name,
+                size_key: &size_key,
+                collection_slug,
+                storage,
+            };
+            process_format_variant(&ctx, guard, &mut formats, &mut queued_conversions)?;
+        }
+
+        if let Some(ref avif_opts) = upload_config.format_options.avif {
+            let ctx = FormatVariantCtx {
+                resized: &resized,
+                format_name: "avif",
+                opts: avif_opts,
+                stem,
+                size_name: &size_def.name,
+                size_key: &size_key,
+                collection_slug,
+                storage,
+            };
+            process_format_variant(&ctx, guard, &mut formats, &mut queued_conversions)?;
+        }
+
+        sizes.insert(
+            size_def.name.clone(),
+            SizeResultBuilder::new(size_url)
+                .width(resized.width())
+                .height(resized.height())
+                .formats(formats)
+                .build(),
+        );
+    }
+
+    Ok((sizes, queued_conversions))
 }
 
 /// Process a queued image conversion using local filesystem paths.

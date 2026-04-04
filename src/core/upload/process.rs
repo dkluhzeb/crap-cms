@@ -1,15 +1,13 @@
-use std::{collections::HashMap, io::Cursor};
+use std::collections::HashMap;
 
-use anyhow::{Context as _, Result, bail};
-use image::ImageReader;
+use anyhow::{Context as _, Result};
 
 use super::{
-    resize::{avif_to_bytes, resize_image, webp_to_bytes},
-    validate::{format_filesize, mime_matches, sanitize_filename, validate_mime_type},
+    resize::process_image_sizes,
+    validate::{check_image_dimensions, sanitize_filename, validate_upload},
 };
 use crate::core::upload::{
-    CollectionUpload, FormatResult, ProcessedUpload, ProcessedUploadBuilder,
-    QueuedConversionBuilder, SharedStorage, SizeResultBuilder, UploadedFile,
+    CollectionUpload, ProcessedUpload, ProcessedUploadBuilder, SharedStorage, UploadedFile,
 };
 
 /// RAII guard that deletes written files if not committed.
@@ -39,7 +37,7 @@ impl CleanupGuard {
         }
     }
 
-    fn push(&mut self, key: String) {
+    pub(super) fn push(&mut self, key: String) {
         self.keys.push(key);
     }
 
@@ -60,6 +58,30 @@ impl Drop for CleanupGuard {
     }
 }
 
+/// Save the original file to storage and return `(unique_filename, url)`.
+fn save_original(
+    file: &UploadedFile,
+    storage: &SharedStorage,
+    collection_slug: &str,
+    guard: &mut CleanupGuard,
+) -> Result<(String, String)> {
+    let id = nanoid::nanoid!(10);
+    let sanitized = sanitize_filename(&file.filename);
+    let unique_filename = format!("{}_{}", id, sanitized);
+
+    let original_key = format!("{}/{}", collection_slug, unique_filename);
+
+    storage
+        .put(&original_key, &file.data, &file.content_type)
+        .with_context(|| format!("Failed to write file: {}", original_key))?;
+
+    guard.push(original_key.clone());
+
+    let url = format!("/uploads/{}", original_key);
+
+    Ok((unique_filename, url))
+}
+
 /// Process an uploaded file: validate, save via storage backend, generate image sizes + format variants.
 ///
 /// Returns both the processed upload metadata and a [`CleanupGuard`].
@@ -74,213 +96,42 @@ pub fn process_upload(
     collection_slug: &str,
     global_max_file_size: u64,
 ) -> Result<(ProcessedUpload, CleanupGuard)> {
-    // Validate MIME type against allowlist
-    if !validate_mime_type(&file.content_type, &upload_config.mime_types) {
-        bail!("File type '{}' is not allowed", file.content_type);
-    }
+    validate_upload(&file, upload_config, global_max_file_size)?;
 
-    // Magic-byte MIME verification: check that the file content matches the claimed type.
-    // If `infer` can detect the type (images, videos, archives, etc.) it must match the
-    // claimed content_type. Files without magic bytes (text, CSS, JS) pass through.
-    if let Some(detected) = infer::get(&file.data) {
-        let detected_mime = detected.mime_type();
-
-        if !mime_matches(detected_mime, &file.content_type) {
-            bail!(
-                "File content does not match claimed type '{}' (detected '{}')",
-                file.content_type,
-                detected_mime,
-            );
-        }
-    }
-
-    // Validate file size
-    let max_size = upload_config.max_file_size.unwrap_or(global_max_file_size);
-    let filesize = file.data.len() as u64;
-
-    if filesize > max_size {
-        bail!(
-            "File size {} exceeds maximum allowed size {}",
-            format_filesize(filesize),
-            format_filesize(max_size),
-        );
-    }
-
-    // Generate unique filename
-    let id = nanoid::nanoid!(10);
-    let sanitized = sanitize_filename(&file.filename);
-    let unique_filename = format!("{}_{}", id, sanitized);
-
-    // Track written files for cleanup on error
     let mut guard = CleanupGuard::new(storage.clone());
-
-    // Save original file
-    let original_key = format!("{}/{}", collection_slug, unique_filename);
-    storage
-        .put(&original_key, &file.data, &file.content_type)
-        .with_context(|| format!("Failed to write file: {}", original_key))?;
-    guard.push(original_key.clone());
-
-    // Always store the proxy URL in the document — works with CSP and
-    // allows the serve handler to apply access control. External frontends
-    // can use storage.public_url() for direct S3/CDN URLs.
-    let url = format!("/uploads/{}", original_key);
+    let (unique_filename, url) = save_original(&file, &storage, collection_slug, &mut guard)?;
 
     let is_image = file.content_type.starts_with("image/");
-
     let mut width = None;
     let mut height = None;
     let mut sizes = HashMap::new();
     let mut queued_conversions = Vec::new();
 
     if is_image {
-        // Check image dimensions before full decode to prevent decompression bombs
-        {
-            let reader = ImageReader::new(Cursor::new(&file.data))
-                .with_guessed_format()
-                .context("Failed to detect image format")?;
-            if let Ok((w, h)) = reader.into_dimensions() {
-                const MAX_PIXELS: u64 = 100_000_000; // 100 megapixels
-                if (w as u64) * (h as u64) > MAX_PIXELS {
-                    bail!("Image too large: {}x{} exceeds pixel limit", w, h);
-                }
-            }
-        }
+        check_image_dimensions(&file.data)?;
 
-        // Load image for processing
-        let img = image::load_from_memory(&file.data).with_context(|| "Failed to decode image")?;
+        let img = image::load_from_memory(&file.data).context("Failed to decode image")?;
 
         width = Some(img.width());
         height = Some(img.height());
 
-        // Generate format variants for original
-        // (We skip original format conversion — only sizes get format variants)
+        let (s, q) = process_image_sizes(
+            &img,
+            &unique_filename,
+            collection_slug,
+            upload_config,
+            &storage,
+            &mut guard,
+        )?;
 
-        // Generate image sizes
-        for size_def in &upload_config.image_sizes {
-            let resized = match resize_image(&img, size_def) {
-                Some(r) => r,
-                None => {
-                    tracing::warn!(
-                        "Skipping size '{}' — source image has zero dimensions",
-                        size_def.name
-                    );
-                    continue;
-                }
-            };
-            let (stem, ext) = unique_filename
-                .rsplit_once('.')
-                .unwrap_or((&unique_filename, "bin"));
-
-            // Save resized image via storage
-            let size_filename = format!("{}_{}.{}", stem, size_def.name, ext);
-            let size_key = format!("{}/{}", collection_slug, size_filename);
-
-            let mut size_buf = Cursor::new(Vec::new());
-            resized
-                .write_to(
-                    &mut size_buf,
-                    image::ImageFormat::from_extension(ext).unwrap_or(image::ImageFormat::Png),
-                )
-                .with_context(|| format!("Failed to encode resized image: {}", size_key))?;
-            let size_bytes = size_buf.into_inner();
-
-            let size_mime = mime_guess::from_path(&size_filename)
-                .first_or_octet_stream()
-                .to_string();
-            storage
-                .put(&size_key, &size_bytes, &size_mime)
-                .with_context(|| format!("Failed to save resized image: {}", size_key))?;
-            guard.push(size_key.clone());
-
-            let size_url = format!("/uploads/{}", size_key);
-            let mut formats = HashMap::new();
-
-            // WebP variant
-            if let Some(ref webp_opts) = upload_config.format_options.webp {
-                let webp_filename = format!("{}_{}.webp", stem, size_def.name);
-                let webp_key = format!("{}/{}", collection_slug, webp_filename);
-                let webp_url = format!("/uploads/{}", webp_key);
-
-                if webp_opts.queue {
-                    // For queued conversions, use storage keys as source/target paths.
-                    // The scheduler will need to resolve these via storage.
-                    let source_path = storage
-                        .local_path(&size_key)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| size_key.clone());
-                    let target_path = storage
-                        .local_path(&webp_key)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| webp_key.clone());
-
-                    queued_conversions.push(
-                        QueuedConversionBuilder::new(source_path, target_path)
-                            .format("webp")
-                            .quality(webp_opts.quality)
-                            .url_column(format!("{}_webp_url", size_def.name))
-                            .url_value(webp_url)
-                            .build(),
-                    );
-                } else {
-                    let webp_data = webp_to_bytes(&resized, webp_opts.quality);
-                    storage
-                        .put(&webp_key, &webp_data, "image/webp")
-                        .with_context(|| format!("Failed to save WebP: {}", webp_key))?;
-                    guard.push(webp_key);
-                    formats.insert("webp".to_string(), FormatResult::new(webp_url));
-                }
-            }
-
-            // AVIF variant
-            if let Some(ref avif_opts) = upload_config.format_options.avif {
-                let avif_filename = format!("{}_{}.avif", stem, size_def.name);
-                let avif_key = format!("{}/{}", collection_slug, avif_filename);
-                let avif_url = format!("/uploads/{}", avif_key);
-
-                if avif_opts.queue {
-                    let source_path = storage
-                        .local_path(&size_key)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| size_key.clone());
-                    let target_path = storage
-                        .local_path(&avif_key)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| avif_key.clone());
-
-                    queued_conversions.push(
-                        QueuedConversionBuilder::new(source_path, target_path)
-                            .format("avif")
-                            .quality(avif_opts.quality)
-                            .url_column(format!("{}_avif_url", size_def.name))
-                            .url_value(avif_url)
-                            .build(),
-                    );
-                } else {
-                    let avif_data = avif_to_bytes(&resized, avif_opts.quality)?;
-                    storage
-                        .put(&avif_key, &avif_data, "image/avif")
-                        .with_context(|| format!("Failed to save AVIF: {}", avif_key))?;
-                    guard.push(avif_key);
-                    formats.insert("avif".to_string(), FormatResult::new(avif_url));
-                }
-            }
-
-            sizes.insert(
-                size_def.name.clone(),
-                SizeResultBuilder::new(size_url)
-                    .width(resized.width())
-                    .height(resized.height())
-                    .formats(formats)
-                    .build(),
-            );
-        }
+        sizes = s;
+        queued_conversions = q;
     }
 
     let created_keys = guard.keys.clone();
     let mut builder = ProcessedUploadBuilder::new(unique_filename, url)
         .mime_type(file.content_type.clone())
-        .filesize(filesize)
+        .filesize(file.data.len() as u64)
         .sizes(sizes)
         .queued_conversions(queued_conversions)
         .created_files(created_keys);
@@ -288,9 +139,11 @@ pub fn process_upload(
     if let Some(w) = width {
         builder = builder.width(w);
     }
+
     if let Some(h) = height {
         builder = builder.height(h);
     }
+
     Ok((builder.build(), guard))
 }
 
@@ -305,6 +158,9 @@ mod tests {
     };
 
     use image::{ImageBuffer, ImageEncoder, Rgba};
+
+    /// Default global max file size used across tests (50 MB).
+    const DEFAULT_MAX: u64 = 50 * 1024 * 1024;
 
     /// Create a small test PNG image in memory.
     fn create_test_png(width: u32, height: u32) -> Vec<u8> {
@@ -440,7 +296,7 @@ mod tests {
             mime_types: vec!["image/*".into()],
             ..Default::default()
         };
-        let result = process_upload(file, &config, storage.clone(), "posts", 50 * 1024 * 1024);
+        let result = process_upload(file, &config, storage.clone(), "posts", DEFAULT_MAX);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -461,7 +317,7 @@ mod tests {
             max_file_size: Some(512), // only allow 512 bytes
             ..Default::default()
         };
-        let result = process_upload(file, &config, storage.clone(), "posts", 50 * 1024 * 1024);
+        let result = process_upload(file, &config, storage.clone(), "posts", DEFAULT_MAX);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -498,9 +354,8 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "docs", 50 * 1024 * 1024)
-                .expect("should succeed for non-image");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "docs", DEFAULT_MAX)
+            .expect("should succeed for non-image");
         assert!(result.url.starts_with("/uploads/docs/"));
         assert!(result.url.ends_with("document.pdf"));
         assert_eq!(result.mime_type, "application/pdf");
@@ -529,9 +384,8 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed for image");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed for image");
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.width, Some(50));
         assert_eq!(result.height, Some(50));
@@ -560,9 +414,8 @@ mod tests {
             ],
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
         assert_eq!(result.width, Some(200));
         assert_eq!(result.height, Some(200));
         assert!(result.sizes.contains_key("thumb"));
@@ -605,9 +458,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
             small.formats.contains_key("webp"),
@@ -640,9 +492,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
             small.formats.contains_key("avif"),
@@ -675,9 +526,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
         let icon = &result.sizes["icon"];
         assert!(icon.formats.contains_key("webp"));
         assert!(icon.formats.contains_key("avif"));
@@ -695,9 +545,8 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed even without extension");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed even without extension");
         // The filename should have the nanoid prefix and sanitized name
         assert!(result.filename.contains("noext"));
         assert!(result.width.is_none());
@@ -724,9 +573,8 @@ mod tests {
             ],
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
         let thumb = &result.sizes["thumb"];
         assert!(
             thumb.url.ends_with("_thumb.png"),
@@ -758,9 +606,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let (result, _guard) =
-            process_upload(file, &config, storage.clone(), "media", 50 * 1024 * 1024)
-                .expect("should succeed");
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
 
         // Sizes should be created but format variants should NOT exist
         let small = &result.sizes["small"];
@@ -803,7 +650,7 @@ mod tests {
             ..Default::default()
         };
         let (processed, guard) =
-            process_upload(file, &config, storage.clone(), "test", 50 * 1024 * 1024)
+            process_upload(file, &config, storage.clone(), "test", DEFAULT_MAX)
                 .expect("should succeed");
 
         let key = format!("test/{}", processed.filename);

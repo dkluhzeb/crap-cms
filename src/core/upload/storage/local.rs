@@ -1,6 +1,6 @@
 //! Local filesystem storage backend.
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context as _, Result};
 
@@ -33,11 +33,11 @@ impl StorageBackend for LocalStorage {
         let path = self.key_to_path(key);
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
+            fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
         }
 
-        std::fs::write(&path, data)
+        fs::write(&path, data)
             .with_context(|| format!("Failed to write file: {}", path.display()))?;
 
         Ok(())
@@ -45,14 +45,15 @@ impl StorageBackend for LocalStorage {
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
         let path = self.key_to_path(key);
-        std::fs::read(&path).with_context(|| format!("Failed to read file: {}", path.display()))
+
+        fs::read(&path).with_context(|| format!("Failed to read file: {}", path.display()))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         let path = self.key_to_path(key);
 
         if path.exists() {
-            std::fs::remove_file(&path)
+            fs::remove_file(&path)
                 .with_context(|| format!("Failed to delete file: {}", path.display()))?;
         }
 

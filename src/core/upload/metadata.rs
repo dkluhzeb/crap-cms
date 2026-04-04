@@ -43,41 +43,10 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
             .map(|v| v as u32);
 
         if let Some(url) = url {
-            let mut size_obj = Map::new();
-            size_obj.insert("url".to_string(), Value::String(url));
+            let formats = collect_format_urls(doc, name, upload);
+            let entry = build_size_entry(url, width, height, formats);
 
-            if let Some(w) = width {
-                size_obj.insert("width".to_string(), json!(w));
-            }
-            if let Some(h) = height {
-                size_obj.insert("height".to_string(), json!(h));
-            }
-
-            let mut formats = Map::new();
-
-            if upload.format_options.webp.is_some()
-                && let Some(Value::String(webp_url)) =
-                    doc.fields.remove(&format!("{}_webp_url", name))
-            {
-                let mut fmt = Map::new();
-                fmt.insert("url".to_string(), Value::String(webp_url));
-                formats.insert("webp".to_string(), Value::Object(fmt));
-            }
-
-            if upload.format_options.avif.is_some()
-                && let Some(Value::String(avif_url)) =
-                    doc.fields.remove(&format!("{}_avif_url", name))
-            {
-                let mut fmt = Map::new();
-                fmt.insert("url".to_string(), Value::String(avif_url));
-                formats.insert("avif".to_string(), Value::Object(fmt));
-            }
-
-            if !formats.is_empty() {
-                size_obj.insert("formats".to_string(), Value::Object(formats));
-            }
-
-            sizes.insert(name.clone(), Value::Object(size_obj));
+            sizes.insert(name.clone(), Value::Object(entry));
         } else {
             // Still remove format columns even if there's no URL
             doc.fields.remove(&format!("{}_webp_url", name));
@@ -88,6 +57,54 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
     if !sizes.is_empty() {
         doc.fields.insert("sizes".to_string(), Value::Object(sizes));
     }
+}
+
+/// Build the JSON object for a single image size entry.
+fn build_size_entry(
+    url: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    formats: Map<String, Value>,
+) -> Map<String, Value> {
+    let mut entry = Map::new();
+    entry.insert("url".to_string(), Value::String(url));
+
+    if let Some(w) = width {
+        entry.insert("width".to_string(), json!(w));
+    }
+
+    if let Some(h) = height {
+        entry.insert("height".to_string(), json!(h));
+    }
+
+    if !formats.is_empty() {
+        entry.insert("formats".to_string(), Value::Object(formats));
+    }
+
+    entry
+}
+
+/// Collect format variant URLs (webp, avif) from document fields.
+fn collect_format_urls(
+    doc: &mut Document,
+    size_name: &str,
+    upload: &CollectionUpload,
+) -> Map<String, Value> {
+    let mut formats = Map::new();
+
+    if upload.format_options.webp.is_some()
+        && let Some(Value::String(webp_url)) = doc.fields.remove(&format!("{}_webp_url", size_name))
+    {
+        formats.insert("webp".to_string(), json!({ "url": webp_url }));
+    }
+
+    if upload.format_options.avif.is_some()
+        && let Some(Value::String(avif_url)) = doc.fields.remove(&format!("{}_avif_url", size_name))
+    {
+        formats.insert("avif".to_string(), json!({ "url": avif_url }));
+    }
+
+    formats
 }
 
 /// Inject upload metadata fields into form data from a processed upload.

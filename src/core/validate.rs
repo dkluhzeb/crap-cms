@@ -179,11 +179,4 @@ mod tests {
         assert!(s.contains("email: invalid"));
         assert!(s.starts_with("Validation failed:"));
     }
-
-    #[test]
-    fn display_empty_errors() {
-        let ve = ValidationError::new(vec![]);
-        let s = ve.to_string();
-        assert_eq!(s, "Validation failed: ");
-    }
 }

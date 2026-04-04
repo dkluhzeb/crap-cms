@@ -37,15 +37,14 @@ impl EmailProvider for SmtpEmailProvider {
     }
 }
 
-/// Send an email via SMTP transport.
-#[cfg(not(tarpaulin_include))]
-pub(super) fn send_email_smtp(
+/// Build the MIME message (multipart if text body provided, HTML-only otherwise).
+fn build_message(
     config: &EmailConfig,
     to: &str,
     subject: &str,
     html: &str,
     text: Option<&str>,
-) -> Result<()> {
+) -> Result<Message> {
     let from: Mailbox = format!("{} <{}>", config.from_name, config.from_address)
         .parse()
         .with_context(|| {
@@ -59,7 +58,7 @@ pub(super) fn send_email_smtp(
         .parse()
         .with_context(|| format!("Invalid recipient address: {}", to))?;
 
-    let message = if let Some(plain) = text {
+    if let Some(plain) = text {
         Message::builder()
             .from(from)
             .to(to_mailbox)
@@ -77,7 +76,7 @@ pub(super) fn send_email_smtp(
                             .body(html.to_string()),
                     ),
             )
-            .context("Failed to build email message")?
+            .context("Failed to build email message")
     } else {
         Message::builder()
             .from(from)
@@ -85,9 +84,12 @@ pub(super) fn send_email_smtp(
             .subject(subject)
             .header(ContentType::TEXT_HTML)
             .body(html.to_string())
-            .context("Failed to build email message")?
-    };
+            .context("Failed to build email message")
+    }
+}
 
+/// Build the SMTP transport with credentials and TLS mode.
+fn build_transport(config: &EmailConfig) -> Result<SmtpTransport> {
     let creds = Credentials::new(
         config.smtp_user.clone(),
         config.smtp_pass.as_ref().to_string(),
@@ -123,6 +125,21 @@ pub(super) fn send_email_smtp(
             .timeout(Some(timeout))
             .build(),
     };
+
+    Ok(transport)
+}
+
+/// Send an email via SMTP transport.
+#[cfg(not(tarpaulin_include))]
+pub(super) fn send_email_smtp(
+    config: &EmailConfig,
+    to: &str,
+    subject: &str,
+    html: &str,
+    text: Option<&str>,
+) -> Result<()> {
+    let message = build_message(config, to, subject, html, text)?;
+    let transport = build_transport(config)?;
 
     transport
         .send(&message)

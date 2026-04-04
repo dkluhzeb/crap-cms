@@ -48,4 +48,19 @@ mod tests {
         assert!(backend.record("k", 60).is_ok());
         assert!(backend.clear("k").is_ok());
     }
+
+    #[test]
+    fn never_blocks_login_limiter() {
+        use crate::core::rate_limit::{LoginRateLimiter, SharedRateLimitBackend};
+        use std::sync::Arc;
+
+        let backend: SharedRateLimitBackend = Arc::new(NoneRateLimitBackend);
+        let limiter = LoginRateLimiter::with_backend(backend, "test", 1, 60);
+
+        for _ in 0..100 {
+            limiter.record_failure("a@b.com");
+        }
+
+        assert!(!limiter.is_blocked("a@b.com"));
+    }
 }

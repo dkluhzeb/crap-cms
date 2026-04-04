@@ -76,6 +76,30 @@ impl PasswordProvider for Argon2PasswordProvider {
     }
 }
 
+/// Hash a password using Argon2id.
+///
+/// Free function for direct usage (Lua API, CLI). For provider-based usage,
+/// prefer `PasswordProvider::hash_password`.
+pub fn hash_password(password: &str) -> Result<HashedPassword> {
+    Argon2PasswordProvider.hash_password(password)
+}
+
+/// Verify a password against a stored hash.
+///
+/// Free function for direct usage (Lua API, CLI). For provider-based usage,
+/// prefer `PasswordProvider::verify_password`.
+pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
+    Argon2PasswordProvider.verify_password(password, hash)
+}
+
+/// Perform a dummy password verification to equalize timing with real verifications.
+///
+/// Free function for direct usage. Prevents timing oracles that leak
+/// whether an email exists.
+pub fn dummy_verify() {
+    Argon2PasswordProvider.dummy_verify();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

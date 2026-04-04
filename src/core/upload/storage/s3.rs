@@ -34,6 +34,7 @@ impl S3Storage {
 impl StorageBackend for S3Storage {
     fn put(&self, key: &str, data: &[u8], content_type: &str) -> Result<()> {
         let full_key = self.full_key(key);
+
         block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.bucket.put_object_with_content_type(
                 &full_key,
@@ -42,6 +43,7 @@ impl StorageBackend for S3Storage {
             ))
         })
         .with_context(|| format!("S3 put failed: {full_key}"))?;
+
         Ok(())
     }
 
@@ -61,10 +63,12 @@ impl StorageBackend for S3Storage {
 
     fn delete(&self, key: &str) -> Result<()> {
         let full_key = self.full_key(key);
+
         block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.bucket.delete_object(&full_key))
         })
         .with_context(|| format!("S3 delete failed: {full_key}"))?;
+
         Ok(())
     }
 
@@ -73,12 +77,14 @@ impl StorageBackend for S3Storage {
         let result = block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.bucket.head_object(&full_key))
         });
+
         match result {
             Ok(_) => Ok(true),
             Err(e) => {
                 // S3 returns 404 for non-existent objects — treat as false.
                 // Log other errors so connection/auth issues aren't silently hidden.
                 let err_str = e.to_string();
+
                 if err_str.contains("404")
                     || err_str.contains("NoSuchKey")
                     || err_str.contains("Not Found")
@@ -94,6 +100,7 @@ impl StorageBackend for S3Storage {
 
     fn public_url(&self, key: &str) -> String {
         let full_key = self.full_key(key);
+
         if self.public_url_base.is_empty() {
             // Generate S3 URL
             format!("{}/{}", self.bucket.url(), full_key)

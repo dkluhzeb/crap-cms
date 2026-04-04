@@ -63,6 +63,22 @@ impl TokenProvider for JwtTokenProvider {
     }
 }
 
+/// Create a signed JWT token from claims.
+///
+/// Free function for direct usage (admin middleware, upload auth).
+/// For provider-based usage, prefer `TokenProvider::create_token`.
+pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
+    JwtTokenProvider::new(secret).create_token(claims)
+}
+
+/// Validate a JWT token and return the claims.
+///
+/// Free function for direct usage (admin middleware, upload auth).
+/// For provider-based usage, prefer `TokenProvider::validate_token`.
+pub fn validate_token(token: &str, secret: &str) -> Result<Claims> {
+    JwtTokenProvider::new(secret).validate_token(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,16 +4,18 @@
 //! `s3` (S3-compatible, feature-flagged), and `custom` (Lua-delegated).
 
 mod custom;
+mod factory;
 mod local;
 #[cfg(feature = "s3-storage")]
 mod s3;
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 
+pub use crate::config::UploadConfig;
 pub use custom::CustomStorage;
+pub use factory::create_storage;
 pub use local::LocalStorage;
 
 /// Thread-safe shared reference to a storage backend.
@@ -50,31 +52,8 @@ pub trait StorageBackend: Send + Sync {
     /// Used by the file serving handler to leverage `tower_http::ServeFile`
     /// with Range, ETag, and conditional GET support.
     /// Non-local backends return `None` and files are served via `get()`.
-    fn local_path(&self, key: &str) -> Option<std::path::PathBuf> {
+    fn local_path(&self, key: &str) -> Option<PathBuf> {
         let _ = key;
         None
-    }
-}
-
-/// Create the appropriate storage backend from config.
-pub fn create_storage(
-    config_dir: &Path,
-    config: &crate::config::UploadConfig,
-) -> Result<SharedStorage> {
-    match config.storage.as_str() {
-        "local" | "" => {
-            let base_dir = config_dir.join("uploads");
-            Ok(Arc::new(LocalStorage::new(base_dir)))
-        }
-        #[cfg(feature = "s3-storage")]
-        "s3" => s3::create_s3_storage(&config.s3),
-        "custom" => {
-            // Custom storage is initialized after Lua init via crap.storage.register().
-            // Use local as placeholder — Lua will replace it when init.lua runs.
-            tracing::info!("Custom storage selected — waiting for Lua init");
-            let base_dir = config_dir.join("uploads");
-            Ok(Arc::new(LocalStorage::new(base_dir)))
-        }
-        other => anyhow::bail!("Unknown upload storage backend: '{}'", other),
     }
 }

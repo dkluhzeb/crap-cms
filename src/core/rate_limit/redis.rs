@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use redis::{Commands, ConnectionLike};
+use redis::Commands;
 
 use super::RateLimitBackend;
 
@@ -50,7 +50,7 @@ impl RedisRateLimitBackend {
 
     fn with_conn<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&mut redis::Connection) -> Result<T>,
+        F: Fn(&mut redis::Connection) -> Result<T>,
     {
         let mut guard = self
             .conn
@@ -104,10 +104,11 @@ impl RateLimitBackend for RedisRateLimitBackend {
         let expire = (window_secs * 2).max(60) as i64;
 
         self.with_conn(|conn| {
-            conn.zadd(&pkey, &member, now)
+            conn.zadd::<_, _, _, ()>(&pkey, &member, now)
                 .context("Redis ZADD failed")?;
 
-            conn.expire(&pkey, expire).context("Redis EXPIRE failed")?;
+            conn.expire::<_, ()>(&pkey, expire)
+                .context("Redis EXPIRE failed")?;
 
             Ok(())
         })
@@ -154,7 +155,7 @@ impl RateLimitBackend for RedisRateLimitBackend {
         let pkey = self.prefixed_key(key);
 
         self.with_conn(|conn| {
-            conn.del(&pkey).context("Redis DEL failed")?;
+            conn.del::<_, ()>(&pkey).context("Redis DEL failed")?;
             Ok(())
         })
     }

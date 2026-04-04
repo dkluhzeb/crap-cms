@@ -60,7 +60,7 @@ impl RedisCache {
     /// Get the shared connection, reconnecting if it's broken.
     fn with_conn<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&mut redis::Connection) -> Result<T>,
+        F: Fn(&mut redis::Connection) -> Result<T>,
     {
         let mut guard = self
             .conn
@@ -108,7 +108,8 @@ impl CacheBackend for RedisCache {
                     .query::<()>(conn)
                     .context("Redis SETEX failed")?;
             } else {
-                conn.set(&pkey, value).context("Redis SET failed")?;
+                conn.set::<_, _, ()>(&pkey, value)
+                    .context("Redis SET failed")?;
             }
 
             Ok(())
@@ -119,7 +120,7 @@ impl CacheBackend for RedisCache {
         let pkey = self.prefixed_key(key);
 
         self.with_conn(|conn| {
-            conn.del(&pkey).context("Redis DEL failed")?;
+            conn.del::<_, ()>(&pkey).context("Redis DEL failed")?;
 
             Ok(())
         })
