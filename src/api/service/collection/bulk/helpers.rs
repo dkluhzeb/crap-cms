@@ -29,9 +29,10 @@ pub fn find_matching_docs(
     locale_ctx: Option<&LocaleContext>,
     db_kind: &str,
 ) -> Result<Vec<Document>, Status> {
-    let mut find_query = FindQuery::new();
-    find_query.filters = filters;
-    find_query.limit = Some(BULK_QUERY_LIMIT);
+    let find_query = FindQuery::builder()
+        .filters(filters)
+        .limit(BULK_QUERY_LIMIT)
+        .build();
 
     let docs = query::find(tx, collection, def, &find_query, locale_ctx)
         .map_err(|e| map_db_error(e, "Bulk query error", db_kind))?;

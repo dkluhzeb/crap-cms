@@ -94,9 +94,7 @@ pub fn find_by_id_full(
             field: "id".to_string(),
             op: FilterOp::Equals(id.to_string()),
         }));
-        let mut fq = FindQuery::new();
-        fq.filters = filters;
-        let fq = fq;
+        let fq = FindQuery::builder().filters(filters).build();
         query::find(conn, slug, def, &fq, locale_ctx)?
             .into_iter()
             .next()

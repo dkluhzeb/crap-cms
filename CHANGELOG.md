@@ -67,6 +67,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `publish_mutation_event`, `strip_read_denied_proto_fields`
   - Eliminated duplicated access check, event publishing, and field
     stripping patterns across admin and API handlers
+  - Added `FindQueryBuilder` for `FindQuery` (9 fields, was using
+    manual field assignment)
 
 - **Optional PostgreSQL backend** — Crap CMS now supports PostgreSQL as
   an alternative database backend, available via the `postgres` Cargo

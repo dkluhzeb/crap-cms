@@ -97,19 +97,35 @@ impl ContentService {
                 .draft_filter(has_drafts, !draft.unwrap_or(false))
                 .build()?;
 
-            let mut find_query = FindQuery::new();
-            find_query.filters = filters.clone();
-            find_query.order_by = order_by.clone();
-            find_query.limit = Some(pagination.limit);
-            find_query.offset = if pagination.has_cursor() {
-                None
-            } else {
-                Some(pagination.offset)
-            };
-            find_query.select = select.clone();
-            find_query.after_cursor = pagination.after_cursor.clone();
-            find_query.before_cursor = pagination.before_cursor.clone();
-            find_query.search = search;
+            let mut fq_builder = FindQuery::builder()
+                .filters(filters.clone())
+                .limit(pagination.limit);
+
+            if let Some(ref ob) = order_by {
+                fq_builder = fq_builder.order_by(ob.clone());
+            }
+
+            if !pagination.has_cursor() {
+                fq_builder = fq_builder.offset(pagination.offset);
+            }
+
+            if let Some(ref s) = select {
+                fq_builder = fq_builder.select(s.clone());
+            }
+
+            if let Some(ref c) = pagination.after_cursor {
+                fq_builder = fq_builder.after_cursor(c.clone());
+            }
+
+            if let Some(ref c) = pagination.before_cursor {
+                fq_builder = fq_builder.before_cursor(c.clone());
+            }
+
+            if let Some(s) = search {
+                fq_builder = fq_builder.search(s);
+            }
+
+            let find_query = fq_builder.build();
 
             query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
