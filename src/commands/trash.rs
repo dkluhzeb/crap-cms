@@ -7,45 +7,41 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use super::TrashAction;
 use crate::{
     cli::{self, Table},
+    commands::helpers::init_stack,
     config::CrapConfig,
-    core::{SharedRegistry, upload, upload::StorageBackend},
-    db::{DbConnection, DbPool, DbValue, migrate, pool, query},
-    hooks,
+    core::{CollectionDefinition, Document, SharedRegistry, upload, upload::StorageBackend},
+    db::{DbConnection, DbPool, DbValue, query},
 };
 
-/// Initialize config, Lua, pool, and migrate. Used by all trash subcommands.
-fn init_stack(config_dir: &Path) -> Result<(CrapConfig, SharedRegistry, DbPool)> {
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-    let cfg = CrapConfig::load(&config_dir)?;
-    let registry = hooks::init_lua(&config_dir, &cfg)?;
-    let pool = pool::create_pool(&config_dir, &cfg)?;
+/// Validate that a collection exists and has soft_delete enabled.
+fn validate_soft_delete(registry: &SharedRegistry, slug: &str) -> Result<()> {
+    let reg = registry
+        .read()
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
-    migrate::sync_all(&pool, &registry, &cfg.locale)?;
+    let def = reg
+        .collections
+        .get(slug)
+        .ok_or_else(|| anyhow!("Collection '{}' not found", slug))?;
 
-    Ok((cfg, registry, pool))
+    if !def.soft_delete {
+        bail!("Collection '{}' does not have soft_delete enabled", slug);
+    }
+
+    Ok(())
 }
 
 /// Collect slugs of collections that have `soft_delete = true`.
 /// If `filter` is provided, only return that collection (validating it exists and supports soft delete).
 fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Result<Vec<String>> {
+    if let Some(slug) = filter {
+        validate_soft_delete(registry, slug)?;
+        return Ok(vec![slug.to_string()]);
+    }
+
     let reg = registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    if let Some(slug) = filter {
-        let def = reg
-            .collections
-            .get(slug)
-            .ok_or_else(|| anyhow!("Collection '{}' not found", slug))?;
-
-        if !def.soft_delete {
-            bail!("Collection '{}' does not have soft_delete enabled", slug);
-        }
-
-        return Ok(vec![slug.to_string()]);
-    }
 
     let mut slugs: Vec<String> = reg
         .collections
@@ -57,6 +53,19 @@ fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Resul
     slugs.sort();
 
     Ok(slugs)
+}
+
+/// Build a FindQuery that returns only soft-deleted documents.
+fn deleted_filter() -> query::FindQuery {
+    let mut fq = query::FindQuery::new();
+
+    fq.include_deleted = true;
+    fq.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "_deleted_at".to_string(),
+        op: query::FilterOp::Exists,
+    })];
+
+    fq
 }
 
 /// List trashed (soft-deleted) documents across collections.
@@ -78,47 +87,18 @@ fn run_list(
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
     let conn = pool.get().context("Failed to get DB connection")?;
     let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale);
+    let fq = deleted_filter();
 
     let mut table = Table::new(vec!["ID", "Title", "Collection", "Deleted At"]);
     let mut total = 0usize;
 
     for slug in &slugs {
-        let def = match reg.collections.get(slug.as_str()) {
-            Some(d) => d,
-            None => continue,
+        let Some(def) = reg.collections.get(slug.as_str()) else {
+            continue;
         };
 
-        let mut fq = query::FindQuery::new();
-
-        fq.include_deleted = true;
-        fq.filters = vec![query::FilterClause::Single(query::Filter {
-            field: "_deleted_at".to_string(),
-            op: query::FilterOp::Exists,
-        })];
-
         let docs = query::find(&conn, slug, def, &fq, locale_ctx.as_ref())?;
-        let title_field = def.title_field().unwrap_or("id");
-
-        for doc in &docs {
-            let id = doc.id.to_string();
-
-            let title = doc
-                .fields
-                .get(title_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("-")
-                .to_string();
-
-            let deleted_at = doc
-                .fields
-                .get("_deleted_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-")
-                .to_string();
-
-            table.row(vec![&id, &title, slug, &deleted_at]);
-            total += 1;
-        }
+        total += collect_trash_rows(&mut table, &docs, slug, def.title_field().unwrap_or("id"));
     }
 
     if total == 0 {
@@ -129,6 +109,36 @@ fn run_list(
     }
 
     Ok(())
+}
+
+/// Append trashed document rows to the table, returns the count added.
+fn collect_trash_rows(
+    table: &mut Table,
+    docs: &[Document],
+    slug: &str,
+    title_field: &str,
+) -> usize {
+    for doc in docs {
+        let id = doc.id.to_string();
+
+        let title = doc
+            .fields
+            .get(title_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+            .to_string();
+
+        let deleted_at = doc
+            .fields
+            .get("_deleted_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+            .to_string();
+
+        table.row(vec![&id, &title, slug, &deleted_at]);
+    }
+
+    docs.len()
 }
 
 /// Parse a duration string like "30d", "7d", "24h" into seconds.
@@ -151,6 +161,22 @@ fn parse_older_than(s: &str) -> Option<i64> {
     }
 }
 
+/// Parse the `older_than` arg into an optional threshold in seconds.
+fn parse_threshold(older_than: &str) -> Result<Option<i64>> {
+    if older_than == "all" {
+        return Ok(None);
+    }
+
+    let secs = parse_older_than(older_than).ok_or_else(|| {
+        anyhow!(
+            "Invalid duration '{}'. Use format like '30d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds), or 'all'",
+            older_than
+        )
+    })?;
+
+    Ok(Some(secs))
+}
+
 /// Purge (permanently delete) trashed documents, optionally filtered by age.
 fn run_purge(
     registry: &SharedRegistry,
@@ -164,34 +190,20 @@ fn run_purge(
 
     if slugs.is_empty() {
         cli::info("No collections with soft_delete enabled.");
-
         return Ok(());
     }
 
-    let threshold_secs = if older_than == "all" {
-        None
-    } else {
-        let secs = parse_older_than(older_than).ok_or_else(|| {
-            anyhow!(
-                "Invalid duration '{}'. Use format like '30d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds), or 'all'",
-                older_than
-            )
-        })?;
-
-        Some(secs)
-    };
+    let threshold_secs = parse_threshold(older_than)?;
 
     let reg = registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
     let mut conn = pool.get().context("Failed to get DB connection")?;
-
     let mut total = 0u64;
 
     for slug in &slugs {
-        let def = match reg.collections.get(slug.as_str()) {
-            Some(d) => d,
-            None => continue,
+        let Some(def) = reg.collections.get(slug.as_str()) else {
+            continue;
         };
 
         let ids = find_purge_candidates(&conn as &dyn DbConnection, slug, threshold_secs)?;
@@ -204,37 +216,44 @@ fn run_purge(
             for id in &ids {
                 cli::info(&format!("Would purge: {} / {}", slug, id));
             }
+        } else {
+            let tx = conn.transaction().context("Start transaction")?;
+            purge_documents(&tx, slug, def, &ids, storage)?;
+            tx.commit().context("Commit purge")?;
 
-            total += ids.len() as u64;
-
-            continue;
+            // Re-acquire connection after commit (tx consumed it)
+            conn = pool.get().context("Failed to get DB connection")?;
         }
-
-        let tx = conn.transaction().context("Start transaction")?;
-
-        for id in &ids {
-            if def.is_upload_collection()
-                && let Ok(Some(doc)) = query::find_by_id_unfiltered(&tx, slug, def, id, None)
-            {
-                upload::delete_upload_files(storage, &doc.fields);
-            }
-
-            query::fts::fts_delete(&tx, slug, id)?;
-            query::delete(&tx, slug, id)?;
-        }
-
-        tx.commit().context("Commit purge")?;
 
         total += ids.len() as u64;
-
-        // Re-acquire connection after commit (tx consumed it)
-        conn = pool.get().context("Failed to get DB connection")?;
     }
 
     if dry_run {
         cli::info(&format!("{} document(s) would be purged.", total));
     } else {
         cli::success(&format!("Purged {} trashed document(s).", total));
+    }
+
+    Ok(())
+}
+
+/// Permanently delete a list of documents, cleaning up uploads and FTS.
+fn purge_documents(
+    tx: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    ids: &[String],
+    storage: &dyn StorageBackend,
+) -> Result<()> {
+    for id in ids {
+        if def.is_upload_collection()
+            && let Ok(Some(doc)) = query::find_by_id_unfiltered(tx, slug, def, id, None)
+        {
+            upload::delete_upload_files(storage, &doc.fields);
+        }
+
+        query::fts::fts_delete(tx, slug, id)?;
+        query::delete(tx, slug, id)?;
     }
 
     Ok(())
@@ -278,21 +297,12 @@ fn find_purge_candidates(
 
 /// Restore a single soft-deleted document.
 fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
+    validate_soft_delete(registry, collection)?;
+
     let reg = registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let def = reg
-        .collections
-        .get(collection)
-        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
-
-    if !def.soft_delete {
-        bail!(
-            "Collection '{}' does not have soft_delete enabled",
-            collection
-        );
-    }
+    let def = &reg.collections[collection];
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
@@ -325,41 +335,20 @@ fn run_empty(
     collection: &str,
     confirm: bool,
 ) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+    validate_soft_delete(registry, collection)?;
 
-    let def = reg
-        .collections
-        .get(collection)
-        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?
-        .clone();
-
-    if !def.soft_delete {
-        bail!(
-            "Collection '{}' does not have soft_delete enabled",
-            collection
-        );
-    }
-
-    // Drop the lock before DB operations
-    drop(reg);
+    let def = {
+        let reg = registry
+            .read()
+            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+        reg.collections[collection].clone()
+    };
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
-
-    // Count trashed docs first
-    let mut fq = query::FindQuery::new();
-
-    fq.include_deleted = true;
-    fq.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "_deleted_at".to_string(),
-        op: query::FilterOp::Exists,
-    })];
-
+    let fq = deleted_filter();
     let docs = query::find(&conn, collection, &def, &fq, None)?;
-    let count = docs.len();
 
-    if count == 0 {
+    if docs.is_empty() {
         cli::info(&format!("No trashed documents in '{}'.", collection));
         return Ok(());
     }
@@ -367,28 +356,24 @@ fn run_empty(
     if !confirm {
         cli::warning(&format!(
             "This will permanently delete {} document(s) from '{}'.",
-            count, collection
+            docs.len(),
+            collection
         ));
         cli::hint("Pass -y/--confirm to proceed.");
         return Ok(());
     }
 
+    let ids: Vec<String> = docs.iter().map(|d| d.id.to_string()).collect();
     let tx = conn.transaction().context("Start transaction")?;
 
-    for doc in &docs {
-        if def.is_upload_collection() {
-            upload::delete_upload_files(storage, &doc.fields);
-        }
-
-        query::fts::fts_delete(&tx, collection, &doc.id)?;
-        query::delete(&tx, collection, &doc.id)?;
-    }
+    purge_documents(&tx, collection, &def, &ids, storage)?;
 
     tx.commit().context("Commit empty trash")?;
 
     cli::success(&format!(
         "Permanently deleted {} document(s) from '{}'.",
-        count, collection
+        ids.len(),
+        collection
     ));
 
     Ok(())

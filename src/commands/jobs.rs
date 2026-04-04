@@ -6,26 +6,11 @@ use std::path::Path;
 
 use crate::{
     cli::{self, Table},
-    commands::JobsAction,
+    commands::{JobsAction, helpers::init_stack},
     config::{CrapConfig, parse_duration_string},
     core::{SharedRegistry, job::JobStatus},
-    db::{DbPool, migrate, pool, query},
-    hooks,
+    db::{DbPool, pool, query},
 };
-
-/// Initialize config, Lua, pool, and migrate. Used by most job subcommands.
-fn init_stack(config_dir: &Path) -> Result<(CrapConfig, SharedRegistry, DbPool)> {
-    let config_dir = config_dir
-        .canonicalize()
-        .unwrap_or_else(|_| config_dir.to_path_buf());
-    let cfg = CrapConfig::load(&config_dir)?;
-    let registry = hooks::init_lua(&config_dir, &cfg)?;
-    let pool = pool::create_pool(&config_dir, &cfg)?;
-
-    migrate::sync_all(&pool, &registry, &cfg.locale)?;
-
-    Ok((cfg, registry, pool))
-}
 
 /// List all defined jobs with recent run status summary.
 fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
@@ -240,9 +225,88 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
     Ok(())
 }
 
-/// Handle the `jobs` subcommand.
-// Excluded from coverage: requires full Lua + DB setup (init_lua, create_pool, sync_all)
-// for each subcommand variant. Tested via CLI integration tests.
+/// Trigger a job manually by slug, queuing it for the scheduler.
+#[cfg(not(tarpaulin_include))]
+fn run_trigger(
+    registry: &SharedRegistry,
+    pool: &DbPool,
+    slug: &str,
+    data: Option<String>,
+) -> Result<()> {
+    let reg = registry
+        .read()
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+
+    let job_def = reg
+        .get_job(slug)
+        .ok_or_else(|| anyhow!("Job '{}' not defined", slug))?;
+
+    let data_json = data.as_deref().unwrap_or("{}");
+
+    serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
+
+    let conn = pool.get().context("Failed to get DB connection")?;
+    let job_run = query::jobs::insert_job(
+        &conn,
+        slug,
+        data_json,
+        "cli",
+        job_def.retries + 1,
+        &job_def.queue,
+    )?;
+
+    cli::success(&format!("Queued job '{}' (run {})", slug, job_run.id));
+    cli::hint("The job will be picked up by the scheduler when the server is running.");
+
+    Ok(())
+}
+
+/// Cancel pending jobs, optionally filtered by slug.
+#[cfg(not(tarpaulin_include))]
+fn run_cancel(config_dir: &Path, slug: Option<String>) -> Result<()> {
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
+
+    let cfg = CrapConfig::load(&config_dir)?;
+    let pool = pool::create_pool(&config_dir, &cfg)?;
+    let conn = pool.get().context("Failed to get DB connection")?;
+    let deleted = query::jobs::cancel_pending_jobs(&conn, slug.as_deref())?;
+
+    match slug {
+        Some(s) => cli::success(&format!("Cancelled {} pending '{}' job(s)", deleted, s)),
+        None => cli::success(&format!("Cancelled {} pending job(s)", deleted)),
+    }
+
+    Ok(())
+}
+
+/// Purge old completed/failed job runs older than the specified duration.
+#[cfg(not(tarpaulin_include))]
+fn run_purge(config_dir: &Path, older_than: &str) -> Result<()> {
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
+
+    let cfg = CrapConfig::load(&config_dir)?;
+    let pool = pool::create_pool(&config_dir, &cfg)?;
+
+    let secs = parse_duration_string(older_than).ok_or_else(|| {
+        anyhow!(
+            "Invalid duration '{}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)",
+            older_than
+        )
+    })?;
+
+    let conn = pool.get().context("Failed to get DB connection")?;
+    let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
+
+    cli::success(&format!("Purged {} old job run(s)", deleted));
+
+    Ok(())
+}
+
+/// Handle the `jobs` subcommand — dispatches to the appropriate action handler.
 #[cfg(not(tarpaulin_include))]
 pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
     match action {
@@ -252,77 +316,16 @@ pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
         }
         JobsAction::Trigger { slug, data } => {
             let (_cfg, registry, pool) = init_stack(config_dir)?;
-            let reg = registry
-                .read()
-                .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-            let job_def = reg
-                .get_job(&slug)
-                .ok_or_else(|| anyhow!("Job '{}' not defined", slug))?;
-
-            let data_json = data.as_deref().unwrap_or("{}");
-
-            serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
-
-            let conn = pool.get().context("Failed to get DB connection")?;
-            let job_run = query::jobs::insert_job(
-                &conn,
-                &slug,
-                data_json,
-                "cli",
-                job_def.retries + 1,
-                &job_def.queue,
-            )?;
-
-            cli::success(&format!("Queued job '{}' (run {})", slug, job_run.id));
-            cli::hint("The job will be picked up by the scheduler when the server is running.");
-
-            Ok(())
+            run_trigger(&registry, &pool, &slug, data)
         }
         JobsAction::Status { id, slug, limit } => {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;
-
             run_status(&pool, id, slug, limit)
         }
-        JobsAction::Cancel { slug } => {
-            let config_dir = config_dir
-                .canonicalize()
-                .unwrap_or_else(|_| config_dir.to_path_buf());
-            let cfg = CrapConfig::load(&config_dir)?;
-            let pool = pool::create_pool(&config_dir, &cfg)?;
-            let conn = pool.get().context("Failed to get DB connection")?;
-            let deleted = query::jobs::cancel_pending_jobs(&conn, slug.as_deref())?;
-
-            match slug {
-                Some(s) => cli::success(&format!("Cancelled {} pending '{}' job(s)", deleted, s)),
-                None => cli::success(&format!("Cancelled {} pending job(s)", deleted)),
-            }
-
-            Ok(())
-        }
-        JobsAction::Purge { older_than } => {
-            let config_dir = config_dir
-                .canonicalize()
-                .unwrap_or_else(|_| config_dir.to_path_buf());
-            let cfg = CrapConfig::load(&config_dir)?;
-            let pool = pool::create_pool(&config_dir, &cfg)?;
-
-            let secs = parse_duration_string(&older_than)
-                .ok_or_else(|| anyhow!(
-                    "Invalid duration '{}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)",
-                    older_than
-                ))?;
-
-            let conn = pool.get().context("Failed to get DB connection")?;
-            let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
-
-            cli::success(&format!("Purged {} old job run(s)", deleted));
-
-            Ok(())
-        }
+        JobsAction::Cancel { slug } => run_cancel(config_dir, slug),
+        JobsAction::Purge { older_than } => run_purge(config_dir, &older_than),
         JobsAction::Healthcheck => {
             let (cfg, registry, pool) = init_stack(config_dir)?;
-
             run_healthcheck(&cfg, &registry, &pool)
         }
     }

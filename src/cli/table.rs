@@ -44,12 +44,18 @@ impl Table {
         widths
     }
 
-    /// Print the table to stdout with bold headers and a dimmed separator.
+    /// Print the table to stdout: header, separator, data rows.
     pub fn print(&self) {
         let widths = self.column_widths();
 
-        // Header row
-        let header_line: String = self
+        self.print_header(&widths);
+        self.print_separator(&widths);
+        self.print_rows(&widths);
+    }
+
+    /// Print the bold header row.
+    fn print_header(&self, widths: &[usize]) {
+        let line: String = self
             .headers
             .iter()
             .enumerate()
@@ -59,13 +65,19 @@ impl Table {
             })
             .collect::<Vec<_>>()
             .join("");
-        println!("{}", header_line);
 
-        // Separator
+        println!("{}", line);
+    }
+
+    /// Print a dimmed horizontal separator line.
+    fn print_separator(&self, widths: &[usize]) {
         let total_width: usize = widths.iter().sum();
-        println!("{}", style("─".repeat(total_width)).dim());
 
-        // Data rows
+        println!("{}", style("─".repeat(total_width)).dim());
+    }
+
+    /// Print all data rows with aligned columns.
+    fn print_rows(&self, widths: &[usize]) {
         for row in &self.rows {
             let line: String = row
                 .iter()
@@ -76,6 +88,7 @@ impl Table {
                 })
                 .collect::<Vec<_>>()
                 .join("");
+
             println!("{}", line);
         }
     }
