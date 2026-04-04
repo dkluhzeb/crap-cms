@@ -129,6 +129,36 @@ pub(in crate::api::service) fn strip_denied_proto_fields(
     }
 }
 
+/// Strip field-level read-denied fields from proto documents.
+///
+/// Opens a transaction for the Lua access check, then strips denied fields.
+/// Used by read and write handlers that return documents to the caller.
+pub(in crate::api::service) fn strip_read_denied_proto_fields(
+    proto_docs: &mut [content::Document],
+    conn: &mut crate::db::BoxedConnection,
+    runner: &crate::hooks::HookRunner,
+    fields: &[crate::core::FieldDefinition],
+    user_doc: Option<&crate::core::Document>,
+) {
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Field access check tx error: {}", e);
+            return;
+        }
+    };
+
+    let denied = runner.check_field_read_access(fields, user_doc, &tx);
+
+    if let Err(e) = tx.commit() {
+        warn!("tx commit failed: {e}");
+    }
+
+    for doc in proto_docs {
+        strip_denied_proto_fields(doc, &denied);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;

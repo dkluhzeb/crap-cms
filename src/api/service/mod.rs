@@ -6,8 +6,11 @@ mod auth;
 mod collection;
 mod convert;
 mod deps_builder;
-mod schema_ops;
+mod globals;
+mod jobs;
+mod schema;
 mod service_impl;
+mod subscribe;
 
 pub use deps_builder::ContentServiceDepsBuilder;
 pub use service_impl::ContentService;

@@ -178,6 +178,72 @@ pub(super) fn field_def_to_proto(field: &FieldDefinition) -> content::FieldInfo 
 
 /// Parse a JSON `where` clause into `Vec<FilterClause>`.
 /// Format: `{ "field": { "op": "value" }, "field2": "simple_value" }`
+/// Parse a single field's filter value into one or more `Filter` entries.
+fn parse_field_filters(field: &str, value: &JsonValue, ctx: &str) -> Result<Vec<Filter>, String> {
+    match value {
+        JsonValue::String(s) => Ok(vec![Filter {
+            field: field.to_string(),
+            op: FilterOp::Equals(s.clone()),
+        }]),
+        JsonValue::Number(_) | JsonValue::Bool(_) => {
+            let s = value_to_string(value).map_err(|e| format!("{} '{}': {}", ctx, field, e))?;
+
+            Ok(vec![Filter {
+                field: field.to_string(),
+                op: FilterOp::Equals(s),
+            }])
+        }
+        JsonValue::Object(ops) => {
+            let mut filters = Vec::new();
+
+            for (op_name, op_value) in ops {
+                let op = parse_filter_op(op_name, op_value)
+                    .map_err(|e| format!("{} '{}': {}", ctx, field, e))?;
+
+                filters.push(Filter {
+                    field: field.to_string(),
+                    op,
+                });
+            }
+
+            Ok(filters)
+        }
+        _ => Err(format!(
+            "{} '{}': value must be string, number, boolean, or operator object",
+            ctx, field
+        )),
+    }
+}
+
+/// Parse an `or` clause array into grouped filter sets.
+fn parse_or_clause(value: &JsonValue) -> Result<FilterClause, String> {
+    let arr = value
+        .as_array()
+        .ok_or_else(|| "'or' must be an array".to_string())?;
+
+    let mut groups = Vec::new();
+
+    for element in arr {
+        let obj = element
+            .as_object()
+            .ok_or_else(|| "'or' elements must be objects".to_string())?;
+
+        let mut group = Vec::new();
+
+        for (f, v) in obj {
+            group.extend(parse_field_filters(f, v, "or field")?);
+        }
+
+        groups.push(group);
+    }
+
+    Ok(FilterClause::Or(groups))
+}
+
+/// Parse a JSON `where` clause string into a list of filter clauses.
+///
+/// Supports simple equality (`{"field": "value"}`), operator objects
+/// (`{"field": {"greater_than": 5}}`), and `or` groups.
 pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
     let obj: JsonValue =
         serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
@@ -187,95 +253,18 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
         .ok_or_else(|| "where clause must be a JSON object".to_string())?;
 
     let mut clauses = Vec::new();
+
     for (field, value) in map {
         if field == "or" {
-            let arr = value
-                .as_array()
-                .ok_or_else(|| "'or' must be an array".to_string())?;
-            let mut groups = Vec::new();
-
-            for element in arr {
-                let obj = element
-                    .as_object()
-                    .ok_or_else(|| "'or' elements must be objects".to_string())?;
-                let mut group = Vec::new();
-
-                for (f, v) in obj {
-                    match v {
-                        JsonValue::String(s) => {
-                            group.push(Filter {
-                                field: f.clone(),
-                                op: FilterOp::Equals(s.clone()),
-                            });
-                        }
-                        JsonValue::Number(_) | JsonValue::Bool(_) => {
-                            let s = value_to_string(v)
-                                .map_err(|e| format!("or field '{}': {}", f, e))?;
-
-                            group.push(Filter {
-                                field: f.clone(),
-                                op: FilterOp::Equals(s),
-                            });
-                        }
-                        JsonValue::Object(ops) => {
-                            for (op_name, op_value) in ops {
-                                let op = parse_filter_op(op_name, op_value)
-                                    .map_err(|e| format!("or field '{}': {}", f, e))?;
-
-                                group.push(Filter {
-                                    field: f.clone(),
-                                    op,
-                                });
-                            }
-                        }
-                        _ => {
-                            return Err(format!(
-                                "or field '{}': value must be string, number, boolean, or operator object",
-                                f
-                            ));
-                        }
-                    }
-                }
-                groups.push(group);
-            }
-
-            clauses.push(FilterClause::Or(groups));
-
+            clauses.push(parse_or_clause(value)?);
             continue;
         }
 
-        match value {
-            JsonValue::String(s) => {
-                clauses.push(FilterClause::Single(Filter {
-                    field: field.clone(),
-                    op: FilterOp::Equals(s.clone()),
-                }));
-            }
-            JsonValue::Number(_) | JsonValue::Bool(_) => {
-                let s = value_to_string(value).map_err(|e| format!("field '{}': {}", field, e))?;
-                clauses.push(FilterClause::Single(Filter {
-                    field: field.clone(),
-                    op: FilterOp::Equals(s),
-                }));
-            }
-            JsonValue::Object(ops) => {
-                for (op_name, op_value) in ops {
-                    let op = parse_filter_op(op_name, op_value)
-                        .map_err(|e| format!("field '{}': {}", field, e))?;
-                    clauses.push(FilterClause::Single(Filter {
-                        field: field.clone(),
-                        op,
-                    }));
-                }
-            }
-            _ => {
-                return Err(format!(
-                    "field '{}': value must be string, number, boolean, or operator object",
-                    field
-                ));
-            }
+        for filter in parse_field_filters(field, value, "field")? {
+            clauses.push(FilterClause::Single(filter));
         }
     }
+
     Ok(clauses)
 }
 

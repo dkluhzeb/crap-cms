@@ -23,7 +23,7 @@ use crate::{
         cache::SharedCache,
         collection::GlobalDefinition,
         email::EmailRenderer,
-        event::{EventBus, EventUser},
+        event::{EventBus, EventOperation, EventTarget, EventUser},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
@@ -31,7 +31,7 @@ use crate::{
         AccessResult, BoxedConnection, DbConnection, DbPool,
         query::{self},
     },
-    hooks::HookRunner,
+    hooks::{HookRunner, lifecycle::PublishEventInput},
 };
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
@@ -115,6 +115,33 @@ impl ContentService {
         auth_user
             .as_ref()
             .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
+    }
+
+    /// Publish a collection mutation event (update, delete, create).
+    /// Handles cache clearing and event bus publishing in one call.
+    pub(in crate::api::service) fn publish_mutation_event(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        operation: EventOperation,
+        auth_user: &Option<AuthUser>,
+    ) {
+        if let Err(e) = self.cache.clear() {
+            tracing::warn!("Cache clear failed: {:#}", e);
+        }
+
+        if let Ok(def) = self.get_collection_def(collection) {
+            self.hook_runner.publish_event(
+                &self.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
+                PublishEventInput::builder(EventTarget::Collection, operation)
+                    .collection(collection.to_string())
+                    .document_id(doc_id.to_string())
+                    .edited_by(Self::event_user_from(auth_user))
+                    .build(),
+            );
+        }
     }
 }
 

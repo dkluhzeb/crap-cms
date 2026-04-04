@@ -93,28 +93,12 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
             .build(),
     );
 
-    // Spawn periodic cache clear task for external DB mutation handling
     if cache_max_age > 0 && content_service.cache_handle().kind() != "none" {
-        let cache = content_service.cache_handle();
-        let interval_secs = cache_max_age;
-        let cache_shutdown = shutdown.clone();
-
-        spawn(async move {
-            let mut interval = interval(Duration::from_secs(interval_secs));
-
-            interval.tick().await; // skip first immediate tick
-
-            loop {
-                select! {
-                    _ = interval.tick() => {
-                        if let Err(e) = cache.clear() {
-                            warn!("Periodic cache clear failed: {:#}", e);
-                        }
-                    },
-                    _ = cache_shutdown.cancelled() => break,
-                }
-            }
-        });
+        spawn_periodic_cache_clear(
+            content_service.cache_handle(),
+            cache_max_age,
+            shutdown.clone(),
+        );
     }
 
     let grpc_limiter = Arc::new(GrpcRateLimiter::with_backend(
@@ -164,4 +148,29 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .await?;
 
     Ok(())
+}
+
+/// Spawn a background task that periodically clears the cache.
+/// Handles external DB mutations that bypass the API's cache invalidation.
+fn spawn_periodic_cache_clear(
+    cache: crate::core::cache::SharedCache,
+    interval_secs: u64,
+    shutdown: CancellationToken,
+) {
+    spawn(async move {
+        let mut tick = interval(Duration::from_secs(interval_secs));
+
+        tick.tick().await; // skip first immediate tick
+
+        loop {
+            select! {
+                _ = tick.tick() => {
+                    if let Err(e) = cache.clear() {
+                        warn!("Periodic cache clear failed: {:#}", e);
+                    }
+                },
+                _ = shutdown.cancelled() => break,
+            }
+        }
+    });
 }
