@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result, bail};
 use std::collections::HashSet;
+use tracing::info;
 
 use crate::{
     config::LocaleConfig,
@@ -13,76 +14,104 @@ use crate::{
     },
 };
 
-/// Sync B-tree indexes for a collection table: field-level `index: true` and
-/// collection-level compound `indexes`. Idempotent — creates missing indexes,
-/// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
-pub(super) fn sync_indexes(
-    conn: &dyn DbConnection,
+/// Add an index entry to the desired set and create statement list.
+fn add_index(
+    desired: &mut HashSet<String>,
+    stmts: &mut Vec<String>,
+    idx_name: String,
+    sql: String,
+) {
+    stmts.push(sql);
+    desired.insert(idx_name);
+}
+
+/// Collect field-level indexes (index=true, skip if unique=true — already indexed).
+fn collect_field_indexes(
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
+    desired: &mut HashSet<String>,
+    stmts: &mut Vec<String>,
 ) -> Result<()> {
-    let mut desired: HashSet<String> = HashSet::new();
-    let mut create_stmts: Vec<String> = Vec::new();
-
-    // 1a. Field-level indexes: index=true (skip if unique=true — already indexed)
     for spec in &collect_column_specs(&def.fields, locale_config) {
         if !spec.field.index || spec.field.unique {
             continue;
         }
+
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
                 let idx_name = format!("idx_{}_{}", slug, col);
-                create_stmts.push(format!(
+                let sql = format!(
                     "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
                     idx_name, slug, col
-                ));
-                desired.insert(idx_name);
+                );
+                add_index(desired, stmts, idx_name, sql);
             }
         } else {
             let idx_name = format!("idx_{}_{}", slug, spec.col_name);
-            create_stmts.push(format!(
+            let sql = format!(
                 "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
                 idx_name, slug, spec.col_name
-            ));
-            desired.insert(idx_name);
+            );
+            add_index(desired, stmts, idx_name, sql);
         }
     }
 
-    // 1b. Partial unique indexes for soft-delete collections.
-    // Inline UNIQUE is omitted from the DDL so that soft-deleted rows don't
-    // block new inserts. Instead we create a partial unique index that only
-    // covers active (non-deleted) rows.
-    if def.soft_delete {
-        for spec in &collect_column_specs(&def.fields, locale_config) {
-            if !spec.field.unique || spec.companion_text {
-                continue;
-            }
-            if spec.is_localized {
-                for locale in &locale_config.locales {
-                    let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
-                    let idx_name = format!("idx_{}_{}_active_unique", slug, col);
-                    create_stmts.push(format!(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
-                        idx_name, slug, col
-                    ));
-                    desired.insert(idx_name);
-                }
-            } else {
-                let idx_name = format!("idx_{}_{}_active_unique", slug, spec.col_name);
-                create_stmts.push(format!(
+    Ok(())
+}
+
+/// Collect partial unique indexes for soft-delete collections.
+fn collect_soft_delete_unique_indexes(
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+    desired: &mut HashSet<String>,
+    stmts: &mut Vec<String>,
+) -> Result<()> {
+    if !def.soft_delete {
+        return Ok(());
+    }
+
+    for spec in &collect_column_specs(&def.fields, locale_config) {
+        if !spec.field.unique || spec.companion_text {
+            continue;
+        }
+
+        if spec.is_localized {
+            for locale in &locale_config.locales {
+                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let idx_name = format!("idx_{}_{}_active_unique", slug, col);
+                let sql = format!(
                     "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
-                    idx_name, slug, spec.col_name
-                ));
-                desired.insert(idx_name);
+                    idx_name, slug, col
+                );
+                add_index(desired, stmts, idx_name, sql);
             }
+        } else {
+            let idx_name = format!("idx_{}_{}_active_unique", slug, spec.col_name);
+            let sql = format!(
+                "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
+                idx_name, slug, spec.col_name
+            );
+            add_index(desired, stmts, idx_name, sql);
         }
     }
 
-    // 2. Collection-level compound indexes
+    Ok(())
+}
+
+/// Collect collection-level compound indexes.
+fn collect_compound_indexes(
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+    desired: &mut HashSet<String>,
+    stmts: &mut Vec<String>,
+) -> Result<()> {
+    let specs = collect_column_specs(&def.fields, locale_config);
+
     for index_def in &def.indexes {
-        // Validate all field names
         for field_name in &index_def.fields {
             if !is_valid_identifier(field_name) {
                 bail!(
@@ -93,53 +122,63 @@ pub(super) fn sync_indexes(
             }
         }
 
-        // Expand localized fields to locale-specific columns
-        let specs = collect_column_specs(&def.fields, locale_config);
-        let mut expanded_cols: Vec<String> = Vec::new();
-        for field_name in &index_def.fields {
-            // Find the matching column spec to check if it's localized
-            let spec = specs.iter().find(|s| s.col_name == *field_name);
-            match spec {
-                Some(s) if s.is_localized => {
-                    // For localized fields in compound indexes, use default locale column
-                    expanded_cols.push(format!(
-                        "{}__{}",
-                        field_name,
-                        sanitize_locale(&locale_config.default_locale)?
-                    ));
+        let expanded_cols: Vec<String> = index_def
+            .fields
+            .iter()
+            .map(|field_name| {
+                let spec = specs.iter().find(|s| s.col_name == *field_name);
+                match spec {
+                    Some(s) if s.is_localized => {
+                        format!("{}__{}", field_name, locale_config.default_locale)
+                    }
+                    _ => field_name.clone(),
                 }
-                _ => {
-                    expanded_cols.push(field_name.clone());
-                }
-            }
-        }
+            })
+            .collect();
 
         let col_list = expanded_cols.join(", ");
-        let name_suffix = index_def.fields.join("_");
-        let idx_name = format!("idx_{}_{}", slug, name_suffix);
+        let idx_name = format!("idx_{}_{}", slug, index_def.fields.join("_"));
         let unique = if index_def.unique { "UNIQUE " } else { "" };
-        create_stmts.push(format!(
+        let sql = format!(
             "CREATE {}INDEX IF NOT EXISTS {} ON {} ({})",
             unique, idx_name, slug, col_list
-        ));
-        desired.insert(idx_name);
+        );
+        add_index(desired, stmts, idx_name, sql);
     }
 
-    // 3. Get existing managed indexes (our prefix only)
+    Ok(())
+}
+
+/// Sync B-tree indexes for a collection table: field-level `index: true` and
+/// collection-level compound `indexes`. Idempotent — creates missing indexes,
+/// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
+pub(super) fn sync_indexes(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut desired: HashSet<String> = HashSet::new();
+    let mut stmts: Vec<String> = Vec::new();
+
+    collect_field_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
+    collect_soft_delete_unique_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
+    collect_compound_indexes(slug, def, locale_config, &mut desired, &mut stmts)?;
+
+    // Drop stale indexes (in existing but not in desired)
     let prefix = format!("idx_{}_", slug);
     let existing: HashSet<String> = conn.index_names(slug, &prefix)?.into_iter().collect();
 
-    // 4. Drop stale indexes (in existing but not in desired)
     for name in existing.difference(&desired) {
-        tracing::info!("Dropping stale index: {}", name);
+        info!("Dropping stale index: {}", name);
         conn.execute_ddl(&format!("DROP INDEX IF EXISTS {}", name), &[])
             .with_context(|| format!("Failed to drop index {}", name))?;
     }
 
-    // 5. Create missing indexes
-    for stmt_sql in &create_stmts {
-        conn.execute_ddl(stmt_sql, &[])
-            .with_context(|| format!("Failed to create index: {}", stmt_sql))?;
+    // Create missing indexes
+    for sql in &stmts {
+        conn.execute_ddl(sql, &[])
+            .with_context(|| format!("Failed to create index: {}", sql))?;
     }
 
     Ok(())

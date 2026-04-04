@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
+use tracing::{debug, info, warn};
 
 use crate::{
     config::LocaleConfig,
@@ -12,6 +13,41 @@ use crate::{
     },
 };
 
+/// Column constraint options for `build_column_def`.
+struct ColumnConstraints<'a> {
+    required: bool,
+    unique: bool,
+    soft_delete: bool,
+    default_value: &'a Option<Value>,
+    field_type: &'a FieldType,
+    db_kind: &'a str,
+}
+
+/// Build a column definition string with type, constraints, and default.
+fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstraints) -> String {
+    let mut col = format!("{} {}", col_name, col_type);
+
+    if constraints.required {
+        col.push_str(" NOT NULL");
+    }
+
+    // Skip inline UNIQUE for soft-delete collections — a partial
+    // unique index (WHERE _deleted_at IS NULL) is created instead
+    // by sync_indexes so that deleted rows don't block new inserts.
+    if constraints.unique && !constraints.soft_delete {
+        col.push_str(" UNIQUE");
+    }
+
+    append_default_value_for(
+        &mut col,
+        constraints.default_value,
+        constraints.field_type,
+        constraints.db_kind,
+    );
+
+    col
+}
+
 pub fn create_collection_table(
     conn: &dyn DbConnection,
     slug: &str,
@@ -20,92 +56,106 @@ pub fn create_collection_table(
 ) -> Result<()> {
     let mut columns = vec!["id TEXT PRIMARY KEY".to_string()];
 
+    collect_field_columns(&mut columns, conn, def, locale_config)?;
+    collect_system_columns(&mut columns, conn, def);
+
+    let sql = format!("CREATE TABLE \"{}\" ({})", slug, columns.join(", "));
+
+    info!("Creating collection table: {}", slug);
+    debug!("SQL: {}", sql);
+
+    conn.execute_ddl(&sql, &[])
+        .with_context(|| format!("Failed to create table {}", slug))?;
+
+    Ok(())
+}
+
+/// Collect user-defined field columns (including localized variants).
+fn collect_field_columns(
+    columns: &mut Vec<String>,
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
     for spec in &collect_column_specs(&def.fields, locale_config) {
+        let col_type = if spec.companion_text {
+            "TEXT"
+        } else {
+            conn.column_type_for(&spec.field.field_type)
+        };
+
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
-                let col_type = if spec.companion_text {
-                    "TEXT"
+                let is_required = !spec.companion_text
+                    && spec.field.required
+                    && *locale == locale_config.default_locale
+                    && !def.has_drafts();
+
+                if spec.companion_text {
+                    columns.push(format!("{} TEXT", col_name));
                 } else {
-                    conn.column_type_for(&spec.field.field_type)
-                };
-                let mut col = format!("{} {}", col_name, col_type);
-
-                if !spec.companion_text {
-                    if spec.field.required
-                        && *locale == locale_config.default_locale
-                        && !def.has_drafts()
-                    {
-                        col.push_str(" NOT NULL");
-                    }
-                    // Skip inline UNIQUE for soft-delete collections — a partial
-                    // unique index (WHERE _deleted_at IS NULL) is created instead
-                    // by sync_indexes so that deleted rows don't block new inserts.
-                    if spec.field.unique && !def.soft_delete {
-                        col.push_str(" UNIQUE");
-                    }
-                    append_default_value_for(
-                        &mut col,
-                        &spec.field.default_value,
-                        &spec.field.field_type,
-                        conn.kind(),
-                    );
+                    let c = ColumnConstraints {
+                        required: is_required,
+                        unique: spec.field.unique,
+                        soft_delete: def.soft_delete,
+                        default_value: &spec.field.default_value,
+                        field_type: &spec.field.field_type,
+                        db_kind: conn.kind(),
+                    };
+                    columns.push(build_column_def(&col_name, col_type, &c));
                 }
-                columns.push(col);
             }
+        } else if spec.companion_text {
+            columns.push(format!("{} TEXT", spec.col_name));
         } else {
-            let col_type = if spec.companion_text {
-                "TEXT"
-            } else {
-                conn.column_type_for(&spec.field.field_type)
+            let c = ColumnConstraints {
+                required: spec.field.required && !def.has_drafts(),
+                unique: spec.field.unique,
+                soft_delete: def.soft_delete,
+                default_value: &spec.field.default_value,
+                field_type: &spec.field.field_type,
+                db_kind: conn.kind(),
             };
-            let mut col = format!("{} {}", spec.col_name, col_type);
-
-            if !spec.companion_text {
-                if spec.field.required && !def.has_drafts() {
-                    col.push_str(" NOT NULL");
-                }
-                // Skip inline UNIQUE for soft-delete collections (see above).
-                if spec.field.unique && !def.soft_delete {
-                    col.push_str(" UNIQUE");
-                }
-                append_default_value_for(
-                    &mut col,
-                    &spec.field.default_value,
-                    &spec.field.field_type,
-                    conn.kind(),
-                );
-            }
-            columns.push(col);
+            columns.push(build_column_def(&spec.col_name, col_type, &c));
         }
     }
 
-    // Versioned collections with drafts get a _status column
+    Ok(())
+}
+
+/// Collect system columns (status, auth, timestamps, etc.).
+fn collect_system_columns(
+    columns: &mut Vec<String>,
+    conn: &dyn DbConnection,
+    def: &CollectionDefinition,
+) {
     if def.has_drafts() {
         columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
     }
 
-    // Soft-delete collections get a _deleted_at column
     if def.soft_delete {
         columns.push(format!("_deleted_at {}", conn.timestamp_column_type()));
     }
 
-    // All collections get a reference count for delete protection
     columns.push("_ref_count INTEGER NOT NULL DEFAULT 0".to_string());
 
-    // Auth collections get hidden system columns (not regular fields)
     if def.is_auth_collection() {
-        columns.push("_password_hash TEXT".to_string());
-        columns.push("_reset_token TEXT".to_string());
-        columns.push("_reset_token_exp INTEGER".to_string());
-        columns.push("_locked INTEGER DEFAULT 0".to_string());
-        columns.push("_settings TEXT".to_string());
-        columns.push("_session_version INTEGER DEFAULT 0".to_string());
+        columns.extend([
+            "_password_hash TEXT".to_string(),
+            "_reset_token TEXT".to_string(),
+            "_reset_token_exp INTEGER".to_string(),
+            "_locked INTEGER DEFAULT 0".to_string(),
+            "_settings TEXT".to_string(),
+            "_session_version INTEGER DEFAULT 0".to_string(),
+        ]);
 
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
-            columns.push("_verified INTEGER DEFAULT 0".to_string());
-            columns.push("_verification_token TEXT".to_string());
-            columns.push("_verification_token_exp INTEGER".to_string());
+            columns.extend([
+                "_verified INTEGER DEFAULT 0".to_string(),
+                "_verification_token TEXT".to_string(),
+                "_verification_token_exp INTEGER".to_string(),
+            ]);
         }
     }
 
@@ -113,16 +163,6 @@ pub fn create_collection_table(
         columns.push(format!("created_at {}", conn.timestamp_column_default()));
         columns.push(format!("updated_at {}", conn.timestamp_column_default()));
     }
-
-    let sql = format!("CREATE TABLE \"{}\" ({})", slug, columns.join(", "));
-
-    tracing::info!("Creating collection table: {}", slug);
-    tracing::debug!("SQL: {}", sql);
-
-    conn.execute_ddl(&sql, &[])
-        .with_context(|| format!("Failed to create table {}", slug))?;
-
-    Ok(())
 }
 
 /// Append a DEFAULT value clause to a column definition string.
@@ -160,19 +200,19 @@ pub fn append_default_value_for(
 fn warn_default_type_mismatch(default: &Value, field_type: &FieldType) {
     match (default, field_type) {
         (Value::String(_), FieldType::Number | FieldType::Checkbox) => {
-            tracing::warn!(
+            warn!(
                 "String default value on {:?} field — possible type mismatch",
                 field_type
             );
         }
         (Value::Bool(_), FieldType::Text | FieldType::Textarea | FieldType::Email) => {
-            tracing::warn!(
+            warn!(
                 "Bool default value on {:?} field — possible type mismatch",
                 field_type
             );
         }
         (Value::Number(_), FieldType::Checkbox) => {
-            tracing::warn!("Number default value on Checkbox field — use a bool default instead");
+            warn!("Number default value on Checkbox field — use a bool default instead");
         }
         _ => {}
     }
@@ -186,16 +226,27 @@ mod tests {
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType};
-    use crate::db::migrate::helpers::{get_table_columns, table_exists};
+    use crate::db::migrate::helpers::get_table_columns;
+
+    /// Create a collection table and return its column names.
+    fn create_and_columns(
+        slug: &str,
+        def: &CollectionDefinition,
+        locale: &LocaleConfig,
+    ) -> std::collections::HashSet<String> {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        create_collection_table(&conn, slug, def, locale).unwrap();
+
+        get_table_columns(&conn, slug).unwrap()
+    }
 
     #[test]
     fn create_simple_collection_table() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection("posts", vec![text_field("title"), text_field("body")]);
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        assert!(table_exists(&conn, "posts").unwrap());
-        let cols = get_table_columns(&conn, "posts").unwrap();
+        let cols = create_and_columns("posts", &def, &no_locale());
+
         assert!(cols.contains("id"));
         assert!(cols.contains("title"));
         assert!(cols.contains("body"));
@@ -205,12 +256,9 @@ mod tests {
 
     #[test]
     fn create_with_localized_fields() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection("posts", vec![localized_field("title")]);
-        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        let cols = create_and_columns("posts", &def, &locale_en_de());
 
-        let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("title__en"), "should have en locale column");
         assert!(cols.contains("title__de"), "should have de locale column");
         assert!(!cols.contains("title"), "should NOT have bare title column");
@@ -218,17 +266,13 @@ mod tests {
 
     #[test]
     fn create_auth_collection_has_system_columns() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let mut def = simple_collection("users", vec![text_field("email")]);
         def.auth = Some({
             let mut auth = Auth::new(true);
             auth.verify_email = true;
             auth
         });
-        create_collection_table(&conn, "users", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "users").unwrap();
+        let cols = create_and_columns("users", &def, &no_locale());
         assert!(cols.contains("_password_hash"));
         assert!(cols.contains("_reset_token"));
         assert!(cols.contains("_reset_token_exp"));
@@ -241,20 +285,15 @@ mod tests {
 
     #[test]
     fn drafts_collection_has_status_column() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.versions = Some(VersionsConfig::new(true, 0));
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        let cols = create_and_columns("posts", &def, &no_locale());
 
-        let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("_status"));
     }
 
     #[test]
     fn group_field_creates_prefixed_columns() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -263,9 +302,8 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        let cols = create_and_columns("posts", &def, &no_locale());
 
-        let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("seo__meta_title"));
         assert!(cols.contains("seo__meta_desc"));
         assert!(
@@ -276,8 +314,6 @@ mod tests {
 
     #[test]
     fn create_with_default_values() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -289,15 +325,12 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         // Just verify it was created (defaults encoded in DDL)
-        assert!(table_exists(&conn, "posts").unwrap());
+        let _ = create_and_columns("posts", &def, &no_locale());
     }
 
     #[test]
     fn create_with_required_unique_fields() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -307,27 +340,21 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        assert!(table_exists(&conn, "posts").unwrap());
+        let _ = create_and_columns("posts", &def, &no_locale());
     }
 
     #[test]
     fn create_collection_no_timestamps() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.timestamps = false;
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        let cols = create_and_columns("posts", &def, &no_locale());
 
-        let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(!cols.contains("created_at"));
         assert!(!cols.contains("updated_at"));
     }
 
     #[test]
     fn create_localized_group_subfield() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -340,17 +367,14 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        let cols = create_and_columns("posts", &def, &locale_en_de());
 
-        let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("seo__title__en"));
         assert!(cols.contains("seo__title__de"));
     }
 
     #[test]
     fn create_required_localized_field() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -361,16 +385,11 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
-
-        // Should succeed — NOT NULL only on default locale
-        assert!(table_exists(&conn, "posts").unwrap());
+        let _ = create_and_columns("posts", &def, &locale_en_de());
     }
 
     #[test]
     fn create_required_localized_group_subfield() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -385,16 +404,13 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
+        let cols = create_and_columns("posts", &def, &locale_en_de());
         assert!(cols.contains("seo__title__en"));
         assert!(cols.contains("seo__title__de"));
     }
 
     #[test]
     fn row_field_promotes_sub_fields_without_prefix() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -403,31 +419,15 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("first_name"),
-            "Row sub-field should be a top-level column"
-        );
-        assert!(
-            cols.contains("last_name"),
-            "Row sub-field should be a top-level column"
-        );
-        assert!(
-            !cols.contains("layout"),
-            "Row field itself should not be a column"
-        );
-        assert!(
-            !cols.contains("layout__first_name"),
-            "Row should not use prefix"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("first_name"));
+        assert!(cols.contains("last_name"));
+        assert!(!cols.contains("layout"));
+        assert!(!cols.contains("layout__first_name"));
     }
 
     #[test]
     fn collapsible_field_promotes_sub_fields_without_prefix() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -436,31 +436,15 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("summary"),
-            "Collapsible sub-field should be promoted"
-        );
-        assert!(
-            cols.contains("notes"),
-            "Collapsible sub-field should be promoted"
-        );
-        assert!(
-            !cols.contains("details"),
-            "Collapsible container should not be a column"
-        );
-        assert!(
-            !cols.contains("details__summary"),
-            "Collapsible should not use prefix"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("summary"));
+        assert!(cols.contains("notes"));
+        assert!(!cols.contains("details"));
+        assert!(!cols.contains("details__summary"));
     }
 
     #[test]
     fn tabs_field_promotes_sub_fields_without_prefix() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -472,24 +456,14 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("body"), "Tabs sub-field should be promoted");
-        assert!(
-            cols.contains("meta_title"),
-            "Tabs sub-field should be promoted"
-        );
-        assert!(
-            !cols.contains("layout"),
-            "Tabs container should not be a column"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("body"));
+        assert!(cols.contains("meta_title"));
+        assert!(!cols.contains("layout"));
     }
 
     #[test]
     fn tabs_containing_group_creates_prefixed_columns() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -508,31 +482,15 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("social__github"),
-            "Group inside Tabs should use group__subfield"
-        );
-        assert!(
-            cols.contains("social__twitter"),
-            "Group inside Tabs should use group__subfield"
-        );
-        assert!(
-            cols.contains("body"),
-            "Plain field in Tabs should be promoted flat"
-        );
-        assert!(
-            !cols.contains("social"),
-            "Group itself should not be a column"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("social__github"));
+        assert!(cols.contains("social__twitter"));
+        assert!(cols.contains("body"));
+        assert!(!cols.contains("social"));
     }
 
     #[test]
     fn collapsible_containing_group_creates_prefixed_columns() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -545,24 +503,14 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("seo__title"),
-            "Group inside Collapsible should use group__subfield"
-        );
-        assert!(
-            cols.contains("seo__desc"),
-            "Group inside Collapsible should use group__subfield"
-        );
-        assert!(!cols.contains("seo"), "Group itself should not be a column");
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("seo__title"));
+        assert!(cols.contains("seo__desc"));
+        assert!(!cols.contains("seo"));
     }
 
     #[test]
     fn deeply_nested_tabs_collapsible_group() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -583,27 +531,14 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("og__image"),
-            "Deeply nested Group inside Collapsible inside Tabs"
-        );
-        assert!(
-            cols.contains("og__title"),
-            "Deeply nested Group inside Collapsible inside Tabs"
-        );
-        assert!(
-            cols.contains("canonical"),
-            "Plain field in Collapsible inside Tabs"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("og__image"));
+        assert!(cols.contains("og__title"));
+        assert!(cols.contains("canonical"));
     }
 
     #[test]
     fn group_containing_row() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -616,22 +551,13 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("meta__title"),
-            "Group→Row should produce meta__title"
-        );
-        assert!(
-            cols.contains("meta__slug"),
-            "Group→Row should produce meta__slug"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("meta__title"));
+        assert!(cols.contains("meta__slug"));
     }
 
     #[test]
     fn group_containing_collapsible() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -644,22 +570,13 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("seo__robots"),
-            "Group→Collapsible should produce seo__robots"
-        );
-        assert!(
-            cols.contains("seo__canonical"),
-            "Group→Collapsible should produce seo__canonical"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("seo__robots"));
+        assert!(cols.contains("seo__canonical"));
     }
 
     #[test]
     fn group_containing_tabs() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -675,22 +592,13 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("settings__theme"),
-            "Group→Tabs should produce settings__theme"
-        );
-        assert!(
-            cols.contains("settings__cache_ttl"),
-            "Group→Tabs should produce settings__cache_ttl"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("settings__theme"));
+        assert!(cols.contains("settings__cache_ttl"));
     }
 
     #[test]
     fn group_tabs_group_three_levels() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -710,18 +618,12 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("outer__inner__deep_value"),
-            "Group→Tabs→Group should produce outer__inner__deep_value"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("outer__inner__deep_value"));
     }
 
     #[test]
     fn group_row_group_collapsible_four_levels() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -742,18 +644,12 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("a__b__leaf"),
-            "Group→Row→Group→Collapsible: a__b__leaf"
-        );
+        let cols = create_and_columns("posts", &def, &no_locale());
+        assert!(cols.contains("a__b__leaf"));
     }
 
     #[test]
     fn group_containing_tabs_with_locale() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
             vec![
@@ -767,17 +663,12 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
-        let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(
-            cols.contains("meta__title__en"),
-            "Localized Group→Tabs: meta__title__en"
-        );
-        assert!(
-            cols.contains("meta__title__de"),
-            "Localized Group→Tabs: meta__title__de"
-        );
+        let cols = create_and_columns("posts", &def, &locale_en_de());
+        assert!(cols.contains("meta__title__en"));
+        assert!(cols.contains("meta__title__de"));
     }
+
+    // ── Default value tests ─────────────────────────────────────────────
 
     #[test]
     fn append_default_string() {
@@ -816,31 +707,21 @@ mod tests {
 
     #[test]
     fn soft_delete_collection_has_deleted_at_column() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.soft_delete = true;
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
+        let cols = create_and_columns("posts", &def, &no_locale());
         assert!(cols.contains("_deleted_at"));
     }
 
     #[test]
     fn non_soft_delete_collection_has_no_deleted_at_column() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection("posts", vec![text_field("title")]);
-        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "posts").unwrap();
+        let cols = create_and_columns("posts", &def, &no_locale());
         assert!(!cols.contains("_deleted_at"));
     }
 
     #[test]
     fn create_date_field_with_timezone_creates_tz_column() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "events",
             vec![
@@ -849,38 +730,24 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "events", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "events").unwrap();
-        assert!(cols.contains("starts_at"), "should have main date column");
-        assert!(
-            cols.contains("starts_at_tz"),
-            "should have companion timezone column"
-        );
+        let cols = create_and_columns("events", &def, &no_locale());
+        assert!(cols.contains("starts_at"));
+        assert!(cols.contains("starts_at_tz"));
     }
 
     #[test]
     fn create_date_field_without_timezone_has_no_tz_column() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "events",
             vec![FieldDefinition::builder("starts_at", FieldType::Date).build()],
         );
-        create_collection_table(&conn, "events", &def, &no_locale()).unwrap();
-
-        let cols = get_table_columns(&conn, "events").unwrap();
+        let cols = create_and_columns("events", &def, &no_locale());
         assert!(cols.contains("starts_at"));
-        assert!(
-            !cols.contains("starts_at_tz"),
-            "should NOT have timezone column when timezone is false"
-        );
+        assert!(!cols.contains("starts_at_tz"));
     }
 
     #[test]
     fn create_localized_date_with_timezone() {
-        let (_dir, pool) = in_memory_pool();
-        let conn = pool.get().unwrap();
         let def = simple_collection(
             "events",
             vec![
@@ -890,9 +757,7 @@ mod tests {
                     .build(),
             ],
         );
-        create_collection_table(&conn, "events", &def, &locale_en_de()).unwrap();
-
-        let cols = get_table_columns(&conn, "events").unwrap();
+        let cols = create_and_columns("events", &def, &locale_en_de());
         assert!(cols.contains("starts_at__en"));
         assert!(cols.contains("starts_at__de"));
         assert!(cols.contains("starts_at_tz__en"));
