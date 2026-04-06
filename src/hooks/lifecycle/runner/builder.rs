@@ -4,10 +4,11 @@ use std::{fs, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use mlua::{Lua, LuaOptions, StdLib};
+use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
-    core::{SharedRegistry, registry::Registry, upload},
+    core::{Registry, SharedRegistry, upload},
     hooks::{
         self, HookRunner,
         api::{self, VmLabel},
@@ -60,9 +61,11 @@ impl<'a> HookRunnerBuilder<'a> {
         let config = self.config.expect("config is required");
 
         let pool_size = config.hooks.vm_pool_size.max(1);
-        tracing::info!("HookRunner: creating pool of {} Lua VMs", pool_size);
+
+        info!("HookRunner: creating pool of {} Lua VMs", pool_size);
 
         let mut vms = Vec::with_capacity(pool_size);
+
         for i in 0..pool_size {
             vms.push(create_lua_vm(config_dir, registry.clone(), config, i + 1)?);
         }
@@ -72,7 +75,7 @@ impl<'a> HookRunnerBuilder<'a> {
         let registered_events = scan_registered_events(&vms[0]);
 
         if !registered_events.is_empty() {
-            tracing::info!("HookRunner: registered events: {:?}", registered_events);
+            info!("HookRunner: registered events: {:?}", registered_events);
         }
 
         let registry_snapshot = Registry::snapshot(&registry);
@@ -94,70 +97,93 @@ fn create_lua_vm(
     vm_index: usize,
 ) -> Result<Lua> {
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
+
     hooks::sandbox_lua(&lua)?;
+
     if config.hooks.max_memory > 0 {
         lua.set_memory_limit(config.hooks.max_memory as usize)?;
     }
-    lua.set_app_data(VmLabel(format!("vm-{}", vm_index)));
 
-    // Set up package paths
+    lua.set_app_data(VmLabel(format!("vm-{vm_index}")));
+
+    setup_package_paths(&lua, config_dir)?;
+
+    register_apis(&lua, registry, config)?;
+
+    init_app_data(&lua, config_dir, config)?;
+
+    load_def_dir(&lua, config_dir, "collection")?;
+    load_def_dir(&lua, config_dir, "global")?;
+    load_def_dir(&lua, config_dir, "job")?;
+
+    execute_init_lua(&lua, config_dir, vm_index)?;
+
+    Ok(lua)
+}
+
+/// Set up Lua package.path to include the config directory.
+fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
     let code = format!(
-        r#"
-        package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path
-        "#,
+        r#"package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path"#,
         config_str
     );
+
     lua.load(&code)
         .exec()
-        .context("Failed to set package paths")?;
+        .context("Failed to set package paths")
+}
 
-    // Register crap.log, crap.util, crap.collections.define, etc.
-    api::register_api(&lua, registry.clone(), config_dir, config)?;
+/// Register the crap API and CRUD functions on the Lua VM.
+fn register_apis(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) -> Result<()> {
+    api::register_api(lua, registry.clone(), config)?;
 
-    // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
-    // These read the active transaction from Lua app_data when called inside hooks.
-    register_crud_functions(&lua, registry, &config.locale, &config.pagination)?;
+    register_crud_functions(lua, registry, &config.locale, &config.pagination)?;
 
-    // Initialize hook depth tracking and config
+    Ok(())
+}
+
+/// Initialize hook depth tracking, access config, and storage backend.
+fn init_app_data(lua: &Lua, config_dir: &Path, config: &CrapConfig) -> Result<()> {
     lua.set_app_data(HookDepth(0));
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
-    // Create and store storage backend for upload file cleanup in CRUD hooks
+
     let storage = upload::create_storage(config_dir, &config.upload)
         .context("Failed to create storage backend for Lua VM")?;
+
     lua.set_app_data(LuaStorage(storage));
 
-    // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
-    let collections_dir = config_dir.join("collections");
+    Ok(())
+}
 
-    if collections_dir.exists() {
-        let _ = hooks::load_lua_dir(&lua, &collections_dir, "collection")?;
-    }
-    let globals_dir = config_dir.join("globals");
-
-    if globals_dir.exists() {
-        let _ = hooks::load_lua_dir(&lua, &globals_dir, "global")?;
-    }
-    let jobs_dir = config_dir.join("jobs");
-
-    if jobs_dir.exists() {
-        let _ = hooks::load_lua_dir(&lua, &jobs_dir, "job")?;
-    }
-
-    // Execute init.lua so crap.hooks.register() calls take effect in this VM
+/// Execute init.lua if it exists in the config directory.
+fn execute_init_lua(lua: &Lua, config_dir: &Path, vm_index: usize) -> Result<()> {
     let init_path = config_dir.join("init.lua");
 
     if init_path.exists() {
-        tracing::debug!("[lua:vm-{vm_index}] Executing init.lua");
+        debug!("[lua:vm-{vm_index}] Executing init.lua");
+
         let code = fs::read_to_string(&init_path)
             .with_context(|| format!("Failed to read {}", init_path.display()))?;
+
         lua.load(&code)
             .set_name(init_path.to_string_lossy())
             .exec()
             .with_context(|| "HookRunner: failed to execute init.lua")?;
     }
 
-    Ok(lua)
+    Ok(())
+}
+
+/// Load Lua definition files from `{config_dir}/{kind}s/` if the directory exists.
+fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<()> {
+    let dir = config_dir.join(format!("{kind}s"));
+
+    if dir.exists() {
+        hooks::load_lua_dir(lua, &dir, kind)?;
+    }
+
+    Ok(())
 }

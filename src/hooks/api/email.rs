@@ -50,6 +50,7 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
             .unwrap_or(default_retries);
 
         let conn_ptr = get_tx_conn(lua)?;
+        // SAFETY: pointer is valid for the hook call duration — see TxContext pattern in architecture docs
         let conn = unsafe { &*conn_ptr };
 
         let job_id = queue_email(

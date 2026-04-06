@@ -5,26 +5,31 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{core::SharedRegistry, hooks::api::parse};
 
-/// Register `crap.jobs` — job definition.
+/// Register `crap.jobs.define` — job definition.
 pub(super) fn register_jobs(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
-    let jobs_table = lua.create_table()?;
-    let reg_clone = registry.clone();
-    let define_job = lua.create_function(move |_lua, (slug, config): (String, Table)| {
-        let def = parse::parse_job_definition(&slug, &config)
-            .map_err(|e| RuntimeError(format!("Failed to parse job '{}': {}", slug, e)))?;
+    let t = lua.create_table()?;
 
-        let mut reg = reg_clone
-            .write()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
+    let reg = registry.clone();
+    t.set(
+        "define",
+        lua.create_function(move |_, (slug, config): (String, Table)| {
+            define(&reg, &slug, &config)
+        })?,
+    )?;
 
-        reg.register_job(def);
+    crap.set("jobs", t)?;
 
-        Ok(())
-    })?;
+    Ok(())
+}
 
-    jobs_table.set("define", define_job)?;
+/// Parse and register a job definition.
+fn define(reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
+    let def = parse::parse_job_definition(slug, config)
+        .map_err(|e| RuntimeError(format!("Failed to parse job '{slug}': {e}")))?;
 
-    crap.set("jobs", jobs_table)?;
+    reg.write()
+        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+        .register_job(def);
 
     Ok(())
 }

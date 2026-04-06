@@ -48,11 +48,13 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
             let format_options = parse_format_options(&tbl);
 
             let mut upload = CollectionUpload::new();
+
             upload.mime_types = mime_types;
             upload.max_file_size = max_file_size;
             upload.image_sizes = image_sizes;
             upload.admin_thumbnail = admin_thumbnail;
             upload.format_options = format_options;
+
             Some(upload)
         }
         _ => None,
@@ -61,6 +63,7 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
 
 pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
     let mut sizes = Vec::new();
+
     for size_tbl in tbl.sequence_values::<Table>().flatten() {
         let name = match get_string(&size_tbl, "name") {
             Some(n) => n,
@@ -72,6 +75,7 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
         if width == 0 || height == 0 {
             continue;
         }
+
         let fit = match get_string(&size_tbl, "fit").as_deref() {
             Some("cover") => ImageFit::Cover,
             Some("contain") => ImageFit::Contain,
@@ -79,6 +83,7 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
             Some("fill") => ImageFit::Fill,
             _ => ImageFit::Cover,
         };
+
         sizes.push(
             ImageSizeBuilder::new(name)
                 .width(width)
@@ -87,6 +92,7 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
                 .build(),
         );
     }
+
     sizes
 }
 
@@ -99,12 +105,14 @@ pub(super) fn parse_format_options(tbl: &Table) -> FormatOptions {
     let webp = get_table(&fo_tbl, "webp").ok().map(|t| {
         let quality = t.get::<u8>("quality").unwrap_or(80);
         let queue = get_bool(&t, "queue", false);
+
         FormatQuality::new(quality, queue)
     });
 
     let avif = get_table(&fo_tbl, "avif").ok().map(|t| {
         let quality = t.get::<u8>("quality").unwrap_or(60);
         let queue = get_bool(&t, "queue", false);
+
         FormatQuality::new(quality, queue)
     });
 

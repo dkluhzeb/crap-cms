@@ -5,10 +5,11 @@ use std::collections::HashMap;
 use anyhow::Result;
 use mlua::Value;
 use serde_json::Value as JsonValue;
+use tracing::error;
 
 use crate::{
     core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
-    db::AccessResult,
+    db::{AccessResult, DbConnection, query::helpers::prefixed_name},
     hooks::{
         HookRunner, api,
         lifecycle::{
@@ -22,6 +23,31 @@ use crate::{
     },
 };
 
+/// Convert a Lua table returned by an auth strategy into a Document.
+fn lua_table_to_auth_user(lua: &mlua::Lua, tbl: &mlua::Table) -> Result<Document> {
+    let id: String = tbl.get("id")?;
+    let mut fields = HashMap::new();
+
+    for pair in tbl.pairs::<String, Value>() {
+        let (k, v) = pair?;
+
+        if k == "id" || k == "created_at" || k == "updated_at" {
+            continue;
+        }
+
+        fields.insert(k, api::lua_to_json(lua, &v)?);
+    }
+
+    let created_at: Option<String> = tbl.get("created_at").ok();
+    let updated_at: Option<String> = tbl.get("updated_at").ok();
+
+    Ok(DocumentBuilder::new(id)
+        .fields(fields)
+        .created_at(created_at)
+        .updated_at(updated_at)
+        .build())
+}
+
 impl HookRunner {
     /// Run a custom auth strategy function. Takes a strategy function ref and
     /// a headers map, returns Some(Document) if the strategy authenticates a user.
@@ -31,7 +57,7 @@ impl HookRunner {
         authenticate_ref: &str,
         collection: &str,
         headers: &HashMap<String, String>,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Result<Option<Document>> {
         let lua = self.pool.acquire()?;
 
@@ -43,37 +69,18 @@ impl HookRunner {
         // Build context table: { headers = {...}, collection = "..." }
         let ctx_table = lua.create_table()?;
         let headers_table = lua.create_table()?;
+
         for (k, v) in headers {
             headers_table.set(k.as_str(), v.as_str())?;
         }
+
         ctx_table.set("headers", headers_table)?;
         ctx_table.set("collection", collection)?;
 
         let result: Value = func.call(ctx_table)?;
 
         match result {
-            Value::Table(tbl) => {
-                // Strategy returned a user table — convert to Document
-                let id: String = tbl.get("id")?;
-                let mut fields = HashMap::new();
-                for pair in tbl.pairs::<String, Value>() {
-                    let (k, v) = pair?;
-
-                    if k == "id" || k == "created_at" || k == "updated_at" {
-                        continue;
-                    }
-                    fields.insert(k, api::lua_to_json(&lua, &v)?);
-                }
-                let created_at: Option<String> = tbl.get("created_at").ok();
-                let updated_at: Option<String> = tbl.get("updated_at").ok();
-                Ok(Some(
-                    DocumentBuilder::new(id)
-                        .fields(fields)
-                        .created_at(created_at)
-                        .updated_at(updated_at)
-                        .build(),
-                ))
-            }
+            Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&lua, &tbl)?)),
             Value::Nil | Value::Boolean(false) => Ok(None),
             _ => Ok(None),
         }
@@ -93,10 +100,11 @@ impl HookRunner {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&HashMap<String, JsonValue>>,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None);
+
         check_access_with_lua(&lua, access_ref, user, id, data)
     }
 
@@ -109,20 +117,24 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have read access functions (recursive check)
         if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
             return Vec::new();
         }
+
         let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
-                tracing::error!("Lua VM pool exhausted during field read access check: {e}");
+                error!("Lua VM pool exhausted during field read access check: {e}");
+
                 return deny_all_access_controlled(fields, |f| f.access.read.as_deref());
             }
         };
+
         let _guard = TxContextGuard::set(&lua, conn, None, None);
+
         check_field_read_access_with_lua(&lua, fields, user)
     }
 
@@ -136,7 +148,7 @@ impl HookRunner {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         operation: &str,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have write access functions (recursive check)
         let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
@@ -144,17 +156,22 @@ impl HookRunner {
             "update" => |f| f.access.update.as_deref(),
             _ => return Vec::new(),
         };
+
         if !has_any_field_access(fields, extractor) {
             return Vec::new();
         }
+
         let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
-                tracing::error!("Lua VM pool exhausted during field write access check: {e}");
+                error!("Lua VM pool exhausted during field write access check: {e}");
+
                 return deny_all_access_controlled(fields, extractor);
             }
         };
+
         let _guard = TxContextGuard::set(&lua, conn, None, None);
+
         check_field_write_access_with_lua(&lua, fields, user, operation)
     }
 }
@@ -177,11 +194,7 @@ fn deny_all_recursive(
     let mut denied = Vec::new();
 
     for field in fields {
-        let full_name = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
+        let full_name = prefixed_name(prefix, &field.name);
 
         if extractor(field).is_some() {
             denied.push(full_name.clone());

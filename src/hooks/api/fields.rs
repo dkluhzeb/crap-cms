@@ -4,6 +4,7 @@
 use anyhow::Result;
 use mlua::{Lua, Table};
 
+/// Register `crap.fields.*` — per-type factory functions (e.g. `crap.fields.text({ name = "title" })`).
 pub(super) fn register_fields(lua: &Lua, crap: &Table) -> Result<()> {
     let fields_table = lua.create_table()?;
 
@@ -34,8 +35,10 @@ pub(super) fn register_fields(lua: &Lua, crap: &Table) -> Result<()> {
         let type_str = type_name.to_string();
         let factory = lua.create_function(move |_lua, config: Table| {
             config.set("type", type_str.clone())?;
+
             Ok(config)
         })?;
+
         fields_table.set(type_name, factory)?;
     }
 

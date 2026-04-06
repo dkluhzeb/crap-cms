@@ -10,6 +10,7 @@ use std::{
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use reqwest::{Method, blocking::Client, redirect};
+use tracing::debug;
 use url::Url;
 
 const MAX_REDIRECTS: u8 = 10;
@@ -23,132 +24,185 @@ pub(super) fn register_http(
     max_response_bytes: u64,
 ) -> Result<()> {
     if !allow_private_networks {
-        tracing::debug!("crap.http: private network blocking enabled with DNS pinning");
+        debug!("crap.http: private network blocking enabled with DNS pinning");
     }
 
-    let http_table = lua.create_table()?;
-    let http_request_fn = lua.create_function(move |lua, opts: Table| -> LuaResult<Table> {
-        let url: String = opts.get("url")?;
-        let method: String = opts
-            .get::<Option<String>>("method")?
-            .unwrap_or_else(|| "GET".to_string())
-            .to_uppercase();
-        let timeout: u64 = opts.get::<Option<u64>>("timeout")?.unwrap_or(30);
-        let body: Option<String> = opts.get("body")?;
-        let timeout_dur = Duration::from_secs(timeout);
+    let t = lua.create_table()?;
+    t.set(
+        "request",
+        lua.create_function(move |lua, opts: Table| {
+            http_request(lua, &opts, allow_private_networks, max_response_bytes)
+        })?,
+    )?;
 
-        // Validate method before any network call
-        if !ALLOWED_METHODS.contains(&method.as_str()) {
-            return Err(RuntimeError(format!("unsupported HTTP method: {method}")));
-        }
-        let method: Method = method
-            .parse()
-            .map_err(|e| RuntimeError(format!("invalid HTTP method: {e}")))?;
-
-        // Collect headers
-        let headers: Vec<(String, String)> = if let Ok(headers_tbl) = opts.get::<Table>("headers") {
-            headers_tbl
-                .pairs::<String, String>()
-                .collect::<LuaResult<Vec<_>>>()?
-        } else {
-            Vec::new()
-        };
-
-        // Resolve + pin DNS (or skip when private networks allowed)
-        let pin = if !allow_private_networks {
-            let (host, addr) = validate_url(&url).map_err(RuntimeError)?;
-            Some((host, addr))
-        } else {
-            None
-        };
-
-        let client = build_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)), timeout_dur)
-            .map_err(RuntimeError)?;
-
-        // Manual redirect loop — re-validate DNS on each hop
-        let mut current_url = url;
-        let mut current_client = client;
-        let mut redirects: u8 = 0;
-
-        loop {
-            let mut req = current_client.request(method.clone(), &current_url);
-            for (k, v) in &headers {
-                req = req.header(k.as_str(), v.as_str());
-            }
-            // Only attach body on first request (not on redirect follows)
-            if redirects == 0
-                && let Some(ref body_str) = body
-            {
-                req = req.body(body_str.clone());
-            }
-
-            let resp = req
-                .send()
-                .map_err(|e| RuntimeError(format!("HTTP transport error: {e}")))?;
-
-            // Check for redirect
-            if resp.status().is_redirection() {
-                redirects += 1;
-                if redirects > MAX_REDIRECTS {
-                    return Err(RuntimeError("too many redirects (max 10)".to_string()));
-                }
-                let location = resp
-                    .headers()
-                    .get("location")
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| RuntimeError("redirect without Location header".to_string()))?
-                    .to_string();
-
-                // Resolve relative redirect
-                let next_url = Url::parse(&current_url)
-                    .and_then(|base| base.join(&location))
-                    .map_err(|e| RuntimeError(format!("invalid redirect URL: {e}")))?
-                    .to_string();
-
-                // Re-validate + re-pin DNS for the new URL
-                let next_pin = if !allow_private_networks {
-                    let (host, addr) = validate_url(&next_url).map_err(RuntimeError)?;
-                    Some((host, addr))
-                } else {
-                    None
-                };
-
-                current_client = build_client(
-                    next_pin.as_ref().map(|(h, a)| (h.as_str(), *a)),
-                    timeout_dur,
-                )
-                .map_err(RuntimeError)?;
-                current_url = next_url;
-                continue;
-            }
-
-            // Build response table
-            let result = lua.create_table()?;
-            result.set("status", resp.status().as_u16() as i64)?;
-
-            let headers_out = lua.create_table()?;
-            for (name, val) in resp.headers().iter() {
-                if let Ok(v) = val.to_str() {
-                    headers_out.set(name.as_str(), v)?;
-                }
-            }
-            result.set("headers", headers_out)?;
-
-            let mut body_buf = String::new();
-            resp.take(max_response_bytes)
-                .read_to_string(&mut body_buf)
-                .map_err(|e| RuntimeError(format!("failed to read response body: {e}")))?;
-            result.set("body", body_buf)?;
-
-            return Ok(result);
-        }
-    })?;
-
-    http_table.set("request", http_request_fn)?;
-
-    crap.set("http", http_table)?;
+    crap.set("http", t)?;
 
     Ok(())
+}
+
+/// Execute an HTTP request with SSRF protection and redirect following.
+fn http_request(
+    lua: &Lua,
+    opts: &Table,
+    allow_private_networks: bool,
+    max_response_bytes: u64,
+) -> LuaResult<Table> {
+    let r = parse_request_opts(opts)?;
+
+    let mut current_url = r.url;
+    let mut current_client =
+        resolve_and_build_client(&current_url, allow_private_networks, r.timeout)?;
+    let mut redirects: u8 = 0;
+
+    loop {
+        let mut req = current_client.request(r.method.clone(), &current_url);
+
+        for (k, v) in &r.headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+
+        if redirects == 0
+            && let Some(ref b) = r.body
+        {
+            req = req.body(b.clone());
+        }
+
+        let resp = req
+            .send()
+            .map_err(|e| RuntimeError(format!("HTTP transport error: {e}")))?;
+
+        if resp.status().is_redirection() {
+            let next = follow_redirect(
+                &current_url,
+                &resp,
+                &mut redirects,
+                allow_private_networks,
+                r.timeout,
+            )?;
+            current_url = next.0;
+            current_client = next.1;
+
+            continue;
+        }
+
+        return build_response_table(lua, resp, max_response_bytes);
+    }
+}
+
+/// Parsed HTTP request options from Lua.
+struct RequestOpts {
+    method: Method,
+    url: String,
+    timeout: Duration,
+    body: Option<String>,
+    headers: Vec<(String, String)>,
+}
+
+/// Parse request options from the Lua table.
+fn parse_request_opts(opts: &Table) -> LuaResult<RequestOpts> {
+    let url: String = opts.get("url")?;
+    let method_str: String = opts
+        .get::<Option<String>>("method")?
+        .unwrap_or_else(|| "GET".to_string())
+        .to_uppercase();
+
+    if !ALLOWED_METHODS.contains(&method_str.as_str()) {
+        return Err(RuntimeError(format!(
+            "unsupported HTTP method: {method_str}"
+        )));
+    }
+
+    let method: Method = method_str
+        .parse()
+        .map_err(|e| RuntimeError(format!("invalid HTTP method: {e}")))?;
+
+    let timeout = Duration::from_secs(opts.get::<Option<u64>>("timeout")?.unwrap_or(30));
+    let body: Option<String> = opts.get("body")?;
+
+    let headers = opts
+        .get::<Table>("headers")
+        .map(|h| h.pairs::<String, String>().collect::<LuaResult<Vec<_>>>())
+        .unwrap_or(Ok(Vec::new()))?;
+
+    Ok(RequestOpts {
+        method,
+        url,
+        timeout,
+        body,
+        headers,
+    })
+}
+
+/// Resolve DNS and build a pinned HTTP client (or unpinned if private networks allowed).
+fn resolve_and_build_client(
+    url: &str,
+    allow_private_networks: bool,
+    timeout: Duration,
+) -> LuaResult<Client> {
+    let pin = if !allow_private_networks {
+        let (host, addr) = validate_url(url).map_err(RuntimeError)?;
+        Some((host, addr))
+    } else {
+        None
+    };
+
+    build_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)), timeout).map_err(RuntimeError)
+}
+
+/// Handle a redirect: validate Location, re-resolve DNS, return new (url, client).
+fn follow_redirect(
+    current_url: &str,
+    resp: &reqwest::blocking::Response,
+    redirects: &mut u8,
+    allow_private_networks: bool,
+    timeout: Duration,
+) -> LuaResult<(String, Client)> {
+    *redirects += 1;
+    if *redirects > MAX_REDIRECTS {
+        return Err(RuntimeError("too many redirects (max 10)".to_string()));
+    }
+
+    let location = resp
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| RuntimeError("redirect without Location header".to_string()))?;
+
+    let next_url = Url::parse(current_url)
+        .and_then(|base| base.join(location))
+        .map_err(|e| RuntimeError(format!("invalid redirect URL: {e}")))?
+        .to_string();
+
+    let client = resolve_and_build_client(&next_url, allow_private_networks, timeout)?;
+
+    Ok((next_url, client))
+}
+
+/// Build a Lua response table from an HTTP response.
+fn build_response_table(
+    lua: &Lua,
+    resp: reqwest::blocking::Response,
+    max_bytes: u64,
+) -> LuaResult<Table> {
+    let result = lua.create_table()?;
+    result.set("status", resp.status().as_u16() as i64)?;
+
+    let headers_out = lua.create_table()?;
+
+    for (name, val) in resp.headers().iter() {
+        if let Ok(v) = val.to_str() {
+            headers_out.set(name.as_str(), v)?;
+        }
+    }
+    result.set("headers", headers_out)?;
+
+    let mut body_buf = String::new();
+    resp.take(max_bytes)
+        .read_to_string(&mut body_buf)
+        .map_err(|e| RuntimeError(format!("failed to read response body: {e}")))?;
+    result.set("body", body_buf)?;
+
+    Ok(result)
 }
 
 /// Resolve and validate a URL against SSRF policy.
@@ -177,15 +231,18 @@ fn validate_url(url_str: &str) -> StdResult<(String, SocketAddr), String> {
         if is_private_ip(addr.ip()) {
             continue;
         }
+
         return Ok((host, addr));
     }
 
     // All addresses were private — report the first one in the error
     if let Some(addr) = addrs.first() {
         let ip = addr.ip();
+
         if ip.is_loopback() || ip.is_unspecified() {
             return Err(format!("requests to {ip} are blocked"));
         }
+
         return Err(format!("requests to private network {ip} are blocked"));
     }
 
@@ -197,6 +254,7 @@ fn is_private_ip(ip: IpAddr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
         return true;
     }
+
     match ip {
         IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => {
@@ -207,7 +265,9 @@ fn is_private_ip(ip: IpAddr) -> bool {
                     || mapped.is_private()
                     || mapped.is_link_local();
             }
+
             let segments = v6.segments();
+
             // fc00::/7 (unique local) or fe80::/10 (link-local)
             (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80
         }

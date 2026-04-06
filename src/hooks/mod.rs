@@ -26,7 +26,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
     setup_package_paths(&lua, config_dir)?;
 
     // Register the crap global API table
-    api::register_api(&lua, registry.clone(), config_dir, config)?;
+    api::register_api(&lua, registry.clone(), config)?;
 
     // Auto-load collections/*.lua
     let collections_dir = config_dir.join("collections");

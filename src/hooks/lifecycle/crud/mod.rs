@@ -1,20 +1,26 @@
 //! Lua CRUD function registration — split into per-operation modules.
 
+mod count;
+mod create;
 mod delete;
+mod delete_many;
 mod find;
-mod globals;
-mod unpublish_ctx_builder;
-mod write;
+mod find_by_id;
+mod globals_get;
+mod globals_update;
+mod helpers;
+mod jobs_queue;
+mod register;
+mod restore;
+mod unpublish;
+mod update;
+mod update_many;
 
-use anyhow::Result;
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
+pub(crate) use register::register_crud_functions;
 
-use crate::{
-    config::{LocaleConfig, PaginationConfig},
-    core::SharedRegistry,
-    db::DbConnection,
-    hooks::lifecycle::TxContext,
-};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult};
+
+use crate::{db::DbConnection, hooks::lifecycle::TxContext};
 
 /// Get the active transaction connection from Lua app_data.
 /// Returns an error if called outside of `run_hooks_with_conn`.
@@ -27,46 +33,6 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<*const dyn DbConnection> {
         )
     })?;
     Ok(ctx.as_ptr())
-}
-
-/// Register the CRUD functions on `crap.collections` and `crap.globals`.
-/// They read the active connection from Lua app_data (set by `run_hooks_with_conn`).
-/// Untestable as unit: registers Lua closures that require TxContext + full DB.
-/// Covered by integration tests (hook CRUD operations in tests/).
-#[cfg(not(tarpaulin_include))]
-pub(crate) fn register_crud_functions(
-    lua: &Lua,
-    registry: SharedRegistry,
-    locale_config: &LocaleConfig,
-    pagination_config: &PaginationConfig,
-) -> Result<()> {
-    let crap: Table = lua.globals().get("crap")?;
-    let collections: Table = crap.get("collections")?;
-
-    find::register_find(
-        lua,
-        &collections,
-        registry.clone(),
-        locale_config,
-        pagination_config,
-    )?;
-    find::register_find_by_id(lua, &collections, registry.clone(), locale_config)?;
-    write::register_create(lua, &collections, registry.clone(), locale_config)?;
-    write::register_update(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_restore(lua, &collections, registry.clone())?;
-    find::register_count(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_update_many(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_delete_many(lua, &collections, registry.clone(), locale_config)?;
-
-    let globals_table: Table = crap.get("globals")?;
-    globals::register_globals_get(lua, &globals_table, registry.clone(), locale_config)?;
-    globals::register_globals_update(lua, &globals_table, registry.clone(), locale_config)?;
-
-    let jobs: Table = crap.get("jobs")?;
-    globals::register_jobs_queue(lua, &jobs, registry)?;
-
-    Ok(())
 }
 
 #[cfg(test)]

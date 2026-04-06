@@ -14,18 +14,22 @@ use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
 /// Convert a FieldDefinition to a full Lua table compatible with parse_fields().
 pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
+
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
 
     if f.required {
         tbl.set("required", true)?;
     }
+
     if f.unique {
         tbl.set("unique", true)?;
     }
+
     if f.localized {
         tbl.set("localized", true)?;
     }
+
     if let Some(ref v) = f.validate {
         tbl.set("validate", v.as_str())?;
     }
@@ -56,6 +60,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
     if f.timezone {
         tbl.set("timezone", true)?;
     }
+
     if let Some(ref dtz) = f.default_timezone {
         tbl.set("default_timezone", dtz.as_str())?;
     }
@@ -75,6 +80,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
             o.set("value", opt.value.as_str())?;
             opts.set(i + 1, o)?;
         }
+
         tbl.set("options", opts)?;
     }
 
@@ -96,76 +102,99 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
     // mcp
     if let Some(ref desc) = f.mcp.description {
         let mcp = lua.create_table()?;
+
         mcp.set("description", desc.as_str())?;
+
         tbl.set("mcp", mcp)?;
     }
 
     // relationship
     if let Some(ref rc) = f.relationship {
         let rel = lua.create_table()?;
+
         rel.set("collection", &*rc.collection)?;
 
         if rc.has_many {
             rel.set("has_many", true)?;
         }
+
         if let Some(md) = rc.max_depth {
             rel.set("max_depth", md)?;
         }
+
         tbl.set("relationship", rel)?;
     }
 
     // sub-fields (array, group)
     if !f.fields.is_empty() {
         let sub = lua.create_table()?;
+
         for (i, sf) in f.fields.iter().enumerate() {
             sub.set(i + 1, field_config_to_lua(lua, sf)?)?;
         }
+
         tbl.set("fields", sub)?;
     }
 
     // blocks
     if !f.blocks.is_empty() {
         let blocks = lua.create_table()?;
+
         for (i, b) in f.blocks.iter().enumerate() {
             let bt = lua.create_table()?;
+
             bt.set("type", b.block_type.as_str())?;
 
             if let Some(ref lbl) = b.label {
                 bt.set("label", localized_string_to_lua(lua, lbl)?)?;
             }
+
             if let Some(ref g) = b.group {
                 bt.set("group", g.as_str())?;
             }
+
             if let Some(ref url) = b.image_url {
                 bt.set("image_url", url.as_str())?;
             }
+
             let bf = lua.create_table()?;
+
             for (j, sf) in b.fields.iter().enumerate() {
                 bf.set(j + 1, field_config_to_lua(lua, sf)?)?;
             }
+
             bt.set("fields", bf)?;
+
             blocks.set(i + 1, bt)?;
         }
+
         tbl.set("blocks", blocks)?;
     }
 
     // tabs (for Tabs field type)
     if !f.tabs.is_empty() {
         let tabs = lua.create_table()?;
+
         for (i, tab) in f.tabs.iter().enumerate() {
             let tt = lua.create_table()?;
+
             tt.set("label", tab.label.as_str())?;
 
             if let Some(ref desc) = tab.description {
                 tt.set("description", desc.as_str())?;
             }
+
             let tf = lua.create_table()?;
+
             for (j, sf) in tab.fields.iter().enumerate() {
                 tf.set(j + 1, field_config_to_lua(lua, sf)?)?;
             }
+
             tt.set("fields", tf)?;
+
             tabs.set(i + 1, tt)?;
         }
+
         tbl.set("tabs", tabs)?;
     }
 
@@ -174,8 +203,6 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
 
 /// Convert a `FieldHooks` to a Lua table. Returns `None` if no hooks are set.
 fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> LuaResult<Option<Table>> {
-    let tbl = lua.create_table()?;
-    let mut has_any = false;
     let pairs: &[(&str, &[String])] = &[
         ("before_validate", &hooks.before_validate),
         ("before_change", &hooks.before_change),
@@ -183,39 +210,48 @@ fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> LuaResult<Option<Table>>
         ("after_read", &hooks.after_read),
     ];
 
+    if pairs.iter().all(|(_, list)| list.is_empty()) {
+        return Ok(None);
+    }
+
+    let tbl = lua.create_table()?;
+
     for (key, list) in pairs {
         if !list.is_empty() {
             let arr = lua.create_table()?;
+
             for (i, s) in list.iter().enumerate() {
                 arr.set(i + 1, s.as_str())?;
             }
+
             tbl.set(*key, arr)?;
-            has_any = true;
         }
     }
 
-    Ok(if has_any { Some(tbl) } else { None })
+    Ok(Some(tbl))
 }
 
 /// Convert a `FieldAccess` to a Lua table. Returns `None` if no access rules are set.
 fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> LuaResult<Option<Table>> {
+    if access.read.is_none() && access.create.is_none() && access.update.is_none() {
+        return Ok(None);
+    }
+
     let tbl = lua.create_table()?;
-    let mut has_any = false;
 
     if let Some(ref s) = access.read {
         tbl.set("read", s.as_str())?;
-        has_any = true;
-    }
-    if let Some(ref s) = access.create {
-        tbl.set("create", s.as_str())?;
-        has_any = true;
-    }
-    if let Some(ref s) = access.update {
-        tbl.set("update", s.as_str())?;
-        has_any = true;
     }
 
-    Ok(if has_any { Some(tbl) } else { None })
+    if let Some(ref s) = access.create {
+        tbl.set("create", s.as_str())?;
+    }
+
+    if let Some(ref s) = access.update {
+        tbl.set("update", s.as_str())?;
+    }
+
+    Ok(Some(tbl))
 }
 
 #[cfg(test)]

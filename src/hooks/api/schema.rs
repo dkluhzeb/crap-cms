@@ -3,163 +3,147 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
-use crate::core::{CollectionDefinition, FieldDefinition, SharedRegistry};
+use crate::core::{
+    CollectionDefinition, FieldDefinition, SharedRegistry,
+    collection::{GlobalDefinition, Labels},
+};
+
+/// Convert `Labels` to a Lua table with optional `singular` and `plural` keys.
+fn labels_to_lua_table(lua: &Lua, labels: &Labels) -> LuaResult<Table> {
+    let tbl = lua.create_table()?;
+
+    if let Some(ref s) = labels.singular {
+        tbl.set("singular", s.resolve_default())?;
+    }
+
+    if let Some(ref s) = labels.plural {
+        tbl.set("plural", s.resolve_default())?;
+    }
+
+    Ok(tbl)
+}
+
+/// Look up a single collection by slug and return its Lua table (or Nil).
+fn get_collection(lua: &Lua, registry: &SharedRegistry, slug: String) -> LuaResult<Value> {
+    let r = registry
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
+
+    match r.get_collection(&slug) {
+        Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
+        None => Ok(Value::Nil),
+    }
+}
+
+/// Look up a single global by slug and return its Lua table (or Nil).
+fn get_global(lua: &Lua, registry: &SharedRegistry, slug: String) -> LuaResult<Value> {
+    let r = registry
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
+
+    match r.get_global(&slug) {
+        Some(def) => Ok(Value::Table(global_def_to_lua_table(lua, def)?)),
+        None => Ok(Value::Nil),
+    }
+}
+
+/// Convert a `GlobalDefinition` to a Lua table for `crap.schema.get_global()`.
+fn global_def_to_lua_table(lua: &Lua, def: &GlobalDefinition) -> LuaResult<Table> {
+    let tbl = lua.create_table()?;
+
+    tbl.set("slug", &*def.slug)?;
+    tbl.set("labels", labels_to_lua_table(lua, &def.labels)?)?;
+
+    let fields_arr = lua.create_table()?;
+
+    for (i, f) in def.fields.iter().enumerate() {
+        fields_arr.set(i + 1, field_def_to_lua_table(lua, f)?)?;
+    }
+
+    tbl.set("fields", fields_arr)?;
+
+    Ok(tbl)
+}
+
+/// Build a slug+labels summary table for a single definition.
+fn slug_labels_table(lua: &Lua, slug: &str, labels: &Labels) -> LuaResult<Table> {
+    let item = lua.create_table()?;
+
+    item.set("slug", slug)?;
+    item.set("labels", labels_to_lua_table(lua, labels)?)?;
+
+    Ok(item)
+}
+
+/// List all collections as an array of `{ slug, labels }` tables.
+fn list_collections_fn(lua: &Lua, registry: &SharedRegistry) -> LuaResult<Table> {
+    let r = registry
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
+
+    let tbl = lua.create_table()?;
+
+    for (i, def) in r.collections.values().enumerate() {
+        tbl.set(i + 1, slug_labels_table(lua, &def.slug, &def.labels)?)?;
+    }
+
+    Ok(tbl)
+}
+
+/// List all globals as an array of `{ slug, labels }` tables.
+fn list_globals_fn(lua: &Lua, registry: &SharedRegistry) -> LuaResult<Table> {
+    let r = registry
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
+
+    let tbl = lua.create_table()?;
+
+    for (i, def) in r.globals.values().enumerate() {
+        tbl.set(i + 1, slug_labels_table(lua, &def.slug, &def.labels)?)?;
+    }
+
+    Ok(tbl)
+}
 
 /// Register `crap.schema` — read-only collection/global introspection.
 pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
     let schema_table = lua.create_table()?;
 
     let reg = registry.clone();
-    let get_collection_fn = lua.create_function(move |lua, slug: String| -> LuaResult<Value> {
-        let r = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-        match r.get_collection(&slug) {
-            Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
-            None => Ok(Value::Nil),
-        }
-    })?;
-
-    schema_table.set("get_collection", get_collection_fn)?;
+    schema_table.set(
+        "get_collection",
+        lua.create_function(move |lua, slug: String| get_collection(lua, &reg, slug))?,
+    )?;
 
     let reg = registry.clone();
-    let get_global_fn = lua.create_function(move |lua, slug: String| -> LuaResult<Value> {
-        let r = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-        match r.get_global(&slug) {
-            Some(def) => {
-                let tbl = lua.create_table()?;
-
-                tbl.set("slug", &*def.slug)?;
-
-                let labels = lua.create_table()?;
-
-                if let Some(ref s) = def.labels.singular {
-                    labels.set("singular", s.resolve_default())?;
-                }
-
-                if let Some(ref s) = def.labels.plural {
-                    labels.set("plural", s.resolve_default())?;
-                }
-
-                tbl.set("labels", labels)?;
-
-                let fields_arr = lua.create_table()?;
-
-                for (i, f) in def.fields.iter().enumerate() {
-                    fields_arr.set(i + 1, field_def_to_lua_table(lua, f)?)?;
-                }
-
-                tbl.set("fields", fields_arr)?;
-
-                Ok(Value::Table(tbl))
-            }
-            None => Ok(Value::Nil),
-        }
-    })?;
-
-    schema_table.set("get_global", get_global_fn)?;
+    schema_table.set(
+        "get_global",
+        lua.create_function(move |lua, slug: String| get_global(lua, &reg, slug))?,
+    )?;
 
     let reg = registry.clone();
-    let list_collections_fn = lua.create_function(move |lua, ()| -> LuaResult<Table> {
-        let r = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-        let tbl = lua.create_table()?;
-
-        let mut i = 0;
-
-        for def in r.collections.values() {
-            i += 1;
-
-            let item = lua.create_table()?;
-
-            item.set("slug", &*def.slug)?;
-
-            let labels = lua.create_table()?;
-
-            if let Some(ref s) = def.labels.singular {
-                labels.set("singular", s.resolve_default())?;
-            }
-
-            if let Some(ref s) = def.labels.plural {
-                labels.set("plural", s.resolve_default())?;
-            }
-
-            item.set("labels", labels)?;
-
-            tbl.set(i, item)?;
-        }
-
-        Ok(tbl)
-    })?;
-
-    schema_table.set("list_collections", list_collections_fn)?;
+    schema_table.set(
+        "list_collections",
+        lua.create_function(move |lua, ()| list_collections_fn(lua, &reg))?,
+    )?;
 
     let reg = registry.clone();
-
-    let list_globals_fn = lua.create_function(move |lua, ()| -> LuaResult<Table> {
-        let r = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-        let tbl = lua.create_table()?;
-
-        let mut i = 0;
-
-        for def in r.globals.values() {
-            i += 1;
-
-            let item = lua.create_table()?;
-
-            item.set("slug", &*def.slug)?;
-
-            let labels = lua.create_table()?;
-
-            if let Some(ref s) = def.labels.singular {
-                labels.set("singular", s.resolve_default())?;
-            }
-
-            if let Some(ref s) = def.labels.plural {
-                labels.set("plural", s.resolve_default())?;
-            }
-
-            item.set("labels", labels)?;
-
-            tbl.set(i, item)?;
-        }
-
-        Ok(tbl)
-    })?;
-
-    schema_table.set("list_globals", list_globals_fn)?;
+    schema_table.set(
+        "list_globals",
+        lua.create_function(move |lua, ()| list_globals_fn(lua, &reg))?,
+    )?;
 
     crap.set("schema", schema_table)?;
 
     Ok(())
 }
 
-/// Convert a CollectionDefinition to a Lua table for crap.schema.get_collection().
+/// Convert a `CollectionDefinition` to a Lua table for `crap.schema.get_collection()`.
 fn collection_def_to_lua_table(lua: &Lua, def: &CollectionDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     tbl.set("slug", &*def.slug)?;
-
-    let labels = lua.create_table()?;
-
-    if let Some(ref s) = def.labels.singular {
-        labels.set("singular", s.resolve_default())?;
-    }
-
-    if let Some(ref s) = def.labels.plural {
-        labels.set("plural", s.resolve_default())?;
-    }
-
-    tbl.set("labels", labels)?;
+    tbl.set("labels", labels_to_lua_table(lua, &def.labels)?)?;
     tbl.set("timestamps", def.timestamps)?;
     tbl.set("has_auth", def.is_auth_collection())?;
     tbl.set("has_upload", def.is_upload_collection())?;

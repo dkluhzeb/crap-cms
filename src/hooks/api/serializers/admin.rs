@@ -6,107 +6,92 @@ use crate::core::FieldAdmin;
 
 use super::helpers::localized_string_to_lua;
 
-/// Convert a `FieldAdmin` to a Lua table. Returns `None` if no properties are set.
+/// Convert a `FieldAdmin` to a Lua table. Returns `None` if all defaults.
 pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Option<Table>> {
-    let tbl = lua.create_table()?;
-    let mut has_any = false;
+    if *admin == FieldAdmin::default() {
+        return Ok(None);
+    }
 
-    if let Some(ref l) = admin.label {
-        tbl.set("label", localized_string_to_lua(lua, l)?)?;
-        has_any = true;
+    let tbl = lua.create_table()?;
+
+    if let Some(ref v) = admin.label {
+        tbl.set("label", localized_string_to_lua(lua, v)?)?;
     }
-    if let Some(ref p) = admin.placeholder {
-        tbl.set("placeholder", localized_string_to_lua(lua, p)?)?;
-        has_any = true;
+    if let Some(ref v) = admin.placeholder {
+        tbl.set("placeholder", localized_string_to_lua(lua, v)?)?;
     }
-    if let Some(ref d) = admin.description {
-        tbl.set("description", localized_string_to_lua(lua, d)?)?;
-        has_any = true;
+    if let Some(ref v) = admin.description {
+        tbl.set("description", localized_string_to_lua(lua, v)?)?;
     }
     if admin.hidden {
         tbl.set("hidden", true)?;
-        has_any = true;
     }
     if admin.readonly {
         tbl.set("readonly", true)?;
-        has_any = true;
     }
-    if let Some(ref w) = admin.width {
-        tbl.set("width", w.as_str())?;
-        has_any = true;
+    if let Some(ref v) = admin.width {
+        tbl.set("width", v.as_str())?;
     }
     if !admin.collapsed {
         tbl.set("collapsed", false)?;
-        has_any = true;
     }
-    if let Some(ref lf) = admin.label_field {
-        tbl.set("label_field", lf.as_str())?;
-        has_any = true;
+    if let Some(ref v) = admin.label_field {
+        tbl.set("label_field", v.as_str())?;
     }
-    if let Some(ref rl) = admin.row_label {
-        tbl.set("row_label", rl.as_str())?;
-        has_any = true;
+    if let Some(ref v) = admin.row_label {
+        tbl.set("row_label", v.as_str())?;
     }
-    if let Some(ref ls) = admin.labels_singular {
-        let labels = lua.create_table()?;
-        labels.set("singular", localized_string_to_lua(lua, ls)?)?;
+    if let Some(ref v) = admin.position {
+        tbl.set("position", v.as_str())?;
+    }
+    if let Some(ref v) = admin.condition {
+        tbl.set("condition", v.as_str())?;
+    }
+    if let Some(ref v) = admin.step {
+        tbl.set("step", v.as_str())?;
+    }
+    if let Some(v) = admin.rows {
+        tbl.set("rows", v)?;
+    }
+    if let Some(ref v) = admin.language {
+        tbl.set("language", v.as_str())?;
+    }
+    if let Some(ref v) = admin.picker {
+        tbl.set("picker", v.as_str())?;
+    }
+    if let Some(ref v) = admin.richtext_format {
+        tbl.set("format", v.as_str())?;
+    }
 
-        if let Some(ref lp) = admin.labels_plural {
-            labels.set("plural", localized_string_to_lua(lua, lp)?)?;
-        }
-        tbl.set("labels", labels)?;
-        has_any = true;
-    } else if let Some(ref lp) = admin.labels_plural {
+    // Labels subtable
+    if admin.labels_singular.is_some() || admin.labels_plural.is_some() {
         let labels = lua.create_table()?;
-        labels.set("plural", localized_string_to_lua(lua, lp)?)?;
-        tbl.set("labels", labels)?;
-        has_any = true;
-    }
-    if let Some(ref pos) = admin.position {
-        tbl.set("position", pos.as_str())?;
-        has_any = true;
-    }
-    if let Some(ref cond) = admin.condition {
-        tbl.set("condition", cond.as_str())?;
-        has_any = true;
-    }
-    if let Some(ref s) = admin.step {
-        tbl.set("step", s.as_str())?;
-        has_any = true;
-    }
-    if let Some(r) = admin.rows {
-        tbl.set("rows", r)?;
-        has_any = true;
-    }
-    if let Some(ref lang) = admin.language {
-        tbl.set("language", lang.as_str())?;
-        has_any = true;
-    }
-    if !admin.features.is_empty() {
-        let features = lua.create_table()?;
-        for (i, feat) in admin.features.iter().enumerate() {
-            features.set(i + 1, feat.as_str())?;
+        if let Some(ref v) = admin.labels_singular {
+            labels.set("singular", localized_string_to_lua(lua, v)?)?;
         }
-        tbl.set("features", features)?;
-        has_any = true;
+        if let Some(ref v) = admin.labels_plural {
+            labels.set("plural", localized_string_to_lua(lua, v)?)?;
+        }
+        tbl.set("labels", labels)?;
     }
-    if let Some(ref p) = admin.picker {
-        tbl.set("picker", p.as_str())?;
-        has_any = true;
-    }
-    if let Some(ref fmt) = admin.richtext_format {
-        tbl.set("format", fmt.as_str())?;
-        has_any = true;
+
+    // Sequence tables
+    if !admin.features.is_empty() {
+        let seq = lua.create_table()?;
+        for (i, v) in admin.features.iter().enumerate() {
+            seq.set(i + 1, v.as_str())?;
+        }
+        tbl.set("features", seq)?;
     }
     if !admin.nodes.is_empty() {
-        let nodes_tbl = lua.create_table()?;
-        for (i, n) in admin.nodes.iter().enumerate() {
-            nodes_tbl.set(i + 1, n.as_str())?;
+        let seq = lua.create_table()?;
+        for (i, v) in admin.nodes.iter().enumerate() {
+            seq.set(i + 1, v.as_str())?;
         }
-        tbl.set("nodes", nodes_tbl)?;
-        has_any = true;
+        tbl.set("nodes", seq)?;
     }
-    Ok(if has_any { Some(tbl) } else { None })
+
+    Ok(Some(tbl))
 }
 
 #[cfg(test)]
