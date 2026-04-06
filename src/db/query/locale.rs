@@ -6,9 +6,8 @@ use serde_json::{Map, Value};
 use crate::{
     config::LocaleConfig,
     core::{Document, FieldDefinition, FieldType},
+    db::query::helpers::{locale_column, prefixed_name, tz_column, walk_leaf_fields},
 };
-
-use crate::db::query::sanitize_locale;
 
 /// How to handle localized fields in a query.
 #[derive(Debug, Clone)]
@@ -36,6 +35,7 @@ impl LocaleContext {
         if !config.is_enabled() {
             return None;
         }
+
         let mode = match locale {
             Some("all") => LocaleMode::All,
             Some(l) => {
@@ -62,22 +62,10 @@ pub fn get_locale_select_columns(
     timestamps: bool,
     locale_ctx: &LocaleContext,
 ) -> Result<(Vec<String>, Vec<String>)> {
-    get_locale_select_columns_with_opts(fields, timestamps, false, locale_ctx)
+    get_locale_select_columns_full(fields, timestamps, false, false, locale_ctx)
 }
 
-/// Like [`get_locale_select_columns`] but with additional options.
-/// When `soft_delete` is true, includes the `_deleted_at` column.
-/// When `has_drafts` is true, includes the `_status` column.
-pub fn get_locale_select_columns_with_opts(
-    fields: &[FieldDefinition],
-    timestamps: bool,
-    soft_delete: bool,
-    locale_ctx: &LocaleContext,
-) -> Result<(Vec<String>, Vec<String>)> {
-    get_locale_select_columns_full(fields, timestamps, soft_delete, false, locale_ctx)
-}
-
-/// Full version with all options including draft status column.
+/// Full version with all options including soft-delete and draft status columns.
 pub fn get_locale_select_columns_full(
     fields: &[FieldDefinition],
     timestamps: bool,
@@ -88,14 +76,7 @@ pub fn get_locale_select_columns_full(
     let mut select_exprs = vec!["id".to_string()];
     let mut result_names = vec!["id".to_string()];
 
-    collect_locale_columns(
-        fields,
-        &mut select_exprs,
-        &mut result_names,
-        locale_ctx,
-        "",
-        false,
-    )?;
+    collect_locale_columns(fields, &mut select_exprs, &mut result_names, locale_ctx)?;
 
     if has_drafts {
         select_exprs.push("_status".to_string());
@@ -117,89 +98,58 @@ pub fn get_locale_select_columns_full(
     Ok((select_exprs, result_names))
 }
 
-/// Recursively collect locale-aware SELECT columns from a field tree.
+/// Push a column (or its locale-expanded variants) onto the SELECT lists.
+fn push_column(
+    select_exprs: &mut Vec<String>,
+    result_names: &mut Vec<String>,
+    col: &str,
+    is_localized: bool,
+    locale_ctx: &LocaleContext,
+) -> Result<()> {
+    if is_localized {
+        add_locale_columns(select_exprs, result_names, col, locale_ctx)
+    } else {
+        select_exprs.push(col.to_string());
+        result_names.push(col.to_string());
+        Ok(())
+    }
+}
+
+/// Collect locale-aware SELECT columns from a field tree using `walk_leaf_fields`.
 fn collect_locale_columns(
     fields: &[FieldDefinition],
     select_exprs: &mut Vec<String>,
     result_names: &mut Vec<String>,
     locale_ctx: &LocaleContext,
-    prefix: &str,
-    inherited_localized: bool,
 ) -> Result<()> {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_locale_columns(
-                    &field.fields,
+    walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if !field.has_parent_column() {
+                return Ok(());
+            }
+
+            let base = prefixed_name(prefix, &field.name);
+            let is_localized =
+                (inherited_localized || field.localized) && locale_ctx.config.is_enabled();
+
+            push_column(select_exprs, result_names, &base, is_localized, locale_ctx)?;
+
+            if field.field_type == FieldType::Date && field.timezone {
+                push_column(
                     select_exprs,
                     result_names,
+                    &tz_column(&base),
+                    is_localized,
                     locale_ctx,
-                    &new_prefix,
-                    inherited_localized || field.localized,
                 )?;
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_locale_columns(
-                    &field.fields,
-                    select_exprs,
-                    result_names,
-                    locale_ctx,
-                    prefix,
-                    inherited_localized,
-                )?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_locale_columns(
-                        &tab.fields,
-                        select_exprs,
-                        result_names,
-                        locale_ctx,
-                        prefix,
-                        inherited_localized,
-                    )?;
-                }
-            }
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
-                let base = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                let is_localized =
-                    (inherited_localized || field.localized) && locale_ctx.config.is_enabled();
 
-                if is_localized {
-                    add_locale_columns(select_exprs, result_names, &base, locale_ctx)?;
-                } else {
-                    select_exprs.push(base.clone());
-                    result_names.push(base.clone());
-                }
-
-                // Timezone companion column for date fields
-                if field.field_type == FieldType::Date && field.timezone {
-                    let tz_col = format!("{}_tz", base);
-
-                    if is_localized {
-                        add_locale_columns(select_exprs, result_names, &tz_col, locale_ctx)?;
-                    } else {
-                        select_exprs.push(tz_col.clone());
-                        result_names.push(tz_col);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
+            Ok(())
+        },
+    )
 }
 
 /// Add SELECT expressions for a localized field based on the locale mode.
@@ -211,8 +161,9 @@ fn add_locale_columns(
 ) -> Result<()> {
     match &locale_ctx.mode {
         LocaleMode::Default => {
-            let locale = sanitize_locale(&locale_ctx.config.default_locale)?;
-            select_exprs.push(format!("{}__{} AS {}", field_name, locale, field_name));
+            let col = locale_column(field_name, &locale_ctx.config.default_locale)?;
+
+            select_exprs.push(format!("{} AS {}", col, field_name));
             result_names.push(field_name.to_string());
         }
         LocaleMode::Single(req_locale) => {
@@ -221,23 +172,24 @@ fn add_locale_columns(
             } else {
                 &locale_ctx.config.default_locale
             };
-            let locale = sanitize_locale(locale)?;
 
-            let default_locale = sanitize_locale(&locale_ctx.config.default_locale)?;
-            if locale_ctx.config.fallback && locale != default_locale {
+            let req_col = locale_column(field_name, locale)?;
+            let default_col = locale_column(field_name, &locale_ctx.config.default_locale)?;
+
+            if locale_ctx.config.fallback && req_col != default_col {
                 select_exprs.push(format!(
-                    "COALESCE({}__{}, {}__{}) AS {}",
-                    field_name, locale, field_name, default_locale, field_name
+                    "COALESCE({}, {}) AS {}",
+                    req_col, default_col, field_name
                 ));
             } else {
-                select_exprs.push(format!("{}__{} AS {}", field_name, locale, field_name));
+                select_exprs.push(format!("{} AS {}", req_col, field_name));
             }
+
             result_names.push(field_name.to_string());
         }
         LocaleMode::All => {
             for locale in &locale_ctx.config.locales {
-                let locale = sanitize_locale(locale)?;
-                let col = format!("{}__{}", field_name, locale);
+                let col = locale_column(field_name, locale)?;
                 select_exprs.push(col.clone());
                 result_names.push(col);
             }
@@ -254,83 +206,40 @@ pub(crate) fn group_locale_fields(
     fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    group_locale_fields_inner(doc, fields, locale_config, "", false)
-}
+    walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if !field.has_parent_column() {
+                return Ok(());
+            }
 
-fn group_locale_fields_inner(
-    doc: &mut Document,
-    fields: &[FieldDefinition],
-    locale_config: &LocaleConfig,
-    prefix: &str,
-    inherited_localized: bool,
-) -> Result<()> {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                group_locale_fields_inner(
-                    doc,
-                    &field.fields,
-                    locale_config,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                )?;
+            let is_localized =
+                (inherited_localized || field.localized) && locale_config.is_enabled();
+
+            if !is_localized {
+                return Ok(());
             }
-            FieldType::Row | FieldType::Collapsible => {
-                group_locale_fields_inner(
-                    doc,
-                    &field.fields,
-                    locale_config,
-                    prefix,
-                    inherited_localized,
-                )?;
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    group_locale_fields_inner(
-                        doc,
-                        &tab.fields,
-                        locale_config,
-                        prefix,
-                        inherited_localized,
-                    )?;
+
+            let base = prefixed_name(prefix, &field.name);
+            let mut locale_map = Map::new();
+
+            for locale in &locale_config.locales {
+                let col = locale_column(&base, locale)?;
+
+                if let Some(val) = doc.fields.remove(&col) {
+                    locale_map.insert(locale.clone(), val);
                 }
             }
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
-                let is_localized =
-                    (inherited_localized || field.localized) && locale_config.is_enabled();
 
-                if !is_localized {
-                    continue;
-                }
-                let base = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                let mut locale_map = Map::new();
-                for locale in &locale_config.locales {
-                    let col = format!("{}__{}", base, sanitize_locale(locale)?);
-
-                    if let Some(val) = doc.fields.remove(&col) {
-                        locale_map.insert(locale.clone(), val);
-                    }
-                }
-                if !locale_map.is_empty() {
-                    doc.fields.insert(base, Value::Object(locale_map));
-                }
+            if !locale_map.is_empty() {
+                doc.fields.insert(base, Value::Object(locale_map));
             }
-        }
-    }
 
-    Ok(())
+            Ok(())
+        },
+    )
 }
 
 /// Map a flat field name to the actual locale-suffixed column name for writes.
@@ -344,24 +253,26 @@ pub(crate) fn locale_write_column(
     locale_ctx: &Option<&LocaleContext>,
     inherited_localized: bool,
 ) -> Result<String> {
-    if let Some(ctx) = locale_ctx
-        && (field.localized || inherited_localized)
-        && ctx.config.is_enabled()
-    {
-        let req_locale = match &ctx.mode {
-            LocaleMode::Single(l) => l.as_str(),
-            _ => ctx.config.default_locale.as_str(),
-        };
-        let locale = if ctx.config.locales.iter().any(|l| l == req_locale) {
-            req_locale
-        } else {
-            ctx.config.default_locale.as_str()
-        };
+    let Some(ctx) = locale_ctx.filter(|c| c.config.is_enabled()) else {
+        return Ok(field_name.to_string());
+    };
 
-        return Ok(format!("{}__{}", field_name, sanitize_locale(locale)?));
+    if !field.localized && !inherited_localized {
+        return Ok(field_name.to_string());
     }
 
-    Ok(field_name.to_string())
+    let req_locale = match &ctx.mode {
+        LocaleMode::Single(l) => l.as_str(),
+        _ => ctx.config.default_locale.as_str(),
+    };
+
+    let locale = if ctx.config.locales.iter().any(|l| l == req_locale) {
+        req_locale
+    } else {
+        ctx.config.default_locale.as_str()
+    };
+
+    locale_column(field_name, locale)
 }
 
 #[cfg(test)]

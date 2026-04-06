@@ -4,13 +4,20 @@ use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 use tracing::info;
 
-use crate::{config::LocaleConfig, core::collection::GlobalDefinition, db::DbConnection};
+use crate::{
+    config::LocaleConfig,
+    core::collection::GlobalDefinition,
+    db::{
+        DbConnection,
+        query::helpers::{global_table, locale_column},
+    },
+};
 
 use crate::db::migrate::{
     collection::append_default_value_for,
     helpers::{
-        collect_column_specs, get_table_columns, sanitize_locale, sync_join_tables,
-        sync_versions_table, table_exists,
+        collect_column_specs, get_table_columns, sync_join_tables, sync_versions_table,
+        table_exists,
     },
 };
 
@@ -21,7 +28,7 @@ pub(super) fn sync_global_table(
     def: &GlobalDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let table_name = format!("_global_{}", slug);
+    let table_name = global_table(slug);
 
     if table_exists(conn, &table_name)? {
         alter_global_table(conn, &table_name, def, locale_config)?;
@@ -73,7 +80,7 @@ fn create_global_table(
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col_name = locale_column(&spec.col_name, locale)?;
                 columns.push(build_col_def(
                     &col_name,
                     col_type,
@@ -163,7 +170,7 @@ fn add_field_columns(
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col_name = locale_column(&spec.col_name, locale)?;
                 add_column_if_missing(
                     conn,
                     table_name,
@@ -259,7 +266,7 @@ mod tests {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         sync_global_table(&conn, &def.slug, def, locale).unwrap();
-        get_table_columns(&conn, &format!("_global_{}", def.slug)).unwrap()
+        get_table_columns(&conn, &global_table(&def.slug)).unwrap()
     }
 
     /// Sync two defs sequentially (create then alter) and return columns.
@@ -272,7 +279,7 @@ mod tests {
         let conn = pool.get().unwrap();
         sync_global_table(&conn, &def1.slug, def1, locale).unwrap();
         sync_global_table(&conn, &def1.slug, def2, locale).unwrap();
-        get_table_columns(&conn, &format!("_global_{}", def1.slug)).unwrap()
+        get_table_columns(&conn, &global_table(&def1.slug)).unwrap()
     }
 
     // ── create ──────────────────────────────────────────────────────────

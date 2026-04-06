@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::core::{CollectionDefinition, Document, FieldType};
+use crate::core::Document;
 
 /// Filter SELECT columns based on a `select` list. If `select` is None or empty,
 /// returns all columns (backward compat). Always includes `id`, `created_at`, `updated_at`.
@@ -11,56 +11,28 @@ pub fn apply_select_filter(
     select_exprs: Vec<String>,
     result_names: Vec<String>,
     select: Option<&Vec<String>>,
-    def: &CollectionDefinition,
 ) -> (Vec<String>, Vec<String>) {
     let select = match select {
         Some(s) if !s.is_empty() => s,
         _ => return (select_exprs, result_names),
     };
 
-    // Build set of group field names for prefix matching
-    let group_names: HashSet<&str> = def
-        .fields
-        .iter()
-        .filter(|f| f.field_type == FieldType::Group)
-        .map(|f| f.name.as_str())
-        .collect();
-
+    let selected: HashSet<&str> = select.iter().map(|s| s.as_str()).collect();
     let mut out_exprs = Vec::new();
     let mut out_names = Vec::new();
 
     for (expr, name) in select_exprs.into_iter().zip(result_names.into_iter()) {
-        // Always include system columns
-        if name == "id" || name == "created_at" || name == "updated_at" {
+        let dominated_by_select = matches!(name.as_str(), "id" | "created_at" | "updated_at")
+            || selected.contains(name.as_str())
+            || name.split_once("__").is_some_and(|(prefix, _)| {
+                // Group prefix: "seo" selected → include "seo__title"
+                // Locale suffix: "title" selected → include "title__de"
+                selected.contains(prefix)
+            });
+
+        if dominated_by_select {
             out_exprs.push(expr);
             out_names.push(name);
-            continue;
-        }
-
-        // Check if the result name is directly selected
-        if select.iter().any(|s| s == &name) {
-            out_exprs.push(expr);
-            out_names.push(name);
-            continue;
-        }
-
-        // Check group prefix: if select contains "seo" and name is "seo__title"
-        if let Some(prefix) = name.split("__").next()
-            && group_names.contains(prefix)
-            && select.iter().any(|s| s == prefix)
-        {
-            out_exprs.push(expr);
-            out_names.push(name);
-            continue;
-        }
-
-        // Check locale suffix
-        let base = name.split("__").next().unwrap_or(&name);
-
-        if base != name && !group_names.contains(base) && select.iter().any(|s| s == base) {
-            out_exprs.push(expr);
-            out_names.push(name);
-            continue;
         }
     }
 
@@ -70,23 +42,19 @@ pub fn apply_select_filter(
 /// Strip fields not in `select` from a document. Always keeps `id`.
 /// Used for post-query field stripping (e.g., after `find_by_id`).
 pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
+    let selected: HashSet<&str> = select.iter().map(|s| s.as_str()).collect();
+
     doc.fields.retain(|key, _| {
-        if select.iter().any(|s| s == key) {
-            return true;
-        }
-        if let Some(prefix) = key.split("__").next()
-            && prefix != key
-            && select.iter().any(|s| s == prefix)
-        {
-            return true;
-        }
-        false
+        selected.contains(key.as_str())
+            || key
+                .split_once("__")
+                .is_some_and(|(prefix, _)| selected.contains(prefix))
     });
 
-    if !select.iter().any(|s| s == "created_at") {
+    if !selected.contains("created_at") {
         doc.created_at = None;
     }
-    if !select.iter().any(|s| s == "updated_at") {
+    if !selected.contains("updated_at") {
         doc.updated_at = None;
     }
 }
@@ -96,32 +64,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::collection::*;
-    use crate::core::field::*;
-
-    fn test_def() -> CollectionDefinition {
-        let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-            FieldDefinition::builder("status", FieldType::Text).build(),
-        ];
-        def
-    }
 
     #[test]
     fn apply_select_filter_with_group() {
-        let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("meta_title", FieldType::Text).build(),
-                    FieldDefinition::builder("meta_desc", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
-        let def = def;
-
         let select_exprs = vec![
             "id".to_string(),
             "title".to_string(),
@@ -134,7 +79,7 @@ mod tests {
 
         // Select only "seo" — should include all seo__* sub-columns
         let select = vec!["seo".to_string()];
-        let (exprs, names) = apply_select_filter(select_exprs, result_names, Some(&select), &def);
+        let (exprs, names) = apply_select_filter(select_exprs, result_names, Some(&select));
 
         assert!(names.contains(&"id".to_string()));
         assert!(names.contains(&"seo__meta_title".to_string()));
@@ -146,22 +91,20 @@ mod tests {
 
     #[test]
     fn apply_select_filter_none_returns_all() {
-        let def = test_def();
         let exprs = vec!["id".to_string(), "title".to_string(), "status".to_string()];
         let names = exprs.clone();
-        let (out_exprs, out_names) = apply_select_filter(exprs.clone(), names.clone(), None, &def);
+        let (out_exprs, out_names) = apply_select_filter(exprs.clone(), names.clone(), None);
         assert_eq!(out_exprs, exprs);
         assert_eq!(out_names, names);
     }
 
     #[test]
     fn apply_select_filter_empty_returns_all() {
-        let def = test_def();
         let exprs = vec!["id".to_string(), "title".to_string()];
         let names = exprs.clone();
         let empty: Vec<String> = Vec::new();
         let (out_exprs, out_names) =
-            apply_select_filter(exprs.clone(), names.clone(), Some(&empty), &def);
+            apply_select_filter(exprs.clone(), names.clone(), Some(&empty));
         assert_eq!(out_exprs, exprs);
         assert_eq!(out_names, names);
     }
@@ -169,7 +112,6 @@ mod tests {
     #[test]
     fn apply_select_filter_locale_suffix_passthrough() {
         // When a column is "title__de" and select has "title", the locale variant should be included
-        let def = test_def();
         let exprs = vec![
             "id".to_string(),
             "title__de".to_string(),
@@ -177,7 +119,7 @@ mod tests {
         ];
         let names = exprs.clone();
         let select = vec!["title".to_string()];
-        let (_, out_names) = apply_select_filter(exprs, names, Some(&select), &def);
+        let (_, out_names) = apply_select_filter(exprs, names, Some(&select));
         assert!(out_names.contains(&"id".to_string()));
         assert!(out_names.contains(&"title__de".to_string()));
         assert!(out_names.contains(&"title__en".to_string()));

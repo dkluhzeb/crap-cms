@@ -7,10 +7,7 @@ use tracing::{debug, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldType},
-    db::{
-        DbConnection,
-        migrate::helpers::{collect_column_specs, sanitize_locale},
-    },
+    db::{DbConnection, migrate::helpers::collect_column_specs, query::helpers::locale_column},
 };
 
 /// Column constraint options for `build_column_def`.
@@ -86,7 +83,7 @@ fn collect_field_columns(
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col_name = locale_column(&spec.col_name, locale)?;
                 let is_required = !spec.companion_text
                     && spec.field.required
                     && *locale == locale_config.default_locale

@@ -3,12 +3,59 @@
 //! Cursors are encoded as base64url(JSON). They contain the sort column,
 //! direction, last sort value, and document ID (tiebreaker).
 
+use std::{fmt, str, str::FromStr};
+
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::Document;
+
+/// Sort direction for ORDER BY clauses and cursor pagination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SortDirection {
+    #[serde(rename = "ASC")]
+    Asc,
+    #[serde(rename = "DESC")]
+    Desc,
+}
+
+impl SortDirection {
+    /// SQL keyword for this direction.
+    pub fn as_sql(&self) -> &'static str {
+        match self {
+            Self::Asc => "ASC",
+            Self::Desc => "DESC",
+        }
+    }
+
+    /// Return the opposite direction.
+    pub fn flip(&self) -> Self {
+        match self {
+            Self::Asc => Self::Desc,
+            Self::Desc => Self::Asc,
+        }
+    }
+}
+
+impl fmt::Display for SortDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_sql())
+    }
+}
+
+impl FromStr for SortDirection {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "ASC" => Ok(Self::Asc),
+            "DESC" => Ok(Self::Desc),
+            other => bail!("Invalid sort direction '{other}': must be ASC or DESC"),
+        }
+    }
+}
 
 /// The engine used for cursor encoding — URL-safe base64 without padding.
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -17,7 +64,7 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CursorData {
     pub sort_col: String,
-    pub sort_dir: String,
+    pub sort_dir: SortDirection,
     pub sort_val: Value,
     pub id: String,
 }
@@ -26,6 +73,7 @@ impl CursorData {
     /// Encode cursor data to a base64url string.
     pub fn encode(&self) -> Result<String> {
         let json = serde_json::to_string(self)?;
+
         Ok(B64.encode(json.as_bytes()))
     }
 
@@ -35,16 +83,14 @@ impl CursorData {
             .decode(s.as_bytes())
             .map_err(|e| anyhow!("Invalid cursor encoding: {}", e))?;
         let json_str =
-            std::str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {}", e))?;
+            str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {}", e))?;
         let data: CursorData =
             serde_json::from_str(json_str).map_err(|e| anyhow!("Invalid cursor JSON: {}", e))?;
 
         if data.sort_col.is_empty() || data.id.is_empty() {
             bail!("Cursor missing required fields");
         }
-        if data.sort_dir != "ASC" && data.sort_dir != "DESC" {
-            bail!("Cursor sort_dir must be ASC or DESC");
-        }
+
         Ok(data)
     }
 }
@@ -59,42 +105,42 @@ impl CursorData {
 pub fn build_cursors(
     docs: &[Document],
     sort_col: &str,
-    sort_dir: &str,
+    sort_dir: SortDirection,
 ) -> (Option<String>, Option<String>) {
     if docs.is_empty() {
         return (None, None);
     }
 
     let start_cursor = cursor_from_doc(&docs[0], sort_col, sort_dir);
-    let end_cursor = cursor_from_doc(&docs[docs.len() - 1], sort_col, sort_dir);
+    let end_cursor = cursor_from_doc(docs.last().unwrap(), sort_col, sort_dir);
 
     (start_cursor, end_cursor)
 }
 
 /// Extract cursor data from a document.
-fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<String> {
-    let sort_val = if sort_col == "id" {
-        Value::String(doc.id.to_string())
-    } else if sort_col == "created_at" {
-        match &doc.created_at {
-            Some(v) => Value::String(v.clone()),
-            None => Value::Null,
-        }
-    } else if sort_col == "updated_at" {
-        match &doc.updated_at {
-            Some(v) => Value::String(v.clone()),
-            None => Value::Null,
-        }
-    } else {
-        doc.fields.get(sort_col).cloned().unwrap_or(Value::Null)
+fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: SortDirection) -> Option<String> {
+    let sort_val = match sort_col {
+        "id" => Value::String(doc.id.to_string()),
+        "created_at" => doc
+            .created_at
+            .as_ref()
+            .map(|v| Value::String(v.clone()))
+            .unwrap_or(Value::Null),
+        "updated_at" => doc
+            .updated_at
+            .as_ref()
+            .map(|v| Value::String(v.clone()))
+            .unwrap_or(Value::Null),
+        col => doc.fields.get(col).cloned().unwrap_or(Value::Null),
     };
 
     let cursor = CursorData {
         sort_col: sort_col.to_string(),
-        sort_dir: sort_dir.to_string(),
+        sort_dir,
         sort_val,
         id: doc.id.to_string(),
     };
+
     match cursor.encode() {
         Ok(encoded) => Some(encoded),
         Err(e) => {
@@ -118,7 +164,7 @@ mod tests {
     fn encode_decode_roundtrip() {
         let cursor = CursorData {
             sort_col: "created_at".to_string(),
-            sort_dir: "DESC".to_string(),
+            sort_dir: SortDirection::Desc,
             sort_val: json!("2024-06-01T12:00:00"),
             id: "abc123".to_string(),
         };
@@ -166,12 +212,9 @@ mod tests {
         let json = r#"{"sort_col":"title","sort_dir":"UPDOWN","sort_val":"x","id":"abc"}"#;
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
-        assert!(result.is_err());
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("sort_dir must be ASC or DESC")
+            result.is_err(),
+            "Invalid sort_dir should fail deserialization"
         );
     }
 
@@ -187,7 +230,7 @@ mod tests {
             })
             .collect();
 
-        let (start, end) = build_cursors(&docs, "created_at", "ASC");
+        let (start, end) = build_cursors(&docs, "created_at", SortDirection::Asc);
         assert!(
             start.is_some(),
             "start_cursor should exist when results non-empty"
@@ -212,7 +255,7 @@ mod tests {
         doc.created_at = Some("2024-01-01".to_string());
         let docs = vec![doc];
 
-        let (start, end) = build_cursors(&docs, "created_at", "ASC");
+        let (start, end) = build_cursors(&docs, "created_at", SortDirection::Asc);
         assert!(start.is_some());
         assert!(end.is_some());
 
@@ -224,7 +267,7 @@ mod tests {
 
     #[test]
     fn build_cursors_empty_docs() {
-        let (start, end) = build_cursors(&[], "id", "ASC");
+        let (start, end) = build_cursors(&[], "id", SortDirection::Asc);
         assert!(start.is_none());
         assert!(end.is_none());
     }
@@ -233,7 +276,7 @@ mod tests {
     fn cursor_with_null_sort_val() {
         let cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: Value::Null,
             id: "abc".to_string(),
         };
@@ -275,7 +318,7 @@ mod tests {
         let mut doc = Document::new("doc1".to_string());
         doc.updated_at = Some("2024-06-15".to_string());
         let docs = vec![doc];
-        let (start, end) = build_cursors(&docs, "updated_at", "DESC");
+        let (start, end) = build_cursors(&docs, "updated_at", SortDirection::Desc);
         let decoded_start = CursorData::decode(&start.unwrap()).unwrap();
         let decoded_end = CursorData::decode(&end.unwrap()).unwrap();
         assert_eq!(decoded_start.sort_col, "updated_at");
@@ -289,7 +332,7 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_updated_at_none() {
         let docs = vec![Document::new("doc1".to_string())];
-        let (start, _end) = build_cursors(&docs, "updated_at", "ASC");
+        let (start, _end) = build_cursors(&docs, "updated_at", SortDirection::Asc);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_val, Value::Null);
     }
@@ -297,7 +340,7 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_created_at_none() {
         let docs = vec![Document::new("doc2".to_string())];
-        let (start, _end) = build_cursors(&docs, "created_at", "ASC");
+        let (start, _end) = build_cursors(&docs, "created_at", SortDirection::Asc);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_val, Value::Null);
     }
@@ -305,7 +348,7 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_id() {
         let docs = vec![Document::new("the-id".to_string())];
-        let (start, _end) = build_cursors(&docs, "id", "ASC");
+        let (start, _end) = build_cursors(&docs, "id", SortDirection::Asc);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "id");
         assert_eq!(decoded.sort_val, Value::String("the-id".to_string()));
@@ -316,7 +359,7 @@ mod tests {
         let mut doc = Document::new("doc3".to_string());
         doc.fields.insert("score".to_string(), json!(42));
         let docs = vec![doc];
-        let (start, _end) = build_cursors(&docs, "score", "ASC");
+        let (start, _end) = build_cursors(&docs, "score", SortDirection::Asc);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "score");
         assert_eq!(decoded.sort_val, json!(42));
@@ -325,7 +368,7 @@ mod tests {
     #[test]
     fn build_cursors_sort_by_arbitrary_field_missing() {
         let docs = vec![Document::new("doc4".to_string())];
-        let (start, _end) = build_cursors(&docs, "nonexistent", "ASC");
+        let (start, _end) = build_cursors(&docs, "nonexistent", SortDirection::Asc);
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_val, Value::Null);
     }

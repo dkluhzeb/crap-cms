@@ -406,6 +406,12 @@ mod tests {
 
     // ── Null values ─────────────────────────────────────────────────
 
+    /// Null JSON values compare as empty string. This mirrors SQLite behavior
+    /// where NULL text columns coerce to "" in comparisons, and matches how
+    /// event data arrives from the DB layer (serde_json maps SQL NULL → Value::Null,
+    /// and `value_to_string` normalizes it to ""). Without this, a filter like
+    /// `status != "deleted"` would fail-closed on documents where status is null,
+    /// incorrectly blocking access.
     #[test]
     fn null_value_equals_empty_string() {
         let d = data(&[("field", Value::Null)]);

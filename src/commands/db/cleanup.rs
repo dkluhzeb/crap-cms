@@ -125,7 +125,7 @@ pub fn find_orphan_columns(
             continue;
         }
 
-        let expected = query::get_expected_column_names(def, locale_config);
+        let expected = query::get_expected_column_names(def, locale_config)?;
 
         let mut orphan_cols: Vec<String> = existing
             .iter()

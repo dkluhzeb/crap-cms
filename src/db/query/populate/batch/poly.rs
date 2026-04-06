@@ -5,15 +5,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    core::{Document, upload},
-    db::query::{
-        populate::{
-            PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
-            parse_poly_ref, populate_cache_key, populate_relationships_batch_cached,
-        },
-        read::find_by_ids,
-    },
+    core::Document,
+    db::query::populate::{PopulateCtx, document_to_json, parse_poly_ref},
 };
+
+use super::nonpoly::batch_fetch_single_collection;
 
 /// Batch fetch and distribute for polymorphic has-many fields.
 pub(super) fn batch_poly_has_many(
@@ -24,6 +20,7 @@ pub(super) fn batch_poly_has_many(
 ) -> Result<()> {
     // Collect all unique poly refs across all docs
     let mut ids_by_collection: HashMap<String, Vec<String>> = HashMap::new();
+
     for doc in docs.iter() {
         if let Some(Value::Array(arr)) = doc.fields.get(field_name) {
             for v in arr {
@@ -56,20 +53,16 @@ pub(super) fn batch_poly_has_many(
             _ => continue,
         };
         let mut populated = Vec::new();
+
         for item in &items {
-            if let Some((col, id)) = parse_poly_ref(item) {
-                if let Some(col_map) = fetched_map.get(&col) {
-                    if let Some(cached_doc) = col_map.get(&id) {
-                        populated.push(document_to_json(cached_doc, &col));
-                    } else {
-                        populated.push(Value::String(item.clone()));
-                    }
-                } else {
-                    populated.push(Value::String(item.clone()));
-                }
-            } else {
-                populated.push(Value::String(item.clone()));
-            }
+            let resolved = parse_poly_ref(item)
+                .and_then(|(col, id)| {
+                    let doc = fetched_map.get(&col)?.get(&id)?;
+                    Some(document_to_json(doc, &col))
+                })
+                .unwrap_or_else(|| Value::String(item.clone()));
+
+            populated.push(resolved);
         }
         doc.fields
             .insert(field_name.to_string(), Value::Array(populated));
@@ -126,66 +119,16 @@ pub(super) fn batch_fetch_with_cache(
     ids_by_collection: &HashMap<String, Vec<String>>,
 ) -> Result<HashMap<String, HashMap<String, Document>>> {
     let mut fetched_map: HashMap<String, HashMap<String, Document>> = HashMap::new();
+
     for (col, col_ids) in ids_by_collection {
         if let Some(item_def) = ctx.registry.get_collection(col) {
             let item_def = item_def.clone();
-            let mut doc_map: HashMap<String, Document> = HashMap::new();
-            let mut uncached_ids: Vec<String> = Vec::new();
-            let locale_key = locale_cache_key(ctx.locale_ctx);
+            let doc_map = batch_fetch_single_collection(ctx, col, &item_def, col_ids)?;
 
-            for id in col_ids {
-                let key = populate_cache_key(col, id, locale_key.as_deref());
-
-                if let Ok(Some(bytes)) = ctx.cache.get(&key) {
-                    if let Ok(cached) = serde_json::from_slice::<Document>(&bytes) {
-                        doc_map.insert(id.clone(), cached);
-                    } else {
-                        uncached_ids.push(id.clone());
-                    }
-                } else {
-                    uncached_ids.push(id.clone());
-                }
-            }
-
-            if !uncached_ids.is_empty() {
-                let mut fetched =
-                    find_by_ids(ctx.conn, col, &item_def, &uncached_ids, ctx.locale_ctx)?;
-                for d in &mut fetched {
-                    if let Some(ref uc) = item_def.upload
-                        && uc.enabled
-                    {
-                        upload::assemble_sizes_object(d, uc);
-                    }
-                }
-                if ctx.effective_depth - 1 > 0 {
-                    populate_relationships_batch_cached(
-                        &PopulateContext {
-                            conn: ctx.conn,
-                            registry: ctx.registry,
-                            collection_slug: col,
-                            def: &item_def,
-                        },
-                        &mut fetched,
-                        &PopulateOpts {
-                            depth: ctx.effective_depth - 1,
-                            select: None,
-                            locale_ctx: ctx.locale_ctx,
-                        },
-                        ctx.cache,
-                    )?;
-                }
-                for d in fetched {
-                    let key = populate_cache_key(col, d.id.as_ref(), locale_key.as_deref());
-                    if let Ok(bytes) = serde_json::to_vec(&d) {
-                        let _ = ctx.cache.set(&key, &bytes);
-                    }
-
-                    doc_map.insert(d.id.to_string(), d);
-                }
-            }
             fetched_map.insert(col.clone(), doc_map);
         }
     }
+
     Ok(fetched_map)
 }
 

@@ -6,7 +6,10 @@ use tracing::{debug, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{FieldDefinition, FieldType, Registry, field::flatten_array_sub_fields},
-    db::{DbConnection, DbValue},
+    db::{
+        DbConnection, DbValue,
+        query::helpers::{global_table, join_table, locale_column},
+    },
 };
 
 const META_KEY: &str = "ref_count_backfilled";
@@ -37,7 +40,7 @@ pub fn backfill_if_needed(
 
     for slug in registry.globals.keys() {
         conn.execute(
-            &format!("UPDATE \"_global_{}\" SET _ref_count = 0", slug),
+            &format!("UPDATE \"{}\" SET _ref_count = 0", global_table(slug)),
             &[],
         )?;
     }
@@ -48,7 +51,7 @@ pub fn backfill_if_needed(
     }
 
     for (slug, def) in &registry.globals {
-        let table = format!("_global_{}", slug);
+        let table = global_table(slug);
         backfill_collection(conn, &table, &def.fields, locale_config)?;
     }
 
@@ -63,6 +66,7 @@ pub fn backfill_if_needed(
     )?;
 
     info!("Ref count backfill complete");
+
     Ok(())
 }
 
@@ -76,14 +80,7 @@ fn backfill_collection(
     backfill_fields(conn, table, fields, locale_config, "")
 }
 
-/// Build a prefixed column/table name: `"prefix__name"` or just `"name"`.
-fn prefixed(prefix: &str, name: &str) -> String {
-    if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}__{}", prefix, name)
-    }
-}
+use crate::db::query::helpers::prefixed_name as prefixed;
 
 fn backfill_fields(
     conn: &dyn DbConnection,
@@ -131,18 +128,21 @@ fn backfill_fields(
                         locale_config,
                     )?;
                 } else {
-                    let junction = format!("{}_{}", table, col);
+                    let junction = join_table(table, &col);
+
                     backfill_has_many(conn, &junction, &rc.collection, rc.is_polymorphic())?;
                 }
             }
 
             FieldType::Array => {
-                let array_table = format!("{}_{}", table, prefixed(prefix, &field.name));
+                let array_table = join_table(table, &prefixed(prefix, &field.name));
+
                 backfill_array(conn, &array_table, &field.fields)?;
             }
 
             FieldType::Blocks => {
-                let blocks_table = format!("{}_{}", table, prefixed(prefix, &field.name));
+                let blocks_table = join_table(table, &prefixed(prefix, &field.name));
+
                 backfill_blocks(conn, &blocks_table, &field.blocks)?;
             }
 
@@ -170,6 +170,7 @@ fn backfill_column_refs(
         Ok(r) => r,
         Err(e) => {
             warn!("Backfill skipping {}.{}: {}", table, col_name, e);
+
             return Ok(());
         }
     };
@@ -213,8 +214,8 @@ fn backfill_has_one(
         locale_config
             .locales
             .iter()
-            .map(|l| format!("{}__{}", col, l))
-            .collect()
+            .map(|l| locale_column(col, l))
+            .collect::<Result<Vec<String>>>()?
     } else {
         vec![col.to_string()]
     };
@@ -259,6 +260,7 @@ fn backfill_polymorphic_junction(conn: &dyn DbConnection, junction_table: &str) 
         Ok(r) => r,
         Err(e) => {
             warn!("Backfill skipping {}: {}", junction_table, e);
+
             return Ok(());
         }
     };

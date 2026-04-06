@@ -105,7 +105,7 @@ pub fn persist_draft_version(
     hook_data: &HashMap<String, Value>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx)?
+    let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     versions::save_draft_version(
@@ -129,7 +129,7 @@ pub fn persist_unpublish(
     id: &str,
     def: &CollectionDefinition,
 ) -> Result<Document> {
-    let doc = query::find_by_id_raw(conn, slug, def, id, None)?
+    let doc = query::find_by_id_raw(conn, slug, def, id, None, false)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     versions::unpublish_with_snapshot(conn, slug, id, &def.fields, def.versions.as_ref(), &doc)?;

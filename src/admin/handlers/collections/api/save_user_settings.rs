@@ -53,7 +53,7 @@ fn save_column_preferences(
     columns: Vec<String>,
 ) -> Result<(), Error> {
     let conn = pool.get().context("Failed to get DB connection")?;
-    let existing = query::auth::get_user_settings(&conn, user_id)?;
+    let existing = query::get_user_settings(&conn, user_id)?;
 
     let mut settings: Value = existing
         .as_deref()
@@ -64,7 +64,7 @@ fn save_column_preferences(
 
     let json_str = to_string(&settings)?;
 
-    query::auth::set_user_settings(&conn, user_id, &json_str)?;
+    query::set_user_settings(&conn, user_id, &json_str)?;
 
     Ok(())
 }

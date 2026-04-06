@@ -14,27 +14,7 @@ use crate::{
     db::query::read::{find_by_id, find_by_ids},
 };
 
-/// Try to get a cached document from the cache backend.
-fn cache_get_doc(
-    cache: &dyn crate::core::cache::CacheBackend,
-    key: &str,
-) -> Result<Option<Document>> {
-    match cache.get(key)? {
-        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        None => Ok(None),
-    }
-}
-
-/// Store a document in the cache backend.
-fn cache_set_doc(
-    cache: &dyn crate::core::cache::CacheBackend,
-    key: &str,
-    doc: &Document,
-) -> Result<()> {
-    let bytes = serde_json::to_vec(doc)?;
-    cache.set(key, &bytes)?;
-    Ok(())
-}
+use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
 
 /// Populate a non-polymorphic has-many field.
 pub(super) fn populate_nonpoly_has_many(

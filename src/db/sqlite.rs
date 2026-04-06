@@ -9,6 +9,7 @@ use anyhow::{Context as _, Result, bail};
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::types::Value as SqliteValue;
+use tracing::warn;
 
 use crate::core::FieldType;
 
@@ -24,6 +25,7 @@ fn sqlite_table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
         "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table' AND name=?1",
         &[DbValue::Text(name.to_string())],
     )?;
+
     Ok(row.map(|r| r.get_i64("cnt").unwrap_or(0)).unwrap_or(0) > 0)
 }
 
@@ -31,7 +33,9 @@ fn sqlite_get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<Hash
     if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         bail!("Invalid table name for PRAGMA: {:?}", table);
     }
+
     let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
+
     Ok(rows
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
@@ -47,11 +51,13 @@ fn sqlite_get_table_column_types(
     }
     let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
     let mut map = HashMap::new();
+
     for row in rows {
         if let (Ok(name), Ok(col_type)) = (row.get_string("name"), row.get_string("type")) {
             map.insert(name, col_type);
         }
     }
+
     Ok(map)
 }
 
@@ -63,6 +69,7 @@ fn sqlite_index_names(conn: &dyn DbConnection, table: &str, prefix: &str) -> Res
             DbValue::Text(format!("{}%", prefix)),
         ],
     )?;
+
     Ok(rows
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
@@ -89,6 +96,7 @@ fn sqlite_list_user_tables(conn: &dyn DbConnection) -> Result<Vec<String>> {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         &[],
     )?;
+
     Ok(rows
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
@@ -103,15 +111,18 @@ fn sqlite_supports_drop_column(conn: &dyn DbConnection) -> bool {
         .and_then(|row| row.get_string("v").ok())
         .unwrap_or_default();
     let parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
+
     parts.len() >= 2 && (parts[0] > 3 || (parts[0] == 3 && parts[1] >= 35))
 }
 
 fn sqlite_vacuum_into(conn: &dyn DbConnection, dest: &std::path::Path) -> Result<()> {
     let p1 = conn.placeholder(1);
+
     conn.execute(
         &format!("VACUUM INTO {p1}"),
         &[DbValue::Text(dest.to_string_lossy().into_owned())],
     )?;
+
     Ok(())
 }
 
@@ -152,10 +163,206 @@ fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, _key_col: &s
         .map(|c| format!("\"{}\"", c))
         .collect::<Vec<_>>()
         .join(", ");
+
     format!(
         "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
         table, cols, values
     )
+}
+
+// ── Macros to deduplicate shared dialect + query methods ───────────────
+
+/// Shared SQLite dialect methods — identical across all `DbConnection` impls.
+/// Mirrors the `pg_shared_methods!()` pattern from `postgres.rs`.
+macro_rules! sqlite_shared_methods {
+    () => {
+        fn placeholder(&self, n: usize) -> String {
+            format!("?{n}")
+        }
+
+        fn now_expr(&self) -> &'static str {
+            "datetime('now')"
+        }
+
+        fn greatest_expr(&self, a: &str, b: &str) -> String {
+            format!("MAX({a}, {b})")
+        }
+
+        fn kind(&self) -> &'static str {
+            "sqlite"
+        }
+
+        fn table_exists(&self, name: &str) -> Result<bool> {
+            sqlite_table_exists(self, name)
+        }
+
+        fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
+            sqlite_get_table_columns(self, table)
+        }
+
+        fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+            sqlite_get_table_column_types(self, table)
+        }
+
+        fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
+            sqlite_index_names(self, table, prefix)
+        }
+
+        fn timestamp_column_default(&self) -> &'static str {
+            "TEXT DEFAULT (datetime('now'))"
+        }
+
+        fn timestamp_column_type(&self) -> &'static str {
+            "TEXT"
+        }
+
+        fn column_type_for(&self, ft: &FieldType) -> &'static str {
+            sqlite_column_type_for(ft)
+        }
+
+        fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
+            sqlite_date_offset_expr(seconds, param_pos)
+        }
+
+        fn json_extract_expr(&self, column: &str, field: &str) -> String {
+            format!("json_extract({}, '$.{}')", column, field)
+        }
+
+        fn json_each_source(&self, source: &str, alias: &str) -> String {
+            format!("json_each({}) AS {}", source, alias)
+        }
+
+        fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
+            sqlite_build_insert_ignore(table, columns, values)
+        }
+
+        fn build_upsert(
+            &self,
+            table: &str,
+            columns: &[&str],
+            values: &str,
+            key_col: &str,
+        ) -> String {
+            sqlite_build_upsert(table, columns, values, key_col)
+        }
+
+        fn supports_fts(&self) -> bool {
+            true
+        }
+
+        fn like_operator(&self) -> &'static str {
+            "LIKE"
+        }
+
+        fn list_user_tables(&self) -> Result<Vec<String>> {
+            sqlite_list_user_tables(self)
+        }
+
+        fn supports_drop_column(&self) -> bool {
+            sqlite_supports_drop_column(self)
+        }
+
+        fn vacuum_into(&self, dest: &std::path::Path) -> Result<()> {
+            sqlite_vacuum_into(self, dest)
+        }
+
+        fn sidecar_extensions(&self) -> &[&str] {
+            SQLITE_SIDECAR_EXTENSIONS
+        }
+
+        fn normalize_timestamp(&self, ts: &str) -> String {
+            sqlite_normalize_timestamp(ts)
+        }
+    };
+}
+
+/// UFCS query methods for types that deref to `rusqlite::Connection`.
+///
+/// The caller passes a closure-style getter `|s| expr` where `s` binds to `self`
+/// and `expr` evaluates to `&rusqlite::Connection`. This works around macro hygiene
+/// restrictions that prevent passing `self` directly as a macro argument.
+macro_rules! sqlite_ufcs_query_methods {
+    (|$s:ident| $inner:expr) => {
+        fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let rusqlite_params = to_rusqlite_params(params);
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                rusqlite_params.iter().map(|b| b.as_ref()).collect();
+
+            let count = rusqlite::Connection::execute(inner, sql, refs.as_slice())
+                .with_context(|| format!("execute failed: {sql}"))?;
+
+            Ok(count)
+        }
+
+        fn execute_batch(&self, sql: &str) -> Result<()> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+
+            rusqlite::Connection::execute_batch(inner, sql)
+                .with_context(|| format!("execute_batch failed: {sql}"))?;
+
+            Ok(())
+        }
+
+        fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let rusqlite_params = to_rusqlite_params(params);
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                rusqlite_params.iter().map(|b| b.as_ref()).collect();
+
+            let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
+                .with_context(|| format!("prepare failed: {sql}"))?;
+
+            let col_count = stmt.column_count();
+            let col_names: Vec<String> = (0..col_count)
+                .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+                .collect();
+
+            let rows = stmt
+                .query_map(refs.as_slice(), |row| {
+                    Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
+                })
+                .with_context(|| format!("query_map failed: {sql}"))?;
+
+            let mut result = Vec::new();
+
+            for row in rows {
+                result.push(row.context("failed to read row")?);
+            }
+
+            Ok(result)
+        }
+
+        fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
+            let $s = self;
+            let inner: &rusqlite::Connection = $inner;
+            let rusqlite_params = to_rusqlite_params(params);
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                rusqlite_params.iter().map(|b| b.as_ref()).collect();
+
+            let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
+                .with_context(|| format!("prepare failed: {sql}"))?;
+
+            let col_count = stmt.column_count();
+            let col_names: Vec<String> = (0..col_count)
+                .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+                .collect();
+
+            let mut rows = stmt
+                .query_map(refs.as_slice(), |row| {
+                    Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
+                })
+                .with_context(|| format!("query_map failed: {sql}"))?;
+
+            match rows.next() {
+                Some(row) => Ok(Some(row.context("failed to read row")?)),
+                None => Ok(None),
+            }
+        }
+    };
 }
 
 /// Wraps a pooled `rusqlite` connection, implementing `DbConnection`.
@@ -183,6 +390,7 @@ impl SqliteConnection {
             .inner
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .context("Failed to begin IMMEDIATE transaction")?;
+
         Ok(SqliteTransaction::new(tx))
     }
 
@@ -192,6 +400,7 @@ impl SqliteConnection {
             .inner
             .transaction()
             .context("Failed to begin transaction")?;
+
         Ok(SqliteTransaction::new(tx))
     }
 }
@@ -199,11 +408,13 @@ impl SqliteConnection {
 impl ConnectionInner for SqliteConnection {
     fn transaction_boxed(&mut self) -> Result<Box<dyn TransactionInner + '_>> {
         let tx = self.transaction()?;
+
         Ok(Box::new(tx))
     }
 
     fn transaction_immediate_boxed(&mut self) -> Result<Box<dyn TransactionInner + '_>> {
         let tx = self.transaction_immediate()?;
+
         Ok(Box::new(tx))
     }
 }
@@ -217,6 +428,7 @@ impl DbConnection for SqliteConnection {
             .inner
             .execute(sql, refs.as_slice())
             .with_context(|| format!("execute failed: {sql}"))?;
+
         Ok(count)
     }
 
@@ -224,6 +436,7 @@ impl DbConnection for SqliteConnection {
         self.inner
             .execute_batch(sql)
             .with_context(|| format!("execute_batch failed: {sql}"))?;
+
         Ok(())
     }
 
@@ -249,9 +462,11 @@ impl DbConnection for SqliteConnection {
             .with_context(|| format!("query_map failed: {sql}"))?;
 
         let mut result = Vec::new();
+
         for row in rows {
             result.push(row.context("failed to read row")?);
         }
+
         Ok(result)
     }
 
@@ -282,97 +497,7 @@ impl DbConnection for SqliteConnection {
         }
     }
 
-    fn placeholder(&self, n: usize) -> String {
-        format!("?{n}")
-    }
-
-    fn now_expr(&self) -> &'static str {
-        "datetime('now')"
-    }
-
-    fn greatest_expr(&self, a: &str, b: &str) -> String {
-        format!("MAX({a}, {b})")
-    }
-
-    fn kind(&self) -> &'static str {
-        "sqlite"
-    }
-
-    fn table_exists(&self, name: &str) -> Result<bool> {
-        sqlite_table_exists(self, name)
-    }
-
-    fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
-        sqlite_get_table_columns(self, table)
-    }
-
-    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
-        sqlite_get_table_column_types(self, table)
-    }
-
-    fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
-        sqlite_index_names(self, table, prefix)
-    }
-
-    fn timestamp_column_default(&self) -> &'static str {
-        "TEXT DEFAULT (datetime('now'))"
-    }
-
-    fn timestamp_column_type(&self) -> &'static str {
-        "TEXT"
-    }
-
-    fn column_type_for(&self, ft: &FieldType) -> &'static str {
-        sqlite_column_type_for(ft)
-    }
-
-    fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
-        sqlite_date_offset_expr(seconds, param_pos)
-    }
-
-    fn json_extract_expr(&self, column: &str, field: &str) -> String {
-        format!("json_extract({}, '$.{}')", column, field)
-    }
-
-    fn json_each_source(&self, source: &str, alias: &str) -> String {
-        format!("json_each({}) AS {}", source, alias)
-    }
-
-    fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-        sqlite_build_insert_ignore(table, columns, values)
-    }
-
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
-        sqlite_build_upsert(table, columns, values, key_col)
-    }
-
-    fn supports_fts(&self) -> bool {
-        true
-    }
-
-    fn like_operator(&self) -> &'static str {
-        "LIKE"
-    }
-
-    fn list_user_tables(&self) -> Result<Vec<String>> {
-        sqlite_list_user_tables(self)
-    }
-
-    fn supports_drop_column(&self) -> bool {
-        sqlite_supports_drop_column(self)
-    }
-
-    fn vacuum_into(&self, dest: &std::path::Path) -> Result<()> {
-        sqlite_vacuum_into(self, dest)
-    }
-
-    fn sidecar_extensions(&self) -> &[&str] {
-        SQLITE_SIDECAR_EXTENSIONS
-    }
-
-    fn normalize_timestamp(&self, ts: &str) -> String {
-        sqlite_normalize_timestamp(ts)
-    }
+    sqlite_shared_methods!();
 }
 
 /// Wraps a `rusqlite::Transaction`, implementing `DbConnection`.
@@ -399,172 +524,8 @@ impl TransactionInner for SqliteTransaction<'_> {
 }
 
 impl DbConnection for SqliteTransaction<'_> {
-    fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-        // Use UFCS to avoid ambiguity: `SqliteTransaction` contains a `rusqlite::Transaction`,
-        // which now also implements `DbConnection`. Deref to `rusqlite::Connection` explicitly
-        // and call the inherent method to resolve the ambiguity.
-        let inner: &rusqlite::Connection = std::ops::Deref::deref(&self.inner);
-        let count = rusqlite::Connection::execute(inner, sql, refs.as_slice())
-            .with_context(|| format!("execute failed: {sql}"))?;
-        Ok(count)
-    }
-
-    fn execute_batch(&self, sql: &str) -> Result<()> {
-        let inner: &rusqlite::Connection = std::ops::Deref::deref(&self.inner);
-        rusqlite::Connection::execute_batch(inner, sql)
-            .with_context(|| format!("execute_batch failed: {sql}"))?;
-        Ok(())
-    }
-
-    fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-
-        let mut stmt = self
-            .inner
-            .prepare_cached(sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.context("failed to read row")?);
-        }
-        Ok(result)
-    }
-
-    fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-
-        let mut stmt = self
-            .inner
-            .prepare_cached(sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let mut rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        match rows.next() {
-            Some(row) => Ok(Some(row.context("failed to read row")?)),
-            None => Ok(None),
-        }
-    }
-
-    fn placeholder(&self, n: usize) -> String {
-        format!("?{n}")
-    }
-
-    fn now_expr(&self) -> &'static str {
-        "datetime('now')"
-    }
-
-    fn greatest_expr(&self, a: &str, b: &str) -> String {
-        format!("MAX({a}, {b})")
-    }
-
-    fn kind(&self) -> &'static str {
-        "sqlite"
-    }
-
-    fn table_exists(&self, name: &str) -> Result<bool> {
-        sqlite_table_exists(self, name)
-    }
-
-    fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
-        sqlite_get_table_columns(self, table)
-    }
-
-    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
-        sqlite_get_table_column_types(self, table)
-    }
-
-    fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
-        sqlite_index_names(self, table, prefix)
-    }
-
-    fn timestamp_column_default(&self) -> &'static str {
-        "TEXT DEFAULT (datetime('now'))"
-    }
-
-    fn timestamp_column_type(&self) -> &'static str {
-        "TEXT"
-    }
-
-    fn column_type_for(&self, ft: &FieldType) -> &'static str {
-        sqlite_column_type_for(ft)
-    }
-
-    fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
-        sqlite_date_offset_expr(seconds, param_pos)
-    }
-
-    fn json_extract_expr(&self, column: &str, field: &str) -> String {
-        format!("json_extract({}, '$.{}')", column, field)
-    }
-
-    fn json_each_source(&self, source: &str, alias: &str) -> String {
-        format!("json_each({}) AS {}", source, alias)
-    }
-
-    fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-        sqlite_build_insert_ignore(table, columns, values)
-    }
-
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
-        sqlite_build_upsert(table, columns, values, key_col)
-    }
-
-    fn supports_fts(&self) -> bool {
-        true
-    }
-
-    fn like_operator(&self) -> &'static str {
-        "LIKE"
-    }
-
-    fn list_user_tables(&self) -> Result<Vec<String>> {
-        sqlite_list_user_tables(self)
-    }
-
-    fn supports_drop_column(&self) -> bool {
-        sqlite_supports_drop_column(self)
-    }
-
-    fn vacuum_into(&self, dest: &std::path::Path) -> Result<()> {
-        sqlite_vacuum_into(self, dest)
-    }
-
-    fn sidecar_extensions(&self) -> &[&str] {
-        SQLITE_SIDECAR_EXTENSIONS
-    }
-
-    fn normalize_timestamp(&self, ts: &str) -> String {
-        sqlite_normalize_timestamp(ts)
-    }
+    sqlite_ufcs_query_methods!(|s| std::ops::Deref::deref(&s.inner));
+    sqlite_shared_methods!();
 }
 
 /// Implement `DbConnection` for `rusqlite::Transaction` so that callers that open
@@ -575,167 +536,8 @@ impl DbConnection for SqliteTransaction<'_> {
 /// explicitly via `std::ops::Deref::deref(self)` to reach the inherent methods and
 /// avoid ambiguity with our trait methods that share the same name.
 impl DbConnection for rusqlite::Transaction<'_> {
-    fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let inner: &rusqlite::Connection = std::ops::Deref::deref(self);
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-        let count = rusqlite::Connection::execute(inner, sql, refs.as_slice())
-            .with_context(|| format!("execute failed: {sql}"))?;
-        Ok(count)
-    }
-
-    fn execute_batch(&self, sql: &str) -> Result<()> {
-        let inner: &rusqlite::Connection = std::ops::Deref::deref(self);
-        rusqlite::Connection::execute_batch(inner, sql)
-            .with_context(|| format!("execute_batch failed: {sql}"))?;
-        Ok(())
-    }
-
-    fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
-        let inner: &rusqlite::Connection = std::ops::Deref::deref(self);
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-
-        let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.context("failed to read row")?);
-        }
-        Ok(result)
-    }
-
-    fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
-        let inner: &rusqlite::Connection = std::ops::Deref::deref(self);
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-
-        let mut stmt = rusqlite::Connection::prepare_cached(inner, sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let mut rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        match rows.next() {
-            Some(row) => Ok(Some(row.context("failed to read row")?)),
-            None => Ok(None),
-        }
-    }
-
-    fn placeholder(&self, n: usize) -> String {
-        format!("?{n}")
-    }
-
-    fn now_expr(&self) -> &'static str {
-        "datetime('now')"
-    }
-
-    fn greatest_expr(&self, a: &str, b: &str) -> String {
-        format!("MAX({a}, {b})")
-    }
-
-    fn kind(&self) -> &'static str {
-        "sqlite"
-    }
-
-    fn table_exists(&self, name: &str) -> Result<bool> {
-        sqlite_table_exists(self, name)
-    }
-
-    fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
-        sqlite_get_table_columns(self, table)
-    }
-
-    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
-        sqlite_get_table_column_types(self, table)
-    }
-
-    fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
-        sqlite_index_names(self, table, prefix)
-    }
-
-    fn timestamp_column_default(&self) -> &'static str {
-        "TEXT DEFAULT (datetime('now'))"
-    }
-
-    fn timestamp_column_type(&self) -> &'static str {
-        "TEXT"
-    }
-
-    fn column_type_for(&self, ft: &FieldType) -> &'static str {
-        sqlite_column_type_for(ft)
-    }
-
-    fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
-        sqlite_date_offset_expr(seconds, param_pos)
-    }
-
-    fn json_extract_expr(&self, column: &str, field: &str) -> String {
-        format!("json_extract({}, '$.{}')", column, field)
-    }
-
-    fn json_each_source(&self, source: &str, alias: &str) -> String {
-        format!("json_each({}) AS {}", source, alias)
-    }
-
-    fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-        sqlite_build_insert_ignore(table, columns, values)
-    }
-
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
-        sqlite_build_upsert(table, columns, values, key_col)
-    }
-
-    fn supports_fts(&self) -> bool {
-        true
-    }
-
-    fn like_operator(&self) -> &'static str {
-        "LIKE"
-    }
-
-    fn list_user_tables(&self) -> Result<Vec<String>> {
-        sqlite_list_user_tables(self)
-    }
-
-    fn supports_drop_column(&self) -> bool {
-        sqlite_supports_drop_column(self)
-    }
-
-    fn vacuum_into(&self, dest: &std::path::Path) -> Result<()> {
-        sqlite_vacuum_into(self, dest)
-    }
-
-    fn sidecar_extensions(&self) -> &[&str] {
-        SQLITE_SIDECAR_EXTENSIONS
-    }
-
-    fn normalize_timestamp(&self, ts: &str) -> String {
-        sqlite_normalize_timestamp(ts)
-    }
+    sqlite_ufcs_query_methods!(|s| std::ops::Deref::deref(s));
+    sqlite_shared_methods!();
 }
 
 /// Implement `DbConnection` directly on `rusqlite::Connection` for test convenience.
@@ -745,163 +547,8 @@ impl DbConnection for rusqlite::Transaction<'_> {
 /// All method calls use UFCS (`rusqlite::Connection::method(self, ...)`) to avoid
 /// ambiguity with the trait methods that share the same name.
 impl DbConnection for rusqlite::Connection {
-    fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-        let count = rusqlite::Connection::execute(self, sql, refs.as_slice())
-            .with_context(|| format!("execute failed: {sql}"))?;
-        Ok(count)
-    }
-
-    fn execute_batch(&self, sql: &str) -> Result<()> {
-        rusqlite::Connection::execute_batch(self, sql)
-            .with_context(|| format!("execute_batch failed: {sql}"))?;
-        Ok(())
-    }
-
-    fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-
-        let mut stmt = rusqlite::Connection::prepare_cached(self, sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.context("failed to read row")?);
-        }
-        Ok(result)
-    }
-
-    fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
-        let rusqlite_params = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            rusqlite_params.iter().map(|b| b.as_ref()).collect();
-
-        let mut stmt = rusqlite::Connection::prepare_cached(self, sql)
-            .with_context(|| format!("prepare failed: {sql}"))?;
-
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-
-        let mut rows = stmt
-            .query_map(refs.as_slice(), |row| {
-                Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-            })
-            .with_context(|| format!("query_map failed: {sql}"))?;
-
-        match rows.next() {
-            Some(row) => Ok(Some(row.context("failed to read row")?)),
-            None => Ok(None),
-        }
-    }
-
-    fn placeholder(&self, n: usize) -> String {
-        format!("?{n}")
-    }
-
-    fn now_expr(&self) -> &'static str {
-        "datetime('now')"
-    }
-
-    fn greatest_expr(&self, a: &str, b: &str) -> String {
-        format!("MAX({a}, {b})")
-    }
-
-    fn kind(&self) -> &'static str {
-        "sqlite"
-    }
-
-    fn table_exists(&self, name: &str) -> Result<bool> {
-        sqlite_table_exists(self, name)
-    }
-
-    fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
-        sqlite_get_table_columns(self, table)
-    }
-
-    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
-        sqlite_get_table_column_types(self, table)
-    }
-
-    fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
-        sqlite_index_names(self, table, prefix)
-    }
-
-    fn timestamp_column_default(&self) -> &'static str {
-        "TEXT DEFAULT (datetime('now'))"
-    }
-
-    fn timestamp_column_type(&self) -> &'static str {
-        "TEXT"
-    }
-
-    fn column_type_for(&self, ft: &FieldType) -> &'static str {
-        sqlite_column_type_for(ft)
-    }
-
-    fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
-        sqlite_date_offset_expr(seconds, param_pos)
-    }
-
-    fn json_extract_expr(&self, column: &str, field: &str) -> String {
-        format!("json_extract({}, '$.{}')", column, field)
-    }
-
-    fn json_each_source(&self, source: &str, alias: &str) -> String {
-        format!("json_each({}) AS {}", source, alias)
-    }
-
-    fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-        sqlite_build_insert_ignore(table, columns, values)
-    }
-
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
-        sqlite_build_upsert(table, columns, values, key_col)
-    }
-
-    fn supports_fts(&self) -> bool {
-        true
-    }
-
-    fn like_operator(&self) -> &'static str {
-        "LIKE"
-    }
-
-    fn list_user_tables(&self) -> Result<Vec<String>> {
-        sqlite_list_user_tables(self)
-    }
-
-    fn supports_drop_column(&self) -> bool {
-        sqlite_supports_drop_column(self)
-    }
-
-    fn vacuum_into(&self, dest: &std::path::Path) -> Result<()> {
-        sqlite_vacuum_into(self, dest)
-    }
-
-    fn sidecar_extensions(&self) -> &[&str] {
-        SQLITE_SIDECAR_EXTENSIONS
-    }
-
-    fn normalize_timestamp(&self, ts: &str) -> String {
-        sqlite_normalize_timestamp(ts)
-    }
+    sqlite_ufcs_query_methods!(|s| s);
+    sqlite_shared_methods!();
 }
 
 /// Convert `&[DbValue]` to a `Vec<Box<dyn ToSql>>` for rusqlite.
@@ -923,6 +570,7 @@ fn to_rusqlite_params(params: &[DbValue]) -> Vec<Box<dyn rusqlite::types::ToSql>
 /// Convert a `rusqlite::Row` to a `DbRow`.
 fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[String]) -> DbRow {
     let mut values = Vec::with_capacity(col_count);
+
     for i in 0..col_count {
         let val = row
             .get_ref(i)
@@ -933,7 +581,8 @@ fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[Str
                 rusqlite::types::ValueRef::Text(s) => match std::str::from_utf8(s) {
                     Ok(valid) => DbValue::Text(valid.to_owned()),
                     Err(e) => {
-                        tracing::warn!("Invalid UTF-8 in SQLite text column: {}", e);
+                        warn!("Invalid UTF-8 in SQLite text column: {}", e);
+
                         DbValue::Text(String::from_utf8_lossy(s).into_owned())
                     }
                 },
@@ -942,6 +591,7 @@ fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[Str
             .unwrap_or(DbValue::Null);
         values.push(val);
     }
+
     DbRow::new(col_names.to_vec(), values)
 }
 
@@ -976,150 +626,8 @@ impl InMemoryConn {
 
 #[cfg(test)]
 impl super::connection::DbConnection for InMemoryConn {
-    fn execute(&self, sql: &str, params: &[super::types::DbValue]) -> anyhow::Result<usize> {
-        let p = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = p.iter().map(|b| b.as_ref()).collect();
-        Ok(self.0.execute(sql, refs.as_slice())?)
-    }
-
-    fn execute_batch(&self, sql: &str) -> anyhow::Result<()> {
-        Ok(self.0.execute_batch(sql)?)
-    }
-
-    fn query_all(
-        &self,
-        sql: &str,
-        params: &[super::types::DbValue],
-    ) -> anyhow::Result<Vec<super::types::DbRow>> {
-        let p = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = p.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = self.0.prepare(sql)?;
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-        let rows = stmt.query_map(refs.as_slice(), |row| {
-            Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }
-
-    fn query_one(
-        &self,
-        sql: &str,
-        params: &[super::types::DbValue],
-    ) -> anyhow::Result<Option<super::types::DbRow>> {
-        let p = to_rusqlite_params(params);
-        let refs: Vec<&dyn rusqlite::types::ToSql> = p.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = self.0.prepare(sql)?;
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
-        let mut rows = stmt.query_map(refs.as_slice(), |row| {
-            Ok(rusqlite_row_to_dbrow(row, col_count, &col_names))
-        })?;
-        match rows.next() {
-            Some(row) => Ok(Some(row?)),
-            None => Ok(None),
-        }
-    }
-
-    fn placeholder(&self, n: usize) -> String {
-        format!("?{n}")
-    }
-
-    fn now_expr(&self) -> &'static str {
-        "datetime('now')"
-    }
-
-    fn greatest_expr(&self, a: &str, b: &str) -> String {
-        format!("MAX({a}, {b})")
-    }
-
-    fn kind(&self) -> &'static str {
-        "sqlite"
-    }
-
-    fn table_exists(&self, name: &str) -> anyhow::Result<bool> {
-        sqlite_table_exists(self, name)
-    }
-
-    fn get_table_columns(&self, table: &str) -> anyhow::Result<HashSet<String>> {
-        sqlite_get_table_columns(self, table)
-    }
-
-    fn get_table_column_types(&self, table: &str) -> anyhow::Result<HashMap<String, String>> {
-        sqlite_get_table_column_types(self, table)
-    }
-
-    fn index_names(&self, table: &str, prefix: &str) -> anyhow::Result<Vec<String>> {
-        sqlite_index_names(self, table, prefix)
-    }
-
-    fn timestamp_column_default(&self) -> &'static str {
-        "TEXT DEFAULT (datetime('now'))"
-    }
-
-    fn timestamp_column_type(&self) -> &'static str {
-        "TEXT"
-    }
-
-    fn column_type_for(&self, ft: &FieldType) -> &'static str {
-        sqlite_column_type_for(ft)
-    }
-
-    fn date_offset_expr(&self, seconds: i64, param_pos: usize) -> (String, DbValue) {
-        sqlite_date_offset_expr(seconds, param_pos)
-    }
-
-    fn json_extract_expr(&self, column: &str, field: &str) -> String {
-        format!("json_extract({}, '$.{}')", column, field)
-    }
-
-    fn json_each_source(&self, source: &str, alias: &str) -> String {
-        format!("json_each({}) AS {}", source, alias)
-    }
-
-    fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-        sqlite_build_insert_ignore(table, columns, values)
-    }
-
-    fn build_upsert(&self, table: &str, columns: &[&str], values: &str, key_col: &str) -> String {
-        sqlite_build_upsert(table, columns, values, key_col)
-    }
-
-    fn supports_fts(&self) -> bool {
-        true
-    }
-
-    fn like_operator(&self) -> &'static str {
-        "LIKE"
-    }
-
-    fn list_user_tables(&self) -> Result<Vec<String>> {
-        sqlite_list_user_tables(self)
-    }
-
-    fn supports_drop_column(&self) -> bool {
-        sqlite_supports_drop_column(self)
-    }
-
-    fn vacuum_into(&self, dest: &std::path::Path) -> Result<()> {
-        sqlite_vacuum_into(self, dest)
-    }
-
-    fn sidecar_extensions(&self) -> &[&str] {
-        SQLITE_SIDECAR_EXTENSIONS
-    }
-
-    fn normalize_timestamp(&self, ts: &str) -> String {
-        sqlite_normalize_timestamp(ts)
-    }
+    sqlite_ufcs_query_methods!(|s| &s.0);
+    sqlite_shared_methods!();
 }
 
 #[cfg(test)]

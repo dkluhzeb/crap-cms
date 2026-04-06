@@ -1,11 +1,17 @@
 //! Value helpers: pagination limits, date normalization, type coercion.
 
 use anyhow::Result;
+use anyhow::anyhow;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde_json::Value;
 
-use crate::{core::FieldType, db::DbValue};
+use crate::{
+    core::{FieldDefinition, FieldType},
+    db::DbValue,
+};
+
+use super::sanitize_locale;
 
 /// Clamp a requested limit to the configured default/max.
 ///
@@ -80,7 +86,7 @@ pub fn normalize_date_value(value: &str) -> String {
 pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
     let tz: Tz = tz_str
         .parse()
-        .map_err(|_| anyhow::anyhow!("Invalid timezone: {}", tz_str))?;
+        .map_err(|_| anyhow!("Invalid timezone: {}", tz_str))?;
 
     let trimmed = value.trim();
 
@@ -90,12 +96,12 @@ pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String>
     {
         let local_noon = date
             .and_hms_opt(12, 0, 0)
-            .ok_or_else(|| anyhow::anyhow!("Failed to construct noon time for {}", trimmed))?;
+            .ok_or_else(|| anyhow!("Failed to construct noon time for {}", trimmed))?;
 
         let utc = tz
             .from_local_datetime(&local_noon)
             .earliest()
-            .ok_or_else(|| anyhow::anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+            .ok_or_else(|| anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
             .with_timezone(&Utc);
 
         return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -109,7 +115,7 @@ pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String>
             let utc = tz
                 .from_local_datetime(&naive)
                 .earliest()
-                .ok_or_else(|| anyhow::anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+                .ok_or_else(|| anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
                 .with_timezone(&Utc);
 
             return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -136,43 +142,28 @@ pub fn utc_to_local(utc_value: &str, tz_str: &str) -> Option<String> {
         .ok()?;
 
     let local = dt.with_timezone(&tz);
+
     Some(local.format("%Y-%m-%dT%H:%M").to_string())
 }
 
 /// Coerce a form string value to the appropriate database type.
 pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
+    if value.is_empty() && *field_type != FieldType::Checkbox {
+        return DbValue::Null;
+    }
+
     match field_type {
         FieldType::Checkbox => {
-            let b = matches!(value, "on" | "true" | "1" | "yes");
-            DbValue::Integer(b as i64)
+            DbValue::Integer(matches!(value, "on" | "true" | "1" | "yes") as i64)
         }
-        FieldType::Number => {
-            if value.is_empty() {
-                DbValue::Null
-            } else if let Ok(f) = value.parse::<f64>() {
-                if f.is_finite() {
-                    DbValue::Real(f)
-                } else {
-                    DbValue::Null
-                }
-            } else {
-                DbValue::Null
-            }
-        }
-        FieldType::Date => {
-            if value.is_empty() {
-                DbValue::Null
-            } else {
-                DbValue::Text(normalize_date_value(value))
-            }
-        }
-        _ => {
-            if value.is_empty() {
-                DbValue::Null
-            } else {
-                DbValue::Text(value.to_string())
-            }
-        }
+        FieldType::Number => value
+            .parse::<f64>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(DbValue::Real)
+            .unwrap_or(DbValue::Null),
+        FieldType::Date => DbValue::Text(normalize_date_value(value)),
+        _ => DbValue::Text(value.to_string()),
     }
 }
 
@@ -196,6 +187,115 @@ pub(crate) fn coerce_json_value(field_type: &FieldType, val: &Value) -> DbValue 
         Value::Array(arr) => DbValue::Text(Value::Array(arr.clone()).to_string()),
         Value::Object(obj) => DbValue::Text(Value::Object(obj.clone()).to_string()),
     }
+}
+
+/// Coerce a date value with optional timezone normalization.
+///
+/// If the field is a Date with timezone enabled and a non-empty timezone string is provided,
+/// normalizes the value using that timezone. Falls back to plain `coerce_value` when
+/// no timezone is available or on normalization error.
+pub(crate) fn coerce_date_value(field_type: &FieldType, value: &str, tz: Option<&str>) -> DbValue {
+    let tz = match tz.filter(|s| !s.is_empty()) {
+        Some(tz) if *field_type == FieldType::Date => tz,
+        _ => return coerce_value(field_type, value),
+    };
+
+    if value.is_empty() {
+        return DbValue::Null;
+    }
+
+    normalize_date_with_timezone(value, tz)
+        .map(DbValue::Text)
+        .unwrap_or_else(|_| coerce_value(field_type, value))
+}
+
+/// Build a prefixed name: `"prefix__name"` or just `"name"` when prefix is empty.
+///
+/// Used by field walkers that track group nesting (backfill, back-references, columns).
+pub(crate) fn prefixed_name(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}__{}", prefix, name)
+    }
+}
+
+/// Walk a field tree, calling `visit` for each non-layout field.
+///
+/// Handles Group (prefixed recursion with localized propagation),
+/// Row/Collapsible (passthrough), and Tabs (per-tab recursion).
+/// The visitor receives `(field, prefix, inherited_localized)` and decides
+/// what to do — including whether to skip non-parent-column fields.
+pub(crate) fn walk_leaf_fields<F>(
+    fields: &[FieldDefinition],
+    prefix: &str,
+    inherited_localized: bool,
+    visit: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&FieldDefinition, &str, bool) -> Result<()>,
+{
+    for field in fields {
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = prefixed_name(prefix, &field.name);
+
+                walk_leaf_fields(
+                    &field.fields,
+                    &new_prefix,
+                    inherited_localized || field.localized,
+                    visit,
+                )?;
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                walk_leaf_fields(&field.fields, prefix, inherited_localized, visit)?;
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    walk_leaf_fields(&tab.fields, prefix, inherited_localized, visit)?;
+                }
+            }
+            _ => visit(field, prefix, inherited_localized)?,
+        }
+    }
+
+    Ok(())
+}
+
+/// Build a locale-suffixed column name: `"field__en"`, `"seo__title__de"`.
+///
+/// Sanitizes the locale string before appending.
+pub(crate) fn locale_column(field_name: &str, locale: &str) -> Result<String> {
+    Ok(format!("{}__{}", field_name, sanitize_locale(locale)?))
+}
+
+/// Current UTC timestamp in ISO 8601 format with milliseconds: `"2024-01-15T14:00:00.000Z"`.
+pub(crate) fn utc_now() -> String {
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string()
+}
+
+/// Build a timezone companion column name: `"field_tz"`, `"seo__start_tz"`.
+pub(crate) fn tz_column(name: &str) -> String {
+    format!("{name}_tz")
+}
+
+/// Build a join table name: `"collection_field"`, `"posts_tags"`.
+pub(crate) fn join_table(collection: &str, field: &str) -> String {
+    format!("{collection}_{field}")
+}
+
+/// Build the table name for a global: `"_global_{slug}"`.
+pub(crate) fn global_table(slug: &str) -> String {
+    format!("_global_{slug}")
+}
+
+/// Append a SQL condition with `WHERE` or `AND` depending on whether a WHERE clause already exists.
+pub(crate) fn append_sql_condition(sql: &mut String, has_where: &mut bool, condition: &str) {
+    sql.push_str(if *has_where { " AND " } else { " WHERE " });
+    sql.push_str(condition);
+    *has_where = true;
 }
 
 #[cfg(test)]

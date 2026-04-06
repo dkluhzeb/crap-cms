@@ -211,7 +211,7 @@ pub fn unpublish_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let doc = query::find_by_id_raw(&tx, slug, def, id, None)?
+    let doc = query::find_by_id_raw(&tx, slug, def, id, None, false)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     let hook_ctx = HookContext::builder(slug, "update")

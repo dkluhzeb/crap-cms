@@ -5,7 +5,13 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 use crate::core::{Document, FieldDefinition, FieldType};
-use crate::db::DbConnection;
+use crate::db::{
+    DbConnection,
+    query::{
+        helpers::{prefixed_name, tz_column},
+        join::hydrate_document,
+    },
+};
 
 /// Build a JSON snapshot of a document's current state (fields + join data).
 pub fn build_snapshot(
@@ -14,22 +20,18 @@ pub fn build_snapshot(
     fields: &[FieldDefinition],
     doc: &Document,
 ) -> Result<Value> {
-    let mut data = Map::new();
-    for (k, v) in &doc.fields {
-        data.insert(k.clone(), v.clone());
-    }
-    // Hydrate join table data into the snapshot
-    let mut doc_clone = doc.clone();
-    super::super::hydrate_document(conn, slug, fields, &mut doc_clone, None, None)?;
-    for (k, v) in &doc_clone.fields {
-        data.insert(k.clone(), v.clone());
-    }
-    if let Some(ref ts) = doc.created_at {
+    let mut hydrated = doc.clone();
+    hydrate_document(conn, slug, fields, &mut hydrated, None, None)?;
+
+    let mut data: Map<String, Value> = hydrated.fields.into_iter().collect();
+
+    if let Some(ts) = &doc.created_at {
         data.insert("created_at".to_string(), Value::String(ts.clone()));
     }
-    if let Some(ref ts) = doc.updated_at {
+    if let Some(ts) = &doc.updated_at {
         data.insert("updated_at".to_string(), Value::String(ts.clone()));
     }
+
     Ok(Value::Object(data))
 }
 
@@ -57,7 +59,7 @@ pub(super) fn extract_snapshot_data(
 }
 
 /// Inner recursive extraction with prefix support.
-/// `prefix` accumulates Group prefixes (`"seo__"`), while layout wrappers pass through.
+/// `prefix` uses the standard `prefixed_name` convention (no trailing `__`).
 fn extract_snapshot_recursive(
     obj: &Map<String, Value>,
     fields: &[FieldDefinition],
@@ -70,35 +72,25 @@ fn extract_snapshot_recursive(
     for field in fields {
         match field.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.to_string()
-                } else {
-                    format!("{}{}", prefix, field.name)
-                };
-                let nested_prefix = format!("{}__", new_prefix);
+                let new_prefix = prefixed_name(prefix, &field.name);
 
-                // Recurse into Group sub-fields with accumulated prefix.
-                // This correctly handles layout wrappers (Row/Tabs) inside Groups.
                 data.extend(extract_snapshot_recursive(
                     obj,
                     &field.fields,
                     locales_enabled,
-                    &nested_prefix,
+                    &new_prefix,
                     inherited_localized || field.localized,
                 ));
 
                 // Also try nested object format (e.g., `seo: { title: ... }`)
                 if let Some(nested_obj) = obj.get(&field.name).and_then(|v| v.as_object()) {
-                    let nested_data = extract_snapshot_recursive(
+                    for (k, v) in extract_snapshot_recursive(
                         nested_obj,
                         &field.fields,
                         locales_enabled,
-                        &nested_prefix,
+                        &new_prefix,
                         inherited_localized || field.localized,
-                    );
-
-                    // Only insert values not already found via flat keys
-                    for (k, v) in nested_data {
+                    ) {
                         data.entry(k).or_insert(v);
                     }
                 }
@@ -132,28 +124,25 @@ fn extract_snapshot_recursive(
                 }
 
                 let is_localized = (inherited_localized || field.localized) && locales_enabled;
+
                 if is_localized {
                     continue;
                 }
 
-                let key = format!("{}{}", prefix, field.name);
+                let key = prefixed_name(prefix, &field.name);
 
-                // Try the full key first, then just the field name (for nested obj format).
-                // Only insert when we actually find a value in the object — missing fields
-                // are handled by the nested-object pass in the Group handler.
                 if let Some(val) = obj.get(&key).or_else(|| obj.get(&field.name))
                     && let Some(s) = snapshot_val_to_string(Some(val))
                 {
                     data.insert(key.clone(), s);
                 }
 
-                // Timezone companion column for date fields
                 if field.field_type == FieldType::Date && field.timezone {
-                    let tz_key = format!("{}_tz", key);
+                    let tz_key = tz_column(&key);
 
                     if let Some(tz_val) = obj
                         .get(&tz_key)
-                        .or_else(|| obj.get(&format!("{}_tz", field.name)))
+                        .or_else(|| obj.get(&tz_column(&field.name)))
                         && let Some(s) = snapshot_val_to_string(Some(tz_val))
                     {
                         data.insert(tz_key, s);

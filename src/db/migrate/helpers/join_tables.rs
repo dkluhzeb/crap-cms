@@ -6,7 +6,10 @@ use tracing::info;
 use crate::{
     config::LocaleConfig,
     core::{FieldDefinition, FieldType, field::flatten_array_sub_fields},
-    db::DbConnection,
+    db::{
+        DbConnection,
+        query::helpers::{join_table, prefixed_name, tz_column},
+    },
 };
 
 use super::{
@@ -34,11 +37,7 @@ fn sync_join_tables_inner(
 ) -> Result<()> {
     for field in fields {
         let has_locale_col = (inherited_localized || field.localized) && locale_config.is_enabled();
-        let full_name = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
+        let full_name = prefixed_name(prefix, &field.name);
 
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
@@ -123,7 +122,7 @@ fn sync_relationship_table(
         _ => return Ok(()),
     };
 
-    let table_name = format!("{}_{}", collection_slug, full_name);
+    let table_name = join_table(collection_slug, full_name);
 
     if !table_exists(conn, &table_name)? {
         create_junction_table(
@@ -221,7 +220,7 @@ fn sync_array_table(
     has_locale_col: bool,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let table_name = format!("{}_{}", collection_slug, full_name);
+    let table_name = join_table(collection_slug, full_name);
     let flat_subs = flatten_array_sub_fields(&field.fields);
 
     if !table_exists(conn, &table_name)? {
@@ -313,7 +312,7 @@ fn alter_array_table(
         }
 
         if sub_field.field_type == FieldType::Date && sub_field.timezone {
-            let tz_col = format!("{}_tz", sub_field.name);
+            let tz_col = tz_column(&sub_field.name);
 
             if !existing.contains(&tz_col) {
                 let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {} TEXT", table_name, tz_col);
@@ -336,7 +335,7 @@ fn sync_blocks_table(
     has_locale_col: bool,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let table_name = format!("{}_{}", collection_slug, full_name);
+    let table_name = join_table(collection_slug, full_name);
 
     if !table_exists(conn, &table_name)? {
         let locale_col = if has_locale_col {

@@ -7,6 +7,7 @@
 use anyhow::{Result, anyhow, bail};
 
 use crate::core::{BlockDefinition, FieldDefinition, FieldType};
+use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, FilterClause, query::is_valid_identifier};
 
 // ── Dot notation normalization ───────────────────────────────────────────
@@ -162,18 +163,12 @@ pub(super) fn resolve_filter(
     let field_def = find_field_recursive(root, fields)
         .ok_or_else(|| anyhow!("Unknown field '{}' in filter path '{}'", root, field))?;
 
-    let join_table = format!("{}_{}", slug, root);
+    let jt = join_table(slug, root);
 
     match field_def.field_type {
-        FieldType::Array => {
-            resolve_array_filter(conn, root, rest, field, slug, field_def, join_table)
-        }
-        FieldType::Blocks => {
-            resolve_blocks_filter(conn, root, rest, field, slug, field_def, join_table)
-        }
-        FieldType::Relationship => {
-            resolve_relationship_filter(root, rest, slug, field_def, join_table)
-        }
+        FieldType::Array => resolve_array_filter(conn, root, rest, field, slug, field_def, jt),
+        FieldType::Blocks => resolve_blocks_filter(conn, root, rest, field, slug, field_def, jt),
+        FieldType::Relationship => resolve_relationship_filter(root, rest, slug, field_def, jt),
         _ => {
             bail!(
                 "Field '{}' (type {:?}) does not support sub-field filtering",
@@ -350,27 +345,23 @@ pub(super) fn walk_block_fields(
             .ok_or_else(|| anyhow!("Unknown field '{}' in block filter path", seg))?;
 
         match field_def.field_type {
-            FieldType::Blocks => {
-                // Nested blocks → json_each join
+            FieldType::Blocks | FieldType::Array => {
+                // Nested blocks/array → json_each join
                 let source =
                     build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
                 let alias = format!("j{}", each_joins.len());
                 each_joins.push((source, alias));
                 json_path_parts.clear();
-                current_fields = field_def
-                    .blocks
-                    .iter()
-                    .flat_map(|bd| bd.fields.iter())
-                    .collect();
-            }
-            FieldType::Array => {
-                // Nested array in block JSON → json_each join
-                let source =
-                    build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
-                let alias = format!("j{}", each_joins.len());
-                each_joins.push((source, alias));
-                json_path_parts.clear();
-                current_fields = field_def.fields.iter().collect();
+
+                current_fields = if field_def.field_type == FieldType::Blocks {
+                    field_def
+                        .blocks
+                        .iter()
+                        .flat_map(|bd| bd.fields.iter())
+                        .collect()
+                } else {
+                    field_def.fields.iter().collect()
+                };
             }
             FieldType::Group | FieldType::Row | FieldType::Collapsible => {
                 json_path_parts.push(seg.to_string());

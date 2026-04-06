@@ -1,8 +1,27 @@
 //! CRUD query functions for the `_crap_jobs` and `_crap_cron_fired` tables.
 
-use crate::core::job::{JobRun, JobStatus};
-use crate::db::{DbConnection, DbRow, DbValue};
-use anyhow::{Context as _, Result};
+use std::{cmp, collections::HashMap};
+
+use anyhow::{Context as _, Result, bail};
+use nanoid::nanoid;
+
+use crate::{
+    core::job::{JobRun, JobStatus},
+    db::{DbConnection, DbRow, DbValue},
+};
+
+/// Extract an integer count from a query result row.
+fn extract_count(row: Option<&DbRow>) -> i64 {
+    row.and_then(|r| r.get_value(0))
+        .and_then(|v| {
+            if let DbValue::Integer(n) = v {
+                Some(*n)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
 
 /// Insert a new pending job run.
 pub fn insert_job(
@@ -13,7 +32,7 @@ pub fn insert_job(
     max_attempts: u32,
     queue: &str,
 ) -> Result<JobRun> {
-    let id = nanoid::nanoid!();
+    let id = nanoid!();
     let (p1, p2, p3, p4, p5, p6) = (
         conn.placeholder(1),
         conn.placeholder(2),
@@ -22,6 +41,7 @@ pub fn insert_job(
         conn.placeholder(5),
         conn.placeholder(6),
     );
+
     conn.execute(
         &format!(
             "INSERT INTO _crap_jobs (id, slug, status, queue, data, max_attempts, scheduled_by)
@@ -57,8 +77,8 @@ pub fn insert_job(
 pub fn claim_pending_jobs(
     conn: &dyn DbConnection,
     limit: usize,
-    _running_counts: &std::collections::HashMap<String, i64>,
-    job_concurrency: &std::collections::HashMap<String, u32>,
+    _running_counts: &HashMap<String, i64>,
+    job_concurrency: &HashMap<String, u32>,
 ) -> Result<Vec<JobRun>> {
     if conn.kind() == "postgres" {
         claim_pending_jobs_postgres(conn, limit, job_concurrency)
@@ -71,7 +91,7 @@ pub fn claim_pending_jobs(
 fn claim_pending_jobs_postgres(
     conn: &dyn DbConnection,
     limit: usize,
-    job_concurrency: &std::collections::HashMap<String, u32>,
+    job_concurrency: &HashMap<String, u32>,
 ) -> Result<Vec<JobRun>> {
     // Get distinct slugs that have pending jobs
     let slug_rows = conn.query_all(
@@ -139,7 +159,7 @@ fn claim_pending_jobs_postgres(
 fn claim_pending_jobs_sqlite(
     conn: &dyn DbConnection,
     limit: usize,
-    job_concurrency: &std::collections::HashMap<String, u32>,
+    job_concurrency: &HashMap<String, u32>,
 ) -> Result<Vec<JobRun>> {
     let now = conn.now_expr();
     let rows = conn.query_all(
@@ -159,8 +179,7 @@ fn claim_pending_jobs_sqlite(
     let running_counts = count_running_per_slug(conn)?;
 
     let mut claimed = Vec::new();
-    let mut extra_running: std::collections::HashMap<String, i64> =
-        std::collections::HashMap::new();
+    let mut extra_running: HashMap<String, i64> = HashMap::new();
 
     for row in &rows {
         if claimed.len() >= limit {
@@ -209,11 +228,11 @@ fn claim_pending_jobs_sqlite(
 fn parse_job_row(row: &DbRow) -> Result<JobRun> {
     let id = match row.get_value(0) {
         Some(DbValue::Text(s)) => s.clone(),
-        _ => anyhow::bail!("Missing job id"),
+        _ => bail!("Missing job id"),
     };
     let slug = match row.get_value(1) {
         Some(DbValue::Text(s)) => s.clone(),
-        _ => anyhow::bail!("Missing job slug"),
+        _ => bail!("Missing job slug"),
     };
     let queue = match row.get_value(2) {
         Some(DbValue::Text(s)) => s.clone(),
@@ -264,6 +283,7 @@ pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>
         None => DbValue::Null,
     };
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+
     conn.execute(
         &format!(
             "UPDATE _crap_jobs SET status = 'completed', result = {p2}, completed_at = {}
@@ -273,6 +293,7 @@ pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>
         &[DbValue::Text(id.to_string()), result_val],
     )
     .context("Failed to complete job")?;
+
     Ok(())
 }
 
@@ -282,7 +303,8 @@ pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>
 /// `attempt` is 1-based (first failure = attempt 1).
 fn backoff_seconds(attempt: u32) -> i64 {
     let exp = attempt.saturating_sub(1).min(6) as i64;
-    std::cmp::min(5 * (1i64 << exp), 300)
+
+    cmp::min(5 * (1i64 << exp), 300)
 }
 
 /// Mark a job as failed. If should_retry is true, resets to pending with exponential backoff.
@@ -348,6 +370,7 @@ pub fn update_heartbeat(conn: &dyn DbConnection, id: &str) -> Result<()> {
         &[DbValue::Text(id.to_string())],
     )
     .context("Failed to update heartbeat")?;
+
     Ok(())
 }
 
@@ -384,32 +407,32 @@ pub fn count_running(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64>
             &[],
         )?,
     };
-    match row.as_ref().and_then(|r| r.get_value(0)) {
-        Some(DbValue::Integer(n)) => Ok(*n),
-        _ => Ok(0),
-    }
+
+    Ok(extract_count(row.as_ref()))
 }
 
 /// Count running jobs per slug, returned as a HashMap.
-pub fn count_running_per_slug(
-    conn: &dyn DbConnection,
-) -> Result<std::collections::HashMap<String, i64>> {
+pub fn count_running_per_slug(conn: &dyn DbConnection) -> Result<HashMap<String, i64>> {
     let rows = conn.query_all(
         "SELECT slug, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY slug",
         &[],
     )?;
-    let mut map = std::collections::HashMap::new();
+    let mut map = HashMap::new();
+
     for row in rows {
         let slug = match row.get_value(0) {
             Some(DbValue::Text(s)) => s.clone(),
             _ => continue,
         };
+
         let count = match row.get_value(1) {
             Some(DbValue::Integer(n)) => *n,
             _ => 0,
         };
+
         map.insert(slug, count);
     }
+
     Ok(map)
 }
 
@@ -442,10 +465,12 @@ pub fn list_job_runs(
         " ORDER BY created_at DESC LIMIT {}",
         conn.placeholder(params.len())
     ));
+
     params.push(DbValue::Integer(offset));
     sql.push_str(&format!(" OFFSET {}", conn.placeholder(params.len())));
 
     let rows = conn.query_all(&sql, &params)?;
+
     rows.iter().map(row_to_job_run).collect()
 }
 
@@ -461,10 +486,7 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
         &[DbValue::Text(id.to_string())],
     )?;
 
-    match row {
-        Some(r) => Ok(Some(row_to_job_run(&r)?)),
-        None => Ok(None),
-    }
+    row.map(|r| row_to_job_run(&r)).transpose()
 }
 
 /// Delete completed/failed job runs older than the given threshold.
@@ -482,6 +504,7 @@ pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Resul
     } else {
         conn.execute("DELETE FROM _crap_jobs WHERE status = 'pending'", &[])? as i64
     };
+
     Ok(deleted)
 }
 
@@ -506,16 +529,12 @@ pub fn count_failed_since(conn: &dyn DbConnection, since_secs: u64) -> Result<i6
     let row = conn.query_one(
         &format!(
             "SELECT COUNT(*) FROM _crap_jobs
-             WHERE status = 'failed'
-               AND completed_at >= {}",
-            offset_sql
+             WHERE status = 'failed' AND completed_at >= {offset_sql}"
         ),
         &[offset_param],
     )?;
-    match row.as_ref().and_then(|r| r.get_value(0)) {
-        Some(DbValue::Integer(n)) => Ok(*n),
-        _ => Ok(0),
-    }
+
+    Ok(extract_count(row.as_ref()))
 }
 
 /// Count pending jobs that have been waiting longer than the given threshold (in seconds).
@@ -524,16 +543,12 @@ pub fn count_pending_older_than(conn: &dyn DbConnection, older_than_secs: u64) -
     let row = conn.query_one(
         &format!(
             "SELECT COUNT(*) FROM _crap_jobs
-             WHERE status = 'pending'
-               AND created_at < {}",
-            offset_sql
+             WHERE status = 'pending' AND created_at < {offset_sql}"
         ),
         &[offset_param],
     )?;
-    match row.as_ref().and_then(|r| r.get_value(0)) {
-        Some(DbValue::Integer(n)) => Ok(*n),
-        _ => Ok(0),
-    }
+
+    Ok(extract_count(row.as_ref()))
 }
 
 /// Get the most recent completed run for a given job slug.
@@ -551,10 +566,7 @@ pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<
         &[DbValue::Text(slug.to_string())],
     )?;
 
-    match row {
-        Some(r) => Ok(Some(row_to_job_run(&r)?)),
-        None => Ok(None),
-    }
+    row.map(|r| row_to_job_run(&r)).transpose()
 }
 
 /// Mark a running job as stale.
@@ -610,24 +622,31 @@ fn row_to_job_run(row: &DbRow) -> Result<JobRun> {
     if let Some(r) = get_opt_text(5) {
         b = b.result(r);
     }
+
     if let Some(e) = get_opt_text(6) {
         b = b.error(e);
     }
+
     if let Some(sb) = get_opt_text(9) {
         b = b.scheduled_by(sb);
     }
+
     if let Some(ca) = get_opt_text(10) {
         b = b.created_at(ca);
     }
+
     if let Some(sa) = get_opt_text(11) {
         b = b.started_at(sa);
     }
+
     if let Some(ca) = get_opt_text(12) {
         b = b.completed_at(ca);
     }
+
     if let Some(ha) = get_opt_text(13) {
         b = b.heartbeat_at(ha);
     }
+
     if let Some(ra) = get_opt_text(14) {
         b = b.retry_after(ra);
     }
@@ -746,8 +765,8 @@ mod tests {
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
 
-        let running = std::collections::HashMap::new();
-        let conc = std::collections::HashMap::new();
+        let running = HashMap::new();
+        let conc = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
         assert_eq!(claimed.len(), 2);
         assert_eq!(claimed[0].status, JobStatus::Running);
@@ -763,8 +782,8 @@ mod tests {
         insert_job(&conn, "limited", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "limited", "{}", "cron", 1, "default").unwrap();
 
-        let running = std::collections::HashMap::new();
-        let mut conc = std::collections::HashMap::new();
+        let running = HashMap::new();
+        let mut conc = HashMap::new();
         conc.insert("limited".to_string(), 1u32);
 
         let claimed = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
@@ -1117,8 +1136,8 @@ mod tests {
         )
         .unwrap();
 
-        let running = std::collections::HashMap::new();
-        let conc = std::collections::HashMap::new();
+        let running = HashMap::new();
+        let conc = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
         assert_eq!(
             claimed.len(),
@@ -1140,8 +1159,8 @@ mod tests {
         )
         .unwrap();
 
-        let running = std::collections::HashMap::new();
-        let conc = std::collections::HashMap::new();
+        let running = HashMap::new();
+        let conc = HashMap::new();
         let claimed = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
         assert_eq!(claimed.len(), 1, "should claim job with past retry_after");
     }

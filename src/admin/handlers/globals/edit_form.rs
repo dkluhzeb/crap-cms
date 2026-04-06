@@ -27,7 +27,10 @@ use crate::{
         auth::{AuthUser, Claims},
         collection::{GlobalDefinition, Hooks},
     },
-    db::{DbPool, ops, query::AccessResult},
+    db::{
+        DbPool, ops,
+        query::{AccessResult, helpers::global_table},
+    },
     hooks::HookRunner,
 };
 
@@ -173,9 +176,9 @@ pub async fn edit_form(
     let has_drafts = def.has_drafts();
     let doc_status = extract_doc_status(&document, has_drafts);
 
-    let global_table = format!("_global_{}", slug);
+    let gtable = global_table(&slug);
     let (versions, total_versions) = if has_versions {
-        fetch_version_sidebar_data(&state.pool, &global_table, "default")
+        fetch_version_sidebar_data(&state.pool, &gtable, "default")
     } else {
         (vec![], 0)
     };

@@ -42,7 +42,13 @@ pub async fn back_references(
     };
 
     let back_refs =
-        query::find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale);
+        match query::find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale)
+        {
+            Ok(refs) => refs,
+            Err(_) => {
+                return Json(json!({ "error": "Back-reference scan failed" })).into_response();
+            }
+        };
 
     Json(json!(back_refs)).into_response()
 }

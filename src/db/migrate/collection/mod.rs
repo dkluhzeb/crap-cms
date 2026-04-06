@@ -12,7 +12,7 @@ pub(super) use sync::sync_collection_table;
 pub(super) use create::create_collection_table;
 
 #[cfg(test)]
-pub(super) mod test_helpers {
+pub(crate) mod test_helpers {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::CollectionDefinition;
     use crate::core::field::{FieldDefinition, FieldType};

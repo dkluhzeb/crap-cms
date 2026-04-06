@@ -8,7 +8,7 @@ use mlua::{Error::RuntimeError, Lua, Table, Value};
 use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
-    db::{AccessResult, LocaleContext, query},
+    db::{AccessResult, LocaleContext, query, query::helpers::global_table},
     hooks::{
         ValidationCtx, api,
         lifecycle::{
@@ -180,17 +180,16 @@ pub(super) fn register_globals_update(
             }
 
             // Run validation
-            let global_table = format!("_global_{}", slug);
-            let val_ctx = ValidationCtx::builder(conn, &global_table)
+            let gtable = global_table(&slug);
+            let val_ctx = ValidationCtx::builder(conn, &gtable)
                 .locale_ctx(locale_ctx.as_ref())
                 .build();
             validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
                 .map_err(|e| RuntimeError(format!("validation error: {:#}", e)))?;
 
-            let global_table = format!("_global_{}", slug);
             let old_refs = query::ref_count::snapshot_outgoing_refs(
                 conn,
-                &global_table,
+                &gtable,
                 "default",
                 &def.fields,
                 &lc,
@@ -202,7 +201,7 @@ pub(super) fn register_globals_update(
 
             query::save_join_table_data(
                 conn,
-                &global_table,
+                &gtable,
                 &def.fields,
                 "default",
                 &join_data,
@@ -210,15 +209,8 @@ pub(super) fn register_globals_update(
             )
             .map_err(|e| RuntimeError(format!("join data error: {:#}", e)))?;
 
-            query::ref_count::after_update(
-                conn,
-                &global_table,
-                "default",
-                &def.fields,
-                &lc,
-                old_refs,
-            )
-            .map_err(|e| RuntimeError(format!("ref count update error: {:#}", e)))?;
+            query::ref_count::after_update(conn, &gtable, "default", &def.fields, &lc, old_refs)
+                .map_err(|e| RuntimeError(format!("ref count update error: {:#}", e)))?;
 
             // Re-fetch to hydrate join data in the returned document
             let mut doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())

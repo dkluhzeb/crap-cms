@@ -23,7 +23,10 @@ use crate::{
         },
     },
     core::auth::AuthUser,
-    db::{AccessResult, query::LocaleContext},
+    db::{
+        AccessResult,
+        query::{LocaleContext, helpers::global_table},
+    },
 };
 
 /// POST /admin/globals/{slug}/validate — validate fields for global update
@@ -60,7 +63,7 @@ pub async fn validate_global(
     let locale_ctx =
         LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale);
 
-    let global_table = format!("_global_{}", slug);
+    let gtable = global_table(&slug);
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let slug_owned = slug.clone();
@@ -74,7 +77,7 @@ pub async fn validate_global(
             hooks: &def_owned.hooks,
             fields: &def_owned.fields,
             slug: &slug_owned,
-            table_name: &global_table,
+            table_name: &gtable,
             operation: "update",
             exclude_id: Some("default"),
             form_data: &form_data,

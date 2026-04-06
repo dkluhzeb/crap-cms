@@ -1,13 +1,21 @@
 //! Global document query functions.
 
-use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
-use crate::core::{Document, collection::GlobalDefinition};
-use crate::db::{
-    DbConnection, DbRow, DbValue, LocaleContext, LocaleMode,
-    document::row_to_document,
-    query::{group_locale_fields, write::UpdateCollector, write::collect_update_params},
+use anyhow::{Context as _, Result};
+
+use crate::{
+    core::{Document, collection::GlobalDefinition},
+    db::{
+        DbConnection, DbRow, DbValue, LocaleContext, LocaleMode,
+        document::row_to_document,
+        query::{
+            collect_column_names, get_locale_select_columns, group_locale_fields,
+            helpers::{global_table, utc_now},
+            join::hydrate_document,
+            write::{UpdateCollector, collect_update_params},
+        },
+    },
 };
 
 /// Get the single global document from `_global_{slug}`.
@@ -17,7 +25,7 @@ pub fn get_global(
     def: &GlobalDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let table_name = format!("_global_{}", slug);
+    let table_name = global_table(slug);
 
     let (select_exprs, result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => get_global_locale_columns(def, ctx)?,
@@ -54,7 +62,7 @@ pub fn get_global(
     }
 
     // Hydrate join table data (arrays, blocks, has-many relationships)
-    super::hydrate_document(conn, &table_name, &def.fields, &mut doc, None, locale_ctx)?;
+    hydrate_document(conn, &table_name, &def.fields, &mut doc, None, locale_ctx)?;
 
     Ok(doc)
 }
@@ -67,21 +75,18 @@ pub fn update_global(
     data: &HashMap<String, String>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let table_name = format!("_global_{}", slug);
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S.000Z")
-        .to_string();
+    let table_name = global_table(slug);
+    let now = utc_now();
 
     let mut col = UpdateCollector::new();
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "", false)?;
+
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn)?;
 
     if col.set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);
     }
 
-    col.set_clauses
-        .push(format!("updated_at = {}", conn.placeholder(col.idx)));
-    col.params.push(DbValue::Text(now));
+    col.push(conn, "updated_at", DbValue::Text(now));
 
     let sql = format!(
         "UPDATE \"{}\" SET {} WHERE id = 'default'",
@@ -97,13 +102,16 @@ pub fn update_global(
 
 fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
-    super::collect_column_names(&def.fields, &mut names);
+
+    collect_column_names(&def.fields, &mut names);
 
     if def.has_drafts() {
         names.push("_status".to_string());
     }
+
     names.push("created_at".to_string());
     names.push("updated_at".to_string());
+
     names
 }
 
@@ -113,12 +121,12 @@ fn get_global_locale_columns(
     def: &GlobalDefinition,
     ctx: &LocaleContext,
 ) -> Result<(Vec<String>, Vec<String>)> {
-    let (mut select_exprs, mut result_names) =
-        super::get_locale_select_columns(&def.fields, true, ctx)?;
+    let (mut select_exprs, mut result_names) = get_locale_select_columns(&def.fields, true, ctx)?;
 
     // Insert _status before timestamps if present
     if def.has_drafts() {
         let ts_pos = select_exprs.len() - 2;
+
         select_exprs.insert(ts_pos, "_status".to_string());
         result_names.insert(ts_pos, "_status".to_string());
     }
@@ -428,7 +436,6 @@ mod tests {
 
     #[test]
     fn update_global_group_containing_tabs() {
-        use crate::core::field::FieldTab;
         let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE _global_settings (
@@ -481,7 +488,6 @@ mod tests {
 
     #[test]
     fn get_global_column_names_group_containing_tabs() {
-        use crate::core::field::FieldTab;
         let mut def = GlobalDefinition::new("settings");
         def.fields = vec![
             FieldDefinition::builder("config", FieldType::Group)

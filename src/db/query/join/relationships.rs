@@ -2,7 +2,10 @@
 
 use anyhow::Result;
 
+use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
+
+use super::helpers::delete_junction_rows;
 
 /// Set the related IDs for a has-many relationship junction table.
 /// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
@@ -17,27 +20,9 @@ pub fn set_related_ids(
     ids: &[String],
     locale: Option<&str>,
 ) -> Result<()> {
-    let table_name = format!("{}_{}", collection, field);
+    let table_name = join_table(collection, field);
 
-    if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        conn.execute(
-            &format!(
-                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
-                table_name
-            ),
-            &[
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )?;
-    } else {
-        let p1 = conn.placeholder(1);
-        conn.execute(
-            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
-            &[DbValue::Text(parent_id.to_string())],
-        )?;
-    }
+    delete_junction_rows(conn, &table_name, parent_id, locale)?;
 
     if let Some(loc) = locale {
         let (p1, p2, p3, p4) = (
@@ -94,7 +79,7 @@ pub fn find_related_ids(
     parent_id: &str,
     locale: Option<&str>,
 ) -> Result<Vec<String>> {
-    let table_name = format!("{}_{}", collection, field);
+    let table_name = join_table(collection, field);
 
     let (sql, params) = if let Some(loc) = locale {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
@@ -147,20 +132,11 @@ pub fn set_polymorphic_related(
     items: &[(String, String)],
     locale: Option<&str>,
 ) -> Result<()> {
-    let table_name = format!("{}_{}", collection, field);
+    let table_name = join_table(collection, field);
+
+    delete_junction_rows(conn, &table_name, parent_id, locale)?;
 
     if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        conn.execute(
-            &format!(
-                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
-                table_name
-            ),
-            &[
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )?;
         let (p1, p2, p3, p4, p5) = (
             conn.placeholder(1),
             conn.placeholder(2),

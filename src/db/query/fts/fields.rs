@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldDefinition, FieldType, Registry},
-    db::query::sanitize_locale,
+    db::query::helpers::locale_column,
 };
 
 /// Field types that live in separate tables and have no column on the parent table.
@@ -118,7 +118,7 @@ pub fn get_fts_columns(
 
         if is_localized {
             for locale in &locale_config.locales {
-                columns.push(format!("{}__{}", field_name, sanitize_locale(locale)?));
+                columns.push(locale_column(field_name, locale)?);
             }
         } else {
             columns.push(field_name.clone());
@@ -182,29 +182,12 @@ mod tests {
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::*;
-
-    fn text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).build()
-    }
+    use crate::db::migrate::collection::test_helpers::{locale_en_de, localized_field, text_field};
 
     fn simple_def(fields: Vec<FieldDefinition>) -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
         def.fields = fields;
         def
-    }
-
-    fn locale_config_en_de() -> LocaleConfig {
-        LocaleConfig {
-            default_locale: "en".to_string(),
-            locales: vec!["en".to_string(), "de".to_string()],
-            fallback: false,
-        }
-    }
-
-    fn localized_text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text)
-            .localized(true)
-            .build()
     }
 
     #[test]
@@ -264,25 +247,22 @@ mod tests {
 
     #[test]
     fn get_fts_columns_with_locale_expands_localized_fields() {
-        let def = simple_def(vec![
-            localized_text_field("title"),
-            localized_text_field("body"),
-        ]);
-        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
+        let def = simple_def(vec![localized_field("title"), localized_field("body")]);
+        let cols = get_fts_columns(&def, &locale_en_de()).unwrap();
         assert_eq!(cols, vec!["title__en", "title__de", "body__en", "body__de"]);
     }
 
     #[test]
     fn get_fts_columns_mixed_localized_and_non_localized() {
-        let def = simple_def(vec![localized_text_field("title"), text_field("slug")]);
-        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
+        let def = simple_def(vec![localized_field("title"), text_field("slug")]);
+        let cols = get_fts_columns(&def, &locale_en_de()).unwrap();
         assert_eq!(cols, vec!["title__en", "title__de", "slug"]);
     }
 
     #[test]
     fn get_fts_columns_locale_enabled_but_no_localized_fields() {
         let def = simple_def(vec![text_field("title"), text_field("body")]);
-        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
+        let cols = get_fts_columns(&def, &locale_en_de()).unwrap();
         // None of the fields are localized, so no expansion
         assert_eq!(cols, vec!["title", "body"]);
     }
@@ -292,7 +272,7 @@ mod tests {
         let def = simple_def(vec![
             FieldDefinition::builder("count", FieldType::Number).build(),
         ]);
-        let cols = get_fts_columns(&def, &locale_config_en_de()).unwrap();
+        let cols = get_fts_columns(&def, &locale_en_de()).unwrap();
         assert!(cols.is_empty());
     }
 

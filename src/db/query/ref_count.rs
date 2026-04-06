@@ -6,11 +6,15 @@
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
+use tracing::{debug, trace, warn};
 
 use crate::{
     config::LocaleConfig,
     core::{BlockDefinition, FieldDefinition, FieldType, field::flatten_array_sub_fields},
-    db::{DbConnection, DbValue},
+    db::{
+        DbConnection, DbValue,
+        query::helpers::{join_table, locale_column, prefixed_name},
+    },
 };
 
 /// An outgoing reference from one document to another.
@@ -18,6 +22,40 @@ use crate::{
 pub struct OutgoingRef {
     target_collection: String,
     target_id: String,
+}
+
+/// Parse a reference value string and push an `OutgoingRef` if valid.
+///
+/// For polymorphic refs, expects `"collection/id"` format.
+/// For non-polymorphic, uses `default_collection` as the target.
+fn push_ref(
+    refs: &mut Vec<OutgoingRef>,
+    value: &str,
+    is_polymorphic: bool,
+    default_collection: &str,
+) {
+    if value.is_empty() {
+        return;
+    }
+
+    if !is_polymorphic {
+        refs.push(OutgoingRef {
+            target_collection: default_collection.to_string(),
+            target_id: value.to_string(),
+        });
+
+        return;
+    }
+
+    if let Some((col, id)) = value.split_once('/')
+        && !col.is_empty()
+        && !id.is_empty()
+    {
+        refs.push(OutgoingRef {
+            target_collection: col.to_string(),
+            target_id: id.to_string(),
+        });
+    }
 }
 
 /// Read the `_ref_count` value for a document.
@@ -49,6 +87,7 @@ pub fn after_create(
 ) -> Result<()> {
     let new_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
     let deltas = to_delta_map(&[], &new_refs);
+
     apply_deltas(conn, &deltas)
 }
 
@@ -64,6 +103,7 @@ pub fn before_hard_delete(
 ) -> Result<()> {
     let old_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
     let deltas = to_delta_map(&old_refs, &[]);
+
     apply_deltas(conn, &deltas)
 }
 
@@ -81,6 +121,7 @@ pub fn after_update(
 ) -> Result<()> {
     let new_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
     let deltas = to_delta_map(&old_refs, &new_refs);
+
     apply_deltas(conn, &deltas)
 }
 
@@ -106,7 +147,9 @@ fn read_outgoing_refs(
     locale_config: &LocaleConfig,
 ) -> Result<Vec<OutgoingRef>> {
     let mut refs = Vec::new();
+
     collect_refs(conn, table, id, fields, locale_config, "", &mut refs)?;
+
     Ok(refs)
 }
 
@@ -123,11 +166,7 @@ fn collect_refs(
     for field in fields {
         match field.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+                let new_prefix = prefixed_name(prefix, &field.name);
                 collect_refs(
                     conn,
                     table,
@@ -148,33 +187,14 @@ fn collect_refs(
             }
 
             FieldType::Relationship | FieldType::Upload => {
-                let rc = match &field.relationship {
-                    Some(rc) => rc,
-                    None => continue,
+                let Some(rc) = &field.relationship else {
+                    continue;
                 };
+                let col = prefixed_name(prefix, &field.name);
 
-                let col = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+                if !field.has_parent_column() {
+                    let junction = join_table(table, &col);
 
-                if field.has_parent_column() {
-                    // Has-one: read column value(s) from the parent table
-                    collect_has_one_refs(
-                        conn,
-                        table,
-                        id,
-                        &col,
-                        &rc.collection,
-                        rc.is_polymorphic(),
-                        field.localized && locale_config.is_enabled(),
-                        locale_config,
-                        refs,
-                    )?;
-                } else {
-                    // Has-many: read from junction table
-                    let junction = format!("{}_{}", table, col);
                     collect_has_many_refs(
                         conn,
                         &junction,
@@ -183,32 +203,40 @@ fn collect_refs(
                         rc.is_polymorphic(),
                         refs,
                     )?;
+
+                    continue;
                 }
+
+                let columns = if field.localized && locale_config.is_enabled() {
+                    locale_config
+                        .locales
+                        .iter()
+                        .map(|l| locale_column(&col, l))
+                        .collect::<Result<_>>()?
+                } else {
+                    vec![col]
+                };
+
+                collect_has_one_refs(
+                    conn,
+                    table,
+                    id,
+                    &columns,
+                    &rc.collection,
+                    rc.is_polymorphic(),
+                    refs,
+                )?;
             }
 
             FieldType::Array => {
-                let array_table = format!(
-                    "{}_{}",
-                    table,
-                    if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    }
-                );
+                let array_table = join_table(table, &prefixed_name(prefix, &field.name));
+
                 collect_array_refs(conn, &array_table, id, &field.fields, refs)?;
             }
 
             FieldType::Blocks => {
-                let blocks_table = format!(
-                    "{}_{}",
-                    table,
-                    if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    }
-                );
+                let blocks_table = join_table(table, &prefixed_name(prefix, &field.name));
+
                 collect_blocks_refs(conn, &blocks_table, id, &field.blocks, refs)?;
             }
 
@@ -220,63 +248,30 @@ fn collect_refs(
 }
 
 /// Read has-one reference(s) from a parent table column.
-#[allow(clippy::too_many_arguments)]
 fn collect_has_one_refs(
     conn: &dyn DbConnection,
     table: &str,
     id: &str,
-    col: &str,
+    columns: &[String],
     default_collection: &str,
     is_polymorphic: bool,
-    is_localized: bool,
-    locale_config: &LocaleConfig,
     refs: &mut Vec<OutgoingRef>,
 ) -> Result<()> {
-    let columns: Vec<String> = if is_localized {
-        locale_config
-            .locales
-            .iter()
-            .map(|l| format!("{}__{}", col, l))
-            .collect()
-    } else {
-        vec![col.to_string()]
-    };
-
     let col_list = columns
         .iter()
-        .map(|c| format!("\"{}\"", c))
+        .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
-
     let p1 = conn.placeholder(1);
-    let sql = format!("SELECT {} FROM \"{}\" WHERE id = {p1}", col_list, table);
+    let sql = format!("SELECT {col_list} FROM \"{table}\" WHERE id = {p1}");
 
-    let row = match conn.query_one(&sql, &[DbValue::Text(id.to_string())])? {
-        Some(r) => r,
-        None => return Ok(()),
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(id.to_string())])? else {
+        return Ok(());
     };
 
-    for (i, _) in columns.iter().enumerate() {
-        let value = match row.get_value(i) {
-            Some(DbValue::Text(s)) if !s.is_empty() => s.clone(),
-            _ => continue,
-        };
-
-        if is_polymorphic {
-            if let Some((col_name, ref_id)) = value.split_once('/')
-                && !col_name.is_empty()
-                && !ref_id.is_empty()
-            {
-                refs.push(OutgoingRef {
-                    target_collection: col_name.to_string(),
-                    target_id: ref_id.to_string(),
-                });
-            }
-        } else {
-            refs.push(OutgoingRef {
-                target_collection: default_collection.to_string(),
-                target_id: value,
-            });
+    for i in 0..columns.len() {
+        if let Some(DbValue::Text(value)) = row.get_value(i) {
+            push_ref(refs, value, is_polymorphic, default_collection);
         }
     }
 
@@ -293,55 +288,42 @@ fn collect_has_many_refs(
     refs: &mut Vec<OutgoingRef>,
 ) -> Result<()> {
     let p1 = conn.placeholder(1);
+    let params = &[DbValue::Text(parent_id.to_string())];
 
     if is_polymorphic {
         let sql = format!(
-            "SELECT related_id, related_collection FROM \"{}\" WHERE parent_id = {p1}",
-            junction_table
+            "SELECT related_id, related_collection FROM \"{junction_table}\" WHERE parent_id = {p1}"
         );
-        let rows = match conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())]) {
+        let rows = match conn.query_all(&sql, params) {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Ref count scan skipping {}: {}", junction_table, e);
+                debug!("Ref count scan skipping {junction_table}: {e}");
+
                 return Ok(());
             }
         };
 
         for row in rows {
-            let ref_id = match row.get_value(0) {
-                Some(DbValue::Text(s)) if !s.is_empty() => s.clone(),
-                _ => continue,
-            };
-            let ref_col = match row.get_value(1) {
-                Some(DbValue::Text(s)) if !s.is_empty() => s.clone(),
-                _ => continue,
-            };
-            refs.push(OutgoingRef {
-                target_collection: ref_col,
-                target_id: ref_id,
-            });
+            if let (Some(DbValue::Text(id)), Some(DbValue::Text(col))) =
+                (row.get_value(0), row.get_value(1))
+            {
+                push_ref(refs, &format!("{col}/{id}"), true, "");
+            }
         }
     } else {
-        let sql = format!(
-            "SELECT related_id FROM \"{}\" WHERE parent_id = {p1}",
-            junction_table
-        );
-        let rows = match conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())]) {
+        let sql = format!("SELECT related_id FROM \"{junction_table}\" WHERE parent_id = {p1}");
+        let rows = match conn.query_all(&sql, params) {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Ref count scan skipping {}: {}", junction_table, e);
+                debug!("Ref count scan skipping {junction_table}: {e}");
+
                 return Ok(());
             }
         };
 
         for row in rows {
-            if let Some(DbValue::Text(ref_id)) = row.get_value(0)
-                && !ref_id.is_empty()
-            {
-                refs.push(OutgoingRef {
-                    target_collection: default_collection.to_string(),
-                    target_id: ref_id.clone(),
-                });
+            if let Some(DbValue::Text(ref_id)) = row.get_value(0) {
+                push_ref(refs, ref_id, false, default_collection);
             }
         }
     }
@@ -366,10 +348,13 @@ fn collect_array_refs(
             if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
                 return None;
             }
+
             let rc = f.relationship.as_ref()?;
+
             if rc.has_many {
                 return None; // has-many inside array not supported
             }
+
             Some((*f, rc.is_polymorphic(), rc.collection.as_ref()))
         })
         .collect();
@@ -393,33 +378,16 @@ fn collect_array_refs(
     let rows = match conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())]) {
         Ok(r) => r,
         Err(e) => {
-            tracing::debug!("Ref count scan skipping {}: {}", array_table, e);
+            debug!("Ref count scan skipping {}: {}", array_table, e);
+
             return Ok(());
         }
     };
 
     for row in &rows {
         for (i, (_, is_poly, default_col)) in rel_fields.iter().enumerate() {
-            let value = match row.get_value(i) {
-                Some(DbValue::Text(s)) if !s.is_empty() => s.clone(),
-                _ => continue,
-            };
-
-            if *is_poly {
-                if let Some((col_name, ref_id)) = value.split_once('/')
-                    && !col_name.is_empty()
-                    && !ref_id.is_empty()
-                {
-                    refs.push(OutgoingRef {
-                        target_collection: col_name.to_string(),
-                        target_id: ref_id.to_string(),
-                    });
-                }
-            } else {
-                refs.push(OutgoingRef {
-                    target_collection: default_col.to_string(),
-                    target_id: value,
-                });
+            if let Some(DbValue::Text(value)) = row.get_value(i) {
+                push_ref(refs, value, *is_poly, default_col);
             }
         }
     }
@@ -485,26 +453,8 @@ fn collect_blocks_refs(
 
         for row in &rows {
             for (i, (_, is_poly, default_col)) in rel_fields.iter().enumerate() {
-                let value = match row.get_value(i) {
-                    Some(DbValue::Text(s)) if !s.is_empty() => s.clone(),
-                    _ => continue,
-                };
-
-                if *is_poly {
-                    if let Some((col_name, ref_id)) = value.split_once('/')
-                        && !col_name.is_empty()
-                        && !ref_id.is_empty()
-                    {
-                        refs.push(OutgoingRef {
-                            target_collection: col_name.to_string(),
-                            target_id: ref_id.to_string(),
-                        });
-                    }
-                } else {
-                    refs.push(OutgoingRef {
-                        target_collection: default_col.to_string(),
-                        target_id: value,
-                    });
+                if let Some(DbValue::Text(value)) = row.get_value(i) {
+                    push_ref(refs, value, *is_poly, default_col);
                 }
             }
         }
@@ -536,6 +486,7 @@ fn to_delta_map(
 
     // Remove zero-deltas
     deltas.retain(|_, v| *v != 0);
+
     deltas
 }
 
@@ -559,16 +510,14 @@ fn apply_deltas(conn: &dyn DbConnection, deltas: &HashMap<(String, String), i64>
             })?;
 
         if affected == 0 && *delta > 0 {
-            tracing::warn!(
+            warn!(
                 "Ref count target {}/{} not found — increment by {} lost (possibly deleted)",
-                collection,
-                id,
-                delta
+                collection, id, delta
             );
         }
 
         if *delta < 0 {
-            tracing::trace!(
+            trace!(
                 "Decremented _ref_count on {}/{} by {}",
                 collection,
                 id,

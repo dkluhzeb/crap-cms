@@ -8,8 +8,11 @@ use crate::db::{
     query::{
         filter::{build_where_clause, resolve_filters},
         fts, is_valid_identifier,
+        validation::{get_valid_filter_paths, validate_filter_field},
     },
 };
+
+use crate::db::query::helpers::append_sql_condition;
 
 /// Count documents in a collection.
 pub fn count(
@@ -35,16 +38,14 @@ pub fn count_with_search(
     search: Option<&str>,
     include_deleted: bool,
 ) -> Result<i64> {
-    let (exact, prefixes) = super::super::get_valid_filter_paths(def, locale_ctx);
+    let (exact, prefixes) = get_valid_filter_paths(def, locale_ctx);
     for clause in filters {
         match clause {
-            FilterClause::Single(f) => {
-                super::super::validate_filter_field(&f.field, &exact, &prefixes)?
-            }
+            FilterClause::Single(f) => validate_filter_field(&f.field, &exact, &prefixes)?,
             FilterClause::Or(groups) => {
                 for group in groups {
                     for f in group {
-                        super::super::validate_filter_field(&f.field, &exact, &prefixes)?;
+                        validate_filter_field(&f.field, &exact, &prefixes)?;
                     }
                 }
             }
@@ -63,38 +64,16 @@ pub fn count_with_search(
     }
 
     // FTS5 full-text search filter
-    if let Some(search_term) = search {
-        let sanitized = fts::sanitize_fts_query(conn, search_term);
-        if !sanitized.is_empty() {
-            let fts_table = format!("_fts_{slug}");
-            let fts_exists = conn.table_exists(&fts_table).unwrap_or(false);
-
-            if fts_exists {
-                let ph = conn.placeholder(params.len() + 1);
-                let fts_clause = match conn.kind() {
-                    "postgres" => format!(
-                        "id IN (SELECT id FROM {fts_table} WHERE tsv @@ to_tsquery('simple', {ph}))"
-                    ),
-                    _ => format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})"),
-                };
-                if has_where {
-                    sql.push_str(&format!(" AND {fts_clause}"));
-                } else {
-                    sql.push_str(&format!(" WHERE {fts_clause}"));
-                    has_where = true;
-                }
-                params.push(DbValue::Text(sanitized));
-            }
-        }
+    if let Some((clause, sanitized)) =
+        search.and_then(|term| fts::fts_where_clause(conn, slug, term, params.len() + 1))
+    {
+        append_sql_condition(&mut sql, &mut has_where, &clause);
+        params.push(DbValue::Text(sanitized));
     }
 
     // Exclude soft-deleted documents unless include_deleted is set
     if def.soft_delete && !include_deleted {
-        if has_where {
-            sql.push_str(" AND _deleted_at IS NULL");
-        } else {
-            sql.push_str(" WHERE _deleted_at IS NULL");
-        }
+        append_sql_condition(&mut sql, &mut has_where, "_deleted_at IS NULL");
     }
 
     let row = conn
@@ -180,13 +159,12 @@ pub fn count_where_field_eq(
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::write::create;
-    use super::super::super::{Filter, FilterClause, FilterOp};
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{DbPool, pool};
+    use crate::db::{Filter, FilterClause, FilterOp, query::write::create};
     use std::collections::HashMap;
     use tempfile::TempDir;
 

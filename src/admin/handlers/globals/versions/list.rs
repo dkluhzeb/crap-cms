@@ -21,7 +21,7 @@ use crate::{
     },
     db::{
         BoxedConnection,
-        query::{self, AccessResult},
+        query::{self, AccessResult, helpers::global_table},
     },
 };
 
@@ -79,7 +79,7 @@ pub async fn list_versions_page(
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let global_table = format!("_global_{}", slug);
+    let global_table = global_table(&slug);
     let pg = params.resolve(&state.config.pagination);
     let (versions, total) = fetch_version_data(&conn, &global_table, &pg);
 

@@ -25,6 +25,7 @@ pub(super) fn batch_nonpoly_has_many(
 ) -> Result<()> {
     // Collect all unique IDs across all docs for this has-many field
     let mut all_ids: Vec<String> = Vec::new();
+
     for doc in docs.iter() {
         if let Some(Value::Array(arr)) = doc.fields.get(field_name) {
             for v in arr {
@@ -51,6 +52,7 @@ pub(super) fn batch_nonpoly_has_many(
             _ => continue,
         };
         let mut populated = Vec::new();
+
         for id in &ids {
             if let Some(cached_doc) = doc_map.get(id) {
                 populated.push(document_to_json(cached_doc, rel_collection));
@@ -74,6 +76,7 @@ pub(super) fn batch_nonpoly_has_one(
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     let mut all_ids: Vec<String> = Vec::new();
+
     for doc in docs.iter() {
         if let Some(Value::String(s)) = doc.fields.get(field_name)
             && !s.is_empty()
@@ -82,6 +85,7 @@ pub(super) fn batch_nonpoly_has_one(
             all_ids.push(s.clone());
         }
     }
+
     all_ids.sort();
     all_ids.dedup();
 
@@ -119,12 +123,15 @@ pub(super) fn batch_fetch_single_collection(
     for id in all_ids {
         let key = populate_cache_key(collection, id, locale_key.as_deref());
 
-        if let Ok(Some(bytes)) = ctx.cache.get(&key) {
-            if let Ok(cached) = serde_json::from_slice::<Document>(&bytes) {
-                doc_map.insert(id.clone(), cached);
-            } else {
-                uncached_ids.push(id.clone());
-            }
+        let cached = ctx
+            .cache
+            .get(&key)
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<Document>(&bytes).ok());
+
+        if let Some(doc) = cached {
+            doc_map.insert(id.clone(), doc);
         } else {
             uncached_ids.push(id.clone());
         }
@@ -133,6 +140,7 @@ pub(super) fn batch_fetch_single_collection(
     if !uncached_ids.is_empty() {
         let mut fetched =
             find_by_ids(ctx.conn, collection, rel_def, &uncached_ids, ctx.locale_ctx)?;
+
         for d in &mut fetched {
             if let Some(ref uc) = rel_def.upload
                 && uc.enabled
@@ -140,6 +148,7 @@ pub(super) fn batch_fetch_single_collection(
                 upload::assemble_sizes_object(d, uc);
             }
         }
+
         if ctx.effective_depth - 1 > 0 {
             populate_relationships_batch_cached(
                 &PopulateContext {
@@ -157,8 +166,10 @@ pub(super) fn batch_fetch_single_collection(
                 ctx.cache,
             )?;
         }
+
         for d in fetched {
             let key = populate_cache_key(collection, d.id.as_ref(), locale_key.as_deref());
+
             if let Ok(bytes) = serde_json::to_vec(&d) {
                 let _ = ctx.cache.set(&key, &bytes);
             }

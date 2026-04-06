@@ -3,19 +3,20 @@
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
 
-use crate::core::{FieldDefinition, field::FieldType};
-
-use crate::db::{
-    DbConnection, DbValue, FindQuery, LocaleContext, LocaleMode,
-    query::{
-        filter::{build_where_clause, resolve_filter_column, resolve_filters},
-        fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
-        validate_query_fields,
-    },
-};
+use super::select::apply_select_filter;
 use crate::{
-    core::{CollectionDefinition, Document},
-    db::document::row_to_document,
+    core::{CollectionDefinition, Document, FieldDefinition, FieldType},
+    db::{
+        DbConnection, DbRow, DbValue, FindQuery, LocaleContext, LocaleMode,
+        document::row_to_document,
+        query::{
+            cursor::{CursorData, SortDirection},
+            filter::{build_where_clause, resolve_filter_column, resolve_filters},
+            fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
+            helpers::{append_sql_condition, prefixed_name},
+            resolve_sort as resolve_order, validate_query_fields,
+        },
+    },
 };
 
 /// Find documents matching a query.
@@ -28,6 +29,58 @@ pub fn find(
 ) -> Result<Vec<Document>> {
     validate_query_fields(def, query, locale_ctx)?;
 
+    let select_exprs = build_select(def, query, locale_ctx)?;
+    let mut sql = format!("SELECT {} FROM \"{slug}\"", select_exprs.join(", "));
+    let mut params: Vec<DbValue> = Vec::new();
+    let mut has_where = false;
+
+    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
+    let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
+    if !where_clause.is_empty() {
+        sql.push_str(&where_clause);
+        has_where = true;
+    }
+
+    apply_fts(conn, slug, query, &mut sql, &mut has_where, &mut params);
+    apply_soft_delete(def, query, &mut sql, &mut has_where);
+
+    let (sort_col, sort_dir, using_before) = resolve_sort(def, query)?;
+
+    if let Some(cursor) = query.after_cursor.as_ref().or(query.before_cursor.as_ref()) {
+        let sort = SortInfo {
+            col: &sort_col,
+            dir: sort_dir,
+            using_before,
+        };
+
+        let resolved = resolve_filter_column(&sort_col, def, locale_ctx)?;
+
+        apply_cursor_keyset(
+            conn,
+            cursor,
+            &sort,
+            &resolved,
+            &mut sql,
+            &mut has_where,
+            &mut params,
+        )?;
+    }
+    apply_order_by(&sort_col, sort_dir, using_before, def, locale_ctx, &mut sql)?;
+    apply_limit_offset(conn, query, &mut sql, &mut params);
+
+    let rows = conn
+        .query_all(&sql, &params)
+        .with_context(|| format!("Failed to execute query on '{slug}'"))?;
+
+    map_rows(conn, &rows, locale_ctx, def, using_before)
+}
+
+/// Build the SELECT column list.
+fn build_select(
+    def: &CollectionDefinition,
+    query: &FindQuery,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Vec<String>> {
     let (select_exprs, result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns_full(
             &def.fields,
@@ -42,82 +95,59 @@ pub fn find(
         }
     };
 
-    let (select_exprs, _result_names) =
-        super::select::apply_select_filter(select_exprs, result_names, query.select.as_ref(), def);
+    let (select_exprs, _) = apply_select_filter(select_exprs, result_names, query.select.as_ref());
 
-    let mut sql = format!("SELECT {} FROM \"{slug}\"", select_exprs.join(", "));
-    let mut params: Vec<DbValue> = Vec::new();
+    Ok(select_exprs)
+}
 
-    // Build WHERE with locale-resolved column names
-    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
-    let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
-    let mut has_where = !where_clause.is_empty();
-
-    if has_where {
-        sql.push_str(&where_clause);
+/// Apply FTS search filter if present.
+fn apply_fts(
+    conn: &dyn DbConnection,
+    slug: &str,
+    query: &FindQuery,
+    sql: &mut String,
+    has_where: &mut bool,
+    params: &mut Vec<DbValue>,
+) {
+    if let Some((clause, sanitized)) = query
+        .search
+        .as_deref()
+        .and_then(|term| fts::fts_where_clause(conn, slug, term, params.len() + 1))
+    {
+        append_sql_condition(sql, has_where, &clause);
+        params.push(DbValue::Text(sanitized));
     }
+}
 
-    // FTS5 full-text search filter
-    if let Some(ref search_term) = query.search {
-        let sanitized = fts::sanitize_fts_query(conn, search_term);
-        if !sanitized.is_empty() {
-            let fts_table = format!("_fts_{slug}");
-            let fts_exists = conn.table_exists(&fts_table).unwrap_or(false);
-
-            if fts_exists {
-                let ph = conn.placeholder(params.len() + 1);
-                let fts_clause = match conn.kind() {
-                    "postgres" => format!(
-                        "id IN (SELECT id FROM {fts_table} WHERE tsv @@ to_tsquery('simple', {ph}))"
-                    ),
-                    _ => format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})"),
-                };
-                if has_where {
-                    sql.push_str(&format!(" AND {fts_clause}"));
-                } else {
-                    sql.push_str(&format!(" WHERE {fts_clause}"));
-                    has_where = true;
-                }
-                params.push(DbValue::Text(sanitized));
-            }
-        }
-    }
-
-    // Exclude soft-deleted documents unless explicitly requested
+/// Exclude soft-deleted documents unless explicitly requested.
+fn apply_soft_delete(
+    def: &CollectionDefinition,
+    query: &FindQuery,
+    sql: &mut String,
+    has_where: &mut bool,
+) {
     if def.soft_delete && !query.include_deleted {
-        if has_where {
-            sql.push_str(" AND _deleted_at IS NULL");
-        } else {
-            sql.push_str(" WHERE _deleted_at IS NULL");
-            has_where = true;
-        }
+        append_sql_condition(sql, has_where, "_deleted_at IS NULL");
     }
+}
 
-    // Cursor + offset mutual exclusion
+/// Resolve sort column, direction, and cursor mode from query.
+fn resolve_sort(
+    def: &CollectionDefinition,
+    query: &FindQuery,
+) -> Result<(String, SortDirection, bool)> {
     let has_cursor = query.after_cursor.is_some() || query.before_cursor.is_some();
 
     if has_cursor && query.offset.is_some() {
         bail!("Cannot use both cursor and offset — they are mutually exclusive");
     }
+
     if query.after_cursor.is_some() && query.before_cursor.is_some() {
         bail!("Cannot use both after_cursor and before_cursor — they are mutually exclusive");
     }
 
-    // Parse sort column and direction from order_by
-    // Default: created_at DESC (newest first) if timestamps enabled, else id ASC
-    let (sort_col, sort_dir) = if let Some(ref order) = query.order_by {
-        if let Some(stripped) = order.strip_prefix('-') {
-            (stripped.to_string(), "DESC")
-        } else {
-            (order.clone(), "ASC")
-        }
-    } else if def.timestamps {
-        ("created_at".to_string(), "DESC")
-    } else {
-        ("id".to_string(), "ASC")
-    };
+    let (sort_col, sort_dir) = resolve_order(query.order_by.as_deref(), def.timestamps);
 
-    // Validate sort column exists on the table
     if !is_valid_sort_column(&sort_col, def) {
         bail!(
             "Invalid sort column '{}' — not a column on '{}'",
@@ -126,124 +156,68 @@ pub fn find(
         );
     }
 
-    // Determine active cursor (after or before) and compute keyset direction
-    let active_cursor = query.after_cursor.as_ref().or(query.before_cursor.as_ref());
-    let using_before = query.before_cursor.is_some();
+    Ok((sort_col, sort_dir, query.before_cursor.is_some()))
+}
 
-    // Cursor keyset WHERE condition
-    if let Some(cursor) = active_cursor {
-        if cursor.sort_col != sort_col {
-            bail!(
-                "Cursor sort_col '{}' does not match query order_by '{}'",
-                cursor.sort_col,
-                sort_col
-            );
-        }
-        // Forward (after_cursor): ASC → >, DESC → <
-        // Backward (before_cursor): flip — ASC → <, DESC → >
-        let op = match (sort_dir, using_before) {
-            ("DESC", false) | ("ASC", true) => "<",
-            _ => ">",
-        };
-        let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
-
-        // Bind sort_val with the correct DbValue variant for proper comparison.
-        let sort_val = match &cursor.sort_val {
-            Value::String(s) => DbValue::Text(s.clone()),
-            Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    DbValue::Integer(i)
-                } else if let Some(f) = n.as_f64() {
-                    DbValue::Real(f)
-                } else {
-                    DbValue::Text(n.to_string())
-                }
-            }
-            Value::Null => DbValue::Null,
-            other => DbValue::Text(other.to_string()),
-        };
-
-        // NULL sort values need special SQL because col > NULL evaluates to NULL.
-        // SQLite sorts NULLs first in ASC, last in DESC.
-        let keyset = if matches!(sort_val, DbValue::Null) {
-            let ph_id = conn.placeholder(params.len() + 1);
-            params.push(DbValue::Text(cursor.id.clone()));
-
-            // For ASC (NULLs first): after a NULL cursor, we want:
-            //   remaining NULLs with higher id, or any non-NULL row
-            // For DESC (NULLs last): after a NULL cursor, we want:
-            //   remaining NULLs with lower id (nothing past NULLs in DESC)
-            if op == ">" {
-                // ASC forward or DESC backward
-                format!(
-                    " AND (({col} IS NULL AND id > {ph_id}) OR {col} IS NOT NULL)",
-                    col = resolved_col,
-                )
-            } else {
-                // DESC forward or ASC backward
-                format!(" AND ({col} IS NULL AND id < {ph_id})", col = resolved_col,)
-            }
-        } else {
-            // Standard keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
-            let ph1 = conn.placeholder(params.len() + 1);
-            let ph2 = conn.placeholder(params.len() + 2);
-            params.push(sort_val);
-            params.push(DbValue::Text(cursor.id.clone()));
-
-            format!(
-                " AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))",
-                col = resolved_col,
-                op = op,
-            )
-        };
-        // Append to existing WHERE or start WHERE
-        if has_where {
-            sql.push_str(&keyset);
-        } else {
-            // Replace leading " AND " with " WHERE "
-            sql.push_str(&keyset.replacen(" AND ", " WHERE ", 1));
-        }
-    }
-
-    // ORDER BY — for before_cursor, reverse the sort direction so the DB returns
-    // rows in the opposite order, then we reverse them after fetching.
-    let effective_dir: &str = if using_before {
-        if sort_dir == "DESC" { "ASC" } else { "DESC" }
-    } else if sort_dir == "DESC" {
-        "DESC"
+/// Append ORDER BY clause with stable tiebreaker.
+fn apply_order_by(
+    sort_col: &str,
+    sort_dir: SortDirection,
+    using_before: bool,
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+    sql: &mut String,
+) -> Result<()> {
+    let effective_dir = if using_before {
+        sort_dir.flip()
     } else {
-        "ASC"
+        sort_dir
     };
-
-    let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
+    let resolved = resolve_filter_column(sort_col, def, locale_ctx)?;
 
     if sort_col != "id" {
-        // Stable ordering: primary sort + id tiebreaker
         sql.push_str(&format!(
-            " ORDER BY {resolved_col} {effective_dir}, id {effective_dir}"
+            " ORDER BY {resolved} {effective_dir}, id {effective_dir}"
         ));
     } else {
         sql.push_str(&format!(" ORDER BY id {effective_dir}"));
     }
 
+    Ok(())
+}
+
+/// Append LIMIT and OFFSET clauses.
+fn apply_limit_offset(
+    conn: &dyn DbConnection,
+    query: &FindQuery,
+    sql: &mut String,
+    params: &mut Vec<DbValue>,
+) {
     if let Some(limit) = query.limit {
         let ph = conn.placeholder(params.len() + 1);
         params.push(DbValue::Integer(limit.max(0)));
         sql.push_str(&format!(" LIMIT {ph}"));
     }
+
     if let Some(offset) = query.offset {
         let ph = conn.placeholder(params.len() + 1);
         params.push(DbValue::Integer(offset.max(0)));
         sql.push_str(&format!(" OFFSET {ph}"));
     }
+}
 
-    let rows = conn
-        .query_all(&sql, &params)
-        .with_context(|| format!("Failed to execute query on '{slug}'"))?;
-
+/// Execute the query and map rows to documents.
+fn map_rows(
+    conn: &dyn DbConnection,
+    rows: &[DbRow],
+    locale_ctx: Option<&LocaleContext>,
+    def: &CollectionDefinition,
+    using_before: bool,
+) -> Result<Vec<Document>> {
     let mut documents = Vec::new();
+
     for row in rows {
-        let mut doc = row_to_document(conn, &row)?;
+        let mut doc = row_to_document(conn, row)?;
 
         if let Some(ctx) = locale_ctx
             && ctx.config.is_enabled()
@@ -251,10 +225,10 @@ pub fn find(
         {
             group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
+
         documents.push(doc);
     }
 
-    // before_cursor: results were fetched in reversed order, restore correct sort order
     if using_before {
         documents.reverse();
     }
@@ -278,11 +252,7 @@ fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
     // Group sub-fields use `group__subfield` naming for DB columns.
     fn check_fields(col: &str, fields: &[FieldDefinition], prefix: &str) -> bool {
         fields.iter().any(|f| {
-            let full_name = if prefix.is_empty() {
-                f.name.clone()
-            } else {
-                format!("{}__{}", prefix, f.name)
-            };
+            let full_name = prefixed_name(prefix, &f.name);
 
             if full_name == col && f.has_parent_column() {
                 return true;
@@ -303,17 +273,117 @@ fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
     check_fields(col, &def.fields, "")
 }
 
+/// Convert a JSON value to its DbValue representation for cursor comparison.
+fn cursor_sort_value(val: &Value) -> DbValue {
+    match val {
+        Value::String(s) => DbValue::Text(s.clone()),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                DbValue::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                DbValue::Real(f)
+            } else {
+                DbValue::Text(n.to_string())
+            }
+        }
+        Value::Null => DbValue::Null,
+        other => DbValue::Text(other.to_string()),
+    }
+}
+
+/// Resolved sort configuration for cursor pagination.
+struct SortInfo<'a> {
+    col: &'a str,
+    dir: SortDirection,
+    using_before: bool,
+}
+
+/// Apply cursor-based keyset pagination to the SQL query.
+fn apply_cursor_keyset(
+    conn: &dyn DbConnection,
+    cursor: &CursorData,
+    sort: &SortInfo<'_>,
+    resolved_col: &str,
+    sql: &mut String,
+    has_where: &mut bool,
+    params: &mut Vec<DbValue>,
+) -> Result<()> {
+    if cursor.sort_col != sort.col {
+        bail!(
+            "Cursor sort_col '{}' does not match query order_by '{}'",
+            cursor.sort_col,
+            sort.col
+        );
+    }
+
+    let op = match (sort.dir, sort.using_before) {
+        (SortDirection::Desc, false) | (SortDirection::Asc, true) => "<",
+        _ => ">",
+    };
+    let sort_val = cursor_sort_value(&cursor.sort_val);
+
+    let keyset = if matches!(sort_val, DbValue::Null) {
+        build_null_keyset(conn, resolved_col, op, &cursor.id, params)
+    } else {
+        build_standard_keyset(conn, resolved_col, op, sort_val, &cursor.id, params)
+    };
+
+    if *has_where {
+        sql.push_str(&keyset);
+    } else {
+        sql.push_str(&keyset.replacen(" AND ", " WHERE ", 1));
+    }
+
+    Ok(())
+}
+
+/// Build keyset condition for NULL sort values.
+fn build_null_keyset(
+    conn: &dyn DbConnection,
+    col: &str,
+    op: &str,
+    cursor_id: &str,
+    params: &mut Vec<DbValue>,
+) -> String {
+    let ph_id = conn.placeholder(params.len() + 1);
+    params.push(DbValue::Text(cursor_id.to_string()));
+
+    if op == ">" {
+        format!(" AND (({col} IS NULL AND id > {ph_id}) OR {col} IS NOT NULL)")
+    } else {
+        format!(" AND ({col} IS NULL AND id < {ph_id})")
+    }
+}
+
+/// Build standard keyset condition for non-NULL sort values.
+fn build_standard_keyset(
+    conn: &dyn DbConnection,
+    col: &str,
+    op: &str,
+    sort_val: DbValue,
+    cursor_id: &str,
+    params: &mut Vec<DbValue>,
+) -> String {
+    let ph1 = conn.placeholder(params.len() + 1);
+    let ph2 = conn.placeholder(params.len() + 2);
+    params.push(sort_val);
+    params.push(DbValue::Text(cursor_id.to_string()));
+
+    format!(" AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::super::super::write::create;
-    use super::super::super::{Filter, FilterClause, FilterOp, FindQuery};
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::db::{DbPool, pool};
+    use crate::db::{
+        DbPool, Filter, FilterClause, FilterOp, FindQuery, pool,
+        query::{cursor::build_cursors, write::create},
+    };
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -453,9 +523,9 @@ mod tests {
         let def = test_def();
 
         let mut query = FindQuery::new();
-        query.after_cursor = Some(super::super::super::cursor::CursorData {
+        query.after_cursor = Some(CursorData {
             sort_col: "id".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!("abc"),
             id: "abc".to_string(),
         });
@@ -494,9 +564,9 @@ mod tests {
 
         // Second page via cursor from last doc of page 1
         let last = &page1[1];
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.to_string(),
         };
@@ -511,9 +581,9 @@ mod tests {
 
         // Third page
         let last2 = &page2[1];
-        let cursor2 = super::super::super::cursor::CursorData {
+        let cursor2 = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(last2.get_str("title").unwrap()),
             id: last2.id.to_string(),
         };
@@ -548,9 +618,9 @@ mod tests {
 
         // Second page via cursor
         let last = &page1[1];
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "DESC".to_string(),
+            sort_dir: SortDirection::Desc,
             sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.to_string(),
         };
@@ -572,9 +642,9 @@ mod tests {
 
         let mut query = FindQuery::new();
         query.order_by = Some("title".to_string());
-        query.after_cursor = Some(super::super::super::cursor::CursorData {
+        query.after_cursor = Some(CursorData {
             sort_col: "status".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!("x"),
             id: "abc".to_string(),
         });
@@ -601,9 +671,9 @@ mod tests {
         p1q.limit = Some(2);
         let page1 = find(&conn, "posts", &def, &p1q, None).unwrap();
         let last_p1 = &page1[1];
-        let fwd_cursor = super::super::super::cursor::CursorData {
+        let fwd_cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.to_string(),
         };
@@ -617,9 +687,9 @@ mod tests {
 
         // Backward: from the first doc of page 2, go backward
         let first_p2 = &page2[0];
-        let back_cursor = super::super::super::cursor::CursorData {
+        let back_cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.to_string(),
         };
@@ -657,9 +727,9 @@ mod tests {
 
         // Forward DESC page 2: Posts 02, 01
         let last_p1 = &page1[1];
-        let fwd_cursor = super::super::super::cursor::CursorData {
+        let fwd_cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "DESC".to_string(),
+            sort_dir: SortDirection::Desc,
             sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.to_string(),
         };
@@ -673,9 +743,9 @@ mod tests {
 
         // Backward from page 2 first doc → should get page 1 back
         let first_p2 = &page2[0];
-        let back_cursor = super::super::super::cursor::CursorData {
+        let back_cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "DESC".to_string(),
+            sort_dir: SortDirection::Desc,
             sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.to_string(),
         };
@@ -697,9 +767,9 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "id".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!("abc"),
             id: "abc".to_string(),
         };
@@ -782,9 +852,9 @@ mod tests {
         assert_eq!(page1[1].get_str("name"), Some("nine"));
 
         // Page 2: cursor after points=9 → should get 10, 20 (NOT skip 10 as string "9" > "10")
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "points".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(9),
             id: "id-nine".to_string(),
         };
@@ -798,9 +868,9 @@ mod tests {
         assert_eq!(page2[1].get_str("name"), Some("twenty"));
 
         // Page 3: cursor after points=20 → should get 100
-        let cursor2 = super::super::super::cursor::CursorData {
+        let cursor2 = CursorData {
             sort_col: "points".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(20),
             id: "id-twenty".to_string(),
         };
@@ -820,9 +890,9 @@ mod tests {
         let def = test_def();
 
         // Null sort_val should execute without error (binds DbValue::Null, not empty string)
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: Value::Null,
             id: "anyid".to_string(),
         };
@@ -880,9 +950,9 @@ mod tests {
         }
 
         // Cursor after score=1.5 → should get mid, high
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "score".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(1.5),
             id: "id-low".to_string(),
         };
@@ -903,9 +973,9 @@ mod tests {
         let def = test_def();
 
         // Bool variant exercises the `other => other.to_string()` arm
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!(true), // Bool variant
             id: "anyid".to_string(),
         };
@@ -934,9 +1004,9 @@ mod tests {
         // Anchor id must sort after all nanoid chars ('~' = ASCII 126 > 'z' = 122)
         // so the tie-break condition `id > anchor` is always false for Post 01,
         // guaranteeing only strictly-after-title results are returned.
-        let cursor = super::super::super::cursor::CursorData {
+        let cursor = CursorData {
             sort_col: "title".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: json!("Post 01"),
             id: "~".to_string(),
         };
@@ -1152,9 +1222,9 @@ mod tests {
 
         let query = FindQuery {
             order_by: Some("title".to_string()),
-            after_cursor: Some(crate::db::query::cursor::CursorData {
+            after_cursor: Some(CursorData {
                 sort_col: "title".to_string(),
-                sort_dir: "ASC".to_string(),
+                sort_dir: SortDirection::Asc,
                 sort_val: Value::String("test".to_string()),
                 id: "abc".to_string(),
             }),
@@ -1197,10 +1267,8 @@ mod tests {
         assert_eq!(page1[9].id.as_ref(), "d05");
 
         // Page 2: forward with after_cursor (overfetch limit=11)
-        let (_, end_cursor_p1) =
-            crate::db::query::cursor::build_cursors(&page1, "created_at", "DESC");
-        let end_cursor_data =
-            crate::db::query::cursor::CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
+        let (_, end_cursor_p1) = build_cursors(&page1, "created_at", SortDirection::Desc);
+        let end_cursor_data = CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
         let q2 = FindQuery {
             limit: Some(limit + 1),
             after_cursor: Some(end_cursor_data),
@@ -1213,11 +1281,8 @@ mod tests {
 
         // Grab the start_cursor of page 2 for going back
         let page2_trimmed = &page2[..page2_count];
-        let (start_cursor_p2, _) =
-            crate::db::query::cursor::build_cursors(page2_trimmed, "created_at", "DESC");
-        let start_cursor_data =
-            crate::db::query::cursor::CursorData::decode(start_cursor_p2.as_ref().unwrap())
-                .unwrap();
+        let (start_cursor_p2, _) = build_cursors(page2_trimmed, "created_at", SortDirection::Desc);
+        let start_cursor_data = CursorData::decode(start_cursor_p2.as_ref().unwrap()).unwrap();
 
         // Go back: before_cursor (overfetch limit=11)
         let q_back = FindQuery {
@@ -1250,10 +1315,9 @@ mod tests {
 
         // Forward again: end_cursor of the back-result
         let (_, end_cursor_p1_again) =
-            crate::db::query::cursor::build_cursors(&page1_trimmed, "created_at", "DESC");
+            build_cursors(&page1_trimmed, "created_at", SortDirection::Desc);
         let end_cursor_data_again =
-            crate::db::query::cursor::CursorData::decode(end_cursor_p1_again.as_ref().unwrap())
-                .unwrap();
+            CursorData::decode(end_cursor_p1_again.as_ref().unwrap()).unwrap();
         let q2_again = FindQuery {
             limit: Some(limit + 1),
             after_cursor: Some(end_cursor_data_again),

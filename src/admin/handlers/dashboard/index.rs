@@ -14,7 +14,7 @@ use crate::{
         Document,
         auth::{AuthUser, Claims},
     },
-    db::{BoxedConnection, DbConnection, ops::count_documents},
+    db::{BoxedConnection, DbConnection, ops::count_documents, query::helpers::global_table},
 };
 
 /// Fetch the most recent `updated_at` value from a table.
@@ -74,7 +74,7 @@ fn build_global_cards(
         .iter()
         .filter(|(_, def)| has_read_access(state, def.access.read.as_deref(), user_doc))
         .map(|(slug, def)| {
-            let table = format!("_global_{}", slug);
+            let table = global_table(slug);
 
             json!({
                 "slug": slug,

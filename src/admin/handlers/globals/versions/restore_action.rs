@@ -16,7 +16,7 @@ use crate::{
     core::{Document, auth::AuthUser, collection::GlobalDefinition},
     db::{
         DbPool,
-        query::{self, AccessResult},
+        query::{self, AccessResult, helpers::global_table},
     },
 };
 
@@ -28,7 +28,7 @@ fn restore_from_version(
     version_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Document, Error> {
-    let global_table = format!("_global_{}", slug);
+    let global_table = global_table(slug);
 
     let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
     let tx = conn

@@ -2,6 +2,8 @@
 //!
 //! Supports SQLite (FTS5 virtual tables) and PostgreSQL (tsvector + GIN index).
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context as _, Result, bail};
 
 use crate::{
@@ -202,7 +204,7 @@ fn bulk_populate_slow(
     fts_table: &str,
     fts_fields: &[String],
     field_list: &str,
-    json_rt_cols: &std::collections::HashSet<String>,
+    json_rt_cols: &HashSet<String>,
 ) -> Result<()> {
     let select_fields: Vec<String> = fts_fields
         .iter()
@@ -315,98 +317,123 @@ pub fn fts_upsert_with_registry(
     };
 
     let json_rt_cols = def.map(json_richtext_columns).unwrap_or_default();
-
-    // Build searchable attrs map for custom richtext nodes
     let node_searchable = build_node_searchable_map(def, registry);
-
     let is_postgres = conn.kind() == "postgres";
 
-    // Collect text values for each FTS column.
-    // For Postgres the column list from the table is just ["tsv"], so we use
-    // all string-valued fields from the document as the logical columns.
-    // For SQLite, we use the actual FTS table column names.
-    let logical_cols: Vec<String> = if is_postgres {
+    let logical_cols = resolve_logical_columns(doc, &fts_cols, is_postgres);
+    let field_texts = extract_field_texts(doc, &logical_cols, &json_rt_cols, &node_searchable);
+
+    if is_postgres {
+        upsert_postgres(conn, &fts_table, doc, field_texts)?;
+    } else {
+        upsert_sqlite(conn, &fts_table, doc, &fts_cols, field_texts)?;
+    }
+
+    Ok(())
+}
+
+/// Determine which columns to index: Postgres uses all string fields, SQLite uses FTS columns.
+fn resolve_logical_columns(doc: &Document, fts_cols: &[String], is_postgres: bool) -> Vec<String> {
+    if is_postgres {
         doc.fields
             .iter()
             .filter(|(_, v)| v.is_string())
             .map(|(k, _)| k.clone())
             .collect()
     } else {
-        fts_cols.clone()
-    };
+        fts_cols.to_vec()
+    }
+}
 
-    let mut field_texts: Vec<String> = Vec::with_capacity(logical_cols.len());
+/// Extract text values for each logical column, handling richtext JSON extraction.
+fn extract_field_texts(
+    doc: &Document,
+    logical_cols: &[String],
+    json_rt_cols: &HashSet<String>,
+    node_searchable: &HashMap<&str, Vec<&str>>,
+) -> Vec<String> {
+    logical_cols
+        .iter()
+        .map(|col_name| {
+            let raw = doc
+                .fields
+                .get(col_name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
-    for col_name in &logical_cols {
-        let raw = doc
-            .fields
-            .get(col_name)
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+            let is_json_rt = json_rt_cols.contains(col_name)
+                || col_name
+                    .split("__")
+                    .next()
+                    .is_some_and(|base| json_rt_cols.contains(base));
 
-        // Check if this column is a JSON-format richtext field
-        // (either exact match or the base name before "__locale" suffix)
-        let is_json_rt = json_rt_cols.contains(col_name)
-            || col_name
-                .split("__")
-                .next()
-                .map(|base| json_rt_cols.contains(base))
-                .unwrap_or(false);
-
-        let text = if is_json_rt && !raw.is_empty() {
-            if node_searchable.is_empty() {
-                extract_prosemirror_text(raw)
+            if is_json_rt && !raw.is_empty() {
+                extract_prosemirror_text_with_nodes(raw, node_searchable)
             } else {
-                extract_prosemirror_text_with_nodes(raw, &node_searchable)
+                raw.to_string()
             }
-        } else {
-            raw.to_string()
-        };
-        field_texts.push(text);
-    }
+        })
+        .collect()
+}
 
-    if is_postgres {
-        // Postgres: single tsvector column, use ON CONFLICT for upsert
-        let combined = field_texts.join(" ");
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        let sql = format!(
-            "INSERT INTO {}(id, tsv) VALUES ({}, to_tsvector('simple', {})) \
-             ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv",
-            fts_table, p1, p2
-        );
-        conn.execute(
-            &sql,
-            &[DbValue::Text(doc.id.to_string()), DbValue::Text(combined)],
-        )
-        .with_context(|| format!("FTS upsert in {}", fts_table))?;
-    } else {
-        // SQLite: delete + insert (FTS5 doesn't support ON CONFLICT)
-        conn.execute(
-            &format!(
-                "DELETE FROM {} WHERE id = {}",
-                fts_table,
-                conn.placeholder(1)
-            ),
-            &[DbValue::Text(doc.id.to_string())],
-        )
-        .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
+/// Upsert into Postgres FTS (single tsvector column, ON CONFLICT).
+fn upsert_postgres(
+    conn: &dyn DbConnection,
+    fts_table: &str,
+    doc: &Document,
+    field_texts: Vec<String>,
+) -> Result<()> {
+    let combined = field_texts.join(" ");
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    let sql = format!(
+        "INSERT INTO {}(id, tsv) VALUES ({}, to_tsvector('simple', {})) \
+         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv",
+        fts_table, p1, p2
+    );
 
-        let mut values: Vec<DbValue> = vec![DbValue::Text(doc.id.to_string())];
-        for text in field_texts {
-            values.push(DbValue::Text(text));
-        }
+    conn.execute(
+        &sql,
+        &[DbValue::Text(doc.id.to_string()), DbValue::Text(combined)],
+    )
+    .with_context(|| format!("FTS upsert in {}", fts_table))?;
 
-        let placeholders: Vec<String> = (1..=values.len()).map(|i| conn.placeholder(i)).collect();
-        let field_list: String = fts_cols.join(", ");
-        let sql = format!(
-            "INSERT INTO {}(id, {}) VALUES ({})",
+    Ok(())
+}
+
+/// Upsert into SQLite FTS5 (delete + insert, no ON CONFLICT support).
+fn upsert_sqlite(
+    conn: &dyn DbConnection,
+    fts_table: &str,
+    doc: &Document,
+    fts_cols: &[String],
+    field_texts: Vec<String>,
+) -> Result<()> {
+    conn.execute(
+        &format!(
+            "DELETE FROM {} WHERE id = {}",
             fts_table,
-            field_list,
-            placeholders.join(", ")
-        );
-        conn.execute(&sql, &values)
-            .with_context(|| format!("FTS upsert in {}", fts_table))?;
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(doc.id.to_string())],
+    )
+    .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
+
+    let mut values: Vec<DbValue> = vec![DbValue::Text(doc.id.to_string())];
+
+    for text in field_texts {
+        values.push(DbValue::Text(text));
     }
+
+    let placeholders: Vec<String> = (1..=values.len()).map(|i| conn.placeholder(i)).collect();
+    let sql = format!(
+        "INSERT INTO {}(id, {}) VALUES ({})",
+        fts_table,
+        fts_cols.join(", "),
+        placeholders.join(", ")
+    );
+
+    conn.execute(&sql, &values)
+        .with_context(|| format!("FTS upsert in {}", fts_table))?;
 
     Ok(())
 }

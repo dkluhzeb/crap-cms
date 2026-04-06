@@ -17,7 +17,7 @@ use crate::{
         },
     },
     core::auth::{AuthUser, Claims},
-    db::query::AccessResult,
+    db::query::{AccessResult, helpers::global_table},
 };
 
 /// GET /admin/globals/{slug}/versions/{version_id}/restore — confirmation page
@@ -50,12 +50,12 @@ pub async fn restore_confirm(
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let global_table = format!("_global_{}", slug);
+    let gtable = global_table(&slug);
 
     let (version, missing) = match load_version_with_missing_relations(
         &conn,
         &state.registry,
-        &global_table,
+        &gtable,
         &version_id,
         &def.fields,
     ) {

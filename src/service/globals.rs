@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     core::{Document, collection::GlobalDefinition},
-    db::{DbPool, query},
+    db::{DbPool, query, query::helpers::global_table},
     hooks::{HookContext, HookEvent, HookRunner, ValidationCtx},
     service::{AfterChangeInput, WriteInput, WriteResult, build_hook_data, run_after_change_hooks},
 };
@@ -29,7 +29,7 @@ pub fn update_global_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let global_table = format!("_global_{}", slug);
+    let global_table = global_table(slug);
 
     let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
@@ -134,7 +134,7 @@ pub fn unpublish_global_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let global_table = format!("_global_{}", slug);
+    let global_table = global_table(slug);
     let doc = query::get_global(&tx, slug, def, None)?;
 
     let hook_ctx = HookContext::builder(slug, "update")

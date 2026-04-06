@@ -11,8 +11,8 @@ use crate::{
         DbConnection,
         migrate::helpers::{
             ColumnSpec, collect_column_specs, get_table_column_types, get_table_columns,
-            sanitize_locale,
         },
+        query::helpers::locale_column,
     },
 };
 
@@ -136,7 +136,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col_name = locale_column(&spec.col_name, locale)?;
                 add_field_column(ctx, &col_name, expected_type, spec)?;
             }
         } else {

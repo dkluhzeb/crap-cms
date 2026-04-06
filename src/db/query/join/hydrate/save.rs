@@ -14,13 +14,13 @@ use super::{
 };
 use crate::{
     core::{FieldDefinition, FieldType},
-    db::{DbConnection, LocaleContext},
+    db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
 };
 
-/// Parse polymorphic relationship values from form data.
-/// Accepts "collection/id" composite strings from either a JSON array or comma-separated string.
-fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
-    let raw_items: Vec<String> = match val {
+/// Parse a JSON value into a list of string IDs.
+/// Accepts a JSON array of strings or a comma-separated string.
+fn parse_id_list(val: &Value) -> Vec<String> {
+    match val {
         Value::Array(arr) => arr
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -36,22 +36,48 @@ fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
             }
         }
         _ => Vec::new(),
-    };
-    raw_items
+    }
+}
+
+/// Parse polymorphic relationship values from form data.
+/// Accepts "collection/id" composite strings from either a JSON array or comma-separated string.
+fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
+    parse_id_list(val)
         .into_iter()
         .filter_map(|item| {
-            // Parse "collection/id" format
-            if let Some((col_str, id_str)) = item.split_once('/') {
-                let col = col_str.to_string();
-                let id = id_str.to_string();
+            let (col, id) = item.split_once('/')?;
 
-                if !col.is_empty() && !id.is_empty() {
-                    return Some((col, id));
-                }
+            if !col.is_empty() && !id.is_empty() {
+                Some((col.to_string(), id.to_string()))
+            } else {
+                None
             }
-            None
         })
         .collect()
+}
+
+/// Coerce a JSON array of objects into a list of string-keyed HashMaps.
+fn coerce_array_rows(val: &Value) -> Vec<HashMap<String, String>> {
+    match val {
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| {
+                let map = v.as_object()?;
+                let row = map
+                    .iter()
+                    .map(|(k, v)| {
+                        let s = match v {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        (k.clone(), s)
+                    })
+                    .collect();
+                Some(row)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Save join table data for has-many relationships and arrays.
@@ -80,72 +106,27 @@ fn save_join_data_inner(
     for field in fields {
         let locale = resolve_join_locale(field, locale_ctx);
         let locale_ref = locale.as_deref();
-        let field_key = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
+        let field_key = prefixed_name(prefix, &field.name);
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
+                    && let Some(val) = data.get(&field_key)
                 {
-                    // Only touch join table if the field was explicitly included in the data.
-                    if let Some(val) = data.get(&field_key) {
-                        if rc.is_polymorphic() {
-                            // Polymorphic: values are "collection/id" composite strings
-                            let items = parse_polymorphic_values(val);
-                            set_polymorphic_related(
-                                conn, slug, &field_key, parent_id, &items, locale_ref,
-                            )?;
-                        } else {
-                            let ids = match val {
-                                Value::Array(arr) => arr
-                                    .iter()
-                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                    .collect(),
-                                Value::String(s) => {
-                                    if s.is_empty() {
-                                        Vec::new()
-                                    } else {
-                                        s.split(',')
-                                            .map(|s| s.trim().to_string())
-                                            .filter(|s| !s.is_empty())
-                                            .collect()
-                                    }
-                                }
-                                _ => Vec::new(),
-                            };
-                            set_related_ids(conn, slug, &field_key, parent_id, &ids, locale_ref)?;
-                        }
+                    if rc.is_polymorphic() {
+                        let items = parse_polymorphic_values(val);
+                        set_polymorphic_related(
+                            conn, slug, &field_key, parent_id, &items, locale_ref,
+                        )?;
+                    } else {
+                        let ids = parse_id_list(val);
+                        set_related_ids(conn, slug, &field_key, parent_id, &ids, locale_ref)?;
                     }
                 }
             }
             FieldType::Array => {
                 if let Some(val) = data.get(&field_key) {
-                    let rows = match val {
-                        Value::Array(arr) => arr
-                            .iter()
-                            .filter_map(|v| {
-                                if let Value::Object(map) = v {
-                                    let row: HashMap<String, String> = map
-                                        .iter()
-                                        .map(|(k, v)| {
-                                            let s = match v {
-                                                Value::String(s) => s.clone(),
-                                                other => other.to_string(),
-                                            };
-                                            (k.clone(), s)
-                                        })
-                                        .collect();
-                                    Some(row)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect(),
-                        _ => Vec::new(),
-                    };
+                    let rows = coerce_array_rows(val);
                     set_array_rows(
                         conn,
                         slug,

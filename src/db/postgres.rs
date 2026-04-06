@@ -4,21 +4,24 @@
 //! to provide the sync `DbConnection` interface expected by the rest of
 //! the codebase.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
 use tokio::task::block_in_place;
-use tokio_postgres::NoTls;
-use tokio_postgres::types::Type;
+use tokio_postgres::{NoTls, types::Type};
+use tracing::info;
 
-use crate::config::CrapConfig;
-use crate::core::FieldType;
+use crate::{config::CrapConfig, core::FieldType};
 
-use super::connection::{BoxedConnection, ConnectionInner, DbConnection, TransactionInner};
-use super::pool::DbPool;
-use super::types::{DbRow, DbValue};
+use super::{
+    connection::{BoxedConnection, ConnectionInner, DbConnection, TransactionInner},
+    pool::DbPool,
+    types::{DbRow, DbValue},
+};
 
 // ── Shared trait methods (non-query) ─────────────────────────────────────
 
@@ -207,7 +210,7 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
         .database
         .url
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("database.url is required for postgres backend"))?;
+        .ok_or_else(|| anyhow!("database.url is required for postgres backend"))?;
 
     let pg_config: tokio_postgres::Config = url.parse().context("Invalid postgres URL")?;
     let mgr = Manager::from_config(
@@ -223,7 +226,7 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
         .build()
         .context("Failed to create Postgres connection pool")?;
 
-    tracing::info!(
+    info!(
         "Postgres pool created (max_size={})",
         config.database.pool_max_size
     );
@@ -246,7 +249,7 @@ impl super::pool::PoolBackend for PgPoolBackend {
                 Ok::<_, deadpool_postgres::PoolError>(c)
             })
         })
-        .map_err(|e| anyhow::anyhow!("Failed to get Postgres connection: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get Postgres connection: {}", e))?;
 
         Ok(BoxedConnection::new(Box::new(PgConnection {
             inner: client,
@@ -279,55 +282,62 @@ impl ConnectionInner for PgConnection {
     }
 }
 
+/// Implement the query methods of `DbConnection` for a type with an `inner` field
+/// that implements `GenericClient` (deadpool-postgres).
+macro_rules! pg_query_methods {
+    () => {
+        fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+            let pg_params = to_pg_params(params);
+            let refs = pg_param_refs(&pg_params);
+            let count = block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.inner.execute(sql, &refs))
+            })
+            .with_context(|| format!("execute failed: {sql}"))?;
+            Ok(count as usize)
+        }
+
+        fn execute_batch(&self, sql: &str) -> Result<()> {
+            block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.inner.batch_execute(sql))
+            })
+            .with_context(|| format!("execute_batch failed: {sql}"))?;
+            Ok(())
+        }
+
+        fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
+            let adjusted = sql.replace(" INTEGER", " BIGINT");
+            self.execute(&adjusted, params)
+        }
+
+        fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
+            let adjusted = sql.replace(" INTEGER", " BIGINT");
+            self.execute_batch(&adjusted)
+        }
+
+        fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
+            let pg_params = to_pg_params(params);
+            let refs = pg_param_refs(&pg_params);
+            let rows = block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.inner.query(sql, &refs))
+            })
+            .with_context(|| format!("query failed: {sql}"))?;
+            Ok(rows.iter().map(pg_row_to_dbrow).collect())
+        }
+
+        fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
+            let pg_params = to_pg_params(params);
+            let refs = pg_param_refs(&pg_params);
+            let row = block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.inner.query_opt(sql, &refs))
+            })
+            .with_context(|| format!("query_one failed: {sql}"))?;
+            Ok(row.as_ref().map(pg_row_to_dbrow))
+        }
+    };
+}
+
 impl DbConnection for PgConnection {
-    fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let pg_params = to_pg_params(params);
-        let refs = pg_param_refs(&pg_params);
-        let count = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.execute(sql, &refs))
-        })
-        .with_context(|| format!("execute failed: {sql}"))?;
-        Ok(count as usize)
-    }
-
-    fn execute_batch(&self, sql: &str) -> Result<()> {
-        block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.batch_execute(sql))
-        })
-        .with_context(|| format!("execute_batch failed: {sql}"))?;
-        Ok(())
-    }
-
-    fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let adjusted = sql.replace(" INTEGER", " BIGINT");
-        self.execute(&adjusted, params)
-    }
-
-    fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
-        let adjusted = sql.replace(" INTEGER", " BIGINT");
-        self.execute_batch(&adjusted)
-    }
-
-    fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
-        let pg_params = to_pg_params(params);
-        let refs = pg_param_refs(&pg_params);
-        let rows = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.query(sql, &refs))
-        })
-        .with_context(|| format!("query failed: {sql}"))?;
-        Ok(rows.iter().map(pg_row_to_dbrow).collect())
-    }
-
-    fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
-        let pg_params = to_pg_params(params);
-        let refs = pg_param_refs(&pg_params);
-        let row = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.query_opt(sql, &refs))
-        })
-        .with_context(|| format!("query_one failed: {sql}"))?;
-        Ok(row.as_ref().map(pg_row_to_dbrow))
-    }
-
+    pg_query_methods!();
     pg_shared_methods!();
 }
 
@@ -345,54 +355,7 @@ impl TransactionInner for PgTransaction<'_> {
 }
 
 impl DbConnection for PgTransaction<'_> {
-    fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let pg_params = to_pg_params(params);
-        let refs = pg_param_refs(&pg_params);
-        let count = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.execute(sql, &refs))
-        })
-        .with_context(|| format!("execute failed: {sql}"))?;
-        Ok(count as usize)
-    }
-
-    fn execute_batch(&self, sql: &str) -> Result<()> {
-        block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.batch_execute(sql))
-        })
-        .with_context(|| format!("execute_batch failed: {sql}"))?;
-        Ok(())
-    }
-
-    fn execute_ddl(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
-        let adjusted = sql.replace(" INTEGER", " BIGINT");
-        self.execute(&adjusted, params)
-    }
-
-    fn execute_batch_ddl(&self, sql: &str) -> Result<()> {
-        let adjusted = sql.replace(" INTEGER", " BIGINT");
-        self.execute_batch(&adjusted)
-    }
-
-    fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
-        let pg_params = to_pg_params(params);
-        let refs = pg_param_refs(&pg_params);
-        let rows = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.query(sql, &refs))
-        })
-        .with_context(|| format!("query failed: {sql}"))?;
-        Ok(rows.iter().map(pg_row_to_dbrow).collect())
-    }
-
-    fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
-        let pg_params = to_pg_params(params);
-        let refs = pg_param_refs(&pg_params);
-        let row = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.inner.query_opt(sql, &refs))
-        })
-        .with_context(|| format!("query_one failed: {sql}"))?;
-        Ok(row.as_ref().map(pg_row_to_dbrow))
-    }
-
+    pg_query_methods!();
     pg_shared_methods!();
 }
 

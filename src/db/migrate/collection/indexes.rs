@@ -9,8 +9,8 @@ use crate::{
     core::CollectionDefinition,
     db::{
         DbConnection,
-        migrate::helpers::{collect_column_specs, sanitize_locale},
-        query::is_valid_identifier,
+        migrate::helpers::collect_column_specs,
+        query::{helpers::locale_column, is_valid_identifier},
     },
 };
 
@@ -40,12 +40,13 @@ fn collect_field_indexes(
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col = locale_column(&spec.col_name, locale)?;
                 let idx_name = format!("idx_{}_{}", slug, col);
                 let sql = format!(
                     "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
                     idx_name, slug, col
                 );
+
                 add_index(desired, stmts, idx_name, sql);
             }
         } else {
@@ -54,6 +55,7 @@ fn collect_field_indexes(
                 "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
                 idx_name, slug, spec.col_name
             );
+
             add_index(desired, stmts, idx_name, sql);
         }
     }
@@ -80,12 +82,13 @@ fn collect_soft_delete_unique_indexes(
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
+                let col = locale_column(&spec.col_name, locale)?;
                 let idx_name = format!("idx_{}_{}_active_unique", slug, col);
                 let sql = format!(
                     "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
                     idx_name, slug, col
                 );
+
                 add_index(desired, stmts, idx_name, sql);
             }
         } else {
@@ -94,6 +97,7 @@ fn collect_soft_delete_unique_indexes(
                 "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}) WHERE _deleted_at IS NULL",
                 idx_name, slug, spec.col_name
             );
+
             add_index(desired, stmts, idx_name, sql);
         }
     }
@@ -127,14 +131,15 @@ fn collect_compound_indexes(
             .iter()
             .map(|field_name| {
                 let spec = specs.iter().find(|s| s.col_name == *field_name);
+
                 match spec {
                     Some(s) if s.is_localized => {
-                        format!("{}__{}", field_name, locale_config.default_locale)
+                        locale_column(field_name, &locale_config.default_locale)
                     }
-                    _ => field_name.clone(),
+                    _ => Ok(field_name.clone()),
                 }
             })
-            .collect();
+            .collect::<Result<Vec<String>>>()?;
 
         let col_list = expanded_cols.join(", ");
         let idx_name = format!("idx_{}_{}", slug, index_def.fields.join("_"));
@@ -143,6 +148,7 @@ fn collect_compound_indexes(
             "CREATE {}INDEX IF NOT EXISTS {} ON {} ({})",
             unique, idx_name, slug, col_list
         );
+
         add_index(desired, stmts, idx_name, sql);
     }
 
@@ -171,6 +177,7 @@ pub(super) fn sync_indexes(
 
     for name in existing.difference(&desired) {
         info!("Dropping stale index: {}", name);
+
         conn.execute_ddl(&format!("DROP INDEX IF EXISTS {}", name), &[])
             .with_context(|| format!("Failed to drop index {}", name))?;
     }

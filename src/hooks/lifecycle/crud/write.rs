@@ -57,7 +57,7 @@ fn handle_unpublish(
     conn: &dyn DbConnection,
     ctx: &UnpublishCtx,
 ) -> mlua::Result<mlua::Table> {
-    let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)
+    let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None, false)
         .map_err(|e| RuntimeError(format!("find error: {:#}", e)))?
         .ok_or_else(|| {
             RuntimeError(format!(
@@ -92,7 +92,7 @@ fn handle_unpublish(
         .map_err(|e| RuntimeError(format!("unpublish error: {:#}", e)))?;
 
     // Re-read the document after unpublish so hooks see the updated state
-    let updated_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)
+    let updated_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None, false)
         .map_err(|e| RuntimeError(format!("find error after unpublish: {:#}", e)))?
         .ok_or_else(|| {
             RuntimeError(format!(

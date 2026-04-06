@@ -89,33 +89,32 @@ pub fn validate_find_pagination(
         // Only reject page > 1 combined with a cursor (intentional pagination conflict).
         let has_explicit_page = req_page.is_some_and(|p| p > 1);
 
-        let ac = if let Some(s) = req_after_cursor {
-            if has_explicit_page {
+        let ac = match req_after_cursor {
+            Some(_) if has_explicit_page => {
                 return Err(
                     "Cannot use both after_cursor and page — they are mutually exclusive"
                         .to_string(),
                 );
             }
-            Some(CursorData::decode(s).map_err(|e| format!("Invalid cursor: {}", e))?)
-        } else {
-            None
+            Some(s) => Some(CursorData::decode(s).map_err(|e| format!("Invalid cursor: {e}"))?),
+            None => None,
         };
-        let bc = if let Some(s) = req_before_cursor {
-            if has_explicit_page {
+
+        let bc = match req_before_cursor {
+            Some(_) if has_explicit_page => {
                 return Err(
                     "Cannot use both before_cursor and page — they are mutually exclusive"
                         .to_string(),
                 );
             }
-            if ac.is_some() {
+            Some(_) if ac.is_some() => {
                 return Err(
                     "Cannot use both after_cursor and before_cursor — they are mutually exclusive"
                         .to_string(),
                 );
             }
-            Some(CursorData::decode(s).map_err(|e| format!("Invalid cursor: {}", e))?)
-        } else {
-            None
+            Some(s) => Some(CursorData::decode(s).map_err(|e| format!("Invalid cursor: {e}"))?),
+            None => None,
         };
         (ac, bc)
     } else {
@@ -134,6 +133,7 @@ pub fn validate_find_pagination(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::query::cursor::SortDirection;
 
     #[test]
     fn basic_page_limit_defaults() {
@@ -291,7 +291,7 @@ mod tests {
     fn make_test_cursor() -> String {
         let data = CursorData {
             sort_col: "created_at".to_string(),
-            sort_dir: "ASC".to_string(),
+            sort_dir: SortDirection::Asc,
             sort_val: serde_json::Value::String("2024-01-01".to_string()),
             id: "doc-123".to_string(),
         };

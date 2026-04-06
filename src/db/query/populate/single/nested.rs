@@ -7,8 +7,8 @@ use std::collections::HashSet;
 
 use super::populate_relationships_cached;
 use crate::core::{
-    CollectionDefinition, Document, FieldDefinition, FieldType, field::flatten_array_sub_fields,
-    upload,
+    BlockDefinition, CollectionDefinition, Document, FieldDefinition, FieldType,
+    field::flatten_array_sub_fields, upload,
 };
 use crate::db::query::populate::{
     PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
@@ -26,34 +26,9 @@ pub(crate) fn populate_containers_in_doc(
 ) -> Result<()> {
     for field in fields {
         match field.field_type {
-            FieldType::Group => {
-                if let Some(Value::Object(map)) = doc.fields.remove(&field.name) {
-                    let mut map = map;
-                    let flat = flatten_array_sub_fields(&field.fields);
-                    populate_in_map(pctx, &mut map, &flat, visited)?;
-                    doc.fields.insert(field.name.clone(), Value::Object(map));
-                }
-            }
-            FieldType::Blocks => {
-                if let Some(Value::Array(items)) = doc.fields.remove(&field.name) {
-                    let mut items = items;
-                    populate_block_items(pctx, &mut items, &field.blocks, visited)?;
-                    doc.fields.insert(field.name.clone(), Value::Array(items));
-                }
-            }
-            FieldType::Array => {
-                if let Some(Value::Array(items)) = doc.fields.remove(&field.name) {
-                    let mut items = items;
-                    let flat = flatten_array_sub_fields(&field.fields);
-                    for item in &mut items {
-                        if let Value::Object(map) = item {
-                            populate_in_map(pctx, map, &flat, visited)?;
-                        }
-                    }
-                    doc.fields.insert(field.name.clone(), Value::Array(items));
-                }
-            }
-            // Transparent containers: recurse to find nested Groups/Blocks/Arrays
+            FieldType::Group => populate_group_in_doc(pctx, doc, field, visited)?,
+            FieldType::Blocks => populate_blocks_in_doc(pctx, doc, field, visited)?,
+            FieldType::Array => populate_array_in_doc(pctx, doc, field, visited)?,
             FieldType::Row | FieldType::Collapsible => {
                 populate_containers_in_doc(pctx, doc, &field.fields, visited)?;
             }
@@ -65,6 +40,66 @@ pub(crate) fn populate_containers_in_doc(
             _ => {}
         }
     }
+
+    Ok(())
+}
+
+/// Populate relationship fields inside a Group value.
+fn populate_group_in_doc(
+    pctx: &PopulateCtx<'_>,
+    doc: &mut Document,
+    field: &FieldDefinition,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    let Some(Value::Object(mut map)) = doc.fields.remove(&field.name) else {
+        return Ok(());
+    };
+
+    let flat = flatten_array_sub_fields(&field.fields);
+    populate_in_map(pctx, &mut map, &flat, visited)?;
+    doc.fields.insert(field.name.clone(), Value::Object(map));
+
+    Ok(())
+}
+
+/// Populate relationship fields inside a Blocks value.
+fn populate_blocks_in_doc(
+    pctx: &PopulateCtx<'_>,
+    doc: &mut Document,
+    field: &FieldDefinition,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    let Some(Value::Array(mut items)) = doc.fields.remove(&field.name) else {
+        return Ok(());
+    };
+
+    populate_block_items(pctx, &mut items, &field.blocks, visited)?;
+    doc.fields.insert(field.name.clone(), Value::Array(items));
+
+    Ok(())
+}
+
+/// Populate relationship fields inside an Array value.
+fn populate_array_in_doc(
+    pctx: &PopulateCtx<'_>,
+    doc: &mut Document,
+    field: &FieldDefinition,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    let Some(Value::Array(mut items)) = doc.fields.remove(&field.name) else {
+        return Ok(());
+    };
+
+    let flat = flatten_array_sub_fields(&field.fields);
+
+    for item in &mut items {
+        if let Value::Object(map) = item {
+            populate_in_map(pctx, map, &flat, visited)?;
+        }
+    }
+
+    doc.fields.insert(field.name.clone(), Value::Array(items));
+
     Ok(())
 }
 
@@ -72,7 +107,7 @@ pub(crate) fn populate_containers_in_doc(
 fn populate_block_items(
     pctx: &PopulateCtx<'_>,
     items: &mut [Value],
-    blocks: &[crate::core::field::BlockDefinition],
+    blocks: &[BlockDefinition],
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     for item in items.iter_mut() {
@@ -103,33 +138,14 @@ fn populate_in_map(
                 populate_rel_in_map(pctx, map, field, visited)?;
             }
             FieldType::Group => {
-                if let Some(Value::Object(inner)) = map.remove(&field.name) {
-                    let mut inner = inner;
-                    let flat = flatten_array_sub_fields(&field.fields);
-                    populate_in_map(pctx, &mut inner, &flat, visited)?;
-                    map.insert(field.name.clone(), Value::Object(inner));
-                }
+                populate_group_in_map(pctx, map, field, visited)?;
             }
             FieldType::Blocks => {
-                if let Some(Value::Array(items)) = map.remove(&field.name) {
-                    let mut items = items;
-                    populate_block_items(pctx, &mut items, &field.blocks, visited)?;
-                    map.insert(field.name.clone(), Value::Array(items));
-                }
+                populate_blocks_in_map(pctx, map, field, visited)?;
             }
             FieldType::Array => {
-                if let Some(Value::Array(items)) = map.remove(&field.name) {
-                    let mut items = items;
-                    let flat = flatten_array_sub_fields(&field.fields);
-                    for item in &mut items {
-                        if let Value::Object(m) = item {
-                            populate_in_map(pctx, m, &flat, visited)?;
-                        }
-                    }
-                    map.insert(field.name.clone(), Value::Array(items));
-                }
+                populate_array_items_in_map(pctx, map, field, visited)?;
             }
-            // Transparent containers within nested data (e.g., Row inside a Block)
             FieldType::Row | FieldType::Collapsible => {
                 let flat = flatten_array_sub_fields(&field.fields);
                 populate_in_map(pctx, map, &flat, visited)?;
@@ -143,6 +159,65 @@ fn populate_in_map(
             _ => {}
         }
     }
+    Ok(())
+}
+
+/// Populate a Group field within a JSON map.
+fn populate_group_in_map(
+    pctx: &PopulateCtx<'_>,
+    map: &mut Map<String, Value>,
+    field: &FieldDefinition,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    let Some(Value::Object(mut inner)) = map.remove(&field.name) else {
+        return Ok(());
+    };
+
+    let flat = flatten_array_sub_fields(&field.fields);
+    populate_in_map(pctx, &mut inner, &flat, visited)?;
+    map.insert(field.name.clone(), Value::Object(inner));
+
+    Ok(())
+}
+
+/// Populate a Blocks field within a JSON map.
+fn populate_blocks_in_map(
+    pctx: &PopulateCtx<'_>,
+    map: &mut Map<String, Value>,
+    field: &FieldDefinition,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    let Some(Value::Array(mut items)) = map.remove(&field.name) else {
+        return Ok(());
+    };
+
+    populate_block_items(pctx, &mut items, &field.blocks, visited)?;
+    map.insert(field.name.clone(), Value::Array(items));
+
+    Ok(())
+}
+
+/// Populate an Array field within a JSON map.
+fn populate_array_items_in_map(
+    pctx: &PopulateCtx<'_>,
+    map: &mut Map<String, Value>,
+    field: &FieldDefinition,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    let Some(Value::Array(mut items)) = map.remove(&field.name) else {
+        return Ok(());
+    };
+
+    let flat = flatten_array_sub_fields(&field.fields);
+
+    for item in &mut items {
+        if let Value::Object(m) = item {
+            populate_in_map(pctx, m, &flat, visited)?;
+        }
+    }
+
+    map.insert(field.name.clone(), Value::Array(items));
+
     Ok(())
 }
 
@@ -204,26 +279,7 @@ fn populate_rel_in_map(
     Ok(())
 }
 
-/// Try to get a cached document from the cache backend.
-fn cache_get_doc(
-    cache: &dyn crate::core::cache::CacheBackend,
-    key: &str,
-) -> Result<Option<Document>> {
-    match cache.get(key)? {
-        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        None => Ok(None),
-    }
-}
-
-/// Store a document in the cache backend.
-fn cache_set_doc(
-    cache: &dyn crate::core::cache::CacheBackend,
-    key: &str,
-    doc: &Document,
-) -> Result<()> {
-    let bytes = serde_json::to_vec(doc)?;
-    cache.set(key, &bytes)
-}
+use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
 
 /// Populate a non-polymorphic has-one field within a JSON map.
 fn populate_has_one_in_map(

@@ -163,15 +163,12 @@ pub fn fts_where_clause(
 mod tests {
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
-    use crate::core::collection::*;
-    use crate::core::field::*;
+    use crate::core::collection::CollectionDefinition;
+    use crate::core::field::FieldDefinition;
+    use crate::db::migrate::collection::test_helpers::text_field;
     use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::{BoxedConnection, DbValue, pool};
     use tempfile::TempDir;
-
-    fn text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).build()
-    }
 
     fn simple_def(fields: Vec<FieldDefinition>) -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");

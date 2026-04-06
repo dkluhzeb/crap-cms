@@ -1,7 +1,10 @@
 //! Dynamic schema migration: syncs SQLite tables to match Lua collection definitions.
 
 mod backfill_ref_counts;
+#[cfg(not(test))]
 mod collection;
+#[cfg(test)]
+pub(crate) mod collection;
 mod global;
 pub mod helpers;
 mod sync;

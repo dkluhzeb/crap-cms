@@ -6,7 +6,10 @@ use tracing::info;
 use crate::{
     config::LocaleConfig,
     core::{FieldDefinition, FieldType},
-    db::DbConnection,
+    db::{
+        DbConnection,
+        query::helpers::{prefixed_name, tz_column, walk_leaf_fields},
+    },
 };
 
 use super::introspection::{get_table_columns, sanitize_locale};
@@ -24,92 +27,56 @@ pub(in crate::db::migrate) struct ColumnSpec<'a> {
     pub companion_text: bool,
 }
 
-/// Recursively collect column specifications from a field tree.
-/// Handles arbitrary nesting of Group, Row, Collapsible, Tabs.
+/// Collect column specifications from a field tree.
+/// Uses `walk_leaf_fields` to handle Group/Row/Collapsible/Tabs recursion.
 pub(in crate::db::migrate) fn collect_column_specs<'a>(
     fields: &'a [FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Vec<ColumnSpec<'a>> {
     let mut specs = Vec::new();
-    collect_column_specs_inner(fields, &mut specs, locale_config, "", false);
-    specs
-}
 
-fn collect_column_specs_inner<'a>(
-    fields: &'a [FieldDefinition],
-    specs: &mut Vec<ColumnSpec<'a>>,
-    locale_config: &LocaleConfig,
-    prefix: &str,
-    inherited_localized: bool,
-) {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_column_specs_inner(
-                    &field.fields,
-                    specs,
-                    locale_config,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                );
+    // walk_leaf_fields is infallible here — the closure never errors.
+    // SAFETY: walk_leaf_fields only passes references derived from its `fields`
+    // parameter, which has lifetime `'a`. The closure's anonymous field lifetime
+    // is actually `'a`, but the compiler can't prove it through the mutable
+    // closure boundary (invariance of `&mut Vec<ColumnSpec<'a>>`). We re-derive
+    // the `'a` lifetime via a pointer round-trip.
+    let _ = walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if !field.has_parent_column() {
+                return Ok(());
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_column_specs_inner(
-                    &field.fields,
-                    specs,
-                    locale_config,
-                    prefix,
-                    inherited_localized,
-                );
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_column_specs_inner(
-                        &tab.fields,
-                        specs,
-                        locale_config,
-                        prefix,
-                        inherited_localized,
-                    );
-                }
-            }
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
 
-                let col_name = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+            let field: &'a FieldDefinition = unsafe { &*(field as *const FieldDefinition) };
+            let col_name = prefixed_name(prefix, &field.name);
 
-                let is_localized =
-                    (inherited_localized || field.localized) && locale_config.is_enabled();
+            let is_localized =
+                (inherited_localized || field.localized) && locale_config.is_enabled();
 
+            specs.push(ColumnSpec {
+                col_name: col_name.clone(),
+                field,
+                is_localized,
+                companion_text: false,
+            });
+
+            if field.field_type == FieldType::Date && field.timezone {
                 specs.push(ColumnSpec {
-                    col_name: col_name.clone(),
+                    col_name: tz_column(&col_name),
                     field,
                     is_localized,
-                    companion_text: false,
+                    companion_text: true,
                 });
-
-                if field.field_type == FieldType::Date && field.timezone {
-                    specs.push(ColumnSpec {
-                        col_name: format!("{}_tz", col_name),
-                        field,
-                        is_localized,
-                        companion_text: true,
-                    });
-                }
             }
-        }
-    }
+
+            Ok(())
+        },
+    );
+
+    specs
 }
 
 /// Ensure a `_locale` column exists on a junction table (for ALTER TABLE on existing tables).

@@ -1,6 +1,7 @@
 //! Image processing queue database operations.
 
 use anyhow::{Context as _, Result};
+use nanoid::nanoid;
 
 use crate::db::{DbConnection, DbRow, DbValue};
 
@@ -17,6 +18,46 @@ fn get_opt_text(row: &DbRow, idx: usize) -> Option<String> {
     match row.get_value(idx) {
         Some(DbValue::Text(s)) => Some(s.clone()),
         _ => None,
+    }
+}
+
+/// Extract an integer count from a single-column query result.
+fn extract_count(row: &DbRow) -> i64 {
+    match row.get_value(0) {
+        Some(DbValue::Integer(n)) => *n,
+        _ => 0,
+    }
+}
+
+/// Map a row (from the full 9-column SELECT) to an `ImageQueueEntry`.
+fn row_to_queue_entry(row: &DbRow) -> ImageQueueEntry {
+    ImageQueueEntry {
+        id: get_text(row, 0),
+        collection: get_text(row, 1),
+        document_id: get_text(row, 2),
+        source_path: get_text(row, 3),
+        target_path: get_text(row, 4),
+        format: get_text(row, 5),
+        quality: match row.get_value(6) {
+            Some(DbValue::Integer(n)) => *n as u8,
+            _ => 0,
+        },
+        url_column: get_text(row, 7),
+        url_value: get_text(row, 8),
+    }
+}
+
+/// Map a row (from the 8-column list SELECT) to an `ImageQueueListEntry`.
+fn row_to_list_entry(row: &DbRow) -> ImageQueueListEntry {
+    ImageQueueListEntry {
+        id: get_text(row, 0),
+        collection: get_text(row, 1),
+        document_id: get_text(row, 2),
+        format: get_text(row, 3),
+        status: get_text(row, 4),
+        error: get_opt_text(row, 5),
+        created_at: get_opt_text(row, 6),
+        completed_at: get_opt_text(row, 7),
     }
 }
 
@@ -64,20 +105,15 @@ pub fn insert_image_queue_entry(
     conn: &dyn DbConnection,
     entry: &NewImageEntry<'_>,
 ) -> Result<String> {
-    let id = nanoid::nanoid!();
-    let p1 = conn.placeholder(1);
-    let p2 = conn.placeholder(2);
-    let p3 = conn.placeholder(3);
-    let p4 = conn.placeholder(4);
-    let p5 = conn.placeholder(5);
-    let p6 = conn.placeholder(6);
-    let p7 = conn.placeholder(7);
-    let p8 = conn.placeholder(8);
-    let p9 = conn.placeholder(9);
+    let id = nanoid!();
+    let ph: Vec<String> = (1..=9).map(|i| conn.placeholder(i)).collect();
+
     conn.execute(
         &format!(
-            "INSERT INTO _crap_image_queue (id, collection, document_id, source_path, target_path, format, quality, url_column, url_value)
-         VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6}, {p7}, {p8}, {p9})"
+            "INSERT INTO _crap_image_queue \
+             (id, collection, document_id, source_path, target_path, format, quality, url_column, url_value) \
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})",
+            ph[0], ph[1], ph[2], ph[3], ph[4], ph[5], ph[6], ph[7], ph[8]
         ),
         &[
             DbValue::Text(id.clone()),
@@ -92,6 +128,7 @@ pub fn insert_image_queue_entry(
         ],
     )
     .context("Failed to insert image queue entry")?;
+
     Ok(id)
 }
 
@@ -166,31 +203,13 @@ pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec
         &params,
     )?;
 
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let quality = match row.get_value(6) {
-            Some(DbValue::Integer(n)) => *n as u8,
-            _ => 0,
-        };
-        entries.push(ImageQueueEntry {
-            id: get_text(row, 0),
-            collection: get_text(row, 1),
-            document_id: get_text(row, 2),
-            source_path: get_text(row, 3),
-            target_path: get_text(row, 4),
-            format: get_text(row, 5),
-            quality,
-            url_column: get_text(row, 7),
-            url_value: get_text(row, 8),
-        });
-    }
-
-    Ok(entries)
+    Ok(rows.iter().map(row_to_queue_entry).collect())
 }
 
 /// Mark an entry as completed.
 pub fn complete_image_entry(conn: &dyn DbConnection, id: &str) -> Result<()> {
     let p1 = conn.placeholder(1);
+
     conn.execute(
         &format!(
             "UPDATE _crap_image_queue SET status = 'completed', completed_at = {} WHERE id = {p1}",
@@ -198,6 +217,7 @@ pub fn complete_image_entry(conn: &dyn DbConnection, id: &str) -> Result<()> {
         ),
         &[DbValue::Text(id.to_string())],
     )?;
+
     Ok(())
 }
 
@@ -205,10 +225,12 @@ pub fn complete_image_entry(conn: &dyn DbConnection, id: &str) -> Result<()> {
 pub fn fail_image_entry(conn: &dyn DbConnection, id: &str, error: &str) -> Result<()> {
     let p1 = conn.placeholder(1);
     let p2 = conn.placeholder(2);
+
     conn.execute(
         &format!("UPDATE _crap_image_queue SET status = 'failed', error = {p2}, completed_at = {} WHERE id = {p1}", conn.now_expr()),
         &[DbValue::Text(id.to_string()), DbValue::Text(error.to_string())],
     )?;
+
     Ok(())
 }
 
@@ -220,6 +242,7 @@ pub fn recover_stale_images(conn: &dyn DbConnection) -> Result<i64> {
         "UPDATE _crap_image_queue SET status = 'pending' WHERE status = 'processing'",
         &[],
     )?;
+
     Ok(updated as i64)
 }
 
@@ -231,10 +254,8 @@ pub fn count_pending_images(conn: &dyn DbConnection) -> Result<i64> {
             &[],
         )?
         .context("Expected a count row")?;
-    match row.get_value(0) {
-        Some(DbValue::Integer(n)) => Ok(*n),
-        _ => Ok(0),
-    }
+
+    Ok(extract_count(&row))
 }
 
 /// Count entries by status.
@@ -246,10 +267,8 @@ pub fn count_image_entries_by_status(conn: &dyn DbConnection, status: &str) -> R
             &[DbValue::Text(status.to_string())],
         )?
         .context("Expected a count row")?;
-    match row.get_value(0) {
-        Some(DbValue::Integer(n)) => Ok(*n),
-        _ => Ok(0),
-    }
+
+    Ok(extract_count(&row))
 }
 
 /// List queue entries with optional status filter and limit.
@@ -260,6 +279,7 @@ pub fn list_image_entries(
 ) -> Result<Vec<ImageQueueListEntry>> {
     let p1 = conn.placeholder(1);
     let p2 = conn.placeholder(2);
+
     let (sql, params) = match status_filter {
         Some(status) => (
             format!(
@@ -278,21 +298,8 @@ pub fn list_image_entries(
     };
 
     let rows = conn.query_all(&sql, &params)?;
-    let entries = rows
-        .iter()
-        .map(|row| ImageQueueListEntry {
-            id: get_text(row, 0),
-            collection: get_text(row, 1),
-            document_id: get_text(row, 2),
-            format: get_text(row, 3),
-            status: get_text(row, 4),
-            error: get_opt_text(row, 5),
-            created_at: get_opt_text(row, 6),
-            completed_at: get_opt_text(row, 7),
-        })
-        .collect();
 
-    Ok(entries)
+    Ok(rows.iter().map(row_to_list_entry).collect())
 }
 
 /// Reset a single failed entry to pending for retry.
@@ -305,6 +312,7 @@ pub fn retry_image_entry(conn: &dyn DbConnection, id: &str) -> Result<bool> {
         ),
         &[DbValue::Text(id.to_string())],
     )?;
+
     Ok(updated > 0)
 }
 
@@ -315,6 +323,7 @@ pub fn retry_all_failed_images(conn: &dyn DbConnection) -> Result<i64> {
          WHERE status = 'failed'",
         &[],
     )?;
+
     Ok(updated as i64)
 }
 
@@ -329,6 +338,7 @@ pub fn purge_old_image_entries(conn: &dyn DbConnection, older_than_secs: u64) ->
         ),
         &[offset_param],
     )?;
+
     Ok(deleted as i64)
 }
 
@@ -341,6 +351,7 @@ pub fn delete_entries_for_document(
     document_id: &str,
 ) -> Result<usize> {
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+
     conn.execute(
         &format!(
             "DELETE FROM _crap_image_queue \

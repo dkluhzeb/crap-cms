@@ -99,7 +99,7 @@ pub fn find_by_id_full(
             .into_iter()
             .next()
     } else {
-        query::find_by_id_raw(conn, slug, def, id, locale_ctx)?
+        query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
     };
 
     // Hydrate join table data (blocks, arrays, has-many relationships)
@@ -113,17 +113,20 @@ pub fn find_by_id_full(
 /// Reconstruct a Document from a version snapshot JSON object.
 fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
     let obj = snapshot.as_object()?;
-    let mut fields = HashMap::new();
-    for (k, v) in obj {
-        if k != "created_at" && k != "updated_at" {
-            fields.insert(k.clone(), v.clone());
-        }
-    }
+    let mut fields: HashMap<String, Value> = obj.clone().into_iter().collect();
+
+    let created_at = fields
+        .remove("created_at")
+        .and_then(|v| v.as_str().map(str::to_string));
+    let updated_at = fields
+        .remove("updated_at")
+        .and_then(|v| v.as_str().map(str::to_string));
+
     Some(
         DocumentBuilder::new(id)
             .fields(fields)
-            .created_at(obj.get("created_at").and_then(|v| v.as_str()))
-            .updated_at(obj.get("updated_at").and_then(|v| v.as_str()))
+            .created_at(created_at)
+            .updated_at(updated_at)
             .build(),
     )
 }

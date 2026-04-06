@@ -55,6 +55,8 @@ pub(super) fn build_op_condition(
             format!("{} <= {}", expr, ph)
         }
         FilterOp::In(vals) => {
+            // Empty IN list: "x IN ()" is a SQL error, so emit always-false.
+            // Semantically correct: nothing is "in" an empty set.
             if vals.is_empty() {
                 return "0 = 1".to_string();
             }
@@ -70,6 +72,8 @@ pub(super) fn build_op_condition(
             format!("{} IN ({})", expr, placeholders.join(", "))
         }
         FilterOp::NotIn(vals) => {
+            // Empty NOT IN list: everything is "not in" an empty set.
+            // Vacuously true — emit always-true to avoid SQL error.
             if vals.is_empty() {
                 return "1 = 1".to_string();
             }
