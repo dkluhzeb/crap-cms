@@ -294,11 +294,11 @@ pub fn execute_tool(
 
         return match parsed.op {
             ToolOp::Find => exec_find(args, &parsed.slug, registry, pool, runner, config),
-            ToolOp::FindById => exec_find_by_id(args, &parsed.slug, registry, pool, config),
+            ToolOp::FindById => exec_find_by_id(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Create => exec_create(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Update => exec_update(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Delete => exec_delete(args, &parsed.slug, registry, pool, runner),
-            ToolOp::ReadGlobal => exec_read_global(&parsed.slug, registry, pool),
+            ToolOp::ReadGlobal => exec_read_global(&parsed.slug, registry, pool, runner),
             ToolOp::UpdateGlobal => exec_update_global(args, &parsed.slug, registry, pool, runner),
         };
     }

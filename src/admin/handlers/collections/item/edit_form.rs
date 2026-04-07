@@ -25,24 +25,22 @@ use crate::{
         },
     },
     core::{
-        CollectionDefinition, Document, FieldDefinition,
+        CollectionDefinition, Document,
         auth::{AuthUser, Claims},
-        collection::Hooks,
         upload,
     },
     db::{
-        DbPool, ops, query,
+        DbPool, query,
         query::{AccessResult, FilterClause, LocaleContext},
     },
-    hooks::{HookRunner, lifecycle::AfterReadCtx},
+    hooks::HookRunner,
+    service::{ReadOptions, RunnerReadHooks, find_document_by_id},
 };
 
 /// Parameters for the blocking document-read task.
 struct ReadParams {
     pool: DbPool,
     runner: HookRunner,
-    hooks: Hooks,
-    fields: Vec<FieldDefinition>,
     slug: String,
     id: String,
     def: CollectionDefinition,
@@ -53,41 +51,24 @@ struct ReadParams {
     user_ui_locale: Option<String>,
 }
 
-/// Fetch the document, run lifecycle hooks, and assemble upload sizes.
+/// Fetch the document via the shared service layer read lifecycle.
 fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
-    params
-        .runner
-        .fire_before_read(&params.hooks, &params.slug, "find_by_id", HashMap::new())?;
-
     let conn = params.pool.get().context("DB connection")?;
 
-    let mut doc = ops::find_by_id_full(
-        &conn,
-        &params.slug,
-        &params.def,
-        &params.id,
-        params.locale_ctx.as_ref(),
-        params.access_constraints,
-        params.has_drafts,
-    )?;
-
-    if let Some(ref mut d) = doc
-        && let Some(ref upload_config) = params.def.upload
-        && upload_config.enabled
-    {
-        upload::assemble_sizes_object(d, upload_config);
-    }
-
-    let ar_ctx = AfterReadCtx {
-        hooks: &params.hooks,
-        fields: &params.fields,
-        collection: &params.slug,
-        operation: "find_by_id",
+    let hooks = RunnerReadHooks {
+        runner: &params.runner,
+        conn: &conn,
+    };
+    let opts = ReadOptions {
+        use_draft: params.has_drafts,
+        access_constraints: params.access_constraints,
+        locale_ctx: params.locale_ctx.as_ref(),
         user: params.user_doc.as_ref(),
         ui_locale: params.user_ui_locale.as_deref(),
+        ..Default::default()
     };
 
-    Ok(doc.map(|d| params.runner.apply_after_read(&ar_ctx, d)))
+    find_document_by_id(&conn, &hooks, &params.slug, &params.def, &params.id, &opts)
 }
 
 /// Append auth-specific fields (password, locked checkbox) to the field list.
@@ -303,8 +284,6 @@ pub async fn edit_form(
     let read_params = ReadParams {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
-        hooks: def.hooks.clone(),
-        fields: def.fields.clone(),
         slug: slug.clone(),
         id: id.clone(),
         def: def.clone(),

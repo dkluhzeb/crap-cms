@@ -1,132 +1,17 @@
 //! Registration of `crap.collections.find_by_id` Lua function.
 
-use std::collections::HashSet;
-
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, SharedRegistry, upload},
-    db::{DbConnection, FilterClause, LocaleContext, ops, query},
-    hooks::lifecycle::{
-        HookContext, HookEvent,
-        access::check_field_read_access_with_lua,
-        converters::document_to_lua_table,
-        execution::{AfterReadCtx, apply_after_read_inner, run_hooks_inner},
-    },
+    core::SharedRegistry,
+    db::{FilterClause, LocaleContext},
+    hooks::lifecycle::converters::document_to_lua_table,
+    service::{LuaReadHooks, ReadOptions, find_document_by_id},
 };
 
 use super::{get_tx_conn, helpers::*};
-
-/// Context for a find_by_id operation.
-struct FindByIdCtx<'a> {
-    collection: &'a str,
-    id: &'a str,
-    depth: i32,
-    override_access: bool,
-    user: Option<&'a Document>,
-    ui_locale: Option<&'a str>,
-}
-
-/// Fire the before_read collection hook.
-fn fire_before_read(lua: &Lua, def: &CollectionDefinition, ctx: &FindByIdCtx<'_>) -> LuaResult<()> {
-    let before_ctx = HookContext::builder(ctx.collection, "find_by_id")
-        .user(ctx.user)
-        .ui_locale(ctx.ui_locale)
-        .build();
-
-    run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-        .map_err(|e| RuntimeError(format!("before_read hook error: {e:#}")))?;
-
-    Ok(())
-}
-
-/// Check access control and return optional constraint filters.
-fn resolve_access_constraints(
-    lua: &Lua,
-    def: &CollectionDefinition,
-    ctx: &FindByIdCtx<'_>,
-) -> LuaResult<Option<Vec<FilterClause>>> {
-    let mut filters: Vec<FilterClause> = Vec::new();
-
-    enforce_access(
-        lua,
-        ctx.override_access,
-        def.access.read.as_deref(),
-        Some(ctx.id),
-        &mut filters,
-        "Read access denied",
-    )?;
-
-    Ok(if filters.is_empty() {
-        None
-    } else {
-        Some(filters)
-    })
-}
-
-/// Populate relationships for a single document.
-fn populate_doc(
-    conn: &dyn DbConnection,
-    reg: &SharedRegistry,
-    def: &CollectionDefinition,
-    ctx: &FindByIdCtx<'_>,
-    doc: &mut Document,
-    select: Option<&[String]>,
-    locale_ctx: Option<&LocaleContext>,
-) -> LuaResult<()> {
-    if ctx.depth <= 0 {
-        return Ok(());
-    }
-
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-    let mut visited = HashSet::new();
-    let pop_ctx = query::PopulateContext::new(conn, &r, ctx.collection, def);
-    let mut pop_opts = query::PopulateOpts::new(ctx.depth);
-
-    if let Some(s) = select {
-        pop_opts = pop_opts.select(s);
-    }
-
-    if let Some(lc) = locale_ctx {
-        pop_opts = pop_opts.locale_ctx(lc);
-    }
-
-    query::populate_relationships(&pop_ctx, doc, &mut visited, &pop_opts)
-        .map_err(|e| RuntimeError(format!("populate error: {e:#}")))?;
-
-    Ok(())
-}
-
-/// Apply upload sizes, select stripping, and field-level read access stripping.
-fn apply_post_filters(
-    lua: &Lua,
-    def: &CollectionDefinition,
-    ctx: &FindByIdCtx<'_>,
-    doc: &mut Document,
-    select: &Option<Vec<String>>,
-) {
-    if let Some(ref upload_config) = def.upload
-        && upload_config.enabled
-    {
-        upload::assemble_sizes_object(doc, upload_config);
-    }
-
-    if let Some(sel) = select {
-        query::apply_select_to_document(doc, sel);
-    }
-
-    if !ctx.override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, ctx.user);
-
-        for name in &denied {
-            doc.fields.remove(name);
-        }
-    }
-}
 
 /// Core logic for `crap.collections.find_by_id`.
 fn find_by_id_inner(
@@ -157,54 +42,37 @@ fn find_by_id_inner(
     let select: Option<Vec<String>> = opts
         .as_ref()
         .and_then(|o| o.get::<Table>("select").ok())
-        .map(|t| {
-            t.sequence_values::<String>()
-                .filter_map(|r| r.ok())
-                .collect()
-        });
+        .map(|t| t.sequence_values::<String>().filter_map(|r| r.ok()).collect());
 
-    let ctx = FindByIdCtx {
-        collection: &collection,
-        id: &id,
-        depth,
-        override_access,
+    // Resolve access constraints
+    let mut access_filters: Vec<FilterClause> = Vec::new();
+    enforce_access(
+        lua, override_access, def.access.read.as_deref(),
+        Some(&id), &mut access_filters, "Read access denied",
+    )?;
+    let access_constraints = if access_filters.is_empty() { None } else { Some(access_filters) };
+
+    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let hooks = LuaReadHooks {
+        lua,
         user: user.as_ref(),
         ui_locale: ui_locale.as_deref(),
+        override_access,
     };
-
-    fire_before_read(lua, &def, &ctx)?;
-
-    let access_constraints = resolve_access_constraints(lua, &def, &ctx)?;
-
-    let mut doc = ops::find_by_id_full(
-        conn,
-        ctx.collection,
-        &def,
-        ctx.id,
-        locale_ctx.as_ref(),
-        access_constraints,
+    let opts = ReadOptions {
+        depth,
+        locale_ctx: locale_ctx.as_ref(),
+        registry: Some(&r),
+        select: select.as_deref(),
+        user: user.as_ref(),
+        ui_locale: ui_locale.as_deref(),
         use_draft,
-    )
-    .map_err(|e| RuntimeError(format!("find_by_id error: {e:#}")))?;
-
-    if let Some(ref mut d) = doc {
-        let select_slice = select.as_deref();
-
-        populate_doc(conn, reg, &def, &ctx, d, select_slice, locale_ctx.as_ref())?;
-
-        apply_post_filters(lua, &def, &ctx, d, &select);
-    }
-
-    // Run after_read hooks
-    let ar_ctx = AfterReadCtx {
-        hooks: &def.hooks,
-        fields: &def.fields,
-        collection: &collection,
-        operation: "find_by_id",
-        user: ctx.user,
-        ui_locale: ctx.ui_locale,
+        access_constraints,
+        ..Default::default()
     };
-    let doc = doc.map(|d| apply_after_read_inner(lua, &ar_ctx, d));
+
+    let doc = find_document_by_id(conn, &hooks, &collection, &def, &id, &opts)
+        .map_err(|e| RuntimeError(format!("find_by_id error: {e:#}")))?;
 
     match doc {
         Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

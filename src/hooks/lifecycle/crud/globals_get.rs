@@ -5,34 +5,13 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, SharedRegistry},
-    db::{LocaleContext, query},
-    hooks::lifecycle::{
-        HookContext, HookEvent,
-        access::check_field_read_access_with_lua,
-        converters::document_to_lua_table,
-        execution::{AfterReadCtx, apply_after_read_inner, run_hooks_inner},
-    },
+    core::SharedRegistry,
+    db::LocaleContext,
+    hooks::lifecycle::converters::document_to_lua_table,
+    service::{LuaReadHooks, get_global_document},
 };
 
 use super::{get_tx_conn, helpers::*};
-
-/// Fire the before_read hook for a global.
-fn fire_before_read(
-    lua: &Lua,
-    def: &crate::core::collection::GlobalDefinition,
-    slug: &str,
-    user: Option<&Document>,
-    ui_locale: Option<&str>,
-) -> mlua::Result<()> {
-    let before_ctx = HookContext::builder(slug, "get")
-        .user(user)
-        .ui_locale(ui_locale)
-        .build();
-    run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-        .map_err(|e| RuntimeError(format!("before_read hook error: {e:#}")))?;
-    Ok(())
-}
 
 /// Core logic for `crap.globals.get`.
 fn globals_get_inner(
@@ -54,36 +33,22 @@ fn globals_get_inner(
     let def = resolve_global(reg, &slug)?;
 
     enforce_access(
-        lua,
-        override_access,
-        def.access.read.as_deref(),
-        None,
-        &mut vec![],
-        "Read access denied",
+        lua, override_access, def.access.read.as_deref(),
+        None, &mut vec![], "Read access denied",
     )?;
 
-    fire_before_read(lua, &def, &slug, user.as_ref(), ui_locale.as_deref())?;
-
-    let mut doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
-        .map_err(|e| RuntimeError(format!("get_global error: {e:#}")))?;
-
-    if !override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, user.as_ref());
-        for name in &denied {
-            doc.fields.remove(name);
-        }
-    }
-
-    // Run after_read hooks
-    let ar_ctx = AfterReadCtx {
-        hooks: &def.hooks,
-        fields: &def.fields,
-        collection: &slug,
-        operation: "get",
+    let hooks = LuaReadHooks {
+        lua,
         user: user.as_ref(),
         ui_locale: ui_locale.as_deref(),
+        override_access,
     };
-    let doc = apply_after_read_inner(lua, &ar_ctx, doc);
+
+    let doc = get_global_document(
+        conn, &hooks, &slug, &def,
+        locale_ctx.as_ref(), user.as_ref(), ui_locale.as_deref(),
+    )
+    .map_err(|e| RuntimeError(format!("get_global error: {e:#}")))?;
 
     document_to_lua_table(lua, &doc)
 }

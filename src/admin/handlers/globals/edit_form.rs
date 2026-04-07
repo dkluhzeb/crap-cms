@@ -23,23 +23,22 @@ use crate::{
         },
     },
     core::{
-        Document, FieldDefinition,
+        Document,
         auth::{AuthUser, Claims},
-        collection::{GlobalDefinition, Hooks},
+        collection::GlobalDefinition,
     },
     db::{
-        DbPool, ops,
+        DbPool,
         query::{AccessResult, helpers::global_table},
     },
     hooks::HookRunner,
+    service::{RunnerReadHooks, get_global_document},
 };
 
 /// Parameters for the blocking global-read task.
 struct ReadParams {
     pool: DbPool,
     runner: HookRunner,
-    hooks: Hooks,
-    fields: Vec<FieldDefinition>,
     slug: String,
     def: GlobalDefinition,
     locale_ctx: Option<crate::db::query::LocaleContext>,
@@ -47,29 +46,21 @@ struct ReadParams {
     user_ui_locale: Option<String>,
 }
 
-/// Fetch the global document and run lifecycle hooks.
+/// Fetch the global document via the shared service layer read lifecycle.
 fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
-    params
-        .runner
-        .fire_before_read(&params.hooks, &params.slug, "get_global", HashMap::new())?;
+    let conn = params.pool.get()?;
 
-    let doc = ops::get_global(
-        &params.pool,
-        &params.slug,
-        &params.def,
-        params.locale_ctx.as_ref(),
-    )?;
-
-    let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
-        hooks: &params.hooks,
-        fields: &params.fields,
-        collection: &params.slug,
-        operation: "get_global",
-        user: params.user_doc.as_ref(),
-        ui_locale: params.user_ui_locale.as_deref(),
+    let hooks = RunnerReadHooks {
+        runner: &params.runner,
+        conn: &conn,
     };
 
-    Ok(params.runner.apply_after_read(&ar_ctx, doc))
+    get_global_document(
+        &conn, &hooks, &params.slug, &params.def,
+        params.locale_ctx.as_ref(),
+        params.user_doc.as_ref(),
+        params.user_ui_locale.as_deref(),
+    )
 }
 
 /// Build, enrich, and split the field contexts for the global edit form.
@@ -139,8 +130,6 @@ pub async fn edit_form(
     let read_params = ReadParams {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
-        hooks: def.hooks.clone(),
-        fields: def.fields.clone(),
         slug: slug.clone(),
         def: def.clone(),
         locale_ctx,

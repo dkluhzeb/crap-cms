@@ -10,6 +10,9 @@ mod email;
 mod globals;
 mod persist;
 mod persist_options_builder;
+pub mod read;
+pub mod read_hooks;
+pub mod write_hooks;
 mod types;
 mod version_snapshot_ctx_builder;
 pub(crate) mod versions;
@@ -27,6 +30,9 @@ pub use collections::{
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_document};
+pub use read::{FindResult, ReadOptions, find_document_by_id, find_documents, get_global_document};
+pub use read_hooks::{LuaReadHooks, ReadHooks, RunnerReadHooks};
+pub use write_hooks::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};
 pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use versions::unpublish_with_snapshot;
 

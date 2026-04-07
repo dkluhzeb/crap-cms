@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::Context as _;
 use axum::{
     Extension,
@@ -29,13 +27,12 @@ use crate::{
     core::{
         CollectionDefinition, Document,
         auth::{AuthUser, Claims},
-        upload,
     },
     db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
-    hooks::lifecycle::AfterReadCtx,
+    service::{ReadOptions, RunnerReadHooks, find_documents},
 };
 
-/// Fetch documents, run lifecycle hooks, and assemble upload sizes.
+/// Fetch documents via the shared service layer read lifecycle.
 fn fetch_list_documents(
     state: &AdminState,
     slug: &str,
@@ -44,47 +41,25 @@ fn fetch_list_documents(
     locale_ctx: Option<&query::LocaleContext>,
     auth_user: &Option<Extension<AuthUser>>,
 ) -> anyhow::Result<(Vec<Document>, i64)> {
-    let runner = state.hook_runner.clone();
-    let hooks = def.hooks.clone();
-    let fields = def.fields.clone();
-
-    runner.fire_before_read(&hooks, slug, "find", HashMap::new())?;
-
     let conn = state.pool.get().context("Failed to get DB connection")?;
-
-    let total = query::count_with_search(
-        &conn,
-        slug,
-        def,
-        &find_query.filters,
-        locale_ctx,
-        find_query.search.as_deref(),
-        find_query.include_deleted,
-    )?;
-
-    let mut docs = query::find(&conn, slug, def, find_query, locale_ctx)?;
-
-    if let Some(ref upload_config) = def.upload
-        && upload_config.enabled
-    {
-        for doc in &mut docs {
-            upload::assemble_sizes_object(doc, upload_config);
-        }
-    }
-
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
     let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
-    let ar_ctx = AfterReadCtx {
-        hooks: &hooks,
-        fields: &fields,
-        collection: slug,
-        operation: "find",
+    let hooks = RunnerReadHooks {
+        runner: &state.hook_runner,
+        conn: &conn,
+    };
+    let opts = ReadOptions {
+        hydrate: false,
+        locale_ctx,
         user: user_doc.as_ref(),
         ui_locale: user_ui_locale.as_deref(),
+        ..Default::default()
     };
 
-    Ok((runner.apply_after_read_many(&ar_ctx, docs), total))
+    let result = find_documents(&conn, &hooks, slug, def, find_query, &opts)?;
+
+    Ok((result.docs, result.total))
 }
 
 /// Compute title column sort URL and sort direction indicators.

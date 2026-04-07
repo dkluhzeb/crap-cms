@@ -5,17 +5,13 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     config::{LocaleConfig, PaginationConfig},
-    core::{CollectionDefinition, Document, SharedRegistry, upload},
+    core::{CollectionDefinition, Document, SharedRegistry},
     db::{
-        DbConnection, FindQuery, LocaleContext,
+        FindQuery, LocaleContext,
         query::{self, PaginationResult, filter::normalize_filter_fields},
     },
-    hooks::lifecycle::{
-        HookContext, HookEvent,
-        access::check_field_read_access_with_lua,
-        converters::*,
-        execution::{AfterReadCtx, apply_after_read_inner, run_hooks_inner},
-    },
+    hooks::lifecycle::converters::*,
+    service::{LuaReadHooks, ReadOptions, find_documents},
 };
 
 use super::{get_tx_conn, helpers::*};
@@ -27,14 +23,10 @@ struct FindParams {
     pg_cursor: bool,
 }
 
-/// Shared context for a find operation.
-struct FindCtx<'a> {
-    collection: &'a str,
-    depth: i32,
+/// Query-building context for the find operation.
+struct FindCtx {
     override_access: bool,
     draft: bool,
-    user: Option<&'a Document>,
-    ui_locale: Option<&'a str>,
 }
 
 /// Convert a [`PaginationResult`] into an mlua table.
@@ -76,7 +68,7 @@ fn prepare_find_query(
     params: &FindParams,
     def: &CollectionDefinition,
     query_table: Option<Table>,
-    ctx: &FindCtx<'_>,
+    ctx: &FindCtx,
 ) -> LuaResult<(FindQuery, Option<i64>)> {
     let (mut fq, lua_page) = match query_table {
         Some(qt) => lua_table_to_find_query(&qt)?,
@@ -112,113 +104,6 @@ fn prepare_find_query(
     )?;
 
     Ok((fq, lua_page))
-}
-
-/// Fire the before_read collection hook.
-fn fire_before_read(lua: &Lua, def: &CollectionDefinition, ctx: &FindCtx<'_>) -> LuaResult<()> {
-    let before_ctx = HookContext::builder(ctx.collection, "find")
-        .user(ctx.user)
-        .ui_locale(ctx.ui_locale)
-        .build();
-    run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-        .map_err(|e| RuntimeError(format!("before_read hook error: {e:#}")))?;
-    Ok(())
-}
-
-/// Validate, execute the find query, and count total matching documents.
-fn execute_find(
-    conn: &dyn DbConnection,
-    def: &CollectionDefinition,
-    ctx: &FindCtx<'_>,
-    find_query: &FindQuery,
-    locale_ctx: Option<&LocaleContext>,
-) -> LuaResult<(Vec<Document>, i64)> {
-    query::validate_query_fields(def, find_query, locale_ctx)
-        .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
-
-    let docs = query::find(conn, ctx.collection, def, find_query, locale_ctx)
-        .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
-
-    let total = query::count_with_search(
-        conn,
-        ctx.collection,
-        def,
-        &find_query.filters,
-        locale_ctx,
-        find_query.search.as_deref(),
-        find_query.include_deleted,
-    )
-    .map_err(|e| RuntimeError(format!("count error: {e:#}")))?;
-
-    Ok((docs, total))
-}
-
-/// Hydrate join-table data and populate relationships for all documents.
-fn hydrate_and_populate(
-    conn: &dyn DbConnection,
-    reg: &SharedRegistry,
-    def: &CollectionDefinition,
-    ctx: &FindCtx<'_>,
-    docs: &mut [Document],
-    select: Option<&[String]>,
-    locale_ctx: Option<&LocaleContext>,
-) -> LuaResult<()> {
-    for doc in docs.iter_mut() {
-        query::hydrate_document(conn, ctx.collection, &def.fields, doc, select, locale_ctx)
-            .map_err(|e| RuntimeError(format!("hydrate error: {e:#}")))?;
-    }
-
-    if ctx.depth > 0 {
-        let r = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-        let pop_ctx = query::PopulateContext::new(conn, &r, ctx.collection, def);
-        let mut pop_opts = query::PopulateOpts::new(ctx.depth);
-        if let Some(s) = select {
-            pop_opts = pop_opts.select(s);
-        }
-        if let Some(lc) = locale_ctx {
-            pop_opts = pop_opts.locale_ctx(lc);
-        }
-        query::populate_relationships_batch(&pop_ctx, docs, &pop_opts)
-            .map_err(|e| RuntimeError(format!("populate error: {e:#}")))?;
-    }
-
-    Ok(())
-}
-
-/// Apply upload sizes, select stripping, and field-level read access stripping.
-fn post_process_docs(
-    lua: &Lua,
-    def: &CollectionDefinition,
-    ctx: &FindCtx<'_>,
-    docs: &mut [Document],
-    select: &Option<Vec<String>>,
-) {
-    if let Some(ref upload_config) = def.upload
-        && upload_config.enabled
-    {
-        for doc in docs.iter_mut() {
-            upload::assemble_sizes_object(doc, upload_config);
-        }
-    }
-
-    if let Some(sel) = select {
-        for doc in docs.iter_mut() {
-            query::apply_select_to_document(doc, sel);
-        }
-    }
-
-    if !ctx.override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, ctx.user);
-        if !denied.is_empty() {
-            for doc in docs.iter_mut() {
-                for name in &denied {
-                    doc.fields.remove(name);
-                }
-            }
-        }
-    }
 }
 
 /// Build the pagination result from query results and config.
@@ -281,50 +166,33 @@ fn find_inner(
     let draft = get_opt_bool(&query_table, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ctx = FindCtx {
-        collection: &collection,
-        depth,
-        override_access,
-        draft,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-    };
+    let ctx = FindCtx { override_access, draft };
 
     let (find_query, lua_page) = prepare_find_query(lua, params, &def, query_table, &ctx)?;
 
-    fire_before_read(lua, &def, &ctx)?;
-
-    let (mut docs, total) = execute_find(conn, &def, &ctx, &find_query, locale_ctx.as_ref())?;
-
-    let select_slice = find_query.select.as_deref();
-    hydrate_and_populate(
-        conn,
-        reg,
-        &def,
-        &ctx,
-        &mut docs,
-        select_slice,
-        locale_ctx.as_ref(),
-    )?;
-    post_process_docs(lua, &def, &ctx, &mut docs, &find_query.select);
-
-    // Run after_read hooks
-    let ar_ctx = AfterReadCtx {
-        hooks: &def.hooks,
-        fields: &def.fields,
-        collection: &collection,
-        operation: "find",
+    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let hooks = LuaReadHooks {
+        lua,
         user: user.as_ref(),
         ui_locale: ui_locale.as_deref(),
+        override_access,
     };
-    let docs: Vec<_> = docs
-        .into_iter()
-        .map(|doc| apply_after_read_inner(lua, &ar_ctx, doc))
-        .collect();
+    let opts = ReadOptions {
+        depth,
+        locale_ctx: locale_ctx.as_ref(),
+        registry: Some(&r),
+        select: find_query.select.as_deref(),
+        user: user.as_ref(),
+        ui_locale: ui_locale.as_deref(),
+        ..Default::default()
+    };
 
-    let pr = build_pagination_result(params, &find_query, &docs, total, lua_page, def.timestamps);
+    let result = find_documents(conn, &hooks, &collection, &def, &find_query, &opts)
+        .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
+
+    let pr = build_pagination_result(params, &find_query, &result.docs, result.total, lua_page, def.timestamps);
     let pagination = pagination_result_to_lua_table(lua, &pr)?;
-    find_result_to_lua(lua, &docs, pagination)
+    find_result_to_lua(lua, &result.docs, pagination)
 }
 
 /// Register `crap.collections.find(collection, query?)`.
