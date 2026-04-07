@@ -1,7 +1,8 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
-use std::collections::HashMap;
 
 /// Validate min_rows / max_rows for Array, Blocks, and has-many Relationship fields.
 pub(crate) fn check_row_bounds(
@@ -14,6 +15,7 @@ pub(crate) fn check_row_bounds(
     if is_draft || (field.min_rows.is_none() && field.max_rows.is_none()) {
         return;
     }
+
     let row_count = match value {
         Some(Value::Array(arr)) => arr.len(),
         _ => 0,
@@ -32,6 +34,7 @@ pub(crate) fn check_row_bounds(
             ]),
         ));
     }
+
     if let Some(max) = field.max_rows
         && row_count > max
     {

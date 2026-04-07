@@ -20,8 +20,6 @@ use crate::{
     },
 };
 
-use super::field_write_ctx_builder::FieldWriteCtxBuilder;
-
 /// Bundled transaction context for field-level write hooks.
 pub struct FieldWriteCtx<'a> {
     pub conn: &'a dyn DbConnection,
@@ -33,6 +31,41 @@ impl<'a> FieldWriteCtx<'a> {
     /// Create a builder with the required connection reference.
     pub fn builder(conn: &'a dyn DbConnection) -> FieldWriteCtxBuilder<'a> {
         FieldWriteCtxBuilder::new(conn)
+    }
+}
+
+/// Builder for [`FieldWriteCtx`].
+pub struct FieldWriteCtxBuilder<'a> {
+    conn: &'a dyn DbConnection,
+    user: Option<&'a Document>,
+    ui_locale: Option<&'a str>,
+}
+
+impl<'a> FieldWriteCtxBuilder<'a> {
+    pub(crate) fn new(conn: &'a dyn DbConnection) -> Self {
+        Self {
+            conn,
+            user: None,
+            ui_locale: None,
+        }
+    }
+
+    pub fn user(mut self, user: Option<&'a Document>) -> Self {
+        self.user = user;
+        self
+    }
+
+    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
+        self.ui_locale = ui_locale;
+        self
+    }
+
+    pub fn build(self) -> FieldWriteCtx<'a> {
+        FieldWriteCtx {
+            conn: self.conn,
+            user: self.user,
+            ui_locale: self.ui_locale,
+        }
     }
 }
 

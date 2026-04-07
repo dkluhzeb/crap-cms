@@ -1,7 +1,8 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
-use std::collections::HashMap;
 
 /// Validate min / max bounds for number fields.
 /// Skipped for has_many fields (validated per-element in `check_has_many_elements`).
@@ -15,39 +16,43 @@ pub(crate) fn check_numeric_bounds(
     if is_empty || field.has_many || (field.min.is_none() && field.max.is_none()) {
         return;
     }
+
     let num_val = match value {
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::String(s)) => s.parse::<f64>().ok(),
         _ => None,
     };
 
-    if let Some(v) = num_val {
-        if let Some(min_val) = field.min
-            && v < min_val
-        {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} must be at least {}", field.name, min_val),
-                "validation.min_value",
-                HashMap::from([
-                    ("field".to_string(), field.name.clone()),
-                    ("min".to_string(), min_val.to_string()),
-                ]),
-            ));
-        }
-        if let Some(max_val) = field.max
-            && v > max_val
-        {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} must be at most {}", field.name, max_val),
-                "validation.max_value",
-                HashMap::from([
-                    ("field".to_string(), field.name.clone()),
-                    ("max".to_string(), max_val.to_string()),
-                ]),
-            ));
-        }
+    let Some(v) = num_val else {
+        return;
+    };
+
+    if let Some(min_val) = field.min
+        && v < min_val
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} must be at least {}", field.name, min_val),
+            "validation.min_value",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("min".to_string(), min_val.to_string()),
+            ]),
+        ));
+    }
+
+    if let Some(max_val) = field.max
+        && v > max_val
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} must be at most {}", field.name, max_val),
+            "validation.max_value",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("max".to_string(), max_val.to_string()),
+            ]),
+        ));
     }
 }
 

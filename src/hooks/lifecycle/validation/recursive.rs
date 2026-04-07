@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, FieldType, validate::FieldError},
-    db::{LocaleMode, query::sanitize_locale},
+    db::{LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
     hooks::ValidationCtx,
 };
 
@@ -30,11 +30,7 @@ pub(super) fn validate_fields_recursive(
     for field in fields {
         match field.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+                let new_prefix = prefixed_name(prefix, &field.name);
                 validate_fields_recursive(
                     lua,
                     &field.fields,
@@ -90,11 +86,7 @@ fn validate_scalar_field(
     inherited_localized: bool,
     errors: &mut Vec<FieldError>,
 ) {
-    let data_key = if prefix.is_empty() {
-        field.name.clone()
-    } else {
-        format!("{}__{}", prefix, field.name)
-    };
+    let data_key = prefixed_name(prefix, &field.name);
 
     let value = data.get(&data_key);
     let is_empty = match value {

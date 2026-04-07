@@ -1,6 +1,6 @@
-use serde_json::Value;
-
 use std::collections::HashMap;
+
+use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, validate::FieldError},
@@ -22,11 +22,13 @@ pub(crate) fn check_unique(
     if !field.unique || is_empty || !field.has_parent_column() {
         return;
     }
+
     let value_str = match value {
         Some(Value::String(s)) => s.clone(),
         Some(other) => other.to_string(),
         None => String::new(),
     };
+
     match query::count_where_field_eq(
         ctx.conn,
         ctx.table,

@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use super::super::types::MaxInstructions;
+use crate::hooks::lifecycle::types::MaxInstructions;
 
 /// Pool of Lua VMs for concurrent hook execution.
 pub(super) struct VmPool {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use mlua::Lua;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     core::{FieldDefinition, validate::FieldError},
@@ -26,13 +27,15 @@ pub(crate) fn check_custom_validate(
         Some(v) => v,
         None => return,
     };
+
     match run_validate_function_inner(lua, validate_ref, val, data, table, &field.name) {
         Ok(Some(err_msg)) => {
             errors.push(FieldError::new(data_key.to_owned(), err_msg));
         }
         Ok(None) => {} // valid
         Err(e) => {
-            tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
+            warn!("Validate function '{}' error: {}", validate_ref, e);
+
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
                 format!("Validation failed (internal error in '{}')", validate_ref),

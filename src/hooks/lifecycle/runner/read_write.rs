@@ -12,13 +12,15 @@ use crate::{
         collection::Hooks,
         validate::{FieldError, ValidationError},
     },
-    db::DbConnection,
+    db::{DbConnection, query::helpers::prefixed_name},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
             execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
             types::FieldHookEvent,
-            validation::validate_fields_inner,
+            validation::{
+                richtext_attrs::run_before_validate_on_node_attrs, validate_fields_inner,
+            },
         },
     },
 };
@@ -65,12 +67,12 @@ impl HookRunner {
     pub fn apply_after_read_for_event(
         &self,
         collection: &str,
-        hooks: &crate::core::collection::Hooks,
-        fields: &[crate::core::FieldDefinition],
+        hooks: &Hooks,
+        fields: &[FieldDefinition],
         document_id: &str,
-        data: &std::collections::HashMap<String, serde_json::Value>,
-        user: Option<&crate::core::Document>,
-    ) -> std::collections::HashMap<String, serde_json::Value> {
+        data: &HashMap<String, Value>,
+        user: Option<&Document>,
+    ) -> HashMap<String, Value> {
         let has_field_hooks = has_field_hooks_for_event(fields, &FieldHookEvent::AfterRead);
         let has_collection_hooks = !hooks.after_read.is_empty();
         let has_registered = self.has_registered_hooks_for("after_read");
@@ -79,7 +81,7 @@ impl HookRunner {
             return data.clone();
         }
 
-        let doc = crate::core::Document {
+        let doc = Document {
             id: document_id.to_string().into(),
             fields: data.clone(),
             created_at: None,
@@ -231,8 +233,6 @@ impl HookRunner {
         data: &mut HashMap<String, Value>,
         collection: &str,
     ) {
-        use super::super::validation::richtext_attrs::run_before_validate_on_node_attrs;
-
         let richtext_fields = collect_richtext_fields_recursive(fields, "");
 
         if richtext_fields.is_empty() {
@@ -323,11 +323,7 @@ fn collect_richtext_fields_recursive<'a>(
     for field in fields {
         match field.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+                let new_prefix = prefixed_name(prefix, &field.name);
                 out.extend(collect_richtext_fields_recursive(
                     &field.fields,
                     &new_prefix,
@@ -342,12 +338,7 @@ fn collect_richtext_fields_recursive<'a>(
                 }
             }
             FieldType::Richtext if !field.admin.nodes.is_empty() => {
-                let data_key = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                out.push((field, data_key));
+                out.push((field, prefixed_name(prefix, &field.name)));
             }
             _ => {}
         }

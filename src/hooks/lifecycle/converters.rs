@@ -6,7 +6,10 @@ use std::collections::HashMap;
 
 use crate::{
     core::{Document, FieldDefinition, FieldType},
-    db::{Filter, FilterClause, FilterOp, FindQuery, query::cursor::CursorData},
+    db::{
+        Filter, FilterClause, FilterOp, FindQuery, query::cursor::CursorData,
+        query::helpers::prefixed_name,
+    },
     hooks::api,
 };
 
@@ -20,14 +23,17 @@ pub(crate) fn lua_table_to_json_map(
     tbl: &Table,
 ) -> LuaResult<HashMap<String, JsonValue>> {
     let mut map = HashMap::new();
+
     for pair in tbl.pairs::<String, Value>() {
         let (k, v) = pair?;
 
         if matches!(v, Value::Nil) {
             continue;
         }
+
         map.insert(k, api::lua_to_json(lua, &v)?);
     }
+
     Ok(map)
 }
 
@@ -35,140 +41,139 @@ pub(crate) fn lua_table_to_json_map(
 /// Supports both simple filters (`{ status = "published" }`) and operator-based
 /// filters (`{ title = { contains = "hello" } }`).
 pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Option<i64>)> {
-    let filters = if let Ok(filters_tbl) = tbl.get::<Table>("where") {
-        let mut clauses = Vec::new();
-        for pair in filters_tbl.pairs::<String, Value>() {
-            let (field, value) = pair?;
+    let filters = parse_where_clause(tbl)?;
 
-            // Handle "or" key for OR groups
-            if field == "or" {
-                if let Value::Table(or_array) = value {
-                    let mut groups = Vec::new();
-                    for element in or_array.sequence_values::<Table>() {
-                        let tbl = element?;
-                        let mut group = Vec::new();
-                        for inner_pair in tbl.pairs::<String, Value>() {
-                            let (f, v) = inner_pair?;
-                            match v {
-                                Value::String(s) => {
-                                    group.push(Filter {
-                                        field: f,
-                                        op: FilterOp::Equals(s.to_str()?.to_string()),
-                                    });
-                                }
-                                Value::Integer(i) => {
-                                    group.push(Filter {
-                                        field: f,
-                                        op: FilterOp::Equals(i.to_string()),
-                                    });
-                                }
-                                Value::Number(n) => {
-                                    group.push(Filter {
-                                        field: f,
-                                        op: FilterOp::Equals(n.to_string()),
-                                    });
-                                }
-                                Value::Table(op_tbl) => {
-                                    for op_pair in op_tbl.pairs::<String, Value>() {
-                                        let (op_name, op_val) = op_pair?;
-                                        let op = lua_parse_filter_op(&op_name, &op_val)?;
-                                        group.push(Filter {
-                                            field: f.clone(),
-                                            op,
-                                        });
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        groups.push(group);
-                    }
-                    clauses.push(FilterClause::Or(groups));
-                }
-                continue;
-            }
-
-            match value {
-                // Simple string value -> Equals
-                Value::String(s) => {
-                    clauses.push(FilterClause::Single(Filter {
-                        field,
-                        op: FilterOp::Equals(s.to_str()?.to_string()),
-                    }));
-                }
-                // Number -> Equals with string representation
-                Value::Integer(i) => {
-                    clauses.push(FilterClause::Single(Filter {
-                        field,
-                        op: FilterOp::Equals(i.to_string()),
-                    }));
-                }
-                Value::Number(n) => {
-                    clauses.push(FilterClause::Single(Filter {
-                        field,
-                        op: FilterOp::Equals(n.to_string()),
-                    }));
-                }
-                // Table -> operator-based filter
-                Value::Table(op_tbl) => {
-                    for op_pair in op_tbl.pairs::<String, Value>() {
-                        let (op_name, op_val) = op_pair?;
-                        let op = lua_parse_filter_op(&op_name, &op_val)?;
-                        clauses.push(FilterClause::Single(Filter {
-                            field: field.clone(),
-                            op,
-                        }));
-                    }
-                }
-                _ => {} // skip nil, bool, etc.
-            }
-        }
-        clauses
-    } else {
-        Vec::new()
-    };
-
-    let order_by: Option<String> = tbl.get("order_by").ok();
-    let limit: Option<i64> = tbl.get("limit").ok();
-    // Accept `page` (primary) or `offset` (backward compat alias).
-    // page takes precedence; conversion to offset happens in the find closure.
     let page: Option<i64> = tbl.get("page").ok();
     let offset: Option<i64> = if page.is_some() {
-        None // page overrides offset
+        None
     } else {
         tbl.get("offset").ok()
     };
+
     let select: Option<Vec<String>> = tbl.get::<Table>("select").ok().map(|t| {
         t.sequence_values::<String>()
             .filter_map(|r| r.ok())
             .collect()
     });
 
-    let after_cursor = match tbl.get::<Option<String>>("after_cursor").ok().flatten() {
-        Some(s) => Some(
-            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {:#}", e)))?,
-        ),
-        None => None,
-    };
-    let before_cursor = match tbl.get::<Option<String>>("before_cursor").ok().flatten() {
-        Some(s) => Some(
-            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {:#}", e)))?,
-        ),
-        None => None,
+    let mut builder = FindQuery::builder().filters(filters);
+
+    if let Ok(v) = tbl.get::<String>("order_by") {
+        builder = builder.order_by(v);
+    }
+    if let Ok(v) = tbl.get::<i64>("limit") {
+        builder = builder.limit(v);
+    }
+    if let Some(v) = offset {
+        builder = builder.offset(v);
+    }
+    if let Some(v) = select {
+        builder = builder.select(v);
+    }
+    if let Some(v) = parse_cursor(tbl, "after_cursor")? {
+        builder = builder.after_cursor(v);
+    }
+    if let Some(v) = parse_cursor(tbl, "before_cursor")? {
+        builder = builder.before_cursor(v);
+    }
+    if let Ok(v) = tbl.get::<String>("search") {
+        builder = builder.search(v);
+    }
+
+    Ok((builder.build(), page))
+}
+
+/// Parse the `where` clause from a Lua query table into filter clauses.
+fn parse_where_clause(tbl: &Table) -> LuaResult<Vec<FilterClause>> {
+    let filters_tbl = match tbl.get::<Table>("where") {
+        Ok(t) => t,
+        Err(_) => return Ok(Vec::new()),
     };
 
-    let search: Option<String> = tbl.get("search").ok();
+    let mut clauses = Vec::new();
 
-    let mut find_query = FindQuery::new();
-    find_query.filters = filters;
-    find_query.order_by = order_by;
-    find_query.limit = limit;
-    find_query.offset = offset;
-    find_query.select = select;
-    find_query.after_cursor = after_cursor;
-    find_query.before_cursor = before_cursor;
-    find_query.search = search;
-    Ok((find_query, page))
+    for pair in filters_tbl.pairs::<String, Value>() {
+        let (field, value) = pair?;
+
+        if field == "or" {
+            if let Value::Table(or_array) = value {
+                clauses.push(FilterClause::Or(parse_or_groups(&or_array)?));
+            }
+            continue;
+        }
+
+        for f in parse_lua_filter_value(&field, &value)? {
+            clauses.push(FilterClause::Single(f));
+        }
+    }
+
+    Ok(clauses)
+}
+
+/// Parse an OR group array: `{ { status = "draft" }, { status = "review" } }`.
+fn parse_or_groups(or_array: &Table) -> LuaResult<Vec<Vec<Filter>>> {
+    let mut groups = Vec::new();
+
+    for element in or_array.sequence_values::<Table>() {
+        let tbl = element?;
+        let mut group = Vec::new();
+
+        for inner_pair in tbl.pairs::<String, Value>() {
+            let (f, v) = inner_pair?;
+
+            group.extend(parse_lua_filter_value(&f, &v)?);
+        }
+
+        groups.push(group);
+    }
+
+    Ok(groups)
+}
+
+/// Parse a single Lua filter value into one or more Filter structs.
+/// Simple values produce one Equals filter; operator tables produce one per operator.
+fn parse_lua_filter_value(field: &str, value: &Value) -> LuaResult<Vec<Filter>> {
+    match value {
+        Value::String(s) => Ok(vec![Filter {
+            field: field.to_string(),
+            op: FilterOp::Equals(s.to_str()?.to_string()),
+        }]),
+        Value::Integer(i) => Ok(vec![Filter {
+            field: field.to_string(),
+            op: FilterOp::Equals(i.to_string()),
+        }]),
+        Value::Number(n) => Ok(vec![Filter {
+            field: field.to_string(),
+            op: FilterOp::Equals(n.to_string()),
+        }]),
+        Value::Table(op_tbl) => {
+            let mut filters = Vec::new();
+
+            for op_pair in op_tbl.pairs::<String, Value>() {
+                let (op_name, op_val) = op_pair?;
+                let op = lua_parse_filter_op(&op_name, &op_val)?;
+
+                filters.push(Filter {
+                    field: field.to_string(),
+                    op,
+                });
+            }
+            Ok(filters)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Decode an optional cursor string from the query table.
+fn parse_cursor(tbl: &Table, key: &str) -> LuaResult<Option<CursorData>> {
+    match tbl.get::<Option<String>>(key).ok().flatten() {
+        Some(s) => {
+            Ok(Some(CursorData::decode(&s).map_err(|e| {
+                RuntimeError(format!("Invalid cursor: {e:#}"))
+            })?))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Parse a Lua filter operator name + value into a FilterOp.
@@ -195,28 +200,24 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> LuaResult<Fil
         "greater_than_or_equal" => Ok(FilterOp::GreaterThanOrEqual(to_string(value)?)),
         "less_than_or_equal" => Ok(FilterOp::LessThanOrEqual(to_string(value)?)),
         "in" => {
-            if let Value::Table(t) = value {
-                let mut vals = Vec::new();
-                for v in t.clone().sequence_values::<Value>() {
-                    vals.push(to_string(&v?)?);
-                }
-                Ok(FilterOp::In(vals))
-            } else {
-                Err(RuntimeError("'in' operator requires a table/array".into()))
-            }
+            let Value::Table(t) = value else {
+                return Err(RuntimeError("'in' operator requires a table/array".into()));
+            };
+
+            let vals = collect_filter_values(t, &to_string)?;
+
+            Ok(FilterOp::In(vals))
         }
         "not_in" => {
-            if let Value::Table(t) = value {
-                let mut vals = Vec::new();
-                for v in t.clone().sequence_values::<Value>() {
-                    vals.push(to_string(&v?)?);
-                }
-                Ok(FilterOp::NotIn(vals))
-            } else {
-                Err(RuntimeError(
+            let Value::Table(t) = value else {
+                return Err(RuntimeError(
                     "'not_in' operator requires a table/array".into(),
-                ))
-            }
+                ));
+            };
+
+            let vals = collect_filter_values(t, &to_string)?;
+
+            Ok(FilterOp::NotIn(vals))
         }
         "exists" => Ok(FilterOp::Exists),
         "not_exists" => Ok(FilterOp::NotExists),
@@ -227,9 +228,22 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> LuaResult<Fil
     }
 }
 
+/// Collect sequence values from a Lua table, converting each to a string.
+fn collect_filter_values(
+    tbl: &Table,
+    to_string: &impl Fn(&Value) -> LuaResult<String>,
+) -> LuaResult<Vec<String>> {
+    let mut vals = Vec::new();
+    for v in tbl.clone().sequence_values::<Value>() {
+        vals.push(to_string(&v?)?);
+    }
+    Ok(vals)
+}
+
 /// Convert a Lua data table to a HashMap<String, String> for create/update.
 pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, String>> {
     let mut map = HashMap::new();
+
     for pair in tbl.pairs::<String, Value>() {
         let (k, v) = pair?;
         let s = match v {
@@ -240,8 +254,10 @@ pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, Str
             Value::Nil => continue,
             _ => continue,
         };
+
         map.insert(k, s);
     }
+
     Ok(map)
 }
 
@@ -256,38 +272,48 @@ pub(crate) fn flatten_lua_groups(
         if field.field_type != FieldType::Group {
             continue;
         }
-        if let Ok(sub_table) = tbl.get::<Table>(field.name.as_str()) {
-            for sub in &field.fields {
-                if let Ok(val) = sub_table.get::<Value>(sub.name.as_str()) {
-                    let s = match val {
-                        Value::String(s) => s.to_str()?.to_string(),
-                        Value::Integer(i) => i.to_string(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Boolean(b) => b.to_string(),
-                        Value::Nil => continue,
-                        _ => continue,
-                    };
-                    data.insert(format!("{}__{}", field.name, sub.name), s);
-                }
-            }
+
+        let Ok(sub_table) = tbl.get::<Table>(field.name.as_str()) else {
+            continue;
+        };
+
+        for sub in &field.fields {
+            let Ok(val) = sub_table.get::<Value>(sub.name.as_str()) else {
+                continue;
+            };
+
+            let s = match val {
+                Value::String(s) => s.to_str()?.to_string(),
+                Value::Integer(i) => i.to_string(),
+                Value::Number(n) => n.to_string(),
+                _ => continue,
+            };
+
+            data.insert(prefixed_name(&field.name, &sub.name), s);
         }
     }
+
     Ok(())
 }
 
 /// Convert a Document to a Lua table.
 pub(crate) fn document_to_lua_table(lua: &Lua, doc: &Document) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
+
     tbl.set("id", &*doc.id)?;
+
     for (k, v) in &doc.fields {
         tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
     }
+
     if let Some(ref ts) = doc.created_at {
         tbl.set("created_at", ts.as_str())?;
     }
+
     if let Some(ref ts) = doc.updated_at {
         tbl.set("updated_at", ts.as_str())?;
     }
+
     Ok(tbl)
 }
 
@@ -299,11 +325,14 @@ pub(crate) fn find_result_to_lua(
 ) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
     let docs_tbl = lua.create_table()?;
+
     for (i, doc) in docs.iter().enumerate() {
         docs_tbl.set(i + 1, document_to_lua_table(lua, doc)?)?;
     }
+
     tbl.set("documents", docs_tbl)?;
     tbl.set("pagination", pagination)?;
+
     Ok(tbl)
 }
 
