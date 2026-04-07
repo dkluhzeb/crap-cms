@@ -56,7 +56,10 @@ fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
     };
 
     get_global_document(
-        &conn, &hooks, &params.slug, &params.def,
+        &conn,
+        &hooks,
+        &params.slug,
+        &params.def,
         params.locale_ctx.as_ref(),
         params.user_doc.as_ref(),
         params.user_ui_locale.as_deref(),

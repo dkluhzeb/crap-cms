@@ -1,7 +1,5 @@
 //! Find handler — query documents with filters, sorting, and pagination.
 
-use std::collections::HashMap;
-
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -20,7 +18,7 @@ use crate::{
 
 use crate::api::service::collection::helpers::strip_read_denied_proto_fields;
 
-use super::helpers::{PostProcessCtx, pagination_result_to_proto, post_process_docs};
+use super::helpers::pagination_result_to_proto;
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -61,9 +59,7 @@ impl ContentService {
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
-        let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
-        let fields = def_fields.clone();
         let collection = req.collection.clone();
         let pop_cache = self.cache.clone();
         let req_where = req.r#where.clone();
@@ -130,67 +126,27 @@ impl ContentService {
             query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-            runner
-                .fire_before_read(&hooks, &collection, "find", HashMap::new())
-                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-
-            let mut docs = query::find(
-                &conn,
-                &collection,
-                &def_owned,
-                &find_query,
-                locale_ctx.as_ref(),
-            )
-            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-
-            let total = query::count_with_search(
-                &conn,
-                &collection,
-                &def_owned,
-                &filters,
-                locale_ctx.as_ref(),
-                find_query.search.as_deref(),
-                find_query.include_deleted,
-            )
-            .map_err(|e| map_db_error(e, "Count error", &db_kind))?;
-
             let select_slice = select.as_deref();
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-            let pp_ctx = PostProcessCtx {
-                conn: &conn,
-                collection: &collection,
-                def: &def_owned,
+            let read_hooks = crate::service::RunnerReadHooks { runner: &runner, conn: &conn };
+            let read_opts = crate::service::ReadOptions {
+                depth,
+                hydrate: true,
                 select: select_slice,
                 locale_ctx: locale_ctx.as_ref(),
-                runner: &runner,
-                hooks: &hooks,
-                fields: &fields,
-                user_doc,
-                db_kind: &db_kind,
+                registry: Some(&registry),
+                user: user_doc,
+                ui_locale: None,
+                cache: Some(&*pop_cache),
+                ..Default::default()
             };
 
-            post_process_docs(&mut docs, &pp_ctx)?;
-
-            if depth > 0 {
-                let cache_ref = &*pop_cache;
-                let pop_ctx =
-                    query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
-                let mut pop_opts = query::PopulateOpts::new(depth);
-
-                if let Some(s) = select_slice {
-                    pop_opts = pop_opts.select(s);
-                }
-
-                if let Some(ref lc) = locale_ctx {
-                    pop_opts = pop_opts.locale_ctx(lc);
-                }
-
-                query::populate_relationships_batch_cached(
-                    &pop_ctx, &mut docs, &pop_opts, cache_ref,
-                )
+            let result = crate::service::find_documents(&conn, &read_hooks, &collection, &def_owned, &find_query, &read_opts)
                 .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-            }
+
+            let docs = result.docs;
+            let total = result.total;
 
             let mut proto_docs: Vec<_> = docs
                 .iter()

@@ -266,6 +266,13 @@ fn update_many_documents(
                 &mut hook_data,
                 &ctx,
             )?;
+
+            // Richtext node attr before_validate (parity with service layer)
+            let r_lock = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+            crate::service::write_hooks::apply_richtext_before_validate(
+                lua, &def.fields, &mut hook_data, &r_lock, collection,
+            );
+            drop(r_lock);
         }
 
         if run_hooks {

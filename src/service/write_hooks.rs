@@ -10,10 +10,9 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
-            FieldHookEvent,
-            access::check_field_write_access_with_lua,
-            run_before_validate_on_node_attrs, run_field_hooks_inner,
-            run_hooks_inner, validate_fields_inner,
+            FieldHookEvent, access::check_field_write_access_with_lua,
+            run_before_validate_on_node_attrs, run_field_hooks_inner, run_hooks_inner,
+            validate_fields_inner,
         },
     },
 };
@@ -118,6 +117,10 @@ pub struct LuaWriteHooks<'a> {
     pub ui_locale: Option<&'a str>,
     pub override_access: bool,
     pub registry: Option<&'a Registry>,
+    /// Whether hooks are enabled (false when hook depth exceeded or `hooks: false` option).
+    pub hooks_enabled: bool,
+    /// Whether validation should run (`hooks` option from Lua API).
+    pub run_validation: bool,
 }
 
 impl WriteHooks for LuaWriteHooks<'_> {
@@ -128,31 +131,33 @@ impl WriteHooks for LuaWriteHooks<'_> {
         mut ctx: HookContext,
         val_ctx: &ValidationCtx,
     ) -> Result<HookContext> {
-        // Field-level BeforeValidate
-        run_field_hooks_inner(
-            self.lua, fields, &FieldHookEvent::BeforeValidate,
-            &mut ctx.data, &ctx.collection, &ctx.operation,
-        )?;
+        if self.hooks_enabled {
+            run_field_hooks_inner(
+                self.lua, fields, &FieldHookEvent::BeforeValidate,
+                &mut ctx.data, &ctx.collection, &ctx.operation,
+            )?;
 
-        // Richtext node attr before_validate (fixes gap vs service layer)
-        if let Some(registry) = self.registry {
-            apply_richtext_before_validate(self.lua, fields, &mut ctx.data, registry, &ctx.collection);
+            if let Some(registry) = self.registry {
+                apply_richtext_before_validate(
+                    self.lua, fields, &mut ctx.data, registry, &ctx.collection,
+                );
+            }
+
+            ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeValidate, ctx)?;
         }
 
-        // Collection-level BeforeValidate
-        ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeValidate, ctx)?;
+        if self.run_validation {
+            validate_fields_inner(self.lua, fields, &ctx.data, val_ctx)?;
+        }
 
-        // Validation
-        validate_fields_inner(self.lua, fields, &ctx.data, val_ctx)?;
+        if self.hooks_enabled {
+            run_field_hooks_inner(
+                self.lua, fields, &FieldHookEvent::BeforeChange,
+                &mut ctx.data, &ctx.collection, &ctx.operation,
+            )?;
 
-        // Field-level BeforeChange
-        run_field_hooks_inner(
-            self.lua, fields, &FieldHookEvent::BeforeChange,
-            &mut ctx.data, &ctx.collection, &ctx.operation,
-        )?;
-
-        // Collection-level BeforeChange
-        ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeChange, ctx)?;
+            ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeChange, ctx)?;
+        }
 
         Ok(ctx)
     }
@@ -165,6 +170,10 @@ impl WriteHooks for LuaWriteHooks<'_> {
         mut ctx: HookContext,
         _conn: &dyn DbConnection,
     ) -> Result<HookContext> {
+        if !self.hooks_enabled {
+            return Ok(ctx);
+        }
+
         if matches!(event, HookEvent::AfterChange) {
             run_field_hooks_inner(
                 self.lua, fields, &FieldHookEvent::AfterChange,
@@ -182,7 +191,9 @@ impl WriteHooks for LuaWriteHooks<'_> {
         ctx: HookContext,
         _conn: &dyn DbConnection,
     ) -> Result<HookContext> {
-        // Lua CRUD is already in transaction context — run hooks inline
+        if !self.hooks_enabled {
+            return Ok(ctx);
+        }
         run_hooks_inner(self.lua, hooks, event, ctx)
     }
 
@@ -200,9 +211,10 @@ impl WriteHooks for LuaWriteHooks<'_> {
 }
 
 /// Run richtext node attr before_validate hooks on all richtext fields in the data map.
+/// Used by both `LuaWriteHooks` and `update_many`.
 /// Walks the field tree to find richtext fields with custom nodes, then runs
 /// `run_before_validate_on_node_attrs` on each field's content.
-fn apply_richtext_before_validate(
+pub(crate) fn apply_richtext_before_validate(
     lua: &mlua::Lua,
     fields: &[FieldDefinition],
     data: &mut std::collections::HashMap<String, Value>,

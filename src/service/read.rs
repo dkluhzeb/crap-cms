@@ -6,12 +6,8 @@
 use anyhow::Result;
 
 use crate::{
-    core::{
-        CollectionDefinition, Document, Registry,
-        collection::GlobalDefinition,
-        upload,
-    },
-    db::{DbConnection, FilterClause, FindQuery, LocaleContext, ops, query},
+    core::{CollectionDefinition, Document, Registry, cache::CacheBackend, collection::GlobalDefinition, upload},
+    db::{AccessResult, DbConnection, FilterClause, FindQuery, LocaleContext, ops, query},
     hooks::lifecycle::AfterReadCtx,
 };
 
@@ -38,6 +34,8 @@ pub struct ReadOptions<'a> {
     pub use_draft: bool,
     /// Access constraint filters for find_by_id (pre-computed by caller).
     pub access_constraints: Option<Vec<FilterClause>>,
+    /// Optional cache backend for relationship population.
+    pub cache: Option<&'a dyn CacheBackend>,
 }
 
 impl Default for ReadOptions<'_> {
@@ -52,6 +50,7 @@ impl Default for ReadOptions<'_> {
             ui_locale: None,
             use_draft: false,
             access_constraints: None,
+            cache: None,
         }
     }
 }
@@ -77,12 +76,22 @@ pub fn find_documents(
     find_query: &FindQuery,
     opts: &ReadOptions,
 ) -> Result<FindResult> {
+    // Collection-level access check — short-circuit if denied
+    let access = hooks.check_access(def.access.read.as_deref(), opts.user, None, None)?;
+    anyhow::ensure!(!matches!(access, AccessResult::Denied), "Read access denied");
+
+    // Merge access constraints into filters
+    let mut fq = find_query.clone();
+    if let AccessResult::Constrained(extra) = access {
+        fq.filters.extend(extra);
+    }
+
     hooks.before_read(&def.hooks, slug, "find")?;
 
-    let mut docs = query::find(conn, slug, def, find_query, opts.locale_ctx)?;
+    let mut docs = query::find(conn, slug, def, &fq, opts.locale_ctx)?;
     let total = query::count_with_search(
-        conn, slug, def, &find_query.filters, opts.locale_ctx,
-        find_query.search.as_deref(), find_query.include_deleted,
+        conn, slug, def, &fq.filters, opts.locale_ctx,
+        fq.search.as_deref(), fq.include_deleted,
     )?;
 
     post_process_docs(conn, hooks, slug, def, &mut docs, opts, "find");
@@ -104,13 +113,24 @@ pub fn find_document_by_id(
     id: &str,
     opts: &ReadOptions,
 ) -> Result<Option<Document>> {
+    // Collection-level access check — short-circuit if denied
+    let access = hooks.check_access(def.access.read.as_deref(), opts.user, Some(id), None)?;
+    anyhow::ensure!(!matches!(access, AccessResult::Denied), "Read access denied");
+
+    // Merge caller-provided + access-derived constraints
+    let constraints = match (opts.access_constraints.clone(), access) {
+        (Some(mut existing), AccessResult::Constrained(extra)) => {
+            existing.extend(extra);
+            Some(existing)
+        }
+        (Some(existing), _) => Some(existing),
+        (None, AccessResult::Constrained(extra)) => Some(extra),
+        _ => None,
+    };
+
     hooks.before_read(&def.hooks, slug, "find_by_id")?;
 
-    // ops::find_by_id_full handles draft overlay, access constraints, and hydration
-    let mut doc = match ops::find_by_id_full(
-        conn, slug, def, id, opts.locale_ctx,
-        opts.access_constraints.clone(), opts.use_draft,
-    )? {
+    let mut doc = match ops::find_by_id_full(conn, slug, def, id, opts.locale_ctx, constraints, opts.use_draft)? {
         Some(d) => d,
         None => return Ok(None),
     };
@@ -133,6 +153,9 @@ pub fn get_global_document(
     user: Option<&Document>,
     ui_locale: Option<&str>,
 ) -> Result<Document> {
+    let access = hooks.check_access(def.access.read.as_deref(), user, None, None)?;
+    anyhow::ensure!(!matches!(access, AccessResult::Denied), "Read access denied");
+
     hooks.before_read(&def.hooks, slug, "get")?;
 
     let mut doc = query::get_global(conn, slug, def, locale_ctx)?;
@@ -166,7 +189,9 @@ fn post_process_single(
     operation: &str,
 ) {
     // Populate relationships
-    if opts.depth > 0 && let Some(registry) = opts.registry {
+    if opts.depth > 0
+        && let Some(registry) = opts.registry
+    {
         let mut visited = std::collections::HashSet::new();
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
         let mut pop_opts = query::PopulateOpts::new(opts.depth);
@@ -176,7 +201,12 @@ fn post_process_single(
         if let Some(lc) = opts.locale_ctx {
             pop_opts = pop_opts.locale_ctx(lc);
         }
-        if let Err(e) = query::populate_relationships(&pop_ctx, doc, &mut visited, &pop_opts) {
+        let pop_result = if let Some(cache) = opts.cache {
+            query::populate_relationships_cached(&pop_ctx, doc, &mut visited, &pop_opts, cache)
+        } else {
+            query::populate_relationships(&pop_ctx, doc, &mut visited, &pop_opts)
+        };
+        if let Err(e) = pop_result {
             tracing::warn!("populate error for {slug}/{}: {e:#}", doc.id);
         }
     }
@@ -223,13 +253,17 @@ fn post_process_docs(
 ) {
     if opts.hydrate {
         for doc in docs.iter_mut() {
-            if let Err(e) = query::hydrate_document(conn, slug, &def.fields, doc, opts.select, opts.locale_ctx) {
+            if let Err(e) =
+                query::hydrate_document(conn, slug, &def.fields, doc, opts.select, opts.locale_ctx)
+            {
                 tracing::warn!("hydrate error for {slug}/{}: {e:#}", doc.id);
             }
         }
     }
 
-    if opts.depth > 0 && let Some(registry) = opts.registry {
+    if opts.depth > 0
+        && let Some(registry) = opts.registry
+    {
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
         let mut pop_opts = query::PopulateOpts::new(opts.depth);
         if let Some(s) = opts.select {
@@ -238,7 +272,12 @@ fn post_process_docs(
         if let Some(lc) = opts.locale_ctx {
             pop_opts = pop_opts.locale_ctx(lc);
         }
-        if let Err(e) = query::populate_relationships_batch(&pop_ctx, docs, &pop_opts) {
+        let pop_result = if let Some(cache) = opts.cache {
+            query::populate_relationships_batch_cached(&pop_ctx, docs, &pop_opts, cache)
+        } else {
+            query::populate_relationships_batch(&pop_ctx, docs, &pop_opts)
+        };
+        if let Err(e) = pop_result {
             tracing::warn!("populate error for {slug}: {e:#}");
         }
     }

@@ -12,10 +12,9 @@ use crate::{
     db::{DbPool, FindQuery, query},
     hooks::HookRunner,
     service::{
-        ReadOptions, RunnerReadHooks,
-        WriteInput, create_document, delete_document,
-        find_document_by_id, find_documents, get_global_document,
-        update_document, update_global_document,
+        ReadOptions, RunnerReadHooks, WriteInput, create_document, delete_document,
+        find_document_by_id, find_documents, get_global_document, update_document,
+        update_global_document,
     },
 };
 
@@ -204,7 +203,10 @@ pub(super) fn exec_find(
     runner: &HookRunner,
     config: &CrapConfig,
 ) -> Result<String> {
-    let def = registry.collections.get(slug).context("Collection not found")?;
+    let def = registry
+        .collections
+        .get(slug)
+        .context("Collection not found")?;
     let conn = pool.get().context("DB connection")?;
 
     let limit = args.get("limit").and_then(|v| v.as_i64());
@@ -221,8 +223,14 @@ pub(super) fn exec_find(
         .validate(limit, page, after_cursor, before_cursor)
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    let order_by = args.get("order_by").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let search = args.get("search").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let order_by = args
+        .get("order_by")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let search = args
+        .get("search")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let depth = depth.min(config.depth.max_depth);
 
@@ -230,14 +238,27 @@ pub(super) fn exec_find(
         .filters(parse_where_filters(args))
         .limit(pagination.limit);
 
-    if let Some(ref ob) = order_by { fq = fq.order_by(ob.as_str()); }
-    if !pagination.has_cursor() { fq = fq.offset(pagination.offset); }
-    if let Some(ref c) = pagination.after_cursor { fq = fq.after_cursor(c.clone()); }
-    if let Some(ref c) = pagination.before_cursor { fq = fq.before_cursor(c.clone()); }
-    if let Some(ref s) = search { fq = fq.search(s.as_str()); }
+    if let Some(ref ob) = order_by {
+        fq = fq.order_by(ob.as_str());
+    }
+    if !pagination.has_cursor() {
+        fq = fq.offset(pagination.offset);
+    }
+    if let Some(ref c) = pagination.after_cursor {
+        fq = fq.after_cursor(c.clone());
+    }
+    if let Some(ref c) = pagination.before_cursor {
+        fq = fq.before_cursor(c.clone());
+    }
+    if let Some(ref s) = search {
+        fq = fq.search(s.as_str());
+    }
 
     let fq = fq.build();
-    let hooks = RunnerReadHooks { runner, conn: &conn };
+    let hooks = RunnerReadHooks {
+        runner,
+        conn: &conn,
+    };
     let opts = ReadOptions {
         depth,
         registry: Some(registry.as_ref()),
@@ -246,11 +267,12 @@ pub(super) fn exec_find(
 
     let result = find_documents(&conn, &hooks, slug, def, &fq, &opts)?;
 
-    let cursor_has_more = if pagination.has_cursor() && (result.docs.len() as i64) < pagination.limit {
-        Some(false)
-    } else {
-        None
-    };
+    let cursor_has_more =
+        if pagination.has_cursor() && (result.docs.len() as i64) < pagination.limit {
+            Some(false)
+        } else {
+            None
+        };
 
     let pr = if config.pagination.is_cursor() {
         query::PaginationResult::builder(&result.docs, result.total, pagination.limit).cursor(
@@ -282,14 +304,26 @@ pub(super) fn exec_find_by_id(
     runner: &HookRunner,
     config: &CrapConfig,
 ) -> Result<String> {
-    let id = args.get("id").and_then(|v| v.as_str()).context("Missing 'id' argument")?;
-    let def = registry.collections.get(slug).context("Collection not found")?;
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .context("Missing 'id' argument")?;
+    let def = registry
+        .collections
+        .get(slug)
+        .context("Collection not found")?;
     let conn = pool.get().context("DB connection")?;
 
-    let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(config.depth.default_depth as i64) as i32;
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(config.depth.default_depth as i64) as i32;
     let depth = depth.min(config.depth.max_depth);
 
-    let hooks = RunnerReadHooks { runner, conn: &conn };
+    let hooks = RunnerReadHooks {
+        runner,
+        conn: &conn,
+    };
     let opts = ReadOptions {
         depth,
         registry: Some(registry.as_ref()),
@@ -431,7 +465,10 @@ pub(super) fn exec_read_global(
 ) -> Result<String> {
     let def = registry.globals.get(slug).context("Global not found")?;
     let conn = pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks { runner, conn: &conn };
+    let hooks = RunnerReadHooks {
+        runner,
+        conn: &conn,
+    };
 
     match get_global_document(&conn, &hooks, slug, def, None, None, None) {
         Ok(d) => Ok(serde_json::to_string_pretty(&doc_to_json(&d))?),

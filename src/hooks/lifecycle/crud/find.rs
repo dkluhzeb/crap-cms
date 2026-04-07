@@ -166,11 +166,16 @@ fn find_inner(
     let draft = get_opt_bool(&query_table, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ctx = FindCtx { override_access, draft };
+    let ctx = FindCtx {
+        override_access,
+        draft,
+    };
 
     let (find_query, lua_page) = prepare_find_query(lua, params, &def, query_table, &ctx)?;
 
-    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let hooks = LuaReadHooks {
         lua,
         user: user.as_ref(),
@@ -190,7 +195,14 @@ fn find_inner(
     let result = find_documents(conn, &hooks, &collection, &def, &find_query, &opts)
         .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
 
-    let pr = build_pagination_result(params, &find_query, &result.docs, result.total, lua_page, def.timestamps);
+    let pr = build_pagination_result(
+        params,
+        &find_query,
+        &result.docs,
+        result.total,
+        lua_page,
+        def.timestamps,
+    );
     let pagination = pagination_result_to_lua_table(lua, &pr)?;
     find_result_to_lua(lua, &result.docs, pagination)
 }

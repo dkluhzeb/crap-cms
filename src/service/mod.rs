@@ -12,10 +12,11 @@ mod persist;
 mod persist_options_builder;
 pub mod read;
 pub mod read_hooks;
-pub mod write_hooks;
 mod types;
 mod version_snapshot_ctx_builder;
 pub(crate) mod versions;
+pub mod write;
+pub mod write_hooks;
 mod write_input_builder;
 
 pub(crate) use after_change_input_builder::AfterChangeInputBuilder;
@@ -29,12 +30,13 @@ pub use collections::{
     restore_document, unpublish_document, update_document, update_document_with_conn,
 };
 pub use email::send_verification_email;
-pub use globals::{unpublish_global_document, update_global_document};
+pub use globals::{unpublish_global_document, update_global_core, update_global_document};
+pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{FindResult, ReadOptions, find_document_by_id, find_documents, get_global_document};
 pub use read_hooks::{LuaReadHooks, ReadHooks, RunnerReadHooks};
-pub use write_hooks::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};
-pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use versions::unpublish_with_snapshot;
+pub use write::{DeleteResult, create_document_core, delete_document_core, update_document_core};
+pub use write_hooks::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};
 
 use std::collections::HashMap;
 
@@ -45,7 +47,7 @@ use serde_json::Value;
 use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
     db::DbConnection,
-    hooks::{HookContext, HookEvent, HookRunner},
+    hooks::{HookContext, HookEvent},
 };
 
 /// Build the hook data map from form data + structured join data.
@@ -67,7 +69,7 @@ pub(crate) fn build_hook_data(
 /// Run after-change hooks and return the request-scoped context.
 /// This pattern is repeated across create, update, unpublish, and global update.
 pub(crate) fn run_after_change_hooks(
-    runner: &HookRunner,
+    write_hooks: &dyn write_hooks::WriteHooks,
     hooks: &Hooks,
     fields: &[FieldDefinition],
     doc: &Document,
@@ -85,7 +87,7 @@ pub(crate) fn run_after_change_hooks(
         .ui_locale(input.ui_locale)
         .build();
     let after_result =
-        runner.run_after_write(hooks, fields, HookEvent::AfterChange, after_ctx, tx)?;
+        write_hooks.run_after_write(hooks, fields, HookEvent::AfterChange, after_ctx, tx)?;
     Ok(after_result.context)
 }
 

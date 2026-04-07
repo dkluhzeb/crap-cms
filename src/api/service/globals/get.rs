@@ -1,7 +1,5 @@
 //! GetGlobal handler — get the single document for a global definition.
 
-use std::collections::HashMap;
-
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
@@ -14,8 +12,7 @@ use crate::{
             convert::document_to_proto,
         },
     },
-    db::{AccessResult, LocaleContext, query},
-    hooks::lifecycle::AfterReadCtx,
+    db::{AccessResult, LocaleContext},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -37,10 +34,9 @@ impl ContentService {
         let runner = self.hook_runner.clone();
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
-        let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
-        let fields = def_fields.clone();
         let slug = req.slug.clone();
+        let def_owned = def;
 
         let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| {
@@ -52,7 +48,7 @@ impl ContentService {
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
             let access_result = ContentService::check_access_blocking(
-                def.access.read.as_deref(),
+                def_owned.access.read.as_deref(),
                 &auth_user,
                 None,
                 None,
@@ -64,42 +60,29 @@ impl ContentService {
                 return Err(Status::permission_denied("Read access denied"));
             }
 
-            runner
-                .fire_before_read(&hooks, &slug, "get_global", HashMap::new())
-                .map_err(|e| {
-                    error!("GetGlobal hook error: {}", e);
-                    Status::internal("Internal error")
-                })?;
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let read_hooks = crate::service::RunnerReadHooks { runner: &runner, conn: &conn };
 
-            let doc = query::get_global(&conn, &slug, &def, locale_ctx.as_ref()).map_err(|e| {
-                error!("GetGlobal query error: {}", e);
+            let doc = crate::service::get_global_document(
+                &conn, &read_hooks, &slug, &def_owned,
+                locale_ctx.as_ref(), user_doc, None,
+            )
+            .map_err(|e| {
+                error!("GetGlobal error: {}", e);
                 Status::internal("Internal error")
             })?;
 
-            let ar_ctx = AfterReadCtx {
-                hooks: &hooks,
-                fields: &fields,
-                collection: &slug,
-                operation: "get_global",
-                user: auth_user.as_ref().map(|au| &au.user_doc),
-                ui_locale: None,
-            };
-
-            let doc = runner.apply_after_read(&ar_ctx, doc);
             let mut proto_doc = document_to_proto(&doc, &slug);
 
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            // Proto-level field stripping (defense in depth — service already stripped at JSON level)
             let tx = conn.transaction().map_err(|e| {
                 error!("Field access check tx error: {}", e);
                 Status::internal("Internal error")
             })?;
-
             let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
-
             if let Err(e) = tx.commit() {
                 warn!("tx commit failed: {e}");
             }
-
             strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok(proto_doc)

@@ -1,9 +1,6 @@
 //! FindByID handler — fetch a single document by ID.
 
-use std::{
-    collections::{HashMap, HashSet},
-    slice,
-};
+use std::slice;
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -14,9 +11,7 @@ use crate::{
         content,
         service::{ContentService, collection::helpers::map_db_error, convert::document_to_proto},
     },
-    core::upload,
-    db::{AccessResult, LocaleContext, ops, query},
-    hooks::lifecycle::AfterReadCtx,
+    db::{AccessResult, LocaleContext},
 };
 
 use crate::api::service::collection::helpers::strip_read_denied_proto_fields;
@@ -56,8 +51,6 @@ impl ContentService {
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
-        let hooks = def.hooks.clone();
-        let fields = def.fields.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
         let def_fields = def.fields.clone();
@@ -89,77 +82,29 @@ impl ContentService {
                 None
             };
 
-            runner
-                .fire_before_read(&hooks, &collection, "find_by_id", HashMap::new())
-                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-
-            let mut doc = ops::find_by_id_full(
-                &conn,
-                &collection,
-                &def_owned,
-                &id,
-                locale_ctx.as_ref(),
-                access_constraints,
-                use_draft_version,
-            )
-            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-
-            if let Some(ref mut d) = doc
-                && let Some(ref upload_config) = def_owned.upload
-                && upload_config.enabled
-            {
-                upload::assemble_sizes_object(d, upload_config);
-            }
-
-            let ar_ctx = AfterReadCtx {
-                hooks: &hooks,
-                fields: &fields,
-                collection: &collection,
-                operation: "find_by_id",
-                user: auth_user.as_ref().map(|au| &au.user_doc),
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let read_hooks = crate::service::RunnerReadHooks { runner: &runner, conn: &conn };
+            let read_opts = crate::service::ReadOptions {
+                depth,
+                hydrate: true,
+                select: select.as_deref(),
+                locale_ctx: locale_ctx.as_ref(),
+                registry: Some(&registry),
+                user: user_doc,
                 ui_locale: None,
+                use_draft: use_draft_version,
+                access_constraints,
+                cache: Some(&*pop_cache),
             };
 
-            let mut doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
-            let select_slice = select.as_deref();
-
-            if depth > 0
-                && let Some(ref mut d) = doc
-            {
-                let mut visited = HashSet::new();
-                let cache_ref = &*pop_cache;
-                let pop_ctx =
-                    query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
-                let mut pop_opts = query::PopulateOpts::new(depth);
-
-                if let Some(s) = select_slice {
-                    pop_opts = pop_opts.select(s);
-                }
-
-                if let Some(ref lc) = locale_ctx {
-                    pop_opts = pop_opts.locale_ctx(lc);
-                }
-
-                query::populate_relationships_cached(
-                    &pop_ctx,
-                    d,
-                    &mut visited,
-                    &pop_opts,
-                    cache_ref,
-                )
-                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-            }
-
-            if let Some(ref sel) = select
-                && let Some(ref mut d) = doc
-            {
-                query::apply_select_to_document(d, sel);
-            }
+            let doc = crate::service::find_document_by_id(
+                &conn, &read_hooks, &collection, &def_owned, &id, &read_opts,
+            )
+            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
 
             match doc {
                 Some(d) => {
                     let mut proto_doc = document_to_proto(&d, &collection);
-                    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
                     strip_read_denied_proto_fields(
                         slice::from_mut(&mut proto_doc),

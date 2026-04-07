@@ -1,101 +1,20 @@
 //! Registration of `crap.globals.update` Lua function.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, SharedRegistry, collection::GlobalDefinition},
-    db::{
-        LocaleContext,
-        query::{self, helpers::global_table},
+    core::SharedRegistry,
+    db::LocaleContext,
+    hooks::lifecycle::{
+        access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
+        converters::*,
     },
-    hooks::{
-        HookContext, HookEvent, ValidationCtx,
-        lifecycle::{
-            FieldHookEvent,
-            access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
-            converters::*,
-            execution::{run_field_hooks_inner, run_hooks_inner},
-            validation::validate_fields_inner,
-        },
-    },
+    service::{LuaWriteHooks, WriteInput, update_global_core},
 };
 
 use super::{get_tx_conn, helpers::*};
-
-/// Context for a global update operation.
-struct GlobalUpdateCtx<'a> {
-    slug: &'a str,
-    locale: Option<&'a str>,
-    user: Option<&'a Document>,
-    ui_locale: Option<&'a str>,
-    override_access: bool,
-}
-
-/// Run a field + collection hook phase (before_validate or before_change).
-fn run_hook_phase(
-    lua: &Lua,
-    def: &GlobalDefinition,
-    field_event: &FieldHookEvent,
-    collection_event: HookEvent,
-    hook: &mut HashMap<String, Value>,
-    ctx: &GlobalUpdateCtx<'_>,
-) -> mlua::Result<()> {
-    let label = format!("{field_event:?}");
-
-    run_field_hooks_inner(lua, &def.fields, field_event, hook, ctx.slug, "update")
-        .map_err(|e| RuntimeError(format!("{label} field hook error: {e:#}")))?;
-
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
-        .data(hook.clone())
-        .locale(ctx.locale)
-        .user(ctx.user)
-        .ui_locale(ctx.ui_locale)
-        .build();
-    let result = run_hooks_inner(lua, &def.hooks, collection_event, hook_ctx)
-        .map_err(|e| RuntimeError(format!("{label} hook error: {e:#}")))?;
-
-    *hook = result.data;
-
-    Ok(())
-}
-
-/// Run after_change field + collection hooks.
-fn run_after_change_hooks(
-    lua: &Lua,
-    def: &GlobalDefinition,
-    doc: &Document,
-    ctx: &GlobalUpdateCtx<'_>,
-) -> mlua::Result<()> {
-    let mut after_data = doc.fields.clone();
-    after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
-
-    run_field_hooks_inner(
-        lua,
-        &def.fields,
-        &FieldHookEvent::AfterChange,
-        &mut after_data,
-        ctx.slug,
-        "update",
-    )
-    .map_err(|e| RuntimeError(format!("after_change field hook error: {e:#}")))?;
-
-    let hook_ctx = HookContext::builder(ctx.slug, "update")
-        .data(after_data)
-        .locale(ctx.locale)
-        .user(ctx.user)
-        .ui_locale(ctx.ui_locale)
-        .build();
-
-    run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, hook_ctx)
-        .map_err(|e| RuntimeError(format!("after_change hook error: {e:#}")))?;
-
-    Ok(())
-}
 
 /// Core logic for `crap.globals.update`.
 fn globals_update_inner(
@@ -119,113 +38,45 @@ fn globals_update_inner(
     let def = resolve_global(reg, &slug)?;
 
     enforce_access(
-        lua,
-        override_access,
-        def.access.update.as_deref(),
-        None,
-        &mut vec![],
-        "Update access denied",
+        lua, override_access, def.access.update.as_deref(),
+        None, &mut vec![], "Update access denied",
     )?;
 
-    let ctx = GlobalUpdateCtx {
-        slug: &slug,
-        locale: locale_str.as_deref(),
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-    };
-
     let mut data = lua_table_to_hashmap(&data_table)?;
-    let mut hook_data = lua_table_to_json_map(lua, &data_table)?;
+    let mut join_data = lua_table_to_json_map(lua, &data_table)?;
 
-    // Merge flat data into hook_data (JSON values for hooks to see)
-    for (k, v) in &data {
-        hook_data
-            .entry(k.clone())
-            .or_insert_with(|| Value::String(v.clone()));
-    }
-
-    if !ctx.override_access {
-        let denied = check_field_write_access_with_lua(lua, &def.fields, ctx.user, "update");
+    if !override_access {
+        let denied = check_field_write_access_with_lua(lua, &def.fields, user.as_ref(), "update");
         for name in &denied {
             data.remove(name);
-            hook_data.remove(name);
+            join_data.remove(name);
         }
     }
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &slug, "update");
 
-    if hooks_enabled {
-        run_hook_phase(
-            lua,
-            &def,
-            &FieldHookEvent::BeforeValidate,
-            HookEvent::BeforeValidate,
-            &mut hook_data,
-            &ctx,
-        )?;
-    }
+    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let write_hooks = LuaWriteHooks {
+        lua,
+        user: user.as_ref(),
+        ui_locale: ui_locale.as_deref(),
+        override_access,
+        registry: Some(&r),
+        hooks_enabled,
+        run_validation: run_hooks,
+    };
 
-    if run_hooks {
-        let gtable = global_table(&slug);
-        let val_ctx = ValidationCtx::builder(conn, &gtable)
-            .locale_ctx(locale_ctx.as_ref())
-            .build();
-        validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
-            .map_err(|e| RuntimeError(format!("validation error: {e:#}")))?;
-    }
+    let write_input = WriteInput::builder(data, &join_data)
+        .locale_ctx(locale_ctx.as_ref())
+        .locale(locale_str)
+        .ui_locale(ui_locale.clone())
+        .build();
 
-    if hooks_enabled {
-        run_hook_phase(
-            lua,
-            &def,
-            &FieldHookEvent::BeforeChange,
-            HookEvent::BeforeChange,
-            &mut hook_data,
-            &ctx,
-        )?;
-    }
-
-    // Convert hook-modified data to string map for DB write
-    let final_data = HookContext::builder(&slug, "update")
-        .data(hook_data.clone())
-        .build()
-        .to_string_map(&def.fields);
-
-    let gtable = global_table(&slug);
-
-    let old_refs =
-        query::ref_count::snapshot_outgoing_refs(conn, &gtable, "default", &def.fields, lc)
-            .map_err(|e| RuntimeError(format!("ref count snapshot error: {e:#}")))?;
-
-    query::update_global(conn, &slug, &def, &final_data, locale_ctx.as_ref())
+    let (mut doc, _ctx) = update_global_core(conn, &write_hooks, &slug, &def, write_input, user.as_ref())
         .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
 
-    query::save_join_table_data(
-        conn,
-        &gtable,
-        &def.fields,
-        "default",
-        &hook_data,
-        locale_ctx.as_ref(),
-    )
-    .map_err(|e| RuntimeError(format!("join data error: {e:#}")))?;
-
-    query::ref_count::after_update(conn, &gtable, "default", &def.fields, lc, old_refs)
-        .map_err(|e| RuntimeError(format!("ref count update error: {e:#}")))?;
-
-    // Re-fetch to hydrate join data in the returned document
-    let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
-        .map_err(|e| RuntimeError(format!("get_global error: {e:#}")))?;
-
-    if hooks_enabled {
-        run_after_change_hooks(lua, &def, &doc, &ctx)?;
-    }
-
-    let mut doc = doc;
-
-    if !ctx.override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, ctx.user);
+    if !override_access {
+        let denied = check_field_read_access_with_lua(lua, &def.fields, user.as_ref());
         for name in &denied {
             doc.fields.remove(name);
         }

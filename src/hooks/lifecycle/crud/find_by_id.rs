@@ -42,17 +42,31 @@ fn find_by_id_inner(
     let select: Option<Vec<String>> = opts
         .as_ref()
         .and_then(|o| o.get::<Table>("select").ok())
-        .map(|t| t.sequence_values::<String>().filter_map(|r| r.ok()).collect());
+        .map(|t| {
+            t.sequence_values::<String>()
+                .filter_map(|r| r.ok())
+                .collect()
+        });
 
     // Resolve access constraints
     let mut access_filters: Vec<FilterClause> = Vec::new();
     enforce_access(
-        lua, override_access, def.access.read.as_deref(),
-        Some(&id), &mut access_filters, "Read access denied",
+        lua,
+        override_access,
+        def.access.read.as_deref(),
+        Some(&id),
+        &mut access_filters,
+        "Read access denied",
     )?;
-    let access_constraints = if access_filters.is_empty() { None } else { Some(access_filters) };
+    let access_constraints = if access_filters.is_empty() {
+        None
+    } else {
+        Some(access_filters)
+    };
 
-    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let hooks = LuaReadHooks {
         lua,
         user: user.as_ref(),

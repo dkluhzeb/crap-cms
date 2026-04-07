@@ -3,14 +3,18 @@
 
 use anyhow::Result;
 
+use std::collections::HashMap;
+
+use serde_json::Value;
+
 use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
-    db::DbConnection,
+    db::{AccessResult, DbConnection},
     hooks::{
         HookRunner,
         lifecycle::{
             AfterReadCtx, HookContext, HookEvent,
-            access::check_field_read_access_with_lua,
+            access::{check_access_with_lua, check_field_read_access_with_lua},
             apply_after_read_inner, run_hooks_inner,
         },
     },
@@ -36,9 +40,19 @@ pub trait ReadHooks {
             .collect()
     }
 
+    /// Check collection-level access. Returns the access result (Allowed/Denied/Constrained).
+    fn check_access(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        id: Option<&str>,
+        data: Option<&HashMap<String, Value>>,
+    ) -> Result<AccessResult>;
+
     /// Return field names denied by read access control.
     /// Returns empty vec if access control is overridden.
-    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>) -> Vec<String>;
+    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>)
+    -> Vec<String>;
 }
 
 /// Pool-based hook execution for admin, gRPC, and MCP surfaces.
@@ -62,7 +76,21 @@ impl ReadHooks for RunnerReadHooks<'_> {
         self.runner.apply_after_read_many(ctx, docs)
     }
 
-    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>) -> Vec<String> {
+    fn check_access(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        id: Option<&str>,
+        data: Option<&HashMap<String, Value>>,
+    ) -> Result<AccessResult> {
+        self.runner.check_access(access_ref, user, id, data, self.conn)
+    }
+
+    fn field_read_denied(
+        &self,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+    ) -> Vec<String> {
         self.runner.check_field_read_access(fields, user, self.conn)
     }
 }
@@ -77,6 +105,19 @@ pub struct LuaReadHooks<'a> {
 }
 
 impl ReadHooks for LuaReadHooks<'_> {
+    fn check_access(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        id: Option<&str>,
+        data: Option<&HashMap<String, Value>>,
+    ) -> Result<AccessResult> {
+        if self.override_access {
+            return Ok(AccessResult::Allowed);
+        }
+        check_access_with_lua(self.lua, access_ref, user, id, data)
+    }
+
     fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()> {
         let ctx = HookContext::builder(slug, operation)
             .user(self.user)
@@ -90,7 +131,11 @@ impl ReadHooks for LuaReadHooks<'_> {
         apply_after_read_inner(self.lua, ctx, doc)
     }
 
-    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>) -> Vec<String> {
+    fn field_read_denied(
+        &self,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+    ) -> Vec<String> {
         if self.override_access {
             return Vec::new();
         }
