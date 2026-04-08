@@ -4,14 +4,17 @@ use anyhow::Context as _;
 
 use crate::{
     core::{Document, collection::GlobalDefinition},
-    db::{DbPool, query::helpers::global_table},
+    db::{AccessResult, DbPool, query, query::helpers::global_table},
     hooks::{HookContext, HookEvent, HookRunner},
-    service::{AfterChangeInput, RunnerWriteHooks, ServiceError, run_after_change_hooks},
+    service::{
+        AfterChangeInput, RunnerWriteHooks, ServiceError, WriteHooks, run_after_change_hooks,
+    },
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Unpublish a global document within a single transaction: before-hooks -> unpublish -> after-hooks.
+/// Unpublish a global document: access check → before-hooks → unpublish →
+/// after-hooks → hydrate → strip read-denied fields → commit.
 #[cfg(not(tarpaulin_include))]
 pub fn unpublish_global_document(
     pool: &DbPool,
@@ -23,8 +26,20 @@ pub fn unpublish_global_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let global_table = global_table(slug);
-    let doc = crate::db::query::get_global(&tx, slug, def, None)?;
+    let wh = RunnerWriteHooks {
+        runner,
+        hooks_enabled: true,
+        conn: Some(&tx),
+    };
+
+    // Access check — unpublish requires update access
+    let access = wh.check_access(def.access.update.as_deref(), user, None, None)?;
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Update access denied".into()));
+    }
+
+    let gtable = global_table(slug);
+    let doc = query::get_global(&tx, slug, def, None)?;
 
     let hook_ctx = HookContext::builder(slug, "update")
         .data(doc.fields.clone())
@@ -37,14 +52,13 @@ pub fn unpublish_global_document(
 
     crate::service::unpublish_with_snapshot(
         &tx,
-        &global_table,
+        &gtable,
         "default",
         &def.fields,
         def.versions.as_ref(),
         &doc,
     )?;
 
-    let wh = RunnerWriteHooks::new(runner);
     run_after_change_hooks(
         &wh,
         &def.hooks,
@@ -56,6 +70,15 @@ pub fn unpublish_global_document(
             .build(),
         &tx,
     )?;
+
+    // Hydrate join fields + strip read-denied fields
+    let mut doc = doc;
+    query::hydrate_document(&tx, &gtable, &def.fields, &mut doc, None, None)?;
+
+    let read_denied = wh.field_read_denied(&def.fields, user);
+    for name in &read_denied {
+        doc.fields.remove(name);
+    }
 
     tx.commit().context("Commit transaction")?;
     Ok(doc)

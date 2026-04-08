@@ -186,10 +186,10 @@ fn soft_deleted_doc_excluded_from_count() {
     assert_eq!(count_after, 1, "count should decrease after soft-delete");
 }
 
-// ── Test e: restore makes doc visible again ──────────────────────────────
+// ── Test e: undelete makes doc visible again ──────────────────────────────
 
 #[test]
-fn restore_document_makes_doc_visible_again() {
+fn undelete_document_makes_doc_visible_again() {
     let def = make_soft_delete_def();
     let (_tmp, pool, _reg) = create_pool_and_migrate(vec![def.clone()]);
 
@@ -444,7 +444,7 @@ fn restore_re_adds_to_fts() {
     let results = query::fts::fts_search(&conn, "articles", "Phoenix", 10).unwrap();
     assert!(results.is_empty(), "should not be in FTS after soft-delete");
 
-    // Restore + re-index FTS (mirrors what restore_document does)
+    // Restore + re-index FTS (mirrors what undelete_document does)
     query::restore(&conn, "articles", &id).unwrap();
     let doc = query::find_by_id_unfiltered(&conn, "articles", &def, &id, None)
         .unwrap()

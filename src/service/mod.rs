@@ -12,9 +12,12 @@ mod error;
 mod globals;
 pub mod helpers;
 pub mod hooks;
+pub mod jobs;
 mod persist;
 pub mod read;
 mod types;
+pub mod upload;
+pub mod user_settings;
 pub(crate) mod versions;
 pub mod write;
 
@@ -26,7 +29,7 @@ pub use types::{
 
 pub use collection::{
     create_document, create_document_with_conn, delete_document, delete_document_with_conn,
-    restore_document, restore_document_core, unpublish_document, update_document,
+    undelete_document, undelete_document_core, unpublish_document, update_document,
     update_document_with_conn,
 };
 pub use email::send_verification_email;
@@ -43,10 +46,12 @@ pub use read::{
     get_global_document, search_documents,
 };
 pub use versions::unpublish_with_snapshot;
-pub use versions::{list_versions, restore_collection_version, restore_global_version};
+pub use versions::{
+    find_version_by_id, list_versions, restore_collection_version, restore_global_version,
+};
 pub use write::{
     DeleteResult, ValidateContext, create_document_core, delete_document_core,
-    update_document_core, validate_document,
+    update_document_core, update_many_single_core, validate_document,
 };
 
 #[cfg(test)]

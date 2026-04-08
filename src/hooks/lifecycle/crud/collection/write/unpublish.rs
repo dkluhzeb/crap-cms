@@ -13,7 +13,7 @@ use crate::{
     service::persist_unpublish,
 };
 
-use super::helpers::check_hook_depth;
+use crate::hooks::lifecycle::crud::helpers::check_hook_depth;
 
 /// Parameters for the unpublish operation.
 pub(super) struct UnpublishCtx<'a> {
@@ -43,6 +43,7 @@ pub(super) fn handle_unpublish(
     conn: &dyn DbConnection,
     ctx: &UnpublishCtx,
 ) -> mlua::Result<Table> {
+    // Internal hook lifecycle lookup — fetches doc state before unpublish, not a user-facing read.
     let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None, false)
         .map_err(|e| RuntimeError(format!("find error: {e:#}")))?
         .ok_or_else(|| {
@@ -70,6 +71,7 @@ pub(super) fn handle_unpublish(
     persist_unpublish(conn, ctx.collection, ctx.id, ctx.def)
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
 
+    // Internal hook lifecycle lookup — fetches doc state after unpublish, not a user-facing read.
     let updated_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None, false)
         .map_err(|e| RuntimeError(format!("find error after unpublish: {e:#}")))?
         .ok_or_else(|| {

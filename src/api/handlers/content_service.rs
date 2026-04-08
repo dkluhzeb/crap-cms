@@ -32,6 +32,7 @@ use crate::{
         query::{self},
     },
     hooks::{HookRunner, lifecycle::PublishEventInput},
+    service,
 };
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
@@ -214,6 +215,7 @@ impl ContentService {
             Some(d) => d.clone(),
             None => return Err(Status::unauthenticated("Auth collection no longer exists")),
         };
+        // Auth infrastructure — direct query for user lookup, not a user-facing read.
         let doc = match query::find_by_id(conn, &claims.collection, &def, &claims.sub, None) {
             Ok(Some(d)) => d,
             Ok(None) => return Err(Status::unauthenticated("User no longer exists")),
@@ -223,8 +225,9 @@ impl ContentService {
         // Reject tokens with stale session version (password was changed).
         // On DB error, reject the token — do not silently default to 0 which
         // would let stale tokens through during transient failures.
-        let db_session_version = query::get_session_version(conn, &claims.collection, &claims.sub)
-            .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
+        let db_session_version =
+            service::auth::get_session_version(conn, &claims.collection, &claims.sub)
+                .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
 
         if claims.session_version != db_session_version {
             return Err(Status::unauthenticated("Session invalidated"));
@@ -307,11 +310,11 @@ impl ContentApi for ContentService {
         self.delete_impl(request).await
     }
 
-    async fn restore(
+    async fn undelete(
         &self,
-        request: Request<content::RestoreRequest>,
-    ) -> Result<Response<content::RestoreResponse>, Status> {
-        self.restore_impl(request).await
+        request: Request<content::UndeleteRequest>,
+    ) -> Result<Response<content::UndeleteResponse>, Status> {
+        self.undelete_impl(request).await
     }
 
     async fn count(
@@ -448,6 +451,41 @@ impl ContentApi for ContentService {
         request: Request<content::ListJobRunsRequest>,
     ) -> Result<Response<content::ListJobRunsResponse>, Status> {
         self.list_job_runs_impl(request).await
+    }
+
+    async fn validate(
+        &self,
+        request: Request<content::ValidateRequest>,
+    ) -> Result<Response<content::ValidateResponse>, Status> {
+        self.validate_impl(request).await
+    }
+
+    async fn lock_account(
+        &self,
+        request: Request<content::AccountActionRequest>,
+    ) -> Result<Response<content::AccountActionResponse>, Status> {
+        self.lock_account_impl(request).await
+    }
+
+    async fn unlock_account(
+        &self,
+        request: Request<content::AccountActionRequest>,
+    ) -> Result<Response<content::AccountActionResponse>, Status> {
+        self.unlock_account_impl(request).await
+    }
+
+    async fn verify_account(
+        &self,
+        request: Request<content::AccountActionRequest>,
+    ) -> Result<Response<content::AccountActionResponse>, Status> {
+        self.verify_account_impl(request).await
+    }
+
+    async fn unverify_account(
+        &self,
+        request: Request<content::AccountActionRequest>,
+    ) -> Result<Response<content::AccountActionResponse>, Status> {
+        self.unverify_account_impl(request).await
     }
 }
 

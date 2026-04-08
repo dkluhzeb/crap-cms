@@ -1,4 +1,4 @@
-//! Restore handler — restore a soft-deleted document from trash.
+//! Undelete handler — restore a soft-deleted document from trash.
 
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -7,19 +7,19 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, collection::helpers::map_db_error, convert::document_to_proto},
+        handlers::{ContentService, convert::document_to_proto},
     },
     core::event::EventOperation,
-    service,
+    service::{self, ServiceError},
 };
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
-    /// Restore a soft-deleted document from trash.
-    pub(in crate::api::handlers) async fn restore_impl(
+    /// Undelete a soft-deleted document from trash.
+    pub(in crate::api::handlers) async fn undelete_impl(
         &self,
-        request: Request<content::RestoreRequest>,
-    ) -> Result<Response<content::RestoreResponse>, Status> {
+        request: Request<content::UndeleteRequest>,
+    ) -> Result<Response<content::UndeleteResponse>, Status> {
         let metadata = request.metadata().clone();
         let token = Self::extract_token(&metadata);
         let req = request.into_inner();
@@ -40,7 +40,9 @@ impl ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
@@ -48,7 +50,7 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             drop(conn);
 
-            let doc = service::restore_document(
+            let doc = service::undelete_document(
                 &pool,
                 &runner,
                 &collection,
@@ -68,7 +70,7 @@ impl ContentService {
 
         self.publish_mutation_event(&req.collection, &req.id, EventOperation::Update, &auth_user);
 
-        Ok(Response::new(content::RestoreResponse {
+        Ok(Response::new(content::UndeleteResponse {
             document: Some(proto_doc),
         }))
     }

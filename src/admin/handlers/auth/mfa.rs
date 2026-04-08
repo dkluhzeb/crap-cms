@@ -20,7 +20,7 @@ use crate::{
         server::extract_cookie,
     },
     core::auth::Claims,
-    db::query,
+    service,
 };
 
 /// Extract the `crap_mfa_pending` cookie value from request headers.
@@ -98,7 +98,7 @@ pub async fn verify_mfa_action(
 
     let verify_result = task::spawn_blocking(move || {
         let conn = pool.get()?;
-        query::verify_mfa_code(&conn, &slug, &user_id, &code)
+        service::auth::verify_mfa_code(&conn, &slug, &user_id, &code).map_err(|e| e.into_anyhow())
     })
     .await;
 

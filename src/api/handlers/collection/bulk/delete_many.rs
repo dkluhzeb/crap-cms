@@ -12,7 +12,7 @@ use crate::{
     service::{RunnerWriteHooks, ServiceError},
 };
 
-use super::helpers::{check_per_doc_access, find_matching_docs, map_db_error, publish_bulk_events};
+use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
 use crate::api::handlers::collection::filter_builder::FilterBuilder;
 
 #[cfg(not(tarpaulin_include))]
@@ -59,7 +59,9 @@ impl ContentService {
 
         let (hard_count, soft_count, skipped_count, deleted_ids) =
             task::spawn_blocking(move || -> Result<(i64, i64, i64, Vec<String>), Status> {
-                let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 let auth_user =
                     ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
@@ -85,7 +87,7 @@ impl ContentService {
                 let tx = conn
                     .transaction_immediate()
                     .context("Start transaction")
-                    .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 let docs =
                     find_matching_docs(&tx, &collection, &def_owned, filters, None, &db_kind)?;
@@ -143,7 +145,7 @@ impl ContentService {
 
                 tx.commit()
                     .context("Commit transaction")
-                    .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 for fields in &upload_fields_to_clean {
                     upload::delete_upload_files(&*storage, fields);

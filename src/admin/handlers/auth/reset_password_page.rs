@@ -2,7 +2,6 @@ use axum::{
     extract::{Query, State},
     response::Html,
 };
-use chrono::Utc;
 use serde_json::json;
 use tokio::task;
 use tracing::error;
@@ -14,10 +13,11 @@ use crate::{
         handlers::auth::ResetPasswordQuery,
     },
     core::Registry,
-    db::{DbPool, query},
+    db::DbPool,
+    service,
 };
 
-/// Check whether a reset token exists and is not expired across all auth collections.
+/// Check whether a reset token exists across all auth collections.
 fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool {
     let conn = match pool.get() {
         Ok(c) => c,
@@ -29,9 +29,8 @@ fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool
             continue;
         }
 
-        match query::find_by_reset_token(&conn, &def.slug, def, token) {
-            Ok(Some((_, exp))) => return Utc::now().timestamp() < exp,
-            _ => continue,
+        if service::auth::find_by_reset_token(&conn, &def.slug, def, token).unwrap_or(false) {
+            return true;
         }
     }
 

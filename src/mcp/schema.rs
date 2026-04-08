@@ -15,6 +15,11 @@ pub enum CrudOp {
     Find,
     FindById,
     Delete,
+    Undelete,
+    Unpublish,
+    Count,
+    ListVersions,
+    RestoreVersion,
 }
 
 /// Convert a single `FieldDefinition` to a JSON Schema value.
@@ -269,6 +274,48 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                     "depth": { "type": "integer", "description": "Relationship population depth" },
                     "search": { "type": "string", "description": "Full-text search query" }
                 }
+            })
+        }
+        CrudOp::Undelete | CrudOp::Unpublish => {
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"]
+            })
+        }
+        CrudOp::Count => {
+            json!({
+                "type": "object",
+                "properties": {
+                    "where": {
+                        "type": "object",
+                        "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
+                    },
+                    "draft": { "type": "boolean", "description": "Include draft/deleted documents in the count" }
+                }
+            })
+        }
+        CrudOp::ListVersions => {
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Document ID to list versions for" },
+                    "limit": { "type": "integer", "description": "Max versions to return" },
+                    "offset": { "type": "integer", "description": "Number of versions to skip" }
+                },
+                "required": ["id"]
+            })
+        }
+        CrudOp::RestoreVersion => {
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Document ID to restore" },
+                    "version_id": { "type": "string", "description": "Version snapshot ID to restore from" }
+                },
+                "required": ["id", "version_id"]
             })
         }
     }

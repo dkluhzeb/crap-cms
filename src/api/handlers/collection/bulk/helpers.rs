@@ -3,8 +3,6 @@
 use tonic::Status;
 use tracing::error;
 
-pub(in crate::api::handlers::collection) use crate::api::handlers::collection::helpers::map_db_error;
-
 use crate::{
     api::handlers::ContentService,
     core::{
@@ -14,6 +12,7 @@ use crate::{
     },
     db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
     hooks::{HookRunner, lifecycle::PublishEventInput},
+    service::ServiceError,
 };
 
 /// Safety limit for bulk operations to prevent unbounded queries.
@@ -34,8 +33,9 @@ pub fn find_matching_docs(
         .limit(BULK_QUERY_LIMIT)
         .build();
 
+    // Internal batch lookup for bulk mutation — not a user-facing read.
     let docs = query::find(tx, collection, def, &find_query, locale_ctx)
-        .map_err(|e| map_db_error(e, "Bulk query error", db_kind))?;
+        .map_err(|e| Status::from(ServiceError::classify(e, db_kind)))?;
 
     if docs.len() >= BULK_QUERY_LIMIT as usize {
         return Err(Status::resource_exhausted(format!(

@@ -13,7 +13,8 @@ use tokio::task;
 use crate::{
     admin::{AdminState, handlers::shared::is_column_eligible},
     core::auth::AuthUser,
-    db::{DbPool, query},
+    db::DbPool,
+    service::user_settings,
 };
 
 /// Parse and validate column keys from the form against the collection definition.
@@ -53,7 +54,7 @@ fn save_column_preferences(
     columns: Vec<String>,
 ) -> Result<(), Error> {
     let conn = pool.get().context("Failed to get DB connection")?;
-    let existing = query::get_user_settings(&conn, user_id)?;
+    let existing = user_settings::get_user_settings(&conn, user_id)?;
 
     let mut settings: Value = existing
         .as_deref()
@@ -64,7 +65,7 @@ fn save_column_preferences(
 
     let json_str = to_string(&settings)?;
 
-    query::set_user_settings(&conn, user_id, &json_str)?;
+    user_settings::set_user_settings(&conn, user_id, &json_str)?;
 
     Ok(())
 }

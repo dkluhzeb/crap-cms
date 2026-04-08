@@ -1,34 +1,24 @@
 //! PATCH /api/upload/{slug}/{id} — replace file on an existing document.
 
-use std::collections::HashMap;
-
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::task;
-use tracing::warn;
 
 use crate::{
     admin::AdminState,
-    core::{
-        event::EventOperation,
-        upload::{
-            CleanupGuard, delete_upload_files, enqueue_conversions, inject_upload_metadata,
-            process_upload,
-        },
-    },
-    db::{LocaleContext, query},
-    service::{WriteInput, update_document},
+    core::event::EventOperation,
+    service::{self, upload::UploadUpdateResult},
 };
 
 use super::helpers::{
     check_upload_access, extract_bearer_user, json_error, json_ok, publish_upload_event,
-    strip_read_denied_doc_fields, strip_write_denied_fields,
+    service_error_to_response,
 };
-use crate::admin::handlers::forms::{extract_join_data_from_form, parse_multipart_form};
+use crate::admin::handlers::forms::parse_multipart_form;
 
 #[cfg(not(tarpaulin_include))]
 pub(super) async fn update_upload(
@@ -61,6 +51,7 @@ pub(super) async fn update_upload(
 
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
+    // Defense-in-depth: pre-check access before parsing the multipart body.
     if let Err(resp) = check_upload_access(
         &state,
         def.access.update.as_deref(),
@@ -71,7 +62,7 @@ pub(super) async fn update_upload(
         return *resp;
     }
 
-    let (mut form_data, file) = match parse_multipart_form(request, &state).await {
+    let (form_data, file) = match parse_multipart_form(request, &state).await {
         Ok(result) => result,
         Err(e) => {
             return json_error(
@@ -81,102 +72,37 @@ pub(super) async fn update_upload(
         }
     };
 
-    let mut old_doc_fields: Option<HashMap<String, Value>> = None;
-    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
-
-    if let Some(ref f) = file
-        && !f.data.is_empty()
-        && let Ok(conn) = state.pool.get()
-        && let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, locale_ctx.as_ref())
-    {
-        old_doc_fields = Some(old_doc.fields.clone());
-    }
-
-    let mut queued_conversions = Vec::new();
-    let mut upload_guard: Option<CleanupGuard> = None;
-
-    if let Some(f) = file
-        && let Some(upload_config) = def.upload.clone()
-    {
-        let storage = state.storage.clone();
-        let slug_for_upload = slug.clone();
-        let global_max = state.config.upload.max_file_size;
-
-        match task::spawn_blocking(move || {
-            process_upload(f, &upload_config, storage, &slug_for_upload, global_max)
-        })
-        .await
-        {
-            Ok(Ok((processed, guard))) => {
-                queued_conversions = processed.queued_conversions.clone();
-                upload_guard = Some(guard);
-                inject_upload_metadata(&mut form_data, &processed);
-            }
-            Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
-            Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Task error: {}", e),
-                );
-            }
-        }
-    }
-
-    strip_write_denied_fields(&state, &def.fields, user_doc, "update", &mut form_data);
-
-    let password = if def.is_auth_collection() {
-        form_data.remove("password")
-    } else {
-        None
-    };
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
-    let action = form_data.remove("_action").unwrap_or_default();
-    let draft = action == "save_draft";
-
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
+    let storage = state.storage.clone();
     let slug_owned = slug.clone();
     let id_owned = id.clone();
     let def_owned = def.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+    let locale_config = state.config.locale.clone();
+    let max_file_size = state.config.upload.max_file_size;
 
     let result = task::spawn_blocking(move || {
-        update_document(
+        service::upload::update_upload(
             &pool,
             &runner,
+            &storage,
             &slug_owned,
             &id_owned,
             &def_owned,
-            WriteInput::builder(form_data, &join_data)
-                .password(password.as_deref())
-                .draft(draft)
-                .ui_locale(ui_locale)
-                .build(),
+            file,
+            form_data,
             user_doc_owned.as_ref(),
+            ui_locale,
+            &locale_config,
+            max_file_size,
         )
     })
     .await;
 
     match result {
-        Ok(Ok((mut doc, _req_context))) => {
-            if let Some(mut g) = upload_guard {
-                g.commit();
-            }
-
-            if let Some(old_fields) = old_doc_fields {
-                delete_upload_files(&*state.storage, &old_fields);
-            }
-
-            if !queued_conversions.is_empty()
-                && let Ok(conn) = state.pool.get()
-                && let Err(e) = enqueue_conversions(&conn, &slug, &id, &queued_conversions)
-            {
-                warn!("Failed to enqueue image conversions: {}", e);
-            }
-
-            strip_read_denied_doc_fields(&state, &def.fields, &auth_user, &mut doc.fields);
-
+        Ok(Ok(UploadUpdateResult { doc, .. })) => {
             publish_upload_event(
                 &state,
                 &def,
@@ -189,7 +115,7 @@ pub(super) async fn update_upload(
 
             json_ok(StatusCode::OK, &json!({ "document": doc }))
         }
-        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Ok(Err(e)) => service_error_to_response(e),
         Err(e) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Task error: {}", e),

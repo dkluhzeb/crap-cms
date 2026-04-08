@@ -9,9 +9,10 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, collection::helpers::map_db_error, convert::document_to_proto},
+        handlers::{ContentService, convert::document_to_proto},
     },
     db::LocaleContext,
+    service::ServiceError,
 };
 
 use crate::api::handlers::collection::helpers::strip_read_denied_proto_fields;
@@ -58,7 +59,9 @@ impl ContentService {
         let def_owned = def;
 
         let result = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;

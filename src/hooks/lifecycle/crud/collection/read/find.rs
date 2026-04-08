@@ -14,7 +14,7 @@ use crate::{
     service::{LuaReadHooks, ReadOptions, find_documents},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Parameters for the find operation, capturing all pre-cloned config values.
 struct FindParams {
@@ -198,7 +198,7 @@ fn find_inner(
 
 /// Register `crap.collections.find(collection, query?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_find(
+pub(crate) fn register_find(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

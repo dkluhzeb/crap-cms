@@ -3,9 +3,13 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table, Value};
 
-use crate::{core::SharedRegistry, db::query, hooks::api};
+use crate::{
+    core::SharedRegistry,
+    db::{AccessResult, query},
+    hooks::{api, lifecycle::access::check_access_with_lua},
+};
 
-use super::get_tx_conn;
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::hook_user};
 
 /// Core logic for `crap.jobs.queue`.
 fn queue_job_inner(
@@ -26,6 +30,22 @@ fn queue_job_inner(
             .cloned()
             .ok_or_else(|| RuntimeError(format!("Job '{}' not defined", slug)))?
     };
+
+    if job_def.access.is_some() {
+        let user_doc = hook_user(lua);
+        let result = check_access_with_lua(
+            lua,
+            job_def.access.as_deref(),
+            user_doc.as_ref(),
+            None,
+            None,
+        )
+        .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
+
+        if matches!(result, AccessResult::Denied) {
+            return Err(RuntimeError("Trigger access denied".to_string()));
+        }
+    }
 
     let data_json = match data {
         Some(tbl) => {
@@ -51,7 +71,7 @@ fn queue_job_inner(
 
 /// Register `crap.jobs.queue(slug, data?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_jobs_queue(
+pub(crate) fn register_jobs_queue(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

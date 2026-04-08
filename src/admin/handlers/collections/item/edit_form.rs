@@ -30,7 +30,7 @@ use crate::{
         upload,
     },
     db::{
-        DbPool, query,
+        DbPool,
         query::{AccessResult, FilterClause, LocaleContext},
     },
     hooks::HookRunner,
@@ -86,7 +86,7 @@ fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &s
     let is_locked = pool
         .get()
         .ok()
-        .and_then(|conn| query::auth::is_locked(&conn, slug, id).ok())
+        .and_then(|conn| crate::service::auth::is_locked(&conn, slug, id).ok())
         .unwrap_or(false);
 
     fields.push(json!({

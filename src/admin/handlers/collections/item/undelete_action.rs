@@ -1,4 +1,4 @@
-//! POST /admin/collections/{slug}/{id}/restore — restore a soft-deleted document.
+//! POST /admin/collections/{slug}/{id}/undelete — undelete a soft-deleted document.
 
 use axum::{
     Extension,
@@ -18,8 +18,8 @@ use crate::{
     service::{self, ServiceError},
 };
 
-/// POST /admin/collections/{slug}/{id}/restore — restore a soft-deleted item
-pub async fn restore_action(
+/// POST /admin/collections/{slug}/{id}/undelete — undelete a soft-deleted item
+pub async fn undelete_action(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
@@ -41,7 +41,7 @@ pub async fn restore_action(
     let user_doc = crate::admin::handlers::shared::get_user_doc(&auth_user).cloned();
 
     let result = task::spawn_blocking(move || {
-        service::restore_document(
+        service::undelete_document(
             &pool,
             &runner,
             &slug_owned,
@@ -54,28 +54,28 @@ pub async fn restore_action(
 
     match result {
         Ok(Ok(_doc)) => {
-            info!("Restored document {} in {}", id, slug);
+            info!("Undeleted document {} in {}", id, slug);
 
             htmx_redirect(&format!("/admin/collections/{}?trash=1", slug))
         }
         Ok(Err(ServiceError::AccessDenied(_))) => {
-            forbidden(&state, "You don't have permission to restore this item").into_response()
+            forbidden(&state, "You don't have permission to undelete this item").into_response()
         }
         Ok(Err(e)) => {
-            error!("Restore error: {}", e);
+            error!("Undelete error: {}", e);
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Restore failed: {}", e),
+                format!("Undelete failed: {}", e),
             )
                 .into_response()
         }
         Err(e) => {
-            error!("Restore task error: {}", e);
+            error!("Undelete task error: {}", e);
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Restore failed: {}", e),
+                format!("Undelete failed: {}", e),
             )
                 .into_response()
         }

@@ -11,13 +11,14 @@ use tokio::task;
 use crate::{
     admin::{AdminState, handlers::auth::LocaleForm},
     core::auth::AuthUser,
-    db::{DbPool, query},
+    db::DbPool,
+    service::user_settings,
 };
 
 /// Read the user's settings JSON, update the `ui_locale` field, and write it back.
 fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), Error> {
     let conn = pool.get()?;
-    let existing = query::get_user_settings(&conn, user_id)?;
+    let existing = user_settings::get_user_settings(&conn, user_id)?;
 
     let mut settings: Value = existing
         .as_deref()
@@ -28,7 +29,7 @@ fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), 
 
     let json_str = to_string(&settings)?;
 
-    query::set_user_settings(&conn, user_id, &json_str)?;
+    user_settings::set_user_settings(&conn, user_id, &json_str)?;
 
     Ok(())
 }

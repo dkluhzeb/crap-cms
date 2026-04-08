@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    db::{AccessResult, query::jobs},
+    service,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -28,7 +28,7 @@ impl ContentService {
         let slug = req.slug.clone();
 
         let job_id = task::spawn_blocking(move || -> Result<String, Status> {
-            let mut conn = pool.get().map_err(|e| {
+            let conn = pool.get().map_err(|e| {
                 error!("TriggerJob pool error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -45,33 +45,16 @@ impl ContentService {
                 .cloned()
                 .ok_or_else(|| Status::not_found(format!("Job '{}' not found", slug)))?;
 
-            if job_def.access.is_some() {
-                let result = ContentService::check_access_blocking(
-                    job_def.access.as_deref(),
-                    &auth_user,
-                    None,
-                    None,
-                    &hook_runner,
-                    &mut conn,
-                )?;
-
-                if matches!(result, AccessResult::Denied) {
-                    return Err(Status::permission_denied("Trigger access denied"));
-                }
-            }
-
-            let job_run = jobs::insert_job(
+            let job_run = service::jobs::queue_job(
                 &conn,
+                &hook_runner,
                 &slug,
-                &data_json,
+                &job_def,
+                Some(&data_json),
                 "grpc",
-                job_def.retries + 1,
-                &job_def.queue,
+                auth_user.as_ref().map(|u| &u.user_doc),
             )
-            .map_err(|e| {
-                error!("Failed to queue job: {}", e);
-                Status::internal("Internal error")
-            })?;
+            .map_err(Status::from)?;
 
             Ok(job_run.id)
         })

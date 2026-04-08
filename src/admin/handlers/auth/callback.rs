@@ -24,7 +24,7 @@ use crate::{
         },
     },
     core::Document,
-    db::query,
+    service,
 };
 
 /// Run the Lua auth callback hook in a blocking task.
@@ -76,7 +76,7 @@ async fn run_auth_callback_hook(
 fn fetch_session_version(state: &AdminState, slug: &str, user_id: &str) -> Option<u64> {
     let conn = state.pool.get().ok()?;
 
-    Some(query::get_session_version(&conn, slug, user_id).unwrap_or(0))
+    Some(service::auth::get_session_version(&conn, slug, user_id).unwrap_or(0))
 }
 
 /// GET/POST `/admin/auth/callback/{name}` — dispatch to Lua auth callback hook.

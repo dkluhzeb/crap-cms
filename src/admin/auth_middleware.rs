@@ -22,6 +22,7 @@ use crate::{
     },
     db::{DbPool, query},
     hooks::HookRunner,
+    service,
 };
 
 use axum::extract::State;
@@ -325,7 +326,7 @@ pub(crate) fn load_auth_user(
 
     // Reject tokens with stale session version (password was changed).
     let db_session_version =
-        query::get_session_version(&conn, &claims.collection, &claims.sub).ok()?;
+        service::auth::get_session_version(&conn, &claims.collection, &claims.sub).ok()?;
 
     if claims.session_version != db_session_version {
         return None;

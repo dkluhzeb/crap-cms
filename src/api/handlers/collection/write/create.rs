@@ -10,13 +10,13 @@ use crate::{
         content,
         handlers::{
             ContentService,
-            collection::helpers::{extract_auth_password, map_db_error},
+            collection::helpers::extract_auth_password,
             convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
     core::event::EventOperation,
     db::LocaleContext,
-    service::{self, WriteInput},
+    service::{self, ServiceError, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -61,7 +61,9 @@ impl ContentService {
         let def_owned = def;
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;

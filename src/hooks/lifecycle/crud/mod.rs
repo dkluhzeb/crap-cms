@@ -1,20 +1,10 @@
 //! Lua CRUD function registration — split into per-operation modules.
 
-mod count;
-mod create;
-mod delete;
-mod delete_many;
-mod find;
-mod find_by_id;
-mod globals_get;
-mod globals_update;
-mod helpers;
-mod jobs_queue;
+mod collection;
+mod globals;
+pub(crate) mod helpers;
+mod jobs;
 mod register;
-mod restore;
-mod unpublish;
-mod update;
-mod update_many;
 
 pub(crate) use register::register_crud_functions;
 

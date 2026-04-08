@@ -221,7 +221,8 @@ fn load_user_columns(
 ) -> Option<Vec<String>> {
     let Extension(au) = auth_user.as_ref()?;
     let conn = state.pool.get().ok()?;
-    let settings_json = query::get_user_settings(&conn, &au.claims.sub).ok()??;
+    let settings_json =
+        crate::service::user_settings::get_user_settings(&conn, &au.claims.sub).ok()??;
     let settings: Value = from_str(&settings_json).ok()?;
     let cols = settings.get(slug)?.get("columns")?.as_array()?;
 

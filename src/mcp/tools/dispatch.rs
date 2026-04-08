@@ -20,8 +20,9 @@ use crate::mcp::{
 
 use super::{
     collection::{
-        read::{exec_find, exec_find_by_id},
-        write::{exec_create, exec_delete, exec_update},
+        read::{exec_count, exec_find, exec_find_by_id},
+        versions::{exec_list_versions, exec_restore_version},
+        write::{exec_create, exec_delete, exec_undelete, exec_unpublish, exec_update},
     },
     globals::{exec_read_global, exec_update_global},
     schema::{
@@ -43,9 +44,14 @@ pub struct ParsedTool {
 pub enum ToolOp {
     Find,
     FindById,
+    Count,
     Create,
     Update,
     Delete,
+    Undelete,
+    Unpublish,
+    ListVersions,
+    RestoreVersion,
     /// Read a global (same as find_by_id but for globals)
     ReadGlobal,
     /// Update a global
@@ -115,6 +121,48 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
             description: Some(format!("Delete a {} document by ID", label)),
             input_schema: collection_input_schema(def, CrudOp::Delete),
         });
+
+        // count_<slug>
+        tools.push(ToolDefinition {
+            name: format!("count_{}", slug),
+            description: Some(format!("Count {} documents matching filters", label)),
+            input_schema: collection_input_schema(def, CrudOp::Count),
+        });
+
+        // undelete_<slug> — only for collections with soft delete
+        if def.has_soft_delete() {
+            tools.push(ToolDefinition {
+                name: format!("undelete_{}", slug),
+                description: Some(format!("Restore a soft-deleted {} document", label)),
+                input_schema: collection_input_schema(def, CrudOp::Undelete),
+            });
+        }
+
+        // unpublish_<slug> — only for versioned collections
+        if def.versions.is_some() {
+            tools.push(ToolDefinition {
+                name: format!("unpublish_{}", slug),
+                description: Some(format!("Unpublish a {} document (set to draft)", label)),
+                input_schema: collection_input_schema(def, CrudOp::Unpublish),
+            });
+
+            // list_versions_<slug>
+            tools.push(ToolDefinition {
+                name: format!("list_versions_{}", slug),
+                description: Some(format!("List version history for a {} document", label)),
+                input_schema: collection_input_schema(def, CrudOp::ListVersions),
+            });
+
+            // restore_version_<slug>
+            tools.push(ToolDefinition {
+                name: format!("restore_version_{}", slug),
+                description: Some(format!(
+                    "Restore a {} document to a specific version",
+                    label
+                )),
+                input_schema: collection_input_schema(def, CrudOp::RestoreVersion),
+            });
+        }
     }
 
     // Global CRUD tools (prefixed with "global_" to avoid collision with collection tools)
@@ -221,17 +269,33 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
 
 /// Parse a tool name like "find_posts" into (op, slug).
 pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
-    // Try collection CRUD patterns
-    for prefix in &["find_by_id_", "find_", "create_", "update_", "delete_"] {
+    // Try collection CRUD patterns (longer prefixes first to avoid ambiguity)
+    for prefix in &[
+        "find_by_id_",
+        "find_",
+        "count_",
+        "create_",
+        "update_",
+        "delete_",
+        "undelete_",
+        "unpublish_",
+        "list_versions_",
+        "restore_version_",
+    ] {
         if let Some(slug) = name.strip_prefix(prefix)
             && registry.collections.contains_key(slug)
         {
             let op = match *prefix {
                 "find_" => ToolOp::Find,
                 "find_by_id_" => ToolOp::FindById,
+                "count_" => ToolOp::Count,
                 "create_" => ToolOp::Create,
                 "update_" => ToolOp::Update,
                 "delete_" => ToolOp::Delete,
+                "undelete_" => ToolOp::Undelete,
+                "unpublish_" => ToolOp::Unpublish,
+                "list_versions_" => ToolOp::ListVersions,
+                "restore_version_" => ToolOp::RestoreVersion,
                 _ => unreachable!(),
             };
 
@@ -305,9 +369,16 @@ pub fn execute_tool(
         return match parsed.op {
             ToolOp::Find => exec_find(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::FindById => exec_find_by_id(args, &parsed.slug, registry, pool, runner, config),
+            ToolOp::Count => exec_count(args, &parsed.slug, registry, pool, runner),
             ToolOp::Create => exec_create(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Update => exec_update(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Delete => exec_delete(args, &parsed.slug, registry, pool, runner),
+            ToolOp::Undelete => exec_undelete(args, &parsed.slug, registry, pool, runner),
+            ToolOp::Unpublish => exec_unpublish(args, &parsed.slug, registry, pool, runner),
+            ToolOp::ListVersions => exec_list_versions(args, &parsed.slug, registry, pool),
+            ToolOp::RestoreVersion => {
+                exec_restore_version(args, &parsed.slug, registry, pool, config)
+            }
             ToolOp::ReadGlobal => exec_read_global(&parsed.slug, registry, pool, runner),
             ToolOp::UpdateGlobal => exec_update_global(args, &parsed.slug, registry, pool, runner),
         };

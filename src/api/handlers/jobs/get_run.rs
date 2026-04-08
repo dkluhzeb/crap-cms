@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    db::query::jobs,
+    service,
 };
 
 use super::job_run_to_proto;
@@ -40,11 +40,8 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            jobs::get_job_run(&conn, &id)
-                .map_err(|e| {
-                    error!("GetJobRun query error: {}", e);
-                    Status::internal("Internal error")
-                })?
+            service::jobs::get_job_run(&conn, &id)
+                .map_err(Status::from)?
                 .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", id)))
         })
         .await

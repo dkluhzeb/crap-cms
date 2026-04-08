@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Extract a bool from an optional Lua options table, returning `default` when absent.
-pub(super) fn get_opt_bool(opts: &Option<Table>, key: &str, default: bool) -> LuaResult<bool> {
+pub(crate) fn get_opt_bool(opts: &Option<Table>, key: &str, default: bool) -> LuaResult<bool> {
     Ok(opts
         .as_ref()
         .and_then(|o| o.get::<Option<bool>>(key).ok().flatten())
@@ -27,27 +27,27 @@ pub(super) fn get_opt_bool(opts: &Option<Table>, key: &str, default: bool) -> Lu
 }
 
 /// Extract an optional string from a Lua options table.
-pub(super) fn get_opt_string(opts: &Option<Table>, key: &str) -> LuaResult<Option<String>> {
+pub(crate) fn get_opt_string(opts: &Option<Table>, key: &str) -> LuaResult<Option<String>> {
     Ok(opts
         .as_ref()
         .and_then(|o| o.get::<Option<String>>(key).ok().flatten()))
 }
 
 /// Extract the authenticated user document from Lua app_data (if present).
-pub(super) fn hook_user(lua: &Lua) -> Option<Document> {
+pub(crate) fn hook_user(lua: &Lua) -> Option<Document> {
     lua.app_data_ref::<UserContext>()
         .and_then(|uc| uc.0.clone())
 }
 
 /// Extract the UI locale string from Lua app_data (if present).
-pub(super) fn hook_ui_locale(lua: &Lua) -> Option<String> {
+pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
     lua.app_data_ref::<UiLocaleContext>()
         .and_then(|uc| uc.0.clone())
 }
 
 /// Look up a collection definition from the shared registry, returning a
 /// `RuntimeError` if not found.
-pub(super) fn resolve_collection(
+pub(crate) fn resolve_collection(
     reg: &SharedRegistry,
     slug: &str,
 ) -> LuaResult<CollectionDefinition> {
@@ -62,7 +62,7 @@ pub(super) fn resolve_collection(
 
 /// Look up a global definition from the shared registry, returning a
 /// `RuntimeError` if not found.
-pub(super) fn resolve_global(reg: &SharedRegistry, slug: &str) -> LuaResult<GlobalDefinition> {
+pub(crate) fn resolve_global(reg: &SharedRegistry, slug: &str) -> LuaResult<GlobalDefinition> {
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
@@ -78,7 +78,7 @@ pub(super) fn resolve_global(reg: &SharedRegistry, slug: &str) -> LuaResult<Glob
 /// When `run_hooks` is false, hooks are unconditionally disabled.
 /// When the current depth has reached `max_depth`, a warning is logged and
 /// hooks are disabled for this call.
-pub(super) fn check_hook_depth<'a>(
+pub(crate) fn check_hook_depth<'a>(
     lua: &'a Lua,
     run_hooks: bool,
     collection: &str,
@@ -112,7 +112,7 @@ pub(super) fn check_hook_depth<'a>(
 /// Returns `Ok(())` if access is allowed (possibly after extending `filters` with constraints).
 /// Returns `Err` with a `RuntimeError` if access is denied.
 /// When `override_access` is true, skips the check entirely.
-pub(super) fn enforce_access(
+pub(crate) fn enforce_access(
     lua: &Lua,
     override_access: bool,
     access_fn: Option<&str>,
@@ -139,7 +139,7 @@ pub(super) fn enforce_access(
 }
 
 /// Append a `_status = 'published'` filter when the collection has drafts and `draft` is false.
-pub(super) fn add_draft_filter(
+pub(crate) fn add_draft_filter(
     def: &CollectionDefinition,
     draft: bool,
     filters: &mut Vec<FilterClause>,
@@ -153,10 +153,10 @@ pub(super) fn add_draft_filter(
 }
 
 /// Extracted data from a Lua data table for create/update operations.
-pub(super) struct ExtractedData {
-    pub(super) flat: HashMap<String, String>,
-    pub(super) hook: HashMap<String, Value>,
-    pub(super) password: Option<String>,
+pub(crate) struct ExtractedData {
+    pub(crate) flat: HashMap<String, String>,
+    pub(crate) hook: HashMap<String, Value>,
+    pub(crate) password: Option<String>,
 }
 
 /// Extract form data, join data, and password from a Lua data table.
@@ -164,7 +164,7 @@ pub(super) struct ExtractedData {
 /// Shared by both `create` and `update` operations: flattens group fields,
 /// separates the password for auth collections, and builds the hook data map
 /// from flat string values plus JSON join data.
-pub(super) fn extract_data(
+pub(crate) fn extract_data(
     lua: &Lua,
     data_table: &Table,
     def: &CollectionDefinition,

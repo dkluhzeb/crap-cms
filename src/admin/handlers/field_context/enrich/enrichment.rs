@@ -65,6 +65,7 @@ fn resolve_polymorphic_ref(
     let related_def = reg.get_collection(col)?;
     let title_field = related_def.title_field().map(|s| s.to_string());
 
+    // Internal UI enrichment — direct query for display labels, not a user-facing read.
     let doc = query::find_by_id(conn, col, related_def, id, locale_ctx)
         .ok()
         .flatten()?;

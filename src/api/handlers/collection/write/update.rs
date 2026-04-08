@@ -9,13 +9,13 @@ use crate::{
         content,
         handlers::{
             ContentService,
-            collection::helpers::{extract_auth_password, map_db_error},
+            collection::helpers::extract_auth_password,
             convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
     core::event::EventOperation,
     db::LocaleContext,
-    service::{self, WriteInput},
+    service::{self, ServiceError, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -65,7 +65,9 @@ impl ContentService {
         let def_owned = def;
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
@@ -76,6 +78,12 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+            let input = WriteInput::builder(data, &join_data)
+                .password(password.as_deref())
+                .locale_ctx(locale_ctx.as_ref())
+                .draft(req.draft.unwrap_or(false))
+                .ui_locale(ui_locale)
+                .build();
 
             let (doc, _req_context) = service::update_document_with_conn(
                 &mut conn,
@@ -83,12 +91,7 @@ impl ContentService {
                 &collection,
                 &id,
                 &def_owned,
-                WriteInput::builder(data, &join_data)
-                    .password(password.as_deref())
-                    .locale_ctx(locale_ctx.as_ref())
-                    .draft(req.draft.unwrap_or(false))
-                    .ui_locale(ui_locale)
-                    .build(),
+                input,
                 user_doc.as_ref(),
             )
             .map_err(|e| Status::from(e.reclassify(&db_kind)))?;

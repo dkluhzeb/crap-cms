@@ -11,6 +11,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     db::query,
+    service,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -44,14 +45,18 @@ impl ContentService {
 
         let (doc, db_session_version, is_locked) = task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
+
+            // Auth infrastructure — direct query for user lookup, not a user-facing read.
             let mut doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
 
             if let Some(ref mut d) = doc {
                 query::hydrate_document(&conn, &collection, &def.fields, d, None, None)?;
             }
 
-            let sv = query::get_session_version(&conn, &collection, &id)?;
-            let locked = query::is_locked(&conn, &collection, &id)?;
+            let sv = service::auth::get_session_version(&conn, &collection, &id)
+                .map_err(|e| e.into_anyhow())?;
+            let locked =
+                service::auth::is_locked(&conn, &collection, &id).map_err(|e| e.into_anyhow())?;
 
             Ok::<_, AnyhowError>((doc, sv, locked))
         })

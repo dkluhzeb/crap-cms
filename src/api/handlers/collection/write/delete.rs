@@ -5,12 +5,9 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
-    api::{
-        content,
-        handlers::{ContentService, collection::helpers::map_db_error},
-    },
+    api::{content, handlers::ContentService},
     core::event::EventOperation,
-    service,
+    service::{self, ServiceError},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -47,7 +44,9 @@ impl ContentService {
         let locale_config = self.locale_config.clone();
 
         let auth_user = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;

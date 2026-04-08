@@ -1,4 +1,4 @@
-//! Registration of `crap.collections.restore` Lua function.
+//! Registration of `crap.collections.undelete` Lua function.
 
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
@@ -8,13 +8,13 @@ use crate::{
     service::{self, LuaWriteHooks},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
-/// Restore a soft-deleted document by ID.
+/// Undelete a soft-deleted document by ID.
 ///
 /// Validates that the collection supports soft delete, then delegates to
-/// `service::restore_document_core` which handles access checks internally.
-fn restore_document(
+/// `service::undelete_document_core` which handles access checks internally.
+fn undelete_document(
     lua: &Lua,
     reg: &SharedRegistry,
     collection: &str,
@@ -46,21 +46,21 @@ fn restore_document(
         run_validation: false,
     };
 
-    service::restore_document_core(conn, &wh, collection, id, &def, user.as_ref())
+    service::undelete_document_core(conn, &wh, collection, id, &def, user.as_ref())
         .map_err(|e| RuntimeError(format!("{e}")))?;
 
     Ok(true)
 }
 
-/// Register `crap.collections.restore(collection, id, opts?)`.
+/// Register `crap.collections.undelete(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
-    let restore_fn = lua.create_function(
+pub(crate) fn register_undelete(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+    let undelete_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            restore_document(lua, &registry, &collection, &id, &opts)
+            undelete_document(lua, &registry, &collection, &id, &opts)
         },
     )?;
-    table.set("restore", restore_fn)?;
+    table.set("undelete", undelete_fn)?;
 
     Ok(())
 }

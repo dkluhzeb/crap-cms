@@ -8,12 +8,11 @@ use crate::{
     api::{
         content,
         handlers::{
-            ContentService,
-            collection::{filter_builder::FilterBuilder, helpers::map_db_error},
-            convert::document_to_proto,
+            ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
         },
     },
     db::{AccessResult, FindQuery, LocaleContext, query},
+    service::ServiceError,
 };
 
 use crate::api::handlers::collection::helpers::strip_read_denied_proto_fields;
@@ -70,7 +69,9 @@ impl ContentService {
         let def_owned = def;
 
         let (proto_docs, pagination_info) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;

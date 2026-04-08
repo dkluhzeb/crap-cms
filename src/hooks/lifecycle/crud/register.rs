@@ -8,10 +8,7 @@ use crate::{
     core::SharedRegistry,
 };
 
-use super::{
-    count, create, delete, delete_many, find, find_by_id, globals_get, globals_update, jobs_queue,
-    restore, update, update_many,
-};
+use super::{collection, globals, jobs};
 
 /// Register the CRUD functions on `crap.collections`, `crap.globals`, and `crap.jobs`.
 ///
@@ -45,21 +42,59 @@ fn register_collection_functions(
 ) -> Result<()> {
     let collections: Table = crap.get("collections")?;
 
-    find::register_find(
+    // Read operations
+    collection::read::find::register_find(
         lua,
         &collections,
         registry.clone(),
         locale_config,
         pagination_config,
     )?;
-    find_by_id::register_find_by_id(lua, &collections, registry.clone(), locale_config)?;
-    create::register_create(lua, &collections, registry.clone(), locale_config)?;
-    update::register_update(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
-    restore::register_restore(lua, &collections, registry.clone())?;
-    count::register_count(lua, &collections, registry.clone(), locale_config)?;
-    update_many::register_update_many(lua, &collections, registry.clone(), locale_config)?;
-    delete_many::register_delete_many(lua, &collections, registry.clone(), locale_config)?;
+    collection::read::find_by_id::register_find_by_id(
+        lua,
+        &collections,
+        registry.clone(),
+        locale_config,
+    )?;
+    collection::read::count::register_count(lua, &collections, registry.clone(), locale_config)?;
+
+    // Write operations
+    collection::write::create::register_create(lua, &collections, registry.clone(), locale_config)?;
+    collection::write::update::register_update(lua, &collections, registry.clone(), locale_config)?;
+    collection::write::delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
+    collection::write::undelete::register_undelete(lua, &collections, registry.clone())?;
+    collection::write::validate::register_validate(
+        lua,
+        &collections,
+        registry.clone(),
+        locale_config,
+    )?;
+
+    // Bulk operations
+    collection::bulk::update_many::register_update_many(
+        lua,
+        &collections,
+        registry.clone(),
+        locale_config,
+    )?;
+    collection::bulk::delete_many::register_delete_many(
+        lua,
+        &collections,
+        registry.clone(),
+        locale_config,
+    )?;
+
+    // Version operations
+    collection::versions::list::register_list_versions(lua, &collections, registry.clone())?;
+    collection::versions::restore::register_restore_version(
+        lua,
+        &collections,
+        registry.clone(),
+        locale_config,
+    )?;
+
+    // Document info
+    collection::ref_count::register_ref_count(lua, &collections, registry.clone())?;
 
     Ok(())
 }
@@ -74,8 +109,8 @@ fn register_global_functions(
 ) -> Result<()> {
     let globals_table: Table = crap.get("globals")?;
 
-    globals_get::register_globals_get(lua, &globals_table, registry.clone(), locale_config)?;
-    globals_update::register_globals_update(lua, &globals_table, registry.clone(), locale_config)?;
+    globals::get::register_globals_get(lua, &globals_table, registry.clone(), locale_config)?;
+    globals::update::register_globals_update(lua, &globals_table, registry.clone(), locale_config)?;
 
     Ok(())
 }
@@ -85,7 +120,7 @@ fn register_global_functions(
 fn register_job_functions(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
     let jobs: Table = crap.get("jobs")?;
 
-    jobs_queue::register_jobs_queue(lua, &jobs, registry)?;
+    jobs::queue::register_jobs_queue(lua, &jobs, registry)?;
 
     Ok(())
 }

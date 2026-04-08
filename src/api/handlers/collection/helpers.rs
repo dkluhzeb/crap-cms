@@ -7,8 +7,6 @@ use tracing::warn;
 
 use crate::{api::content, config::PasswordPolicy};
 
-pub(in crate::api::handlers::collection) use super::error_mapping::map_db_error;
-
 /// Extract and validate password from an auth collection's data map.
 ///
 /// - If not an auth collection, returns `Ok(None)` (password field stays in data).

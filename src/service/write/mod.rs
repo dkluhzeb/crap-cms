@@ -8,6 +8,7 @@ mod create;
 mod delete;
 pub(crate) mod helpers;
 mod update;
+mod update_many_single;
 mod validate;
 
 use crate::service::ServiceError;
@@ -15,4 +16,5 @@ use crate::service::ServiceError;
 pub use create::create_document_core;
 pub use delete::{DeleteResult, delete_document_core};
 pub use update::update_document_core;
+pub use update_many_single::update_many_single_core;
 pub use validate::{ValidateContext, validate_document};

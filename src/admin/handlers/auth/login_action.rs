@@ -27,8 +27,9 @@ use crate::{
         email,
         email::EmailRenderer,
     },
-    db::{BoxedConnection, DbPool, query},
+    db::{BoxedConnection, DbPool},
     hooks::HookRunner,
+    service,
 };
 
 /// Successful login result containing the user document and session version.
@@ -115,17 +116,20 @@ async fn verify_credentials(
             && let Some(user) = try_strategy_auth(&conn, slug, def, runner, &params.headers)
         {
             // Strategy-authenticated users still need locked/verified checks
-            if query::is_locked(&conn, slug, &user.id)? {
+            if service::auth::is_locked(&conn, slug, &user.id).unwrap_or(false) {
                 debug!("Login denied for {}: account locked", user.id);
                 return Ok(None);
             }
 
-            if params.verify_email_flag && !query::is_verified(&conn, slug, &user.id)? {
+            if params.verify_email_flag
+                && !service::auth::is_verified(&conn, slug, &user.id).unwrap_or(false)
+            {
                 debug!("Login denied for {}: email not verified", user.id);
                 return Ok(None);
             }
 
-            let session_version = query::get_session_version(&conn, slug, &user.id)?;
+            let session_version = service::auth::get_session_version(&conn, slug, &user.id)
+                .map_err(|e| e.into_anyhow())?;
             return Ok(Some(Ok(LoginSuccess {
                 user,
                 session_version,
@@ -169,7 +173,7 @@ fn send_mfa_code(params: MfaCodeParams, code: &str) {
 
     let exp = Utc::now().timestamp() + MFA_PENDING_EXPIRY as i64;
 
-    if let Err(e) = query::set_mfa_code(&conn, &params.slug, &params.user_id, code, exp) {
+    if let Err(e) = service::auth::set_mfa_code(&conn, &params.slug, &params.user_id, code, exp) {
         error!("Failed to store MFA code: {}", e);
         return;
     }

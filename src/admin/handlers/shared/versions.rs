@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::{
     core::{Document, FieldDefinition, Registry, document::VersionSnapshot},
-    db::{BoxedConnection, DbPool, query},
+    db::{BoxedConnection, DbPool},
 };
 
 /// Map a `VersionSnapshot` to the JSON object used in templates.
@@ -46,8 +46,8 @@ pub fn load_version_with_missing_relations(
     table: &str,
     version_id: &str,
     fields: &[FieldDefinition],
-) -> Result<(VersionSnapshot, Vec<query::MissingRelation>), &'static str> {
-    let version = match query::find_version_by_id(conn, table, version_id) {
+) -> Result<(VersionSnapshot, Vec<crate::db::query::MissingRelation>), &'static str> {
+    let version = match crate::service::find_version_by_id(conn, table, version_id) {
         Ok(Some(v)) => v,
         Ok(None) => return Err("Version not found"),
         Err(e) => {

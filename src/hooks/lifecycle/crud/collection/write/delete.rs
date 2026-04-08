@@ -10,7 +10,7 @@ use crate::{
     service::{LuaWriteHooks, delete_document_core},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Execute the delete operation.
 fn delete_document(
@@ -75,7 +75,7 @@ fn delete_document(
 
 /// Register `crap.collections.delete(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_delete(
+pub(crate) fn register_delete(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

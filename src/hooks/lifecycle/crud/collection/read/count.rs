@@ -14,7 +14,7 @@ use crate::{
     service::{LuaReadHooks, count_documents},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.collections.count`.
 fn count_inner(
@@ -68,7 +68,7 @@ fn count_inner(
 
 /// Register `crap.collections.count(collection, query?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_count(
+pub(crate) fn register_count(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

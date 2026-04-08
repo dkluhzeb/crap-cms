@@ -172,17 +172,17 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/Delete
 ```
 
-## Restore
+## Undelete
 
-Restore a soft-deleted document from trash. Only works on collections with `soft_delete = true`.
+Undelete a soft-deleted document from trash. Only works on collections with `soft_delete = true`.
 
 ```protobuf
-message RestoreRequest {
+message UndeleteRequest {
   string collection = 1;
   string id = 2;
 }
 
-message RestoreResponse {
+message UndeleteResponse {
   Document document = 1;
 }
 ```

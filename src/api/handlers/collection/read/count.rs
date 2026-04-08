@@ -12,7 +12,7 @@ use crate::{
     db::{AccessResult, LocaleContext},
 };
 
-use crate::api::handlers::collection::helpers::map_db_error;
+use crate::service::ServiceError;
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -42,7 +42,9 @@ impl ContentService {
         let def_owned = def;
 
         let count = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;

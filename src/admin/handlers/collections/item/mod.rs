@@ -8,8 +8,8 @@ pub mod delete_action;
 pub mod delete_confirm;
 /// Handler for the collection item edit form.
 pub mod edit_form;
-/// Handler for restoring a soft-deleted collection item.
-pub mod restore_action;
+/// Handler for undeleting a soft-deleted collection item.
+pub mod undelete_action;
 /// Handler for updating a collection item.
 pub mod update_action;
 /// Handlers for collection item versions.

@@ -14,8 +14,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::{Slug, auth::ClaimsBuilder},
-    db::query,
-    service::ServiceError,
+    service::{self, ServiceError},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -96,15 +95,18 @@ impl ContentService {
                         &conn,
                     ) {
                         // Strategy-authenticated users still need locked/verified checks
-                        if query::is_locked(&conn, &slug, &doc.id)? {
+                        if service::auth::is_locked(&conn, &slug, &doc.id).unwrap_or(false) {
                             return Ok(None);
                         }
 
-                        if check_verify_email && !query::is_verified(&conn, &slug, &doc.id)? {
+                        if check_verify_email
+                            && !service::auth::is_verified(&conn, &slug, &doc.id).unwrap_or(false)
+                        {
                             return Ok(None);
                         }
 
-                        let sv = query::get_session_version(&conn, &slug, &doc.id)?;
+                        let sv = service::auth::get_session_version(&conn, &slug, &doc.id)
+                            .map_err(|e| e.into_anyhow())?;
                         return Ok(Some((doc, sv)));
                     }
                 }

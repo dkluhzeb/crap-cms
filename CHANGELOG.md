@@ -49,6 +49,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **BREAKING: "Restore" renamed to "Undelete" for trash operations** —
+  The operation that un-deletes a soft-deleted document is now called
+  "undelete" everywhere to distinguish it from "restore version" (which
+  reverts a document to a previous snapshot). Affected APIs:
+  - gRPC: `rpc Restore` → `rpc Undelete`, `RestoreRequest` → `UndeleteRequest`,
+    `RestoreResponse` → `UndeleteResponse`
+  - Lua: `crap.collections.restore()` → `crap.collections.undelete()`
+  - Admin URL: `/admin/collections/{slug}/{id}/restore` →
+    `/admin/collections/{slug}/{id}/undelete`
+  - Version restore operations (`RestoreVersion`, `restore_collection_version`,
+    etc.) are unchanged.
+
+- **Service layer unification** — all database operation flows now go through
+  a shared service layer (`src/service/`), ensuring consistent access control,
+  field-level permissions, validation, hydration, and error handling across
+  all 4 API surfaces (admin, gRPC, MCP, Lua hooks). Key additions:
+  - `ServiceError` with 12 typed variants replacing string-based error matching
+  - `WriteHooks::check_access` / `field_write_denied` / `field_read_denied`
+    for unified access control inside service operations
+  - `service::auth` module for authentication, password reset, email verification
+  - `service::version_ops` for version restore/list
+  - `service::document_info` for ref counts and back-references
+  - `service::user_settings` for per-user preferences
+  - Write operations now hydrate + strip read-denied fields before returning
+
 - **Internal code quality refactoring** — large files split into focused
   modules following one-handler-per-file and no-logic-in-mod.rs rules.
   Key restructurings:
@@ -382,10 +407,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Empty trash** action. Upload files are preserved until hard purge.
   Configurable retention (`soft_delete_retention = "30d"`) auto-purges
   expired documents. Granular permissions: `access.trash` controls
-  soft-delete and restore (falls back to `access.update`), while
+  soft-delete and undelete (falls back to `access.update`), while
   `access.delete` controls permanent deletion. Available in admin UI,
-  gRPC (`Delete` with `force_hard_delete`, new `Restore` RPC), and Lua
-  (`crap.collections.delete/restore` with `forceHardDelete` option).
+  gRPC (`Delete` with `force_hard_delete`, new `Undelete` RPC), and Lua
+  (`crap.collections.delete/undelete` with `forceHardDelete` option).
 
 - **Delete confirmation dialog** — Replaces the old two-step confirmation
   page with a single modal dialog. For soft-delete collections, shows
@@ -1607,9 +1632,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   correctly documented in the `FindByIDResponse` message comment.
   Fixed the RPC-level comment to match actual behavior.
 
-- **Restore action silently redirected on failure** — The admin restore
+- **Undelete action silently redirected on failure** — The admin undelete
   action logged errors but always redirected to the trash page,
-  regardless of whether the restore succeeded. Users had no indication
+  regardless of whether the undelete succeeded. Users had no indication
   of failure. Now returns an HTTP 500 error response on failure.
 
 - **Proto `FieldInfo.type` listed nonexistent field types** — The
@@ -1742,7 +1767,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua
   CRUD functions (`find`, `find_by_id`, `create`, `update`, `delete`,
-  `count`, `update_many`, `delete_many`, `restore`) now enforce access
+  `count`, `update_many`, `delete_many`, `undelete`) now enforce access
   control by default. Previously they bypassed access checks unless
   explicitly set to `false`. This follows the principle of least
   privilege — hooks that need unrestricted access must explicitly opt in

@@ -1,4 +1,4 @@
-//! Registration of `crap.collections.update` Lua function.
+//! Registration of `crap.collections.create` Lua function.
 
 use std::collections::HashMap;
 
@@ -11,19 +11,17 @@ use crate::{
     core::SharedRegistry,
     db::LocaleContext,
     hooks::lifecycle::converters::*,
-    service::{LuaWriteHooks, WriteInput, update_document_core},
+    service::{LuaWriteHooks, WriteInput, create_document_core},
 };
 
-use super::unpublish::{UnpublishCtx, handle_unpublish};
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
-/// Execute the `crap.collections.update` operation.
-fn update_document(
+/// Execute the `crap.collections.create` operation.
+fn create_document(
     lua: &Lua,
     reg: &SharedRegistry,
     lc: &LocaleConfig,
     collection: String,
-    id: String,
     data_table: Table,
     opts: Option<Table>,
 ) -> mlua::Result<Table> {
@@ -37,26 +35,11 @@ fn update_document(
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc);
     let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
     let run_hooks = get_opt_bool(&opts, "hooks", true)?;
-    let unpublish = get_opt_bool(&opts, "unpublish", false)?;
     let draft = get_opt_bool(&opts, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    // Collection-level access check is handled inside service::update_document_core
+    // Collection-level access check is handled inside service::create_document_core
     // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
-
-    // Handle unpublish early return
-    if unpublish && def.has_versions() {
-        return handle_unpublish(
-            lua,
-            conn,
-            &UnpublishCtx::builder(&collection, &id, &def)
-                .run_hooks(run_hooks)
-                .locale_str(locale_str.as_deref())
-                .hook_user(user.as_ref())
-                .hook_ui_locale(ui_locale.as_deref())
-                .build(),
-        );
-    }
 
     let ExtractedData {
         flat,
@@ -64,12 +47,12 @@ fn update_document(
         password,
     } = extract_data(lua, &data_table, &def)?;
 
-    // Field write access is now checked inside service::update_document_core
+    // Field write access is now checked inside service::create_document_core
     // via WriteHooks::field_write_denied.
 
-    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
+    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "create");
 
-    // Separate join data from the merged hook map
+    // Separate join data (non-string values) from the merged hook map
     let join_data: HashMap<String, Value> = hook
         .iter()
         .filter(|(_, v)| !matches!(v, Value::String(_)))
@@ -97,38 +80,38 @@ fn update_document(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (doc, _ctx) = update_document_core(
+    let (doc, _ctx) = create_document_core(
         conn,
         &write_hooks,
         &collection,
-        &id,
         &def,
         write_input,
         user.as_ref(),
     )
-    .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
+    .map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
 
     // Hydration and read-denied field stripping are handled inside
-    // update_document_core via WriteHooks.
+    // create_document_core via WriteHooks.
 
     document_to_lua_table(lua, &doc)
 }
 
-/// Register `crap.collections.update(collection, id, data, opts?)`.
+/// Register `crap.collections.create(collection, data, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_update(
+pub(crate) fn register_create(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();
-    let update_fn = lua.create_function(
-        move |lua, (collection, id, data_table, opts): (String, String, Table, Option<Table>)| {
-            update_document(lua, &registry, &lc, collection, id, data_table, opts)
+    let create_fn = lua.create_function(
+        move |lua, (collection, data_table, opts): (String, mlua::Table, Option<mlua::Table>)| {
+            create_document(lua, &registry, &lc, collection, data_table, opts)
         },
     )?;
 
-    table.set("update", update_fn)?;
+    table.set("create", create_fn)?;
+
     Ok(())
 }

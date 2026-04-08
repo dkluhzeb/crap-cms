@@ -11,7 +11,7 @@ use crate::{
     service::{LuaWriteHooks, WriteInput, update_global_core},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.globals.update`.
 fn globals_update_inner(
@@ -76,7 +76,7 @@ fn globals_update_inner(
 
 /// Register `crap.globals.update(slug, data, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_globals_update(
+pub(crate) fn register_globals_update(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

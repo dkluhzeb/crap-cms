@@ -256,6 +256,7 @@ fn enrich_nested_relationship(
         return;
     }
 
+    // Internal UI enrichment — direct query for display labels, not a user-facing read.
     let item = query::find_by_id(
         conn,
         &rc.collection,
@@ -313,6 +314,7 @@ fn enrich_nested_upload(
         return;
     }
 
+    // Internal UI enrichment — direct query for display labels, not a user-facing read.
     let Some(mut doc) = query::find_by_id(
         conn,
         &rc.collection,

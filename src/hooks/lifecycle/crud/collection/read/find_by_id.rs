@@ -11,7 +11,7 @@ use crate::{
     service::{LuaReadHooks, ReadOptions, find_document_by_id},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.collections.find_by_id`.
 fn find_by_id_inner(
@@ -79,7 +79,7 @@ fn find_by_id_inner(
 
 /// Register `crap.collections.find_by_id(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_find_by_id(
+pub(crate) fn register_find_by_id(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

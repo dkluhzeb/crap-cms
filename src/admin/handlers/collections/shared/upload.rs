@@ -52,7 +52,8 @@ pub(in crate::admin::handlers::collections) async fn process_collection_upload(
 ) -> Result<UploadResult, Response> {
     let upload_config = p.def.upload.clone().expect("upload config required");
 
-    // For updates, load old document to get old file paths for cleanup
+    // For updates, load old document to get old file paths for cleanup.
+    // Internal lookup for file cleanup planning, not a user-facing read.
     let old_doc_fields = if let Some(id) = p.doc_id {
         p.state
             .pool

@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    db::query::jobs,
+    service,
 };
 
 use super::job_run_to_proto;
@@ -43,12 +43,8 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            jobs::list_job_runs(&conn, slug.as_deref(), status.as_deref(), limit, offset).map_err(
-                |e| {
-                    error!("ListJobRuns query error: {}", e);
-                    Status::internal("Internal error")
-                },
-            )
+            service::jobs::list_job_runs(&conn, slug.as_deref(), status.as_deref(), limit, offset)
+                .map_err(Status::from)
         })
         .await
         .inspect_err(|e| error!("ListJobRuns task error: {}", e))

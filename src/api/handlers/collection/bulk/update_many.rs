@@ -1,9 +1,6 @@
 //! Bulk UpdateMany RPC handler.
 
-use std::collections::HashMap;
-
 use anyhow::Context as _;
-use serde_json::Value;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
@@ -13,117 +10,18 @@ use crate::{
         content,
         handlers::{
             ContentService,
+            collection::filter_builder::FilterBuilder,
             convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    core::{Document, collection::CollectionDefinition},
-    db::{AccessResult, DbConnection, LocaleContext},
-    hooks::{HookContext, HookEvent, HookRunner, ValidationCtx},
-    service,
+    core::event::EventOperation,
+    db::{AccessResult, LocaleContext},
+    service::{self, RunnerWriteHooks, WriteInput},
 };
 
-use super::helpers::{check_per_doc_access, find_matching_docs, map_db_error, publish_bulk_events};
-use crate::api::handlers::collection::filter_builder::FilterBuilder;
-use crate::core::event::EventOperation;
+use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
 
-/// Shared context for per-document update processing.
-struct UpdateDocCtx<'a> {
-    tx: &'a dyn DbConnection,
-    collection: &'a str,
-    def: &'a CollectionDefinition,
-    data: &'a HashMap<String, String>,
-    join_data: &'a HashMap<String, Value>,
-    locale_ctx: Option<&'a LocaleContext>,
-    hook_runner: &'a HookRunner,
-    user_doc: Option<&'a Document>,
-    run_hooks: bool,
-    draft: bool,
-    db_kind: &'a str,
-}
-
-/// Process a single document update within a bulk transaction.
-fn update_single_doc(ctx: &UpdateDocCtx, doc: &Document) -> Result<Document, Status> {
-    let (write_data, write_join_data) = if ctx.run_hooks {
-        run_update_hooks(ctx, doc)?
-    } else {
-        (ctx.data.clone(), ctx.join_data.clone())
-    };
-
-    let locale_cfg = ctx
-        .locale_ctx
-        .map(|lc| lc.config.clone())
-        .unwrap_or_default();
-
-    let updated = service::persist_bulk_update(
-        ctx.tx,
-        ctx.collection,
-        &doc.id,
-        ctx.def,
-        &write_data,
-        &write_join_data,
-        ctx.locale_ctx,
-        &locale_cfg,
-    )
-    .map_err(|e| map_db_error(e, "UpdateMany error", ctx.db_kind))?;
-
-    if ctx.run_hooks {
-        run_after_update_hook(ctx, &updated)?;
-    }
-
-    Ok(updated)
-}
-
-/// Write data after hook processing: string map for columns + JSON map for joins.
-type HookWriteData = (HashMap<String, String>, HashMap<String, Value>);
-
-/// Run before-write lifecycle hooks for a bulk update document.
-fn run_update_hooks(ctx: &UpdateDocCtx, doc: &Document) -> Result<HookWriteData, Status> {
-    let hook_data = service::build_hook_data(ctx.data, ctx.join_data);
-
-    let hook_ctx = HookContext::builder(ctx.collection, "update")
-        .data(hook_data)
-        .user(ctx.user_doc)
-        .build();
-
-    let val_ctx = ValidationCtx::builder(ctx.tx, ctx.collection)
-        .exclude_id(Some(&doc.id))
-        .locale_ctx(ctx.locale_ctx)
-        .soft_delete(ctx.def.soft_delete)
-        .draft(ctx.draft)
-        .build();
-
-    let final_ctx = ctx
-        .hook_runner
-        .run_before_write(&ctx.def.hooks, &ctx.def.fields, hook_ctx, &val_ctx)
-        .map_err(|e| map_db_error(e, "UpdateMany hook error", ctx.db_kind))?;
-
-    let final_data = final_ctx.to_string_map(&ctx.def.fields);
-
-    Ok((final_data, final_ctx.data))
-}
-
-/// Run after-change hook for a single updated document.
-fn run_after_update_hook(ctx: &UpdateDocCtx, updated: &Document) -> Result<(), Status> {
-    let mut after_data = updated.fields.clone();
-    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
-
-    let after_ctx = HookContext::builder(ctx.collection, "update")
-        .data(after_data)
-        .user(ctx.user_doc)
-        .build();
-
-    ctx.hook_runner
-        .run_after_write(
-            &ctx.def.hooks,
-            &ctx.def.fields,
-            HookEvent::AfterChange,
-            after_ctx,
-            ctx.tx,
-        )
-        .map_err(|e| map_db_error(e, "UpdateMany hook error", ctx.db_kind))?;
-
-    Ok(())
-}
+use crate::service::ServiceError;
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -172,10 +70,13 @@ impl ContentService {
         let collection = req.collection.clone();
         let req_where = req.r#where.clone();
         let def_owned = def;
+        let locale_config = self.locale_config.clone();
 
         let (modified, updated_ids) =
             task::spawn_blocking(move || -> Result<(i64, Vec<String>), Status> {
-                let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 let auth_user =
                     ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
@@ -201,7 +102,7 @@ impl ContentService {
                 let tx = conn
                     .transaction_immediate()
                     .context("Start transaction")
-                    .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 let docs = find_matching_docs(
                     &tx,
@@ -223,37 +124,32 @@ impl ContentService {
                     "Update access denied",
                 )?;
 
-                let denied = hook_runner.check_field_write_access(
-                    &def_owned.fields,
-                    user_doc,
-                    "update",
-                    &tx,
-                );
-
-                for name in &denied {
-                    data.remove(name);
-                    join_data.remove(name);
-                }
-
-                let update_ctx = UpdateDocCtx {
-                    tx: &tx,
-                    collection: &collection,
-                    def: &def_owned,
-                    data: &data,
-                    join_data: &join_data,
-                    locale_ctx: locale_ctx.as_ref(),
-                    hook_runner: &hook_runner,
-                    user_doc,
-                    run_hooks,
-                    draft,
-                    db_kind: &db_kind,
+                let wh = RunnerWriteHooks {
+                    runner: &hook_runner,
+                    hooks_enabled: run_hooks,
+                    conn: Some(&tx),
                 };
 
                 let mut count = 0i64;
                 let mut ids = Vec::new();
 
                 for doc in &docs {
-                    update_single_doc(&update_ctx, doc)?;
+                    let input = WriteInput::builder(data.clone(), &join_data)
+                        .locale_ctx(locale_ctx.as_ref())
+                        .draft(draft)
+                        .build();
+
+                    service::update_many_single_core(
+                        &tx,
+                        &wh,
+                        &collection,
+                        &doc.id,
+                        &def_owned,
+                        input,
+                        user_doc,
+                        &locale_config,
+                    )
+                    .map_err(|e| e.reclassify(&db_kind))?;
 
                     ids.push(doc.id.to_string());
                     count += 1;
@@ -261,7 +157,7 @@ impl ContentService {
 
                 tx.commit()
                     .context("Commit transaction")
-                    .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 Ok((count, ids))
             })

@@ -1,6 +1,7 @@
 //! Registers the `crap.*` Lua API namespace (collections, globals, hooks, log, util,
 //! crypto, schema).
 
+mod access;
 mod auth;
 mod collections;
 mod config;

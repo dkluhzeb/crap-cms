@@ -1,0 +1,35 @@
+//! Execute `unpublish` — unpublish a versioned document.
+
+use std::sync::Arc;
+
+use anyhow::{Context as _, Result};
+use serde_json::Value;
+use tracing::info;
+
+use crate::{core::Registry, db::DbPool, hooks::HookRunner, service::unpublish_document};
+
+use crate::mcp::tools::collection::helpers::doc_to_json;
+
+/// Execute `unpublish` — set a document to draft status.
+pub(in crate::mcp::tools) fn exec_unpublish(
+    args: &Value,
+    slug: &str,
+    registry: &Arc<Registry>,
+    pool: &DbPool,
+    runner: &HookRunner,
+) -> Result<String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .context("Missing 'id' argument")?;
+    let def = registry
+        .collections
+        .get(slug)
+        .context("Collection not found")?;
+
+    let doc = unpublish_document(pool, runner, slug, id, def, None)?;
+
+    info!("MCP unpublish {}: {}", slug, id);
+
+    Ok(serde_json::to_string_pretty(&doc_to_json(&doc))?)
+}

@@ -6,6 +6,7 @@ use mlua::Lua;
 use crate::{config::CrapConfig, core::SharedRegistry};
 
 use super::{
+    access::register_access,
     auth::register_auth,
     collections::register_collections,
     config::{register_config, register_locale},
@@ -36,6 +37,7 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) ->
     register_schema(lua, &crap, registry.clone())?;
     register_hooks(lua, &crap)?;
     register_auth(lua, &crap)?;
+    register_access(lua, &crap, registry.clone())?;
     register_env(lua, &crap)?;
     register_http(
         lua,

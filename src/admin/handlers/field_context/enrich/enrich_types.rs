@@ -52,6 +52,8 @@ fn doc_to_label_item(doc: &Document, title_field: &Option<String>) -> Value {
 }
 
 /// Resolve has-many selected items by looking up each ID in the DB.
+///
+/// Internal UI enrichment — direct query for display labels, not a user-facing read.
 fn resolve_has_many_items(
     ids: &[String],
     collection: &str,
@@ -71,6 +73,8 @@ fn resolve_has_many_items(
 }
 
 /// Resolve a has-one selected item by looking up the current value in the DB.
+///
+/// Internal UI enrichment — direct query for display labels, not a user-facing read.
 fn resolve_has_one_item(
     ctx: &Value,
     collection: &str,
@@ -291,6 +295,8 @@ fn prepare_upload_doc(
 }
 
 /// Resolve has-many upload items by looking up each ID in the DB.
+///
+/// Internal UI enrichment — direct query for display labels, not a user-facing read.
 fn resolve_upload_has_many(
     ids: &[String],
     collection: &str,
@@ -313,6 +319,8 @@ fn resolve_upload_has_many(
 }
 
 /// Resolve a has-one upload item, setting preview URL and filename on the context.
+///
+/// Internal UI enrichment — direct query for display labels, not a user-facing read.
 fn resolve_upload_has_one(
     ctx: &mut Value,
     collection: &str,
@@ -610,6 +618,7 @@ pub(super) fn enrich_join(
     rel_locale_ctx: Option<&LocaleContext>,
     doc_id: Option<&str>,
 ) {
+    // Internal UI enrichment — direct query for display labels, not a user-facing read.
     if let Some(ref jc) = field_def.join
         && let Some(doc_id_str) = doc_id
         && let Some(target_def) = reg.get_collection(&jc.collection)

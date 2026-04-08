@@ -276,8 +276,8 @@ fn protected_routes(
             get(collections::back_references),
         )
         .route(
-            "/admin/collections/{slug}/{id}/restore",
-            post(collections::restore_action),
+            "/admin/collections/{slug}/{id}/undelete",
+            post(collections::undelete_action),
         )
         .route(
             "/admin/collections/{slug}/empty-trash",

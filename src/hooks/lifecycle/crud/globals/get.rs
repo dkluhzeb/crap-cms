@@ -11,7 +11,7 @@ use crate::{
     service::{LuaReadHooks, get_global_document},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.globals.get`.
 fn globals_get_inner(
@@ -55,7 +55,7 @@ fn globals_get_inner(
 
 /// Register `crap.globals.get(slug, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_globals_get(
+pub(crate) fn register_globals_get(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,

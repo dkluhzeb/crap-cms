@@ -207,6 +207,52 @@ pub fn is_verified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool
     Ok(query::is_verified(conn, slug, id)?)
 }
 
+/// Get the current session version for a user (for JWT invalidation).
+pub fn get_session_version(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+) -> Result<u64, ServiceError> {
+    Ok(query::get_session_version(conn, slug, id)?)
+}
+
+/// Check whether a user document exists.
+pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool, ServiceError> {
+    Ok(query::user_exists(conn, slug, id)?)
+}
+
+/// Validate a password reset token without consuming it (for rendering the reset page).
+pub fn find_by_reset_token(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    token: &str,
+) -> Result<bool, ServiceError> {
+    Ok(query::find_by_reset_token(conn, slug, def, token)?.is_some())
+}
+
+/// Store an MFA code for a user.
+pub fn set_mfa_code(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+    code: &str,
+    expiry: i64,
+) -> Result<(), ServiceError> {
+    query::set_mfa_code(conn, slug, id, code, expiry)?;
+    Ok(())
+}
+
+/// Verify an MFA code. Returns true if valid and not expired.
+pub fn verify_mfa_code(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+    code: &str,
+) -> Result<bool, ServiceError> {
+    Ok(query::verify_mfa_code(conn, slug, id, code)?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

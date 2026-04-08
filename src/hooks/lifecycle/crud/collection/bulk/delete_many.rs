@@ -14,7 +14,7 @@ use crate::{
     service::{LuaWriteHooks, ServiceError},
 };
 
-use super::{get_tx_conn, helpers::*};
+use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Context for bulk delete operations.
 struct DeleteManyCtx<'a> {
@@ -63,6 +63,7 @@ fn find_docs_for_deletion(
 
     let mut find_all = FindQuery::new();
     find_all.filters = find_query.filters;
+    // Internal batch lookup for bulk mutation — not a user-facing read.
     let docs = query::find(conn, ctx.collection, def, &find_all, locale_ctx.as_ref())
         .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
 
@@ -166,7 +167,7 @@ fn delete_many_documents(
 
 /// Register `crap.collections.delete_many(collection, query, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_delete_many(
+pub(crate) fn register_delete_many(
     lua: &Lua,
     table: &Table,
     registry: SharedRegistry,
