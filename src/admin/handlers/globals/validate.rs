@@ -15,7 +15,7 @@ use crate::{
         AdminState,
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
-            shared::{check_access_or_forbid, get_user_doc, strip_write_denied_string_fields},
+            shared::{check_access_or_forbid, get_user_doc},
             validate::{
                 RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
                 validation_error_response_simple, values_to_string_map,
@@ -50,11 +50,8 @@ pub async fn validate_global(
 
     let mut form_data = values_to_string_map(&payload.data);
 
-    if let Err(_resp) =
-        strip_write_denied_string_fields(&state, &auth_user, &def.fields, "update", &mut form_data)
-    {
-        return validation_error_response_simple("Access check failed");
-    }
+    // Field write access stripping is now handled inside service::validate_document
+    // via WriteHooks::field_write_denied.
 
     transform_select_has_many(&mut form_data, &def.fields);
     let join_data = extract_join_data_from_form(&form_data, &def.fields);

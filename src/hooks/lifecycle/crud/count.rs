@@ -11,6 +11,7 @@ use crate::{
         query::{self, filter::normalize_filter_fields},
     },
     hooks::lifecycle::converters::lua_table_to_find_query,
+    service::{LuaReadHooks, count_documents},
 };
 
 use super::{get_tx_conn, helpers::*};
@@ -31,6 +32,7 @@ fn count_inner(
         LocaleContext::from_locale_string(get_opt_string(&query_table, "locale")?.as_deref(), lc);
     let override_access = get_opt_bool(&query_table, "overrideAccess", false)?;
     let draft = get_opt_bool(&query_table, "draft", false)?;
+    let user = hook_user(lua);
     let def = resolve_collection(reg, &collection)?;
 
     let find_query = match query_table {
@@ -42,25 +44,26 @@ fn count_inner(
 
     normalize_filter_fields(&mut filters, &def.fields);
     add_draft_filter(&def, draft, &mut filters);
-    enforce_access(
-        lua,
-        override_access,
-        def.access.read.as_deref(),
-        None,
-        &mut filters,
-        "Read access denied",
-    )?;
 
-    query::count_with_search(
+    let hooks = LuaReadHooks {
+        lua,
+        user: user.as_ref(),
+        ui_locale: None,
+        override_access,
+    };
+
+    count_documents(
         conn,
+        &hooks,
         &collection,
         &def,
         &filters,
         locale_ctx.as_ref(),
         search.as_deref(),
         false,
+        user.as_ref(),
     )
-    .map_err(|e| RuntimeError(format!("count error: {e:#}")))
+    .map_err(|e| RuntimeError(format!("{e}")))
 }
 
 /// Register `crap.collections.count(collection, query?)`.

@@ -83,7 +83,8 @@ impl ReadHooks for RunnerReadHooks<'_> {
         id: Option<&str>,
         data: Option<&HashMap<String, Value>>,
     ) -> Result<AccessResult> {
-        self.runner.check_access(access_ref, user, id, data, self.conn)
+        self.runner
+            .check_access(access_ref, user, id, data, self.conn)
     }
 
     fn field_read_denied(

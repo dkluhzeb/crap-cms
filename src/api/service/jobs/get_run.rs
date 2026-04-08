@@ -48,10 +48,8 @@ impl ContentService {
                 .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", id)))
         })
         .await
-        .map_err(|e| {
-            error!("GetJobRun task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("GetJobRun task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(job_run_to_proto(&run)))
     }

@@ -420,10 +420,8 @@ impl ContentService {
             })
         })
         .await
-        .map_err(|e| {
-            error!("Subscribe task error: {}", e);
-            Status::internal("Internal error")
-        })?
+        .inspect_err(|e| error!("Subscribe task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?
     }
 }
 

@@ -23,7 +23,6 @@ pub(crate) use super::query_utils::{
 pub(crate) use access::{
     EvaluateConditionsRequest, check_access_or_forbid, compute_denied_read_fields,
     evaluate_condition_results, get_event_user, get_user_doc, has_read_access, strip_denied_fields,
-    strip_write_denied_string_fields,
 };
 
 // document

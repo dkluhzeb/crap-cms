@@ -57,7 +57,8 @@ fn fetch_list_documents(
         ..Default::default()
     };
 
-    let result = find_documents(&conn, &hooks, slug, def, find_query, &opts)?;
+    let result =
+        find_documents(&conn, &hooks, slug, def, find_query, &opts).map_err(|e| e.into_anyhow())?;
 
     Ok((result.docs, result.total))
 }

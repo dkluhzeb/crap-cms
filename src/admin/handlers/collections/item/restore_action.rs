@@ -12,11 +12,10 @@ use tracing::{error, info};
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{check_access_or_forbid, forbidden, htmx_redirect},
+        handlers::shared::{forbidden, htmx_redirect},
     },
     core::auth::AuthUser,
-    db::query::AccessResult,
-    service,
+    service::{self, ServiceError},
 };
 
 /// POST /admin/collections/{slug}/{id}/restore — restore a soft-deleted item
@@ -30,29 +29,26 @@ pub async fn restore_action(
         None => return htmx_redirect("/admin/collections"),
     };
 
-    // Check trash access (restore is the inverse of soft-delete)
-    let trash_access = def.access.resolve_trash();
-
-    match check_access_or_forbid(&state, trash_access, &auth_user, Some(&id), None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to restore this item")
-                .into_response();
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
     if !def.soft_delete {
         return htmx_redirect(&format!("/admin/collections/{}", slug));
     }
 
     let pool = state.pool.clone();
+    let runner = state.hook_runner.clone();
     let slug_owned = slug.clone();
     let id_owned = id.clone();
     let def_owned = def.clone();
+    let user_doc = crate::admin::handlers::shared::get_user_doc(&auth_user).cloned();
 
     let result = task::spawn_blocking(move || {
-        service::restore_document(&pool, &slug_owned, &id_owned, &def_owned)
+        service::restore_document(
+            &pool,
+            &runner,
+            &slug_owned,
+            &id_owned,
+            &def_owned,
+            user_doc.as_ref(),
+        )
     })
     .await;
 
@@ -61,6 +57,9 @@ pub async fn restore_action(
             info!("Restored document {} in {}", id, slug);
 
             htmx_redirect(&format!("/admin/collections/{}?trash=1", slug))
+        }
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            forbidden(&state, "You don't have permission to restore this item").into_response()
         }
         Ok(Err(e)) => {
             error!("Restore error: {}", e);

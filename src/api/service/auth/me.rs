@@ -56,10 +56,8 @@ impl ContentService {
             Ok::<_, AnyhowError>((doc, sv, locked))
         })
         .await
-        .map_err(|e| {
-            error!("Me task error: {}", e);
-            Status::internal("Internal error")
-        })?
+        .inspect_err(|e| error!("Me task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?
         .map_err(|e| {
             error!("Me query error: {}", e);
             Status::internal("Internal error")

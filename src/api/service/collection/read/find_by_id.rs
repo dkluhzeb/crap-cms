@@ -11,7 +11,7 @@ use crate::{
         content,
         service::{ContentService, collection::helpers::map_db_error, convert::document_to_proto},
     },
-    db::{AccessResult, LocaleContext},
+    db::LocaleContext,
 };
 
 use crate::api::service::collection::helpers::strip_read_denied_proto_fields;
@@ -63,27 +63,12 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                Some(&id),
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
-
-            let access_constraints = if let AccessResult::Constrained(ref filters) = access_result {
-                Some(filters.clone())
-            } else {
-                None
-            };
-
+            // Access check is handled by service::find_document_by_id
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let read_hooks = crate::service::RunnerReadHooks { runner: &runner, conn: &conn };
+            let read_hooks = crate::service::RunnerReadHooks {
+                runner: &runner,
+                conn: &conn,
+            };
             let read_opts = crate::service::ReadOptions {
                 depth,
                 hydrate: true,
@@ -93,14 +78,19 @@ impl ContentService {
                 user: user_doc,
                 ui_locale: None,
                 use_draft: use_draft_version,
-                access_constraints,
                 cache: Some(&*pop_cache),
+                ..Default::default()
             };
 
             let doc = crate::service::find_document_by_id(
-                &conn, &read_hooks, &collection, &def_owned, &id, &read_opts,
+                &conn,
+                &read_hooks,
+                &collection,
+                &def_owned,
+                &id,
+                &read_opts,
             )
-            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+            .map_err(Status::from)?;
 
             match doc {
                 Some(d) => {
@@ -123,10 +113,8 @@ impl ContentService {
             }
         })
         .await
-        .map_err(|e| {
-            error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("Task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::FindByIdResponse {
             document: result,

@@ -31,19 +31,16 @@ fn fetch_version_data(
     global_table: &str,
     pg: &Pagination,
 ) -> (Vec<Value>, i64) {
-    let total = query::count_versions(conn, global_table, "default").unwrap_or(0);
-
-    let versions = query::list_versions(
+    let (snapshots, total) = crate::service::version_ops::list_versions(
         conn,
         global_table,
         "default",
         Some(pg.per_page),
         Some(pg.offset),
     )
-    .unwrap_or_default()
-    .into_iter()
-    .map(version_to_json)
-    .collect();
+    .unwrap_or_default();
+
+    let versions = snapshots.into_iter().map(version_to_json).collect();
 
     (versions, total)
 }

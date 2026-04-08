@@ -32,15 +32,6 @@ fn globals_get_inner(
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(reg, &slug)?;
 
-    enforce_access(
-        lua,
-        override_access,
-        def.access.read.as_deref(),
-        None,
-        &mut vec![],
-        "Read access denied",
-    )?;
-
     let hooks = LuaReadHooks {
         lua,
         user: user.as_ref(),
@@ -57,7 +48,7 @@ fn globals_get_inner(
         user.as_ref(),
         ui_locale.as_deref(),
     )
-    .map_err(|e| RuntimeError(format!("get_global error: {e:#}")))?;
+    .map_err(|e| RuntimeError(format!("{e}")))?;
 
     document_to_lua_table(lua, &doc)
 }

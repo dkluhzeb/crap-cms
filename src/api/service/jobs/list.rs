@@ -36,10 +36,8 @@ impl ContentService {
             Ok::<_, Status>(())
         })
         .await
-        .map_err(|e| {
-            error!("ListJobs task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("ListJobs task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         let jobs: Vec<content::JobDefinitionInfo> = self
             .registry

@@ -9,16 +9,13 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
-    db::{LocaleContext, query},
-    hooks::lifecycle::{
-        access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
-        converters::*,
-    },
+    db::LocaleContext,
+    hooks::lifecycle::converters::*,
     service::{LuaWriteHooks, WriteInput, update_document_core},
 };
 
-use super::{get_tx_conn, helpers::*};
 use super::unpublish::{UnpublishCtx, handle_unpublish};
+use super::{get_tx_conn, helpers::*};
 
 /// Execute the `crap.collections.update` operation.
 fn update_document(
@@ -44,15 +41,14 @@ fn update_document(
     let draft = get_opt_bool(&opts, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    enforce_access(
-        lua, override_access, def.access.update.as_deref(),
-        Some(&id), &mut vec![], "Update access denied",
-    )?;
+    // Collection-level access check is handled inside service::update_document_core
+    // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
     // Handle unpublish early return
     if unpublish && def.has_versions() {
         return handle_unpublish(
-            lua, conn,
+            lua,
+            conn,
             &UnpublishCtx::builder(&collection, &id, &def)
                 .run_hooks(run_hooks)
                 .locale_str(locale_str.as_deref())
@@ -62,16 +58,14 @@ fn update_document(
         );
     }
 
-    let ExtractedData { mut flat, mut hook, password } = extract_data(lua, &data_table, &def)?;
+    let ExtractedData {
+        flat,
+        hook,
+        password,
+    } = extract_data(lua, &data_table, &def)?;
 
-    // Strip write-denied fields
-    if !override_access {
-        let denied = check_field_write_access_with_lua(lua, &def.fields, user.as_ref(), "update");
-        for name in &denied {
-            flat.remove(name);
-            hook.remove(name);
-        }
-    }
+    // Field write access is now checked inside service::update_document_core
+    // via WriteHooks::field_write_denied.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
 
@@ -82,7 +76,9 @@ fn update_document(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let write_hooks = LuaWriteHooks {
         lua,
         user: user.as_ref(),
@@ -90,7 +86,7 @@ fn update_document(
         override_access,
         registry: Some(&r),
         hooks_enabled,
-        run_validation: run_hooks,
+        run_validation: true,
     };
 
     let write_input = WriteInput::builder(flat, &join_data)
@@ -101,19 +97,19 @@ fn update_document(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (mut doc, _ctx) = update_document_core(conn, &write_hooks, &collection, &id, &def, write_input, user.as_ref())
-        .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
+    let (doc, _ctx) = update_document_core(
+        conn,
+        &write_hooks,
+        &collection,
+        &id,
+        &def,
+        write_input,
+        user.as_ref(),
+    )
+    .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
 
-    // Hydrate join fields and strip read-denied fields before returning
-    query::hydrate_document(conn, &collection, &def.fields, &mut doc, None, locale_ctx.as_ref())
-        .map_err(|e| RuntimeError(format!("hydrate error: {e:#}")))?;
-
-    if !override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, user.as_ref());
-        for name in &denied {
-            doc.fields.remove(name);
-        }
-    }
+    // Hydration and read-denied field stripping are handled inside
+    // update_document_core via WriteHooks.
 
     document_to_lua_table(lua, &doc)
 }
@@ -128,7 +124,7 @@ pub(super) fn register_update(
 ) -> Result<()> {
     let lc = locale_config.clone();
     let update_fn = lua.create_function(
-    move |lua, (collection, id, data_table, opts): (String, String, Table, Option<Table>)| {
+        move |lua, (collection, id, data_table, opts): (String, String, Table, Option<Table>)| {
             update_document(lua, &registry, &lc, collection, id, data_table, opts)
         },
     )?;

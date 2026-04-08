@@ -7,10 +7,7 @@ use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
     db::LocaleContext,
-    hooks::lifecycle::{
-        access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
-        converters::*,
-    },
+    hooks::lifecycle::converters::*,
     service::{LuaWriteHooks, WriteInput, update_global_core},
 };
 
@@ -37,25 +34,20 @@ fn globals_update_inner(
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(reg, &slug)?;
 
-    enforce_access(
-        lua, override_access, def.access.update.as_deref(),
-        None, &mut vec![], "Update access denied",
-    )?;
+    // Collection-level access check is handled inside service::update_global_core
+    // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
-    let mut data = lua_table_to_hashmap(&data_table)?;
-    let mut join_data = lua_table_to_json_map(lua, &data_table)?;
+    let data = lua_table_to_hashmap(&data_table)?;
+    let join_data = lua_table_to_json_map(lua, &data_table)?;
 
-    if !override_access {
-        let denied = check_field_write_access_with_lua(lua, &def.fields, user.as_ref(), "update");
-        for name in &denied {
-            data.remove(name);
-            join_data.remove(name);
-        }
-    }
+    // Field write access is now checked inside service::update_global_core
+    // via WriteHooks::field_write_denied.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &slug, "update");
 
-    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let write_hooks = LuaWriteHooks {
         lua,
         user: user.as_ref(),
@@ -63,7 +55,7 @@ fn globals_update_inner(
         override_access,
         registry: Some(&r),
         hooks_enabled,
-        run_validation: run_hooks,
+        run_validation: true,
     };
 
     let write_input = WriteInput::builder(data, &join_data)
@@ -72,15 +64,12 @@ fn globals_update_inner(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (mut doc, _ctx) = update_global_core(conn, &write_hooks, &slug, &def, write_input, user.as_ref())
-        .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
+    let (doc, _ctx) =
+        update_global_core(conn, &write_hooks, &slug, &def, write_input, user.as_ref())
+            .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
 
-    if !override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, user.as_ref());
-        for name in &denied {
-            doc.fields.remove(name);
-        }
-    }
+    // Hydration and read-denied field stripping are handled inside
+    // update_global_core via WriteHooks.
 
     document_to_lua_table(lua, &doc)
 }

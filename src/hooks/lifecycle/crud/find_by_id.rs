@@ -6,7 +6,7 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
-    db::{FilterClause, LocaleContext},
+    db::LocaleContext,
     hooks::lifecycle::converters::document_to_lua_table,
     service::{LuaReadHooks, ReadOptions, find_document_by_id},
 };
@@ -48,22 +48,6 @@ fn find_by_id_inner(
                 .collect()
         });
 
-    // Resolve access constraints
-    let mut access_filters: Vec<FilterClause> = Vec::new();
-    enforce_access(
-        lua,
-        override_access,
-        def.access.read.as_deref(),
-        Some(&id),
-        &mut access_filters,
-        "Read access denied",
-    )?;
-    let access_constraints = if access_filters.is_empty() {
-        None
-    } else {
-        Some(access_filters)
-    };
-
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
@@ -81,12 +65,11 @@ fn find_by_id_inner(
         user: user.as_ref(),
         ui_locale: ui_locale.as_deref(),
         use_draft,
-        access_constraints,
         ..Default::default()
     };
 
     let doc = find_document_by_id(conn, &hooks, &collection, &def, &id, &opts)
-        .map_err(|e| RuntimeError(format!("find_by_id error: {e:#}")))?;
+        .map_err(|e| RuntimeError(format!("{e}")))?;
 
     match doc {
         Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

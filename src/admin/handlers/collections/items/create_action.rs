@@ -19,9 +19,8 @@ use crate::{
             },
             forms::{extract_join_data_from_form, parse_form, transform_select_has_many},
             shared::{
-                check_access_or_forbid, forbidden, get_event_user, get_user_doc,
-                htmx_redirect_with_created, redirect_response, strip_write_denied_string_fields,
-                toast_only_error,
+                forbidden, get_event_user, get_user_doc, htmx_redirect_with_created,
+                redirect_response, toast_only_error,
             },
         },
     },
@@ -30,11 +29,10 @@ use crate::{
         auth::AuthUser,
         event::{EventOperation, EventTarget},
         upload,
-        validate::ValidationError,
     },
-    db::query::{AccessResult, LocaleContext, LocaleMode},
+    db::query::{LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
-    service,
+    service::{self, ServiceError},
 };
 
 /// Handle post-create success: commit upload, enqueue conversions, publish event, send verification email.
@@ -128,7 +126,7 @@ async fn spawn_create(
     def: &CollectionDefinition,
     auth_user: &Option<Extension<AuthUser>>,
     input: CreateInput,
-) -> Result<Result<service::WriteResult, anyhow::Error>, task::JoinError> {
+) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let slug_owned = slug.to_string();
@@ -171,16 +169,7 @@ pub async fn create_action(
         None => return redirect_response("/admin/collections"),
     };
 
-    match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(
-                &state,
-                "You don't have permission to create items in this collection",
-            );
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
+    // Collection-level access check is handled inside service::create_document_core.
 
     let (mut form_data, file) = match parse_form(request, &state, &def).await {
         Ok(result) => result,
@@ -215,11 +204,7 @@ pub async fn create_action(
         }
     }
 
-    if let Err(resp) =
-        strip_write_denied_string_fields(&state, &auth_user, &def.fields, "create", &mut form_data)
-    {
-        return *resp;
-    }
+    // Field write access is now checked inside service::create_document_core.
 
     let password = match extract_and_validate_password(&state, &def, &mut form_data) {
         Ok(pw) => pw,
@@ -266,22 +251,25 @@ pub async fn create_action(
 
             htmx_redirect_with_created(&format!("/admin/collections/{}", slug), &doc.id, label)
         }
-        Ok(Err(e)) => {
-            if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                render_form_validation_errors(
-                    &state,
-                    &def,
-                    None,
-                    &form_data_clone,
-                    &join_data_clone,
-                    ve,
-                    &auth_user,
-                )
-            } else {
-                error!("Create error: {}", e);
+        Ok(Err(e)) => match e {
+            ServiceError::AccessDenied(_) => forbidden(
+                &state,
+                "You don't have permission to create items in this collection",
+            ),
+            ServiceError::Validation(ref ve) => render_form_validation_errors(
+                &state,
+                &def,
+                None,
+                &form_data_clone,
+                &join_data_clone,
+                ve,
+                &auth_user,
+            ),
+            other => {
+                error!("Create error: {}", other);
                 redirect_response(&format!("/admin/collections/{}/create", slug))
             }
-        }
+        },
         Err(e) => {
             error!("Create task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/create", slug))

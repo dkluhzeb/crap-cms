@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, service::ContentService},
-    db::{AccessResult, query},
+    db::AccessResult,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -59,16 +59,14 @@ impl ContentService {
                 return Err(Status::permission_denied("Read access denied"));
             }
 
-            query::list_versions(&conn, &collection, &id, limit, None).map_err(|e| {
-                error!("ListVersions error: {}", e);
-                Status::internal("Internal error")
-            })
+            let (versions, _total) =
+                crate::service::version_ops::list_versions(&conn, &collection, &id, limit, None)
+                    .map_err(Status::from)?;
+            Ok(versions)
         })
         .await
-        .map_err(|e| {
-            error!("ListVersions task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("ListVersions task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         let proto_versions: Vec<content::VersionInfo> = versions
             .iter()

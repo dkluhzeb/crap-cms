@@ -6,9 +6,8 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect},
 };
-use chrono::Utc;
 use tokio::task;
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     admin::{
@@ -16,7 +15,7 @@ use crate::{
         handlers::auth::{VerifyEmailQuery, client_ip},
     },
     core::Registry,
-    db::{DbPool, query},
+    db::DbPool,
 };
 
 /// Find a verification token across all auth collections, validate it,
@@ -41,33 +40,13 @@ fn consume_verification_token(
             continue;
         }
 
-        let Some((user, exp)) = query::find_by_verification_token(&tx, &def.slug, def, token)?
-        else {
-            continue;
-        };
-
-        if Utc::now().timestamp() >= exp {
-            if let Err(e) = query::clear_verification_token(&tx, &def.slug, &user.id) {
-                warn!("Failed to clear expired verification token: {}", e);
+        match crate::service::auth::consume_verification_token(&tx, &def.slug, def, token)? {
+            true => {
+                tx.commit()?;
+                return Ok(true);
             }
-
-            tx.commit()?;
-
-            return Ok(false);
+            false => continue,
         }
-
-        // Block verification for locked accounts (consistent with reset_password)
-        if query::is_locked(&tx, &def.slug, &user.id)? {
-            query::clear_verification_token(&tx, &def.slug, &user.id)?;
-            tx.commit()?;
-
-            return Ok(false);
-        }
-
-        query::mark_verified(&tx, &def.slug, &user.id)?;
-        tx.commit()?;
-
-        return Ok(true);
     }
 
     Ok(false)

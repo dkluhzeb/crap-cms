@@ -5,8 +5,6 @@ use axum::{
     http::HeaderMap,
     response::Html,
 };
-use chrono::Utc;
-use nanoid::nanoid;
 use serde_json::json;
 use tokio::task;
 use tracing::error;
@@ -20,7 +18,7 @@ use crate::{
     },
     config::EmailConfig,
     core::{CollectionDefinition, email, email::EmailRenderer},
-    db::{DbPool, query},
+    db::DbPool,
 };
 
 /// Everything needed to look up a user and send the password-reset email.
@@ -65,22 +63,21 @@ fn send_reset_email(params: ResetEmailParams) {
         }
     };
 
-    let user = match query::find_by_email(&conn, &params.slug, &params.def, &params.user_email) {
-        Ok(Some(u)) => u,
+    let token_result = match crate::service::auth::generate_reset_token(
+        &conn,
+        &params.slug,
+        &params.def,
+        &params.user_email,
+        params.reset_expiry,
+    ) {
+        Ok(Some(r)) => r,
         Ok(None) => return,
         Err(e) => {
-            error!("Forgot password lookup: {}", e);
+            error!("Forgot password error: {}", e);
             return;
         }
     };
-
-    let token = nanoid!();
-    let exp = Utc::now().timestamp() + params.reset_expiry as i64;
-
-    if let Err(e) = query::set_reset_token(&conn, &params.slug, &user.id, &token, exp) {
-        error!("Failed to set reset token: {}", e);
-        return;
-    }
+    let token = &token_result.token;
 
     let reset_url = format!("{}/admin/reset-password?token={}", params.base_url, token);
 

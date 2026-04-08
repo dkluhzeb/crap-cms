@@ -10,7 +10,8 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
-            FieldHookEvent, access::check_field_write_access_with_lua,
+            FieldHookEvent,
+            access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
             run_before_validate_on_node_attrs, run_field_hooks_inner, run_hooks_inner,
             validate_fields_inner,
         },
@@ -52,6 +53,19 @@ pub trait WriteHooks {
         conn: &dyn DbConnection,
     ) -> Result<HookContext>;
 
+    /// Field-level read access: returns denied field names to strip from returned documents.
+    fn field_read_denied(&self, fields: &[FieldDefinition], user: Option<&Document>)
+    -> Vec<String>;
+
+    /// Collection-level access check. Returns the access result (Allowed/Denied/Constrained).
+    fn check_access(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        id: Option<&str>,
+        data: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::db::AccessResult>;
+
     /// Field-level write access: returns denied field names to strip before persistence.
     fn field_write_denied(
         &self,
@@ -64,6 +78,23 @@ pub trait WriteHooks {
 /// Pool-based write hook execution for admin, gRPC, and MCP surfaces.
 pub struct RunnerWriteHooks<'a> {
     pub runner: &'a HookRunner,
+    /// Whether hooks are enabled. When `false`, hook calls are skipped (but validation
+    /// still runs in `run_before_write`). Defaults to `true` when not set.
+    pub hooks_enabled: bool,
+    /// Optional connection for field-level write access checks. When provided,
+    /// `field_write_denied` actually checks access via Lua. When `None`, returns empty.
+    pub conn: Option<&'a dyn DbConnection>,
+}
+
+impl<'a> RunnerWriteHooks<'a> {
+    /// Create with hooks enabled and no field access connection (the common case).
+    pub fn new(runner: &'a HookRunner) -> Self {
+        Self {
+            runner,
+            hooks_enabled: true,
+            conn: None,
+        }
+    }
 }
 
 impl WriteHooks for RunnerWriteHooks<'_> {
@@ -74,7 +105,13 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         ctx: HookContext,
         val_ctx: &ValidationCtx,
     ) -> Result<HookContext> {
-        self.runner.run_before_write(hooks, fields, ctx, val_ctx)
+        if self.hooks_enabled {
+            self.runner.run_before_write(hooks, fields, ctx, val_ctx)
+        } else {
+            // Still validate, but skip hooks
+            self.runner.validate_fields(fields, &ctx.data, val_ctx)?;
+            Ok(ctx)
+        }
     }
 
     fn run_after_write(
@@ -85,7 +122,11 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         ctx: HookContext,
         conn: &dyn DbConnection,
     ) -> Result<HookContext> {
-        self.runner.run_after_write(hooks, fields, event, ctx, conn)
+        if self.hooks_enabled {
+            self.runner.run_after_write(hooks, fields, event, ctx, conn)
+        } else {
+            Ok(ctx)
+        }
     }
 
     fn run_hooks_with_conn(
@@ -95,18 +136,48 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         ctx: HookContext,
         conn: &dyn DbConnection,
     ) -> Result<HookContext> {
-        self.runner.run_hooks_with_conn(hooks, event, ctx, conn)
+        if self.hooks_enabled {
+            self.runner.run_hooks_with_conn(hooks, event, ctx, conn)
+        } else {
+            Ok(ctx)
+        }
+    }
+
+    fn field_read_denied(
+        &self,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+    ) -> Vec<String> {
+        let Some(conn) = self.conn else {
+            return Vec::new();
+        };
+        self.runner.check_field_read_access(fields, user, conn)
+    }
+
+    fn check_access(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        id: Option<&str>,
+        data: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::db::AccessResult> {
+        let Some(conn) = self.conn else {
+            return Ok(crate::db::AccessResult::Allowed);
+        };
+        self.runner.check_access(access_ref, user, id, data, conn)
     }
 
     fn field_write_denied(
         &self,
-        _fields: &[FieldDefinition],
-        _user: Option<&Document>,
-        _operation: &str,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+        operation: &str,
     ) -> Vec<String> {
-        // RunnerWriteHooks: field-level write access is checked by the service layer
-        // using runner.check_field_write_access() with its own connection.
-        Vec::new()
+        let Some(conn) = self.conn else {
+            return Vec::new();
+        };
+        self.runner
+            .check_field_write_access(fields, user, operation, conn)
     }
 }
 
@@ -133,13 +204,21 @@ impl WriteHooks for LuaWriteHooks<'_> {
     ) -> Result<HookContext> {
         if self.hooks_enabled {
             run_field_hooks_inner(
-                self.lua, fields, &FieldHookEvent::BeforeValidate,
-                &mut ctx.data, &ctx.collection, &ctx.operation,
+                self.lua,
+                fields,
+                &FieldHookEvent::BeforeValidate,
+                &mut ctx.data,
+                &ctx.collection,
+                &ctx.operation,
             )?;
 
             if let Some(registry) = self.registry {
                 apply_richtext_before_validate(
-                    self.lua, fields, &mut ctx.data, registry, &ctx.collection,
+                    self.lua,
+                    fields,
+                    &mut ctx.data,
+                    registry,
+                    &ctx.collection,
                 );
             }
 
@@ -152,8 +231,12 @@ impl WriteHooks for LuaWriteHooks<'_> {
 
         if self.hooks_enabled {
             run_field_hooks_inner(
-                self.lua, fields, &FieldHookEvent::BeforeChange,
-                &mut ctx.data, &ctx.collection, &ctx.operation,
+                self.lua,
+                fields,
+                &FieldHookEvent::BeforeChange,
+                &mut ctx.data,
+                &ctx.collection,
+                &ctx.operation,
             )?;
 
             ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeChange, ctx)?;
@@ -176,8 +259,12 @@ impl WriteHooks for LuaWriteHooks<'_> {
 
         if matches!(event, HookEvent::AfterChange) {
             run_field_hooks_inner(
-                self.lua, fields, &FieldHookEvent::AfterChange,
-                &mut ctx.data, &ctx.collection, &ctx.operation,
+                self.lua,
+                fields,
+                &FieldHookEvent::AfterChange,
+                &mut ctx.data,
+                &ctx.collection,
+                &ctx.operation,
             )?;
         }
 
@@ -195,6 +282,30 @@ impl WriteHooks for LuaWriteHooks<'_> {
             return Ok(ctx);
         }
         run_hooks_inner(self.lua, hooks, event, ctx)
+    }
+
+    fn check_access(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+        id: Option<&str>,
+        data: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::db::AccessResult> {
+        if self.override_access {
+            return Ok(crate::db::AccessResult::Allowed);
+        }
+        crate::hooks::lifecycle::access::check_access_with_lua(self.lua, access_ref, user, id, data)
+    }
+
+    fn field_read_denied(
+        &self,
+        fields: &[FieldDefinition],
+        user: Option<&Document>,
+    ) -> Vec<String> {
+        if self.override_access {
+            return Vec::new();
+        }
+        check_field_read_access_with_lua(self.lua, fields, user)
     }
 
     fn field_write_denied(

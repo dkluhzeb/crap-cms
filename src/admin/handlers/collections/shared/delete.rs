@@ -12,53 +12,15 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{
-            check_access_or_forbid, forbidden, get_event_user, get_user_doc, htmx_redirect,
-        },
+        handlers::shared::{forbidden, get_event_user, get_user_doc, htmx_redirect},
     },
     core::{
         auth::AuthUser,
-        collection::CollectionDefinition,
         event::{EventOperation, EventTarget},
     },
-    db::query::AccessResult,
     hooks::lifecycle::PublishEventInput,
-    service,
+    service::{self, ServiceError},
 };
-
-/// Check delete/trash access based on soft_delete and force_hard_delete flags.
-fn check_delete_access(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    auth_user: &Option<Extension<AuthUser>>,
-    id: &str,
-    force_hard_delete: bool,
-    json_response: bool,
-) -> Result<(), Box<Response>> {
-    let (access_fn, deny_msg) = if def.soft_delete && !force_hard_delete {
-        (
-            def.access.resolve_trash(),
-            "You don't have permission to trash this item",
-        )
-    } else {
-        (
-            def.access.delete.as_deref(),
-            "You don't have permission to permanently delete this item",
-        )
-    };
-
-    match check_access_or_forbid(state, access_fn, auth_user, Some(id), None) {
-        Ok(AccessResult::Denied) => {
-            if json_response {
-                Err(Box::new(json_error_response(deny_msg)))
-            } else {
-                Err(Box::new(forbidden(state, deny_msg).into_response()))
-            }
-        }
-        Err(resp) => Err(resp),
-        _ => Ok(()),
-    }
-}
 
 /// Build a JSON `{"ok": true}` success response.
 fn json_ok_response() -> Response {
@@ -89,12 +51,6 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
             return Redirect::to("/admin/collections").into_response();
         }
     };
-
-    if let Err(resp) =
-        check_delete_access(state, &def, auth_user, id, force_hard_delete, json_response)
-    {
-        return *resp;
-    }
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -141,10 +97,31 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
             }
         }
         Ok(Err(e)) => {
-            error!("Delete error: {}", e);
+            let msg = match &e {
+                ServiceError::AccessDenied(_) => {
+                    let deny_msg = if def.soft_delete && !force_hard_delete {
+                        "You don't have permission to trash this item"
+                    } else {
+                        "You don't have permission to permanently delete this item"
+                    };
+
+                    if json_response {
+                        return json_error_response(deny_msg);
+                    }
+
+                    return forbidden(state, deny_msg).into_response();
+                }
+                ServiceError::Referenced { count, .. } => {
+                    format!("Cannot delete: referenced by {count} document(s)")
+                }
+                _ => {
+                    error!("Delete error: {}", e);
+                    "Failed to delete item".to_string()
+                }
+            };
 
             if json_response {
-                return json_error_response("Failed to delete item");
+                return json_error_response(&msg);
             }
         }
         Err(e) => {

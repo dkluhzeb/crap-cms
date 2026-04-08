@@ -4,8 +4,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Result, anyhow};
-
+use anyhow::Context as _;
 use serde_json::Value;
 
 use crate::{
@@ -14,10 +13,12 @@ use crate::{
     db::{DbConnection, DbPool, query},
     hooks::{HookContext, HookEvent, HookRunner},
     service::{
-        AfterChangeInput, RunnerWriteHooks, WriteInput, WriteResult,
+        AfterChangeInput, RunnerWriteHooks, ServiceError, WriteInput, WriteResult,
         run_after_change_hooks,
     },
 };
+
+type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Create a document within a single transaction: before-hooks → insert → after-hooks → commit.
 /// When `draft` is true and the collection has drafts enabled, the document is created with
@@ -47,7 +48,11 @@ pub fn create_document_with_conn(
     user: Option<&Document>,
 ) -> Result<WriteResult> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks { runner };
+    let wh = RunnerWriteHooks {
+        runner,
+        hooks_enabled: true,
+        conn: Some(&tx),
+    };
     let result = crate::service::create_document_core(&tx, &wh, slug, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)
@@ -83,7 +88,11 @@ pub fn update_document_with_conn(
     user: Option<&Document>,
 ) -> Result<WriteResult> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks { runner };
+    let wh = RunnerWriteHooks {
+        runner,
+        hooks_enabled: true,
+        conn: Some(&tx),
+    };
     let result = crate::service::update_document_core(&tx, &wh, slug, id, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)
@@ -105,7 +114,7 @@ pub fn unpublish_document(
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let doc = query::find_by_id_raw(&tx, slug, def, id, None, false)?
-        .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
+        .ok_or_else(|| ServiceError::NotFound(format!("Document '{id}' not found in '{slug}'")))?;
 
     let hook_ctx = HookContext::builder(slug, "update")
         .data(doc.fields.clone())
@@ -118,7 +127,7 @@ pub fn unpublish_document(
 
     crate::service::persist_unpublish(&tx, slug, id, def)?;
 
-    let wh = RunnerWriteHooks { runner };
+    let wh = RunnerWriteHooks::new(runner);
     run_after_change_hooks(
         &wh,
         &def.hooks,
@@ -178,8 +187,9 @@ pub fn delete_document_with_conn(
     locale_config: Option<&LocaleConfig>,
 ) -> Result<HashMap<String, Value>> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks { runner };
-    let result = crate::service::delete_document_core(&tx, &wh, slug, id, def, user, locale_config)?;
+    let wh = RunnerWriteHooks::new(runner);
+    let result =
+        crate::service::delete_document_core(&tx, &wh, slug, id, def, user, locale_config)?;
     tx.commit().context("Commit transaction")?;
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
@@ -192,33 +202,64 @@ pub fn delete_document_with_conn(
     Ok(result.context)
 }
 
+/// Core restore logic on an existing connection: access check + restore row + FTS re-sync.
+///
+/// Checks trash access via `write_hooks.check_access`, then restores the document.
+/// Does NOT manage transactions — caller must open/commit.
+/// Returns the restored document on success.
+pub fn restore_document_core(
+    conn: &dyn DbConnection,
+    write_hooks: &dyn crate::service::WriteHooks,
+    slug: &str,
+    id: &str,
+    def: &CollectionDefinition,
+    user: Option<&Document>,
+) -> Result<Document> {
+    let access = write_hooks.check_access(def.access.resolve_trash(), user, Some(id), None)?;
+    if matches!(access, crate::db::AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Restore access denied".into()));
+    }
+
+    let restored = query::restore(conn, slug, id)?;
+    if !restored {
+        return Err(ServiceError::NotFound(
+            "Document not found or not deleted".into(),
+        ));
+    }
+
+    // Re-sync FTS index (the FTS row was deleted on soft-delete)
+    if conn.supports_fts()
+        && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, slug, def, id, None)
+    {
+        query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+    }
+
+    query::find_by_id(conn, slug, def, id, None)?
+        .ok_or_else(|| ServiceError::NotFound("Document not found after restore".into()))
+}
+
 /// Restore a soft-deleted document: clear `_deleted_at`, re-sync FTS index.
 // Excluded from coverage: requires DB pool + FTS for full integration testing.
 // Tested indirectly through admin handler and Lua API tests.
 #[cfg(not(tarpaulin_include))]
 pub fn restore_document(
     pool: &DbPool,
+    runner: &HookRunner,
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
+    user: Option<&Document>,
 ) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
+    let wh = RunnerWriteHooks {
+        runner,
+        hooks_enabled: true,
+        conn: Some(&tx),
+    };
 
-    let restored = query::restore(&tx, slug, id)?;
-    if !restored {
-        anyhow::bail!("Document not found or not deleted");
-    }
-
-    // Re-sync FTS index (the FTS row was deleted on soft-delete)
-    if tx.supports_fts()
-        && let Ok(Some(doc)) = query::find_by_id_unfiltered(&tx, slug, def, id, None)
-    {
-        query::fts::fts_upsert(&tx, slug, &doc, Some(def))?;
-    }
+    let doc = restore_document_core(&tx, &wh, slug, id, def, user)?;
 
     tx.commit()?;
-
-    query::find_by_id(&conn, slug, def, id, None)?
-        .ok_or_else(|| anyhow!("Document not found after restore"))
+    Ok(doc)
 }

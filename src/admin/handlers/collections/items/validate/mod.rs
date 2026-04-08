@@ -19,8 +19,7 @@ use crate::{
         AdminState,
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
-            shared::strip_write_denied_string_fields,
-            validate::{ValidateRequest, validation_error_response_simple, values_to_string_map},
+            validate::{ValidateRequest, values_to_string_map},
         },
     },
     core::{CollectionDefinition, auth::AuthUser},
@@ -35,21 +34,16 @@ type PreparedFormData = (HashMap<String, String>, HashMap<String, Value>);
 /// Prepare form data for validation: strip denied fields, remove password,
 /// transform selects, extract join data, and inject upload placeholders.
 fn prepare_form_for_validation(
-    state: &AdminState,
+    _state: &AdminState,
     def: &CollectionDefinition,
-    auth_user: &Option<Extension<AuthUser>>,
+    _auth_user: &Option<Extension<AuthUser>>,
     payload: &ValidateRequest,
-    operation: &str,
+    _operation: &str,
 ) -> Result<PreparedFormData, Box<Response>> {
     let mut form_data = values_to_string_map(&payload.data);
 
-    if let Err(_resp) =
-        strip_write_denied_string_fields(state, auth_user, &def.fields, operation, &mut form_data)
-    {
-        return Err(Box::new(validation_error_response_simple(
-            "Access check failed",
-        )));
-    }
+    // Field write access stripping is now handled inside service::validate_document
+    // via WriteHooks::field_write_denied.
 
     form_data.remove("password");
     transform_select_has_many(&mut form_data, &def.fields);

@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
+    config::LocaleConfig,
     core::{CollectionDefinition, Document},
     db::{DbConnection, LocaleContext, query},
 };
@@ -135,4 +136,44 @@ pub fn persist_unpublish(
     versions::unpublish_with_snapshot(conn, slug, id, &def.fields, def.versions.as_ref(), &doc)?;
 
     Ok(doc)
+}
+
+/// Persist the DB write phase of a single document in a bulk update.
+///
+/// Handles: partial update → join data → ref count adjustment → FTS sync → version snapshot.
+/// Used by both gRPC UpdateMany and Lua update_many to avoid duplicating per-doc persistence logic.
+#[allow(clippy::too_many_arguments)]
+pub fn persist_bulk_update(
+    conn: &dyn DbConnection,
+    slug: &str,
+    id: &str,
+    def: &CollectionDefinition,
+    final_data: &HashMap<String, String>,
+    hook_data: &HashMap<String, Value>,
+    locale_ctx: Option<&LocaleContext>,
+    locale_config: &LocaleConfig,
+) -> Result<Document> {
+    let old_refs =
+        query::ref_count::snapshot_outgoing_refs(conn, slug, id, &def.fields, locale_config)?;
+
+    let updated = query::update_partial(conn, slug, def, id, final_data, locale_ctx)?;
+
+    query::save_join_table_data(conn, slug, &def.fields, id, hook_data, locale_ctx)?;
+
+    query::ref_count::after_update(conn, slug, id, &def.fields, locale_config, old_refs)?;
+
+    if conn.supports_fts() {
+        query::fts::fts_upsert(conn, slug, &updated, Some(def))?;
+    }
+
+    if def.has_versions() {
+        let vs_ctx = versions::VersionSnapshotCtx::builder(slug, &updated.id)
+            .fields(&def.fields)
+            .versions(def.versions.as_ref())
+            .has_drafts(def.has_drafts())
+            .build();
+        versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)?;
+    }
+
+    Ok(updated)
 }

@@ -5,7 +5,6 @@ use axum::{
     http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use chrono::Utc;
 use serde_json::json;
 use tokio::task;
 use tracing::error;
@@ -17,7 +16,7 @@ use crate::{
         handlers::auth::{ResetPasswordForm, client_ip},
     },
     core::{Registry, auth::ResetTokenError},
-    db::{DbPool, query},
+    db::DbPool,
 };
 
 /// Render a reset password error page with the given error key and optional token.
@@ -65,31 +64,20 @@ fn consume_reset_token(
             continue;
         }
 
-        let Some((user, exp)) = query::find_by_reset_token(&tx, &def.slug, def, token)? else {
-            continue;
-        };
-
-        // Locked accounts must not reset their password.
-        // Return NotFound to avoid leaking that the account exists but is locked.
-        if query::is_locked(&tx, &def.slug, &user.id)? {
-            query::clear_reset_token(&tx, &def.slug, &user.id)?;
-            tx.commit()?;
-
-            return Err(ResetTokenError::NotFound.into());
+        match crate::service::auth::consume_reset_token(&tx, &def.slug, def, token, password) {
+            Ok(()) => {
+                tx.commit()?;
+                return Ok(());
+            }
+            Err(crate::service::ServiceError::InvalidToken {
+                reason: "not found",
+                ..
+            }) => continue,
+            Err(e) => {
+                tx.commit()?;
+                return Err(e.into_anyhow());
+            }
         }
-
-        if Utc::now().timestamp() >= exp {
-            query::clear_reset_token(&tx, &def.slug, &user.id)?;
-            tx.commit()?;
-
-            return Err(ResetTokenError::Expired.into());
-        }
-
-        query::update_password(&tx, &def.slug, &user.id, password)?;
-        query::clear_reset_token(&tx, &def.slug, &user.id)?;
-        tx.commit()?;
-
-        return Ok(());
     }
 
     Err(ResetTokenError::NotFound.into())

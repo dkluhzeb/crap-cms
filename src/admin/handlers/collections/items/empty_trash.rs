@@ -1,7 +1,5 @@
 //! POST /admin/collections/{slug}/empty-trash — permanently delete all trashed documents.
 
-use std::collections::HashMap;
-
 use anyhow::Context as _;
 use axum::{
     Extension,
@@ -9,77 +7,21 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::task;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::{
-    admin::{
-        AdminState,
-        handlers::shared::{check_access_or_forbid, forbidden},
-    },
+    admin::AdminState,
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, auth::AuthUser, upload, upload::StorageBackend},
+    core::{CollectionDefinition, auth::AuthUser, upload, upload::StorageBackend},
     db::{
-        BoxedTransaction, DbConnection, DbPool,
-        query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery},
+        DbPool,
+        query::{self, Filter, FilterClause, FilterOp, FindQuery},
     },
-    hooks::{HookContext, HookEvent, HookRunner},
+    hooks::HookRunner,
+    service::{RunnerWriteHooks, ServiceError},
 };
-
-/// Hard-delete a single document: run hooks, clean up refs/uploads/FTS, delete row.
-///
-/// Returns `true` if deleted, `false` if skipped (still referenced).
-fn hard_delete_one(
-    tx: &BoxedTransaction,
-    runner: &HookRunner,
-    def: &CollectionDefinition,
-    slug: &str,
-    doc: &Document,
-    locale_cfg: &LocaleConfig,
-    storage: &dyn StorageBackend,
-) -> anyhow::Result<bool> {
-    let ref_count = query::ref_count::get_ref_count(tx, slug, &doc.id)?.unwrap_or(0);
-
-    if ref_count > 0 {
-        debug!(
-            "Skipping permanent delete of {}/{}: referenced by {} document(s)",
-            slug, doc.id, ref_count
-        );
-        return Ok(false);
-    }
-
-    let hook_data: HashMap<String, Value> =
-        [("id".into(), Value::String(doc.id.to_string()))].into();
-
-    let hook_ctx = HookContext::builder(slug, "delete").data(hook_data).build();
-
-    runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, tx)?;
-
-    query::ref_count::before_hard_delete(tx, slug, &doc.id, &def.fields, locale_cfg)?;
-
-    if def.is_upload_collection() {
-        upload::delete_upload_files(storage, &doc.fields);
-        let _ = query::images::delete_entries_for_document(tx, slug, &doc.id);
-    }
-
-    if tx.supports_fts() {
-        query::fts::fts_delete(tx, slug, &doc.id)?;
-    }
-
-    query::delete(tx, slug, &doc.id)?;
-
-    let after_data: HashMap<String, Value> =
-        [("id".into(), Value::String(doc.id.to_string()))].into();
-
-    let after_ctx = HookContext::builder(slug, "delete")
-        .data(after_data)
-        .build();
-
-    let _ = runner.run_hooks(&def.hooks, HookEvent::AfterDelete, after_ctx);
-
-    Ok(true)
-}
 
 /// Find all trashed documents and permanently delete them (skipping referenced ones).
 fn empty_trash(
@@ -101,15 +43,39 @@ fn empty_trash(
     })];
 
     let docs = query::find(&tx, slug, def, &fq, None)?;
+    let wh = RunnerWriteHooks::new(runner);
+    let mut hard_def = def.clone();
+    hard_def.soft_delete = false;
+
     let mut deleted = 0;
+    let mut upload_fields = Vec::new();
 
     for doc in &docs {
-        if hard_delete_one(&tx, runner, def, slug, doc, locale_cfg, storage)? {
-            deleted += 1;
+        match crate::service::delete_document_core(
+            &tx,
+            &wh,
+            slug,
+            &doc.id,
+            &hard_def,
+            None,
+            Some(locale_cfg),
+        ) {
+            Ok(result) => {
+                if let Some(fields) = result.upload_doc_fields {
+                    upload_fields.push(fields);
+                }
+                deleted += 1;
+            }
+            Err(ServiceError::Referenced { .. }) => continue,
+            Err(e) => return Err(e.into_anyhow()),
         }
     }
 
     tx.commit().context("Commit empty-trash")?;
+
+    for fields in &upload_fields {
+        upload::delete_upload_files(storage, fields);
+    }
 
     Ok(deleted)
 }
@@ -119,7 +85,7 @@ fn empty_trash(
 pub async fn empty_trash_action(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
-    auth_user: Option<Extension<AuthUser>>,
+    _auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
@@ -132,18 +98,6 @@ pub async fn empty_trash_action(
             "Collection does not support soft delete",
         )
             .into_response();
-    }
-
-    match check_access_or_forbid(&state, def.access.delete.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(
-                &state,
-                "You don't have permission to permanently delete items",
-            )
-            .into_response();
-        }
-        Err(resp) => return *resp,
-        _ => {}
     }
 
     let pool = state.pool.clone();

@@ -23,7 +23,6 @@ use crate::{
             validation::validate_fields_inner,
         },
     },
-    service::versions,
 };
 
 use super::{get_tx_conn, helpers::*};
@@ -104,7 +103,7 @@ fn run_after_change_hooks(
     Ok(())
 }
 
-/// Persist a single document update: DB write, join data, ref counts, FTS, versions.
+/// Persist a single document update via the shared service layer function.
 fn persist_single_update(
     conn: &dyn DbConnection,
     def: &CollectionDefinition,
@@ -114,49 +113,17 @@ fn persist_single_update(
     hook_data: &HashMap<String, Value>,
     lc: &LocaleConfig,
 ) -> mlua::Result<Document> {
-    let old_refs =
-        query::ref_count::snapshot_outgoing_refs(conn, ctx.collection, doc_id, &def.fields, lc)
-            .map_err(|e| RuntimeError(format!("ref count snapshot error: {e:#}")))?;
-
-    let updated = query::update_partial(
+    crate::service::persist_bulk_update(
         conn,
         ctx.collection,
+        doc_id,
         def,
-        doc_id,
         final_data,
-        ctx.locale_ctx,
-    )
-    .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
-
-    query::save_join_table_data(
-        conn,
-        ctx.collection,
-        &def.fields,
-        doc_id,
         hook_data,
         ctx.locale_ctx,
+        lc,
     )
-    .map_err(|e| RuntimeError(format!("join data error: {e:#}")))?;
-
-    query::ref_count::after_update(conn, ctx.collection, doc_id, &def.fields, lc, old_refs)
-        .map_err(|e| RuntimeError(format!("ref count update error: {e:#}")))?;
-
-    if conn.supports_fts() {
-        query::fts::fts_upsert(conn, ctx.collection, &updated, Some(def))
-            .map_err(|e| RuntimeError(format!("FTS upsert error: {e:#}")))?;
-    }
-
-    if def.has_versions() {
-        let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.collection, &updated.id)
-            .fields(&def.fields)
-            .versions(def.versions.as_ref())
-            .has_drafts(def.has_drafts())
-            .build();
-        versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)
-            .map_err(|e| RuntimeError(format!("version snapshot error: {e:#}")))?;
-    }
-
-    Ok(updated)
+    .map_err(|e| RuntimeError(format!("update error: {e:#}")))
 }
 
 /// Update multiple documents matching a query with the given data.
@@ -268,9 +235,15 @@ fn update_many_documents(
             )?;
 
             // Richtext node attr before_validate (parity with service layer)
-            let r_lock = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+            let r_lock = reg
+                .read()
+                .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
             crate::service::write_hooks::apply_richtext_before_validate(
-                lua, &def.fields, &mut hook_data, &r_lock, collection,
+                lua,
+                &def.fields,
+                &mut hook_data,
+                &r_lock,
+                collection,
             );
             drop(r_lock);
         }

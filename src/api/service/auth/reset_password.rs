@@ -1,15 +1,13 @@
 //! Reset password handler — reset password using a valid reset token.
 
-use anyhow::{Context as _, Error as AnyhowError};
-use chrono::Utc;
+use anyhow::Context as _;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
     api::{content, service::ContentService},
-    core::auth::ResetTokenError,
-    db::query,
+    service::ServiceError,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -56,36 +54,18 @@ impl ContentService {
         let password = req.new_password.clone();
         let def_owned = def;
 
-        let result: Result<(), AnyhowError> = task::spawn_blocking(move || {
+        let result = task::spawn_blocking(move || {
             let mut conn = pool.get().context("DB connection")?;
             let tx = conn.transaction().context("Start transaction")?;
 
-            let (user, exp) = query::find_by_reset_token(&tx, &slug, &def_owned, &token)?
-                .ok_or(ResetTokenError::NotFound)?;
+            crate::service::auth::consume_reset_token(&tx, &slug, &def_owned, &token, &password)?;
+            tx.commit().context("Commit transaction")?;
 
-            if query::is_locked(&tx, &slug, &user.id)? {
-                query::clear_reset_token(&tx, &slug, &user.id)?;
-                tx.commit()?;
-                return Err(ResetTokenError::NotFound.into());
-            }
-
-            if Utc::now().timestamp() >= exp {
-                query::clear_reset_token(&tx, &slug, &user.id)?;
-                tx.commit()?;
-                return Err(ResetTokenError::Expired.into());
-            }
-
-            query::update_password(&tx, &slug, &user.id, &password)?;
-            query::clear_reset_token(&tx, &slug, &user.id)?;
-            tx.commit()?;
-
-            Ok(())
+            Ok::<(), ServiceError>(())
         })
         .await
-        .map_err(|e| {
-            error!("Reset password task error: {}", e);
-            Status::internal("Internal error")
-        })?;
+        .inspect_err(|e| error!("Reset password task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
 
         match result {
             Ok(()) => Ok(Response::new(content::ResetPasswordResponse {
@@ -93,14 +73,7 @@ impl ContentService {
             })),
             Err(e) => {
                 self.ip_forgot_password_limiter.record_failure(&ip);
-
-                match e.downcast_ref::<ResetTokenError>() {
-                    Some(_) => Err(Status::invalid_argument(e.to_string())),
-                    None => {
-                        error!("Reset password error: {}", e);
-                        Err(Status::internal("Internal error"))
-                    }
-                }
+                Err(Status::from(e))
             }
         }
     }

@@ -31,20 +31,16 @@ fn delete_document(
     let force_hard_delete = get_opt_bool(&opts, "forceHardDelete", false)?;
     let def = resolve_collection(reg, &collection)?;
 
+    // Collection-level access check is handled inside service::delete_document_core
+    // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
+
     let is_hard = !def.soft_delete || force_hard_delete;
-    let access_ref = if !is_hard {
-        def.access.resolve_trash()
-    } else {
-        def.access.delete.as_deref()
-    };
-    enforce_access(
-        lua, override_access, access_ref,
-        Some(&id), &mut vec![], "Delete access denied",
-    )?;
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "delete");
 
-    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let write_hooks = LuaWriteHooks {
         lua,
         user: user.as_ref(),
@@ -52,11 +48,19 @@ fn delete_document(
         override_access,
         registry: Some(&r),
         hooks_enabled,
-        run_validation: run_hooks,
+        run_validation: true,
     };
 
-    let result = delete_document_core(conn, &write_hooks, &collection, &id, &def, user.as_ref(), Some(lc))
-        .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
+    let result = delete_document_core(
+        conn,
+        &write_hooks,
+        &collection,
+        &id,
+        &def,
+        user.as_ref(),
+        Some(lc),
+    )
+    .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
 
     // Clean up upload files after successful delete (skip for soft-delete)
     if is_hard

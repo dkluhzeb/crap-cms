@@ -17,9 +17,8 @@ use crate::{
             forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
-                check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
-                get_user_doc, html_with_toast, htmx_redirect, redirect_response,
-                split_sidebar_fields, strip_write_denied_string_fields,
+                enrich_field_contexts, forbidden, get_event_user, get_user_doc, html_with_toast,
+                htmx_redirect, redirect_response, split_sidebar_fields,
                 translate_validation_errors,
             },
         },
@@ -33,10 +32,10 @@ use crate::{
     },
     db::{
         DbPool,
-        query::{AccessResult, LocaleContext, LocaleMode},
+        query::{LocaleContext, LocaleMode},
     },
     hooks::{HookRunner, lifecycle::PublishEventInput},
-    service,
+    service::{self, ServiceError},
 };
 
 /// Parameters for the blocking global-update task.
@@ -58,7 +57,7 @@ struct UpdateParams {
 /// Execute the global update (or unpublish) inside a blocking task.
 fn execute_update(
     params: UpdateParams,
-) -> Result<(Document, HashMap<String, Value>), anyhow::Error> {
+) -> Result<(Document, HashMap<String, Value>), ServiceError> {
     if params.action == "unpublish" && params.def.has_versions() {
         let doc = service::unpublish_global_document(
             &params.pool,
@@ -176,24 +175,12 @@ pub async fn update_action(
         None => return redirect_response("/admin"),
     };
 
-    match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to update this global");
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
     let action = form_data.remove("_action").unwrap_or_default();
     let form_locale = form_data.remove("_locale");
     let locale_ctx =
         LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
 
-    if let Err(resp) =
-        strip_write_denied_string_fields(&state, &auth_user, &def.fields, "update", &mut form_data)
-    {
-        return *resp;
-    }
+    // Field write access is now checked inside service::update_global_core.
 
     transform_select_has_many(&mut form_data, &def.fields);
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
@@ -225,14 +212,18 @@ pub async fn update_action(
             publish_update_event(&state, &def.hooks, &def, &slug, &doc, &auth_user);
             htmx_redirect(&format!("/admin/globals/{}", slug))
         }
-        Ok(Err(e)) => {
-            if let Some(ve) = e.downcast_ref::<ValidationError>() {
+        Ok(Err(e)) => match e {
+            ServiceError::AccessDenied(_) => {
+                forbidden(&state, "You don't have permission to update this global")
+            }
+            ServiceError::Validation(ref ve) => {
                 render_validation_error(&state, &def, &form_data, &join_data, ve, &auth_user)
-            } else {
-                error!("Global update error: {}", e);
+            }
+            other => {
+                error!("Global update error: {}", other);
                 redirect_response(&format!("/admin/globals/{}", slug))
             }
-        }
+        },
         Err(e) => {
             error!("Global update task error: {}", e);
             redirect_response(&format!("/admin/globals/{}", slug))

@@ -16,7 +16,7 @@ use crate::{
         Document, FieldDefinition, auth::AuthUser, collection::Hooks, validate::ValidationError,
     },
     db::{DbPool, query::LocaleContext},
-    hooks::{HookContext, HookRunner, ValidationCtx},
+    hooks::HookRunner,
     service,
 };
 
@@ -105,30 +105,38 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
     let mut conn = p.pool.get()?;
     let tx = conn.transaction()?;
 
-    let hook_data = service::build_hook_data(p.form_data, p.join_data);
+    let locale = p.locale_ctx.and_then(|ctx| {
+        if let crate::db::query::LocaleMode::Single(l) = &ctx.mode {
+            Some(l.clone())
+        } else {
+            None
+        }
+    });
 
-    let hook_ctx = HookContext::builder(p.slug, p.operation)
-        .data(hook_data)
-        .locale(p.locale_ctx.and_then(|ctx| {
-            if let crate::db::query::LocaleMode::Single(l) = &ctx.mode {
-                Some(l.clone())
-            } else {
-                None
-            }
-        }))
-        .draft(p.is_draft)
-        .user(p.user_doc)
-        .build();
+    let wh = service::RunnerWriteHooks {
+        runner: p.runner,
+        hooks_enabled: true,
+        conn: Some(&tx),
+    };
 
-    let val_ctx = ValidationCtx::builder(&tx, p.table_name)
-        .exclude_id(p.exclude_id)
-        .draft(p.is_draft)
+    let input = service::WriteInput::builder(p.form_data.clone(), p.join_data)
         .locale_ctx(p.locale_ctx)
-        .soft_delete(p.soft_delete)
+        .locale(locale)
+        .draft(p.is_draft)
         .build();
 
-    p.runner
-        .run_before_write(p.hooks, p.fields, hook_ctx, &val_ctx)?;
+    let validate_ctx = service::ValidateContext {
+        slug: p.slug,
+        table_name: p.table_name,
+        fields: p.fields,
+        hooks: p.hooks,
+        operation: p.operation,
+        exclude_id: p.exclude_id,
+        soft_delete: p.soft_delete,
+    };
+
+    service::validate_document(&tx, &wh, &validate_ctx, input, p.user_doc)
+        .map_err(|e| e.into_anyhow())?;
 
     // Always rollback — this is validation only
     drop(tx);

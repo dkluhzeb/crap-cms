@@ -109,52 +109,6 @@ pub fn compute_denied_read_fields(
     Ok(denied)
 }
 
-/// Strips fields denied for write access from a `HashMap<String, String>` form in-place.
-/// Returns `Err(response)` on pool/tx failure, `Ok(())` on success.
-pub fn strip_write_denied_string_fields(
-    state: &AdminState,
-    auth_user: &Option<Extension<AuthUser>>,
-    fields: &[FieldDefinition],
-    operation: &str,
-    form_data: &mut HashMap<String, String>,
-) -> Result<(), Box<axum::response::Response>> {
-    let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
-        "create" => |f| f.access.create.as_deref(),
-        "update" => |f| f.access.update.as_deref(),
-        _ => return Ok(()),
-    };
-
-    if !has_any_field_access(fields, extractor) {
-        return Ok(());
-    }
-
-    let user_doc = get_user_doc(auth_user);
-
-    let mut conn = state.pool.get().map_err(|e| {
-        error!("Field access check pool error: {}", e);
-        Box::new(server_error(state, "Database error"))
-    })?;
-
-    let tx = conn.transaction().map_err(|e| {
-        error!("Field access check tx error: {}", e);
-        Box::new(server_error(state, "Database error"))
-    })?;
-
-    let denied = state
-        .hook_runner
-        .check_field_write_access(fields, user_doc, operation, &tx);
-
-    if let Err(e) = tx.commit() {
-        warn!("tx commit failed: {e}");
-    }
-
-    for name in &denied {
-        form_data.remove(name);
-    }
-
-    Ok(())
-}
-
 /// Recursively collect all `admin.condition` function refs from field definitions.
 pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashSet<&str> {
     let mut refs = HashSet::new();

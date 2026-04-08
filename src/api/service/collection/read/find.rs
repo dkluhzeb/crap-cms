@@ -75,20 +75,8 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
-
-            let filters = FilterBuilder::new(&def_owned.fields, &access_result)
+            // Access check is handled by service::find_documents — pass Allowed to FilterBuilder
+            let filters = FilterBuilder::new(&def_owned.fields, &AccessResult::Allowed)
                 .where_json(req_where.as_deref())
                 .draft_filter(has_drafts, !draft.unwrap_or(false))
                 .build()?;
@@ -129,7 +117,10 @@ impl ContentService {
             let select_slice = select.as_deref();
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-            let read_hooks = crate::service::RunnerReadHooks { runner: &runner, conn: &conn };
+            let read_hooks = crate::service::RunnerReadHooks {
+                runner: &runner,
+                conn: &conn,
+            };
             let read_opts = crate::service::ReadOptions {
                 depth,
                 hydrate: true,
@@ -142,8 +133,15 @@ impl ContentService {
                 ..Default::default()
             };
 
-            let result = crate::service::find_documents(&conn, &read_hooks, &collection, &def_owned, &find_query, &read_opts)
-                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+            let result = crate::service::find_documents(
+                &conn,
+                &read_hooks,
+                &collection,
+                &def_owned,
+                &find_query,
+                &read_opts,
+            )
+            .map_err(Status::from)?;
 
             let docs = result.docs;
             let total = result.total;
@@ -184,10 +182,8 @@ impl ContentService {
             Ok((proto_docs, pagination_result_to_proto(&pr)))
         })
         .await
-        .map_err(|e| {
-            error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("Task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::FindResponse {
             documents: proto_docs,

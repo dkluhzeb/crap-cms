@@ -76,10 +76,8 @@ impl ContentService {
             Ok(job_run.id)
         })
         .await
-        .map_err(|e| {
-            error!("TriggerJob task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("TriggerJob task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::TriggerJobResponse { job_id }))
     }

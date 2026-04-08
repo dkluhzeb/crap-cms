@@ -64,6 +64,7 @@ fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
         params.user_doc.as_ref(),
         params.user_ui_locale.as_deref(),
     )
+    .map_err(|e| e.into_anyhow())
 }
 
 /// Build, enrich, and split the field contexts for the global edit form.

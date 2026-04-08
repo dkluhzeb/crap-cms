@@ -9,7 +9,7 @@ use crate::{
         content,
         service::{ContentService, collection::filter_builder::FilterBuilder},
     },
-    db::{AccessResult, LocaleContext, query},
+    db::{AccessResult, LocaleContext},
 };
 
 use crate::api::service::collection::helpers::map_db_error;
@@ -42,45 +42,40 @@ impl ContentService {
         let def_owned = def;
 
         let count = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
-
-            let filters = FilterBuilder::new(&def_owned.fields, &access_result)
+            // Build caller-side filters (where + draft). Access check is handled by
+            // service::count_documents via ReadHooks.
+            let filters = FilterBuilder::new(&def_owned.fields, &AccessResult::Allowed)
                 .where_json(req_where.as_deref())
                 .draft_filter(has_drafts, !draft.unwrap_or(false))
                 .build()?;
 
-            query::count_with_search(
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let read_hooks = crate::service::RunnerReadHooks {
+                runner: &runner,
+                conn: &conn,
+            };
+
+            crate::service::count_documents(
                 &conn,
+                &read_hooks,
                 &collection,
                 &def_owned,
                 &filters,
                 locale_ctx.as_ref(),
                 search.as_deref(),
                 false,
+                user_doc,
             )
-            .map_err(|e| map_db_error(e, "Count error", &db_kind))
+            .map_err(Status::from)
         })
         .await
-        .map_err(|e| {
-            error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("Task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::CountResponse { count }))
     }

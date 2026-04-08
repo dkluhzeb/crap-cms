@@ -69,6 +69,7 @@ fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
     };
 
     find_document_by_id(&conn, &hooks, &params.slug, &params.def, &params.id, &opts)
+        .map_err(|e| e.into_anyhow())
 }
 
 /// Append auth-specific fields (password, locked checkbox) to the field list.

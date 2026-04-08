@@ -5,7 +5,9 @@
 //! to be called from within `spawn_blocking`.
 
 mod after_change_input_builder;
+pub mod auth;
 mod collections;
+pub mod document_info;
 mod email;
 mod globals;
 mod persist;
@@ -13,6 +15,7 @@ mod persist_options_builder;
 pub mod read;
 pub mod read_hooks;
 mod types;
+pub mod version_ops;
 mod version_snapshot_ctx_builder;
 pub(crate) mod versions;
 pub mod write;
@@ -22,25 +25,32 @@ mod write_input_builder;
 pub(crate) use after_change_input_builder::AfterChangeInputBuilder;
 pub use persist_options_builder::PersistOptionsBuilder;
 pub(crate) use types::AfterChangeInput;
-pub use types::{PersistOptions, WriteInput, WriteResult};
+pub use types::{PersistOptions, ServiceError, WriteInput, WriteResult};
 pub use write_input_builder::WriteInputBuilder;
 
 pub use collections::{
     create_document, create_document_with_conn, delete_document, delete_document_with_conn,
-    restore_document, unpublish_document, update_document, update_document_with_conn,
+    restore_document, restore_document_core, unpublish_document, update_document,
+    update_document_with_conn,
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};
-pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
-pub use read::{FindResult, ReadOptions, find_document_by_id, find_documents, get_global_document};
+pub use persist::{
+    persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
+};
+pub use read::{
+    FindResult, ReadOptions, count_documents, find_document_by_id, find_documents,
+    get_global_document,
+};
 pub use read_hooks::{LuaReadHooks, ReadHooks, RunnerReadHooks};
 pub use versions::unpublish_with_snapshot;
-pub use write::{DeleteResult, create_document_core, delete_document_core, update_document_core};
+pub use write::{
+    DeleteResult, ValidateContext, create_document_core, delete_document_core,
+    update_document_core, validate_document,
+};
 pub use write_hooks::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};
 
 use std::collections::HashMap;
-
-use anyhow::Result;
 
 use serde_json::Value;
 
@@ -75,7 +85,7 @@ pub(crate) fn run_after_change_hooks(
     doc: &Document,
     input: AfterChangeInput<'_>,
     tx: &dyn DbConnection,
-) -> Result<HashMap<String, Value>> {
+) -> anyhow::Result<HashMap<String, Value>> {
     let mut after_data = doc.fields.clone();
     after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
     let after_ctx = HookContext::builder(input.slug, input.operation)

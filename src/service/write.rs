@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
 use serde_json::Value;
 
 use crate::{
@@ -15,13 +14,89 @@ use crate::{
     db::{DbConnection, LocaleContext, query},
     hooks::{HookContext, HookEvent, ValidationCtx},
     service::{
-        AfterChangeInput, PersistOptions, WriteInput, WriteResult,
-        build_hook_data, persist_create, persist_draft_version, persist_update,
-        run_after_change_hooks,
+        AfterChangeInput, PersistOptions, WriteInput, WriteResult, build_hook_data, persist_create,
+        persist_draft_version, persist_update, run_after_change_hooks,
     },
 };
 
-use super::write_hooks::WriteHooks;
+use super::{ServiceError, write_hooks::WriteHooks};
+
+type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Strip denied field names from flat data and return a (potentially cloned) join_data map
+/// with denied keys removed. If no fields are denied, returns the original join_data unchanged.
+pub(crate) fn strip_denied_fields<'a>(
+    denied: &[String],
+    data: &mut HashMap<String, String>,
+    join_data: &'a HashMap<String, Value>,
+) -> std::borrow::Cow<'a, HashMap<String, Value>> {
+    if denied.is_empty() {
+        return std::borrow::Cow::Borrowed(join_data);
+    }
+
+    for name in denied {
+        data.remove(name);
+    }
+
+    let mut filtered = join_data.clone();
+    for name in denied {
+        filtered.remove(name);
+    }
+    std::borrow::Cow::Owned(filtered)
+}
+
+/// Context for a validate-only run (no persist).
+pub struct ValidateContext<'a> {
+    pub slug: &'a str,
+    /// Table name for unique checks — collection slug or `_global_{slug}`.
+    pub table_name: &'a str,
+    pub fields: &'a [crate::core::FieldDefinition],
+    pub hooks: &'a crate::core::collection::Hooks,
+    pub operation: &'a str,
+    /// Exclude this document from unique checks (update path).
+    pub exclude_id: Option<&'a str>,
+    pub soft_delete: bool,
+}
+
+/// Validate a document without persisting — runs the full before-write pipeline
+/// (field stripping, field hooks, validation, collection hooks) and returns.
+///
+/// Used by live validation endpoints.
+pub fn validate_document(
+    conn: &dyn DbConnection,
+    write_hooks: &dyn WriteHooks,
+    ctx: &ValidateContext<'_>,
+    mut input: WriteInput<'_>,
+    user: Option<&Document>,
+) -> Result<()> {
+    // Note: collection-level access check is intentionally skipped here.
+    // Validation endpoints already check access before calling this function.
+
+    let is_draft = input.draft;
+
+    // Strip write-denied fields
+    let denied = write_hooks.field_write_denied(ctx.fields, user, ctx.operation);
+    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+
+    let hook_data = build_hook_data(&input.data, &join_data);
+    let hook_ctx = HookContext::builder(ctx.slug, ctx.operation)
+        .data(hook_data)
+        .locale(input.locale.clone())
+        .draft(is_draft)
+        .user(user)
+        .build();
+
+    let val_ctx = ValidationCtx::builder(conn, ctx.table_name)
+        .exclude_id(ctx.exclude_id)
+        .draft(is_draft)
+        .locale_ctx(input.locale_ctx)
+        .soft_delete(ctx.soft_delete)
+        .build();
+
+    write_hooks.run_before_write(ctx.hooks, ctx.fields, hook_ctx, &val_ctx)?;
+
+    Ok(())
+}
 
 /// Result of a delete operation.
 pub struct DeleteResult {
@@ -40,13 +115,23 @@ pub fn create_document_core(
     write_hooks: &dyn WriteHooks,
     slug: &str,
     def: &CollectionDefinition,
-    input: WriteInput<'_>,
+    mut input: WriteInput<'_>,
     user: Option<&Document>,
 ) -> Result<WriteResult> {
+    // Collection-level access check
+    let access = write_hooks.check_access(def.access.create.as_deref(), user, None, None)?;
+    if matches!(access, crate::db::AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Create access denied".into()));
+    }
+
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
 
-    let hook_data = build_hook_data(&input.data, input.join_data);
+    // Strip write-denied fields before hook processing
+    let denied = write_hooks.field_write_denied(&def.fields, user, "create");
+    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+
+    let hook_data = build_hook_data(&input.data, &join_data);
     let hook_ctx = HookContext::builder(slug, "create")
         .data(hook_data)
         .locale(input.locale.clone())
@@ -72,7 +157,14 @@ pub fn create_document_core(
         persist_builder = persist_builder.locale_config(&lctx.config);
     }
 
-    let doc = persist_create(conn, slug, def, &final_data, &final_ctx.data, &persist_builder.build())?;
+    let doc = persist_create(
+        conn,
+        slug,
+        def,
+        &final_data,
+        &final_ctx.data,
+        &persist_builder.build(),
+    )?;
 
     let ctx = run_after_change_hooks(
         write_hooks,
@@ -89,6 +181,16 @@ pub fn create_document_core(
         conn,
     )?;
 
+    // Hydrate join fields (arrays, blocks, has-many) so the returned document is complete
+    let mut doc = doc;
+    query::hydrate_document(conn, slug, &def.fields, &mut doc, None, input.locale_ctx)?;
+
+    // Strip read-denied fields AFTER hydration (hydration can add join data for denied fields)
+    let read_denied = write_hooks.field_read_denied(&def.fields, user);
+    for name in &read_denied {
+        doc.fields.remove(name);
+    }
+
     Ok((doc, ctx))
 }
 
@@ -103,13 +205,23 @@ pub fn update_document_core(
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
-    input: WriteInput<'_>,
+    mut input: WriteInput<'_>,
     user: Option<&Document>,
 ) -> Result<WriteResult> {
+    // Collection-level access check
+    let access = write_hooks.check_access(def.access.update.as_deref(), user, Some(id), None)?;
+    if matches!(access, crate::db::AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Update access denied".into()));
+    }
+
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
 
-    let hook_data = build_hook_data(&input.data, input.join_data);
+    // Strip write-denied fields before hook processing
+    let denied = write_hooks.field_write_denied(&def.fields, user, "update");
+    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+
+    let hook_data = build_hook_data(&input.data, &join_data);
     let hook_ctx = HookContext::builder(slug, "update")
         .data(hook_data)
         .locale(input.locale.clone())
@@ -137,7 +249,15 @@ pub fn update_document_core(
         if let Some(lctx) = input.locale_ctx {
             update_builder = update_builder.locale_config(&lctx.config);
         }
-        persist_update(conn, slug, id, def, &final_data, &final_ctx.data, &update_builder.build())?
+        persist_update(
+            conn,
+            slug,
+            id,
+            def,
+            &final_data,
+            &final_ctx.data,
+            &update_builder.build(),
+        )?
     };
 
     let ctx = run_after_change_hooks(
@@ -154,6 +274,16 @@ pub fn update_document_core(
             .build(),
         conn,
     )?;
+
+    // Hydrate join fields (arrays, blocks, has-many) so the returned document is complete
+    let mut doc = doc;
+    query::hydrate_document(conn, slug, &def.fields, &mut doc, None, input.locale_ctx)?;
+
+    // Strip read-denied fields AFTER hydration
+    let read_denied = write_hooks.field_read_denied(&def.fields, user);
+    for name in &read_denied {
+        doc.fields.remove(name);
+    }
 
     Ok((doc, ctx))
 }
@@ -172,6 +302,22 @@ pub fn delete_document_core(
     user: Option<&Document>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<DeleteResult> {
+    // Collection-level access check — use trash access for soft delete, delete for hard
+    let access_ref = if def.soft_delete {
+        def.access.resolve_trash()
+    } else {
+        def.access.delete.as_deref()
+    };
+    let access = write_hooks.check_access(access_ref, user, Some(id), None)?;
+    if matches!(access, crate::db::AccessResult::Denied) {
+        let msg = if def.soft_delete {
+            "Trash access denied"
+        } else {
+            "Delete access denied"
+        };
+        return Err(ServiceError::AccessDenied(msg.into()));
+    }
+
     // Pre-load upload doc for file cleanup (before deletion removes it)
     let upload_doc_fields = if def.is_upload_collection() {
         let lc = locale_config.cloned().unwrap_or_default();
@@ -188,10 +334,10 @@ pub fn delete_document_core(
     if !def.soft_delete {
         let ref_count = query::ref_count::get_ref_count(conn, slug, id)?.unwrap_or(0);
         if ref_count > 0 {
-            anyhow::bail!(
-                "Cannot delete: this document is referenced by {} other document(s)",
-                ref_count
-            );
+            return Err(ServiceError::Referenced {
+                id: id.to_string(),
+                count: ref_count,
+            });
         }
     }
 
@@ -206,7 +352,8 @@ pub fn delete_document_core(
         .data(hook_data.clone())
         .user(user)
         .build();
-    let final_ctx = write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, conn)?;
+    let final_ctx =
+        write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, conn)?;
 
     // Decrement ref counts before hard delete
     if !def.soft_delete {
@@ -218,12 +365,16 @@ pub fn delete_document_core(
     if def.soft_delete {
         let deleted = query::soft_delete(conn, slug, id)?;
         if !deleted {
-            anyhow::bail!("Document '{}' not found in '{}' (or already deleted)", id, slug);
+            return Err(ServiceError::NotFound(format!(
+                "Document '{id}' not found in '{slug}' (or already deleted)"
+            )));
         }
     } else {
         let deleted = query::delete(conn, slug, id)?;
         if !deleted {
-            anyhow::bail!("Document '{}' not found in '{}'", id, slug);
+            return Err(ServiceError::NotFound(format!(
+                "Document '{id}' not found in '{slug}'"
+            )));
         }
     }
 
@@ -241,7 +392,8 @@ pub fn delete_document_core(
         .context(final_ctx.context)
         .user(user)
         .build();
-    let after_result = write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::AfterDelete, after_ctx, conn)?;
+    let after_result =
+        write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::AfterDelete, after_ctx, conn)?;
 
     Ok(DeleteResult {
         context: after_result.context,

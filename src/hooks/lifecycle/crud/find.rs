@@ -25,9 +25,11 @@ struct FindParams {
 
 /// Query-building context for the find operation.
 struct FindCtx {
-    override_access: bool,
     draft: bool,
 }
+
+// Note: `override_access` is parsed from opts and passed to `LuaReadHooks`
+// (which passes it to the service layer's `check_access`), not to `FindCtx`.
 
 /// Convert a [`PaginationResult`] into an mlua table.
 fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> LuaResult<Table> {
@@ -64,7 +66,6 @@ fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> LuaResult
 
 /// Build the FindQuery from the Lua table, applying pagination, filters, and access control.
 fn prepare_find_query(
-    lua: &Lua,
     params: &FindParams,
     def: &CollectionDefinition,
     query_table: Option<Table>,
@@ -93,15 +94,6 @@ fn prepare_find_query(
 
     normalize_filter_fields(&mut fq.filters, &def.fields);
     add_draft_filter(def, ctx.draft, &mut fq.filters);
-
-    enforce_access(
-        lua,
-        ctx.override_access,
-        def.access.read.as_deref(),
-        None,
-        &mut fq.filters,
-        "Read access denied",
-    )?;
 
     Ok((fq, lua_page))
 }
@@ -166,12 +158,9 @@ fn find_inner(
     let draft = get_opt_bool(&query_table, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ctx = FindCtx {
-        override_access,
-        draft,
-    };
+    let ctx = FindCtx { draft };
 
-    let (find_query, lua_page) = prepare_find_query(lua, params, &def, query_table, &ctx)?;
+    let (find_query, lua_page) = prepare_find_query(params, &def, query_table, &ctx)?;
 
     let r = reg
         .read()
@@ -193,7 +182,7 @@ fn find_inner(
     };
 
     let result = find_documents(conn, &hooks, &collection, &def, &find_query, &opts)
-        .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
+        .map_err(|e| RuntimeError(format!("{e}")))?;
 
     let pr = build_pagination_result(
         params,

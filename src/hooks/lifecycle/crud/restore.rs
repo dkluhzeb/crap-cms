@@ -3,14 +3,17 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 
-use crate::{core::SharedRegistry, db::query};
+use crate::{
+    core::SharedRegistry,
+    service::{self, LuaWriteHooks},
+};
 
 use super::{get_tx_conn, helpers::*};
 
 /// Restore a soft-deleted document by ID.
 ///
-/// Validates that the collection supports soft delete, checks trash access,
-/// restores the document, and re-syncs the FTS index.
+/// Validates that the collection supports soft delete, then delegates to
+/// `service::restore_document_core` which handles access checks internally.
 fn restore_document(
     lua: &Lua,
     reg: &SharedRegistry,
@@ -23,6 +26,7 @@ fn restore_document(
     let conn = unsafe { &*conn_ptr };
 
     let override_access = get_opt_bool(opts, "overrideAccess", false)?;
+    let user = hook_user(lua);
     let def = resolve_collection(reg, collection)?;
 
     if !def.soft_delete {
@@ -32,32 +36,18 @@ fn restore_document(
         )));
     }
 
-    enforce_access(
+    let wh = LuaWriteHooks {
         lua,
+        user: user.as_ref(),
+        ui_locale: None,
         override_access,
-        def.access.resolve_trash(),
-        Some(id),
-        &mut vec![],
-        "Restore access denied",
-    )?;
+        registry: None,
+        hooks_enabled: false,
+        run_validation: false,
+    };
 
-    let restored = query::restore(conn, collection, id)
-        .map_err(|e| RuntimeError(format!("restore error: {e:#}")))?;
-
-    if !restored {
-        return Err(RuntimeError(format!(
-            "Document '{}' not found or not deleted in '{}'",
-            id, collection
-        )));
-    }
-
-    // Re-sync FTS index
-    if conn.supports_fts()
-        && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, collection, &def, id, None)
-    {
-        query::fts::fts_upsert(conn, collection, &doc, Some(&def))
-            .map_err(|e| RuntimeError(format!("FTS upsert error: {e:#}")))?;
-    }
+    service::restore_document_core(conn, &wh, collection, id, &def, user.as_ref())
+        .map_err(|e| RuntimeError(format!("{e}")))?;
 
     Ok(true)
 }

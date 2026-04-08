@@ -10,7 +10,6 @@ use crate::{
         service::{ContentService, collection::helpers::map_db_error},
     },
     core::event::EventOperation,
-    db::AccessResult,
     service,
 };
 
@@ -32,18 +31,6 @@ impl ContentService {
 
         let will_soft_delete = def.soft_delete && !req.force_hard_delete;
 
-        let access_ref = if will_soft_delete {
-            def.access.resolve_trash()
-        } else {
-            def.access.delete.as_deref()
-        };
-
-        let deny_msg = if will_soft_delete {
-            "Trash access denied"
-        } else {
-            "Delete access denied"
-        };
-
         if req.force_hard_delete && def.soft_delete {
             def.soft_delete = false;
         }
@@ -58,27 +45,12 @@ impl ContentService {
         let id = req.id.clone();
         let storage = self.storage.clone();
         let locale_config = self.locale_config.clone();
-        let access_owned = access_ref.map(|s| s.to_string());
-        let deny_msg_owned = deny_msg.to_string();
 
         let auth_user = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            let access_result = ContentService::check_access_blocking(
-                access_owned.as_deref(),
-                &auth_user,
-                Some(&id),
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied(deny_msg_owned));
-            }
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
@@ -92,15 +64,13 @@ impl ContentService {
                 Some(&*storage),
                 Some(&locale_config),
             )
-            .map_err(|e| map_db_error(e, "Delete error", &db_kind))?;
+            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(auth_user)
         })
         .await
-        .map_err(|e| {
-            error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("Task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         self.publish_mutation_event(&req.collection, &req.id, EventOperation::Delete, &auth_user);
 

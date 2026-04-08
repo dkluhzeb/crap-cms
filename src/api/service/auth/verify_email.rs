@@ -1,15 +1,11 @@
 //! Verify email handler — verify an email address using a verification token.
 
 use anyhow::Context as _;
-use chrono::Utc;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
-use crate::{
-    api::{content, service::ContentService},
-    db::query,
-};
+use crate::api::{content, service::ContentService};
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -43,30 +39,15 @@ impl ContentService {
             let mut conn = pool.get().context("DB connection")?;
             let tx = conn.transaction().context("Start transaction")?;
 
-            match query::find_by_verification_token(&tx, &slug, &def_owned, &token)? {
-                Some((user, exp)) => {
-                    if Utc::now().timestamp() >= exp {
-                        if let Err(e) = query::clear_verification_token(&tx, &slug, &user.id) {
-                            warn!("Failed to clear expired verification token: {}", e);
-                        }
+            let verified =
+                crate::service::auth::consume_verification_token(&tx, &slug, &def_owned, &token)?;
+            tx.commit().context("Commit transaction")?;
 
-                        tx.commit()?;
-                        return Ok(false);
-                    }
-
-                    query::mark_verified(&tx, &slug, &user.id)?;
-                    tx.commit()?;
-
-                    Ok(true)
-                }
-                None => Ok(false),
-            }
+            Ok::<_, anyhow::Error>(verified)
         })
         .await
-        .map_err(|e| {
-            error!("Verify email task error: {}", e);
-            Status::internal("Internal error")
-        })?
+        .inspect_err(|e| error!("Verify email task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?
         .map_err(|e: anyhow::Error| {
             error!("Verify email error: {}", e);
             Status::internal("Internal error")

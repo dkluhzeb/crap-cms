@@ -1,4 +1,4 @@
-use anyhow::{Error, anyhow};
+use anyhow::Context as _;
 use axum::{
     Extension,
     extract::{Path, State},
@@ -10,14 +10,10 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{check_access_or_forbid, forbidden, htmx_redirect, redirect_response},
+        handlers::shared::{htmx_redirect, redirect_response},
     },
-    config::LocaleConfig,
     core::{Document, auth::AuthUser, collection::GlobalDefinition},
-    db::{
-        DbPool,
-        query::{self, AccessResult, helpers::global_table},
-    },
+    db::DbPool,
 };
 
 /// Find the version snapshot and restore it inside a transaction.
@@ -26,29 +22,21 @@ fn restore_from_version(
     slug: &str,
     def: &GlobalDefinition,
     version_id: &str,
-    locale_config: &LocaleConfig,
-) -> Result<Document, Error> {
-    let global_table = global_table(slug);
+    locale_config: &crate::config::LocaleConfig,
+) -> anyhow::Result<Document> {
+    let mut conn = pool.get().context("DB connection")?;
+    let tx = conn.transaction().context("Start transaction")?;
 
-    let mut conn = pool.get().map_err(|e| anyhow!("DB connection: {}", e))?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| anyhow!("Start transaction: {}", e))?;
-
-    let version = query::find_version_by_id(&tx, &global_table, version_id)?
-        .ok_or_else(|| anyhow!("Version not found"))?;
-
-    let doc = query::restore_global_version(
+    let doc = crate::service::version_ops::restore_global_version(
         &tx,
         slug,
         def,
-        &version.snapshot,
-        "published",
+        version_id,
         locale_config,
-    )?;
+    )
+    .map_err(|e| e.into_anyhow())?;
 
-    tx.commit().map_err(|e| anyhow!("Commit: {}", e))?;
-
+    tx.commit().context("Commit")?;
     Ok(doc)
 }
 
@@ -56,7 +44,7 @@ fn restore_from_version(
 pub async fn restore_version(
     State(state): State<AdminState>,
     Path((slug, version_id)): Path<(String, String)>,
-    auth_user: Option<Extension<AuthUser>>,
+    _auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let def = match state.registry.get_global(&slug) {
         Some(d) => d.clone(),
@@ -65,14 +53,6 @@ pub async fn restore_version(
 
     if !def.has_versions() {
         return redirect_response(&format!("/admin/globals/{}", slug));
-    }
-
-    match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to update this global");
-        }
-        Err(resp) => return *resp,
-        _ => {}
     }
 
     let redirect = format!("/admin/globals/{}", slug);

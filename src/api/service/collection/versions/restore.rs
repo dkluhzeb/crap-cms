@@ -7,13 +7,10 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        service::{
-            ContentService, collection::helpers::strip_read_denied_proto_fields,
-            convert::document_to_proto,
-        },
+        service::{ContentService, convert::document_to_proto},
     },
     core::event::EventOperation,
-    db::{AccessResult, query},
+    db::AccessResult,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -45,7 +42,6 @@ impl ContentService {
         let access_update = def.access.update.clone();
         let def_owned = def.clone();
         let locale_config = self.locale_config.clone();
-        let def_fields = def.fields.clone();
 
         let (doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
             let mut conn = pool.get().map_err(|e| {
@@ -74,54 +70,28 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let version = query::find_version_by_id(&tx, &collection, &version_id)
-                .map_err(|e| {
-                    error!("RestoreVersion error: {}", e);
-                    Status::internal("Internal error")
-                })?
-                .ok_or_else(|| Status::not_found(format!("Version '{}' not found", version_id)))?;
-
-            let doc = query::restore_version(
+            let doc = crate::service::version_ops::restore_collection_version(
                 &tx,
                 &collection,
                 &def_owned,
                 &document_id,
-                &version.snapshot,
-                &version.status,
+                &version_id,
                 &locale_config,
             )
-            .map_err(|e| {
-                error!("RestoreVersion error: {}", e);
-                Status::internal("Internal error")
-            })?;
+            .map_err(Status::from)?;
 
             tx.commit().map_err(|e| {
                 error!("RestoreVersion commit error: {}", e);
                 Status::internal("Internal error")
             })?;
 
-            let mut proto_doc = document_to_proto(&doc, &collection);
-            let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
-            let mut conn = pool.get().map_err(|e| {
-                error!("RestoreVersion field access pool error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            strip_read_denied_proto_fields(
-                std::slice::from_mut(&mut proto_doc),
-                &mut conn,
-                &runner,
-                &def_fields,
-                user_doc_ref,
-            );
+            let proto_doc = document_to_proto(&doc, &collection);
 
             Ok((proto_doc, auth_user))
         })
         .await
-        .map_err(|e| {
-            error!("RestoreVersion task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("RestoreVersion task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         self.publish_mutation_event(
             &req.collection,

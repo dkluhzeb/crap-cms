@@ -9,7 +9,6 @@ use crate::{
         content,
         service::{
             ContentService,
-            collection::helpers::strip_read_denied_proto_fields,
             convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
@@ -31,13 +30,13 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
 
-        let mut join_data = req
+        let join_data = req
             .data
             .as_ref()
             .map(prost_struct_to_json_map)
             .unwrap_or_default();
 
-        let mut data = req
+        let data = req
             .data
             .map(|s| prost_struct_to_hashmap(&s))
             .unwrap_or_default();
@@ -50,7 +49,6 @@ impl ContentService {
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let slug = req.slug.clone();
-        let def_fields = def.fields.clone();
         let def_owned = def;
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
@@ -75,26 +73,8 @@ impl ContentService {
                 return Err(Status::permission_denied("Update access denied"));
             }
 
-            // Strip field-level update-denied fields
-            {
-                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-                let tx = conn.transaction().map_err(|e| {
-                    error!("UpdateGlobal field access tx error: {}", e);
-                    Status::internal("Internal error")
-                })?;
-
-                let denied =
-                    runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
-
-                if let Err(e) = tx.commit() {
-                    warn!("tx commit failed: {e}");
-                }
-
-                for name in &denied {
-                    data.remove(name);
-                    join_data.remove(name);
-                }
-            }
+            // Field write access is now checked inside service::update_global_core
+            // via WriteHooks::field_write_denied (using the transaction connection).
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
@@ -116,28 +96,13 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let mut proto_doc = document_to_proto(&doc, &slug);
-            let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
-            let mut conn = pool.get().map_err(|e| {
-                error!("UpdateGlobal field access pool error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            strip_read_denied_proto_fields(
-                std::slice::from_mut(&mut proto_doc),
-                &mut conn,
-                &runner,
-                &def_fields,
-                user_doc_ref,
-            );
+            let proto_doc = document_to_proto(&doc, &slug);
 
             Ok((proto_doc, auth_user))
         })
         .await
-        .map_err(|e| {
-            error!("UpdateGlobal task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         if let Err(e) = self.cache.clear() {
             warn!("Cache clear failed: {:#}", e);

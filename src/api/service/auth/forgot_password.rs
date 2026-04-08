@@ -1,7 +1,5 @@
 //! Forgot password handler — generate reset token and queue email.
 
-use chrono::Utc;
-use nanoid::nanoid;
 use serde_json::json;
 use tokio::task;
 use tonic::{Request, Response, Status};
@@ -10,7 +8,6 @@ use tracing::error;
 use crate::{
     api::{content, service::ContentService},
     core::email,
-    db::query,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -102,22 +99,21 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
         }
     };
 
-    let user = match query::find_by_email(&conn, ctx.slug, ctx.def, ctx.user_email) {
-        Ok(Some(u)) => u,
+    let token_result = match crate::service::auth::generate_reset_token(
+        &conn,
+        ctx.slug,
+        ctx.def,
+        ctx.user_email,
+        ctx.reset_expiry,
+    ) {
+        Ok(Some(r)) => r,
         Ok(None) => return,
         Err(e) => {
-            error!("Forgot password lookup: {}", e);
+            error!("Forgot password error: {}", e);
             return;
         }
     };
-
-    let token = nanoid!();
-    let exp = Utc::now().timestamp() + ctx.reset_expiry as i64;
-
-    if let Err(e) = query::set_reset_token(&conn, ctx.slug, &user.id, &token, exp) {
-        error!("Failed to set reset token: {}", e);
-        return;
-    }
+    let token = &token_result.token;
 
     let base_url = ctx.server_config.public_url.clone().unwrap_or_else(|| {
         if ctx.server_config.host == "0.0.0.0" {

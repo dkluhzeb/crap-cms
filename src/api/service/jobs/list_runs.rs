@@ -51,10 +51,8 @@ impl ContentService {
             )
         })
         .await
-        .map_err(|e| {
-            error!("ListJobRuns task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("ListJobRuns task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         let runs: Vec<content::GetJobRunResponse> = runs.iter().map(job_run_to_proto).collect();
 

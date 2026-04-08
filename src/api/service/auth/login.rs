@@ -6,18 +6,16 @@ use anyhow::{Context as _, Error as AnyhowError};
 use chrono::Utc;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
         content,
         service::{ContentService, convert::document_to_proto},
     },
-    core::{
-        Slug,
-        auth::{ClaimsBuilder, dummy_verify},
-    },
+    core::{Slug, auth::ClaimsBuilder},
     db::query,
+    service::ServiceError,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -66,31 +64,30 @@ impl ContentService {
         let password_provider = self.password_provider.clone();
         let hook_runner = self.hook_runner.clone();
 
-        let login_result: Result<Option<_>, &'static str> = task::spawn_blocking(move || {
+        let login_result = task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
 
-            let mut user = None;
-
+            // Try local email+password authentication via service layer
             if !disable_local {
-                if let Some(doc) = query::find_by_email(&conn, &slug, &def_owned, &email)? {
-                    let verified = match query::get_password_hash(&conn, &slug, &doc.id)? {
-                        Some(hash) => {
-                            password_provider.verify_password(&password, hash.as_ref())?
-                        }
-                        None => false,
-                    };
-
-                    if verified {
-                        user = Some(doc);
-                    }
-                } else {
-                    dummy_verify();
+                match crate::service::auth::authenticate_local(
+                    &conn,
+                    &slug,
+                    &def_owned,
+                    &email,
+                    &password,
+                    &*password_provider,
+                    check_verify_email,
+                ) {
+                    Ok(result) => return Ok(Some((result.user, result.session_version))),
+                    Err(ServiceError::InvalidCredentials)
+                    | Err(ServiceError::AccountLocked)
+                    | Err(ServiceError::EmailNotVerified) => {}
+                    Err(e) => return Err(e.into_anyhow()),
                 }
             }
 
-            if user.is_none()
-                && let Some(auth) = &def_owned.auth
-            {
+            // Fallback: try custom auth strategies
+            if let Some(auth) = &def_owned.auth {
                 for strategy in &auth.strategies {
                     if let Ok(Some(doc)) = hook_runner.run_auth_strategy(
                         &strategy.authenticate,
@@ -98,53 +95,34 @@ impl ContentService {
                         &HashMap::new(),
                         &conn,
                     ) {
-                        user = Some(doc);
-                        break;
+                        // Strategy-authenticated users still need locked/verified checks
+                        if query::is_locked(&conn, &slug, &doc.id)? {
+                            return Ok(None);
+                        }
+
+                        if check_verify_email && !query::is_verified(&conn, &slug, &doc.id)? {
+                            return Ok(None);
+                        }
+
+                        let sv = query::get_session_version(&conn, &slug, &doc.id)?;
+                        return Ok(Some((doc, sv)));
                     }
                 }
             }
 
-            let doc = match user {
-                Some(d) => d,
-                None => {
-                    if !disable_local {
-                        dummy_verify();
-                    }
-                    return Ok(Ok(None));
-                }
-            };
-
-            if query::is_locked(&conn, &slug, &doc.id)? {
-                return Ok(Err("This account has been locked"));
-            }
-
-            if check_verify_email && !query::is_verified(&conn, &slug, &doc.id)? {
-                return Ok(Err("Please verify your email before logging in"));
-            }
-
-            let session_version = query::get_session_version(&conn, &slug, &doc.id)?;
-
-            Ok::<_, AnyhowError>(Ok(Some((doc, session_version))))
+            Ok::<_, AnyhowError>(None)
         })
         .await
-        .map_err(|e| {
-            error!("Login task error: {}", e);
-            Status::internal("Internal error")
-        })?
+        .inspect_err(|e| error!("Login task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?
         .map_err(|e| {
             error!("Login error: {}", e);
             Status::internal("Internal error")
         })?;
 
         let (user, session_version) = match login_result {
-            Ok(Some(u)) => u,
-            Ok(None) => {
-                self.login_limiter.record_failure(&req.email);
-                self.ip_login_limiter.record_failure(&ip);
-                return Err(Status::unauthenticated("Invalid email or password"));
-            }
-            Err(msg) => {
-                warn!("Login denied for '{}': {}", req.email, msg);
+            Some(u) => u,
+            None => {
                 self.login_limiter.record_failure(&req.email);
                 self.ip_login_limiter.record_failure(&ip);
                 return Err(Status::unauthenticated("Invalid email or password"));

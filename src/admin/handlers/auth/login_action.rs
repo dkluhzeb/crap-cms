@@ -22,7 +22,7 @@ use crate::{
     config::EmailConfig,
     core::{
         CollectionDefinition, Document, DocumentId, Slug,
-        auth::{ClaimsBuilder, SharedPasswordProvider, dummy_verify},
+        auth::{ClaimsBuilder, SharedPasswordProvider},
         collection::MfaMode,
         email,
         email::EmailRenderer,
@@ -50,29 +50,6 @@ struct VerifyParams {
     headers: HashMap<String, String>,
 }
 
-/// Try local email+password authentication. Returns the user document if
-/// credentials are valid, `None` otherwise.
-fn try_local_auth(
-    conn: &BoxedConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    email: &str,
-    password: &str,
-    password_provider: &SharedPasswordProvider,
-) -> anyhow::Result<Option<Document>> {
-    let Some(doc) = query::find_by_email(conn, slug, def, email)? else {
-        dummy_verify();
-        return Ok(None);
-    };
-
-    let verified = match query::get_password_hash(conn, slug, &doc.id)? {
-        Some(hash) => password_provider.verify_password(password, hash.as_ref())?,
-        None => false,
-    };
-
-    Ok(if verified { Some(doc) } else { None })
-}
-
 /// Try external auth strategies via Lua hooks. Returns the first successful
 /// match, or `None` if all strategies fail.
 fn try_strategy_auth(
@@ -95,26 +72,6 @@ fn try_strategy_auth(
     None
 }
 
-/// Check that the user account is not locked and (if required) email is verified.
-fn check_user_status(
-    conn: &BoxedConnection,
-    slug: &str,
-    user: &Document,
-    verify_email_flag: bool,
-) -> anyhow::Result<bool> {
-    if query::is_locked(conn, slug, &user.id)? {
-        debug!("Login denied for {}: account locked", user.id);
-        return Ok(false);
-    }
-
-    if verify_email_flag && !query::is_verified(conn, slug, &user.id)? {
-        debug!("Login denied for {}: email not verified", user.id);
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
 async fn verify_credentials(
     params: VerifyParams,
 ) -> Result<Result<Option<Result<LoginSuccess, String>>, anyhow::Error>, task::JoinError> {
@@ -123,48 +80,63 @@ async fn verify_credentials(
         let slug = &params.slug;
         let def = &params.def;
 
-        // Try local email+password authentication unless disabled
-        let mut user = if !params.disable_local {
-            try_local_auth(
+        // Try local email+password authentication via service layer
+        if !params.disable_local {
+            match crate::service::auth::authenticate_local(
                 &conn,
                 slug,
                 def,
                 &params.email,
                 &params.password,
-                &params.password_provider,
-            )?
-        } else {
-            None
-        };
+                &*params.password_provider,
+                params.verify_email_flag,
+            ) {
+                Ok(result) => {
+                    return Ok(Some(Ok(LoginSuccess {
+                        user: result.user,
+                        session_version: result.session_version,
+                    })));
+                }
+                Err(crate::service::ServiceError::AccountLocked) => {
+                    debug!("Login denied: account locked");
+                    return Ok(None);
+                }
+                Err(crate::service::ServiceError::EmailNotVerified) => {
+                    debug!("Login denied: email not verified");
+                    return Ok(None);
+                }
+                Err(crate::service::ServiceError::InvalidCredentials) => {}
+                Err(e) => return Err(e.into_anyhow()),
+            }
+        }
 
         // Fallback: try auth strategies if local auth failed/skipped
-        if user.is_none()
-            && let Some(runner) = &params.hook_runner
+        if let Some(runner) = &params.hook_runner
+            && let Some(user) = try_strategy_auth(&conn, slug, def, runner, &params.headers)
         {
-            user = try_strategy_auth(&conn, slug, def, runner, &params.headers);
-        }
-
-        let user = match user {
-            Some(doc) => doc,
-            None => {
-                if !params.disable_local {
-                    dummy_verify();
-                }
-
+            // Strategy-authenticated users still need locked/verified checks
+            if query::is_locked(&conn, slug, &user.id)? {
+                debug!("Login denied for {}: account locked", user.id);
                 return Ok(None);
             }
-        };
 
-        if !check_user_status(&conn, slug, &user, params.verify_email_flag)? {
-            return Ok(None);
+            if params.verify_email_flag && !query::is_verified(&conn, slug, &user.id)? {
+                debug!("Login denied for {}: email not verified", user.id);
+                return Ok(None);
+            }
+
+            let session_version = query::get_session_version(&conn, slug, &user.id)?;
+            return Ok(Some(Ok(LoginSuccess {
+                user,
+                session_version,
+            })));
         }
 
-        let session_version = query::get_session_version(&conn, slug, &user.id)?;
+        if !params.disable_local {
+            crate::core::auth::dummy_verify();
+        }
 
-        Ok::<_, anyhow::Error>(Some(Ok(LoginSuccess {
-            user,
-            session_version,
-        })))
+        Ok::<_, anyhow::Error>(None)
     })
     .await
 }

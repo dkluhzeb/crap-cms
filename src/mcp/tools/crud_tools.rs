@@ -265,7 +265,8 @@ pub(super) fn exec_find(
         ..Default::default()
     };
 
-    let result = find_documents(&conn, &hooks, slug, def, &fq, &opts)?;
+    let result =
+        find_documents(&conn, &hooks, slug, def, &fq, &opts).map_err(|e| e.into_anyhow())?;
 
     let cursor_has_more =
         if pagination.has_cursor() && (result.docs.len() as i64) < pagination.limit {
@@ -330,7 +331,8 @@ pub(super) fn exec_find_by_id(
         ..Default::default()
     };
 
-    let doc = find_document_by_id(&conn, &hooks, slug, def, id, &opts)?;
+    let doc =
+        find_document_by_id(&conn, &hooks, slug, def, id, &opts).map_err(|e| e.into_anyhow())?;
 
     match doc {
         Some(d) => Ok(serde_json::to_string_pretty(&doc_to_json(&d))?),
@@ -470,7 +472,9 @@ pub(super) fn exec_read_global(
         conn: &conn,
     };
 
-    match get_global_document(&conn, &hooks, slug, def, None, None, None) {
+    match get_global_document(&conn, &hooks, slug, def, None, None, None)
+        .map_err(|e| e.into_anyhow())
+    {
         Ok(d) => Ok(serde_json::to_string_pretty(&doc_to_json(&d))?),
         Err(e) => {
             // The global row may not exist yet (table missing or default row not inserted).

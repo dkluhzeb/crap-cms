@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use crate::{
     admin::Translations,
     core::{FieldAdmin, FieldDefinition, FieldType, field, validate::ValidationError},
-    db::{DbPool, query},
+    db::DbPool,
     hooks::HookRunner,
 };
 
@@ -127,8 +127,7 @@ pub fn translate_validation_errors(
 pub fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
     pool.get()
         .ok()
-        .and_then(|conn| query::ref_count::get_ref_count(&conn, slug, id).ok())
-        .flatten()
+        .map(|conn| crate::service::document_info::get_ref_count(&conn, slug, id).unwrap_or(0))
         .unwrap_or(0)
 }
 

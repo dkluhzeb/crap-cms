@@ -9,11 +9,8 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
-    db::{LocaleContext, query},
-    hooks::lifecycle::{
-        access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
-        converters::*,
-    },
+    db::LocaleContext,
+    hooks::lifecycle::converters::*,
     service::{LuaWriteHooks, WriteInput, create_document_core},
 };
 
@@ -41,21 +38,17 @@ fn create_document(
     let draft = get_opt_bool(&opts, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    enforce_access(
-        lua, override_access, def.access.create.as_deref(),
-        None, &mut vec![], "Create access denied",
-    )?;
+    // Collection-level access check is handled inside service::create_document_core
+    // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
-    let ExtractedData { mut flat, mut hook, password } = extract_data(lua, &data_table, &def)?;
+    let ExtractedData {
+        flat,
+        hook,
+        password,
+    } = extract_data(lua, &data_table, &def)?;
 
-    // Strip write-denied fields
-    if !override_access {
-        let denied = check_field_write_access_with_lua(lua, &def.fields, user.as_ref(), "create");
-        for name in &denied {
-            flat.remove(name);
-            hook.remove(name);
-        }
-    }
+    // Field write access is now checked inside service::create_document_core
+    // via WriteHooks::field_write_denied.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "create");
 
@@ -66,7 +59,9 @@ fn create_document(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
-    let r = reg.read().map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let write_hooks = LuaWriteHooks {
         lua,
         user: user.as_ref(),
@@ -74,7 +69,7 @@ fn create_document(
         override_access,
         registry: Some(&r),
         hooks_enabled,
-        run_validation: run_hooks,
+        run_validation: true,
     };
 
     let write_input = WriteInput::builder(flat, &join_data)
@@ -85,19 +80,18 @@ fn create_document(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (mut doc, _ctx) = create_document_core(conn, &write_hooks, &collection, &def, write_input, user.as_ref())
-        .map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
+    let (doc, _ctx) = create_document_core(
+        conn,
+        &write_hooks,
+        &collection,
+        &def,
+        write_input,
+        user.as_ref(),
+    )
+    .map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
 
-    // Hydrate join fields and strip read-denied fields before returning
-    query::hydrate_document(conn, &collection, &def.fields, &mut doc, None, locale_ctx.as_ref())
-        .map_err(|e| RuntimeError(format!("hydrate error: {e:#}")))?;
-
-    if !override_access {
-        let denied = check_field_read_access_with_lua(lua, &def.fields, user.as_ref());
-        for name in &denied {
-            doc.fields.remove(name);
-        }
-    }
+    // Hydration and read-denied field stripping are handled inside
+    // create_document_core via WriteHooks.
 
     document_to_lua_table(lua, &doc)
 }

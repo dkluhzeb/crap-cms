@@ -17,8 +17,8 @@ use crate::{
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
-                check_access_or_forbid, forbidden, get_event_user, get_user_doc, htmx_redirect,
-                redirect_response, strip_write_denied_string_fields, toast_only_error,
+                forbidden, get_event_user, get_user_doc, htmx_redirect, redirect_response,
+                toast_only_error,
             },
         },
     },
@@ -28,11 +28,10 @@ use crate::{
         collection::CollectionDefinition,
         event::{EventOperation, EventTarget},
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
-        validate::ValidationError,
     },
-    db::query::{self, AccessResult, LocaleContext, LocaleMode},
+    db::query::{self, LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
-    service,
+    service::{self, ServiceError},
 };
 
 use super::render_form_validation_errors;
@@ -95,7 +94,7 @@ async fn spawn_update(
     def: &CollectionDefinition,
     auth_user: &Option<Extension<AuthUser>>,
     input: UpdateInput,
-) -> Result<Result<service::WriteResult, anyhow::Error>, task::JoinError> {
+) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let slug_owned = slug.to_string();
@@ -177,21 +176,6 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     let locale_ctx =
         LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
 
-    match check_access_or_forbid(
-        state,
-        def.access.update.as_deref(),
-        auth_user,
-        Some(id),
-        None,
-    ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(state, "You don't have permission to update this item")
-                .into_response();
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
     let mut upload_result = None;
 
     if let Some(f) = file
@@ -216,11 +200,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         }
     }
 
-    if let Err(resp) =
-        strip_write_denied_string_fields(state, auth_user, &def.fields, "update", &mut form_data)
-    {
-        return (*resp).into_response();
-    }
+    // Field write access is now checked inside service::update_document_core.
 
     let password = if def.is_auth_collection() {
         form_data.remove("password")
@@ -270,23 +250,25 @@ pub(in crate::admin::handlers::collections) async fn do_update(
 
             htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
         }
-        Ok(Err(e)) => {
-            if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                render_form_validation_errors(
-                    state,
-                    &def,
-                    Some(id),
-                    &form_data_clone,
-                    &join_data_clone,
-                    ve,
-                    auth_user,
-                )
-                .into_response()
-            } else {
-                error!("Update error: {}", e);
+        Ok(Err(e)) => match e {
+            ServiceError::AccessDenied(_) => {
+                forbidden(state, "You don't have permission to update this item").into_response()
+            }
+            ServiceError::Validation(ref ve) => render_form_validation_errors(
+                state,
+                &def,
+                Some(id),
+                &form_data_clone,
+                &join_data_clone,
+                ve,
+                auth_user,
+            )
+            .into_response(),
+            other => {
+                error!("Update error: {}", other);
                 redirect_response(&format!("/admin/collections/{}/{}", slug, id))
             }
-        }
+        },
         Err(e) => {
             error!("Update task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/{}", slug, id))

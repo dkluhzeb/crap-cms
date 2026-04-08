@@ -1,7 +1,5 @@
 //! Unpublish handler — revert a published document to draft status.
 
-use std::slice;
-
 use tokio::task;
 use tonic::{Response, Status};
 use tracing::error;
@@ -9,14 +7,9 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        service::{
-            ContentService,
-            collection::helpers::{map_db_error, strip_read_denied_proto_fields},
-            convert::document_to_proto,
-        },
+        service::{ContentService, collection::helpers::map_db_error, convert::document_to_proto},
     },
     core::{CollectionDefinition, event::EventOperation},
-    db::AccessResult,
     service,
 };
 
@@ -36,29 +29,16 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
-        let def_fields = def.fields.clone();
         let def_owned = def.clone();
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+            let conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.update.as_deref(),
-                &auth_user,
-                Some(&id),
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Update access denied"));
-            }
-
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+
             drop(conn);
 
             let doc = service::unpublish_document(
@@ -69,27 +49,15 @@ impl ContentService {
                 &def_owned,
                 user_doc.as_ref(),
             )
-            .map_err(|e| map_db_error(e, "Unpublish error", &db_kind))?;
+            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
-            let mut proto_doc = document_to_proto(&doc, &collection);
-            let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
-
-            strip_read_denied_proto_fields(
-                slice::from_mut(&mut proto_doc),
-                &mut conn,
-                &runner,
-                &def_fields,
-                user_doc_ref,
-            );
+            let proto_doc = document_to_proto(&doc, &collection);
 
             Ok((proto_doc, auth_user))
         })
         .await
-        .map_err(|e| {
-            error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("Task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         self.publish_mutation_event(&req.collection, &req.id, EventOperation::Update, &auth_user);
 

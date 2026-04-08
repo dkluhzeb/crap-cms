@@ -12,7 +12,7 @@ use crate::{
             convert::document_to_proto,
         },
     },
-    db::{AccessResult, LocaleContext},
+    db::LocaleContext,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -47,30 +47,23 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
-
+            // Access check is handled by service::get_global_document
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let read_hooks = crate::service::RunnerReadHooks { runner: &runner, conn: &conn };
+            let read_hooks = crate::service::RunnerReadHooks {
+                runner: &runner,
+                conn: &conn,
+            };
 
             let doc = crate::service::get_global_document(
-                &conn, &read_hooks, &slug, &def_owned,
-                locale_ctx.as_ref(), user_doc, None,
+                &conn,
+                &read_hooks,
+                &slug,
+                &def_owned,
+                locale_ctx.as_ref(),
+                user_doc,
+                None,
             )
-            .map_err(|e| {
-                error!("GetGlobal error: {}", e);
-                Status::internal("Internal error")
-            })?;
+            .map_err(Status::from)?;
 
             let mut proto_doc = document_to_proto(&doc, &slug);
 
@@ -88,10 +81,8 @@ impl ContentService {
             Ok(proto_doc)
         })
         .await
-        .map_err(|e| {
-            error!("GetGlobal task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+        .inspect_err(|e| error!("GetGlobal task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::GetGlobalResponse {
             document: Some(proto_doc),

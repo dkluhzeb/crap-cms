@@ -17,9 +17,9 @@ use crate::{
         },
     },
     core::{Document, collection::CollectionDefinition},
-    db::{AccessResult, DbConnection, LocaleContext, query},
+    db::{AccessResult, DbConnection, LocaleContext},
     hooks::{HookContext, HookEvent, HookRunner, ValidationCtx},
-    service::{self, versions},
+    service,
 };
 
 use super::helpers::{check_per_doc_access, find_matching_docs, map_db_error, publish_bulk_events};
@@ -54,60 +54,17 @@ fn update_single_doc(ctx: &UpdateDocCtx, doc: &Document) -> Result<Document, Sta
         .map(|lc| lc.config.clone())
         .unwrap_or_default();
 
-    let old_refs = query::ref_count::snapshot_outgoing_refs(
+    let updated = service::persist_bulk_update(
         ctx.tx,
         ctx.collection,
         &doc.id,
-        &ctx.def.fields,
-        &locale_cfg,
-    )
-    .map_err(|e| map_db_error(e, "UpdateMany ref snapshot error", ctx.db_kind))?;
-
-    let updated = query::update_partial(
-        ctx.tx,
-        ctx.collection,
         ctx.def,
-        &doc.id,
         &write_data,
-        ctx.locale_ctx,
-    )
-    .map_err(|e| map_db_error(e, "UpdateMany error", ctx.db_kind))?;
-
-    query::save_join_table_data(
-        ctx.tx,
-        ctx.collection,
-        &ctx.def.fields,
-        &doc.id,
         &write_join_data,
         ctx.locale_ctx,
+        &locale_cfg,
     )
     .map_err(|e| map_db_error(e, "UpdateMany error", ctx.db_kind))?;
-
-    query::ref_count::after_update(
-        ctx.tx,
-        ctx.collection,
-        &doc.id,
-        &ctx.def.fields,
-        &locale_cfg,
-        old_refs,
-    )
-    .map_err(|e| map_db_error(e, "UpdateMany ref count error", ctx.db_kind))?;
-
-    if ctx.tx.supports_fts() {
-        query::fts::fts_upsert(ctx.tx, ctx.collection, &updated, Some(ctx.def))
-            .map_err(|e| map_db_error(e, "UpdateMany error", ctx.db_kind))?;
-    }
-
-    if ctx.def.has_versions() {
-        let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.collection, &updated.id)
-            .fields(&ctx.def.fields)
-            .versions(ctx.def.versions.as_ref())
-            .has_drafts(ctx.def.has_drafts())
-            .build();
-
-        versions::create_version_snapshot(ctx.tx, &vs_ctx, "published", &updated)
-            .map_err(|e| map_db_error(e, "UpdateMany version error", ctx.db_kind))?;
-    }
 
     if ctx.run_hooks {
         run_after_update_hook(ctx, &updated)?;
@@ -309,10 +266,8 @@ impl ContentService {
                 Ok((count, ids))
             })
             .await
-            .map_err(|e| {
-                error!("Task error: {}", e);
-                Status::internal("Internal error")
-            })??;
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         if let Err(e) = self.cache.clear() {
             warn!("Cache clear failed: {:#}", e);

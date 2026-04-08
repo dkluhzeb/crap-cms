@@ -25,18 +25,16 @@ pub fn fetch_version_sidebar_data(
     table_name: &str,
     parent_id: &str,
 ) -> (Vec<Value>, i64) {
-    if let Ok(conn) = pool.get() {
-        let total = query::count_versions(&conn, table_name, parent_id).unwrap_or(0);
+    let Ok(conn) = pool.get() else {
+        return (vec![], 0);
+    };
 
-        let vers = query::list_versions(&conn, table_name, parent_id, Some(3), None)
-            .unwrap_or_default()
-            .into_iter()
-            .map(version_to_json)
-            .collect();
-
-        (vers, total)
-    } else {
-        (vec![], 0)
+    match crate::service::version_ops::list_versions(&conn, table_name, parent_id, Some(3), None) {
+        Ok((versions, total)) => {
+            let vers = versions.into_iter().map(version_to_json).collect();
+            (vers, total)
+        }
+        Err(_) => (vec![], 0),
     }
 }
 
@@ -58,7 +56,12 @@ pub fn load_version_with_missing_relations(
         }
     };
 
-    let missing = query::find_missing_relations(conn, registry, &version.snapshot, fields);
+    let missing = crate::service::document_info::find_missing_relations(
+        conn,
+        registry,
+        &version.snapshot,
+        fields,
+    );
 
     Ok((version, missing))
 }
