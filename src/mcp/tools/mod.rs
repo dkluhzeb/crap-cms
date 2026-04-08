@@ -1,18 +1,22 @@
 //! MCP tool generation from Registry and tool execution.
 
-mod crud_tools;
+mod collection;
 mod dispatch;
-mod static_tools;
+mod globals;
+mod schema;
 
 pub use dispatch::{
     ParsedTool, ToolOp, execute_tool, generate_tools, parse_tool_name, should_include,
 };
 
-// Re-export internal helpers for tests (they use `super::exec_*` etc.)
+// Re-export internal helpers for tests
 #[cfg(test)]
-use crud_tools::*;
+use collection::helpers::{doc_to_json, parse_where_filters};
 #[cfg(test)]
-use static_tools::*;
+use schema::{
+    exec_cli_reference, exec_describe_collection, exec_list_collections, exec_list_config_files,
+    exec_list_field_types, exec_read_config_file, exec_write_config_file, safe_config_path,
+};
 
 #[cfg(test)]
 mod tests;

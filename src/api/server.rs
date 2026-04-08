@@ -11,9 +11,9 @@ use tracing::warn;
 use crate::{
     api::{
         content::{FILE_DESCRIPTOR_SET, content_api_server::ContentApiServer},
+        handlers::{ContentService, ContentServiceDeps},
         rate_limit::GrpcRateLimitLayer,
         server_builder::GrpcStartParamsBuilder,
-        service::{ContentService, ContentServiceDeps},
     },
     config::CrapConfig,
     core::{

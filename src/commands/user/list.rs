@@ -38,11 +38,12 @@ pub fn user_list(pool: &DbPool, registry: &SharedRegistry, collection: &str) -> 
             .get("email")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let locked = query::is_locked(&conn, collection, &user.id).unwrap_or(false);
+        let locked = crate::service::auth::is_locked(&conn, collection, &user.id).unwrap_or(false);
         let locked_str = if locked { "yes" } else { "no" };
 
         if verify_email {
-            let verified = query::is_verified(&conn, collection, &user.id).unwrap_or(false);
+            let verified =
+                crate::service::auth::is_verified(&conn, collection, &user.id).unwrap_or(false);
             let verified_str = if verified { "yes" } else { "no" };
 
             table.row(vec![&user.id, email, locked_str, verified_str]);

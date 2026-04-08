@@ -171,6 +171,42 @@ pub fn consume_verification_token(
     Ok(true)
 }
 
+// ── Account status operations ───────────────────────────────────────
+
+/// Lock a user account, preventing login.
+pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
+    query::lock_user(conn, slug, id)?;
+    Ok(())
+}
+
+/// Unlock a user account.
+pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
+    query::unlock_user(conn, slug, id)?;
+    Ok(())
+}
+
+/// Mark a user's email as verified.
+pub fn mark_verified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
+    query::mark_verified(conn, slug, id)?;
+    Ok(())
+}
+
+/// Mark a user's email as unverified.
+pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
+    query::mark_unverified(conn, slug, id)?;
+    Ok(())
+}
+
+/// Check whether a user account is locked.
+pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool, ServiceError> {
+    Ok(query::is_locked(conn, slug, id)?)
+}
+
+/// Check whether a user's email is verified.
+pub fn is_verified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool, ServiceError> {
+    Ok(query::is_verified(conn, slug, id)?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

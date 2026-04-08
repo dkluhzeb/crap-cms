@@ -1,0 +1,42 @@
+//! Execute `update_global` — update a global document.
+
+use std::sync::Arc;
+
+use anyhow::{Context as _, Result};
+use serde_json::Value;
+use tracing::info;
+
+use crate::{
+    core::Registry,
+    db::DbPool,
+    hooks::HookRunner,
+    service::{WriteInput, update_global_document},
+};
+
+use crate::mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args};
+
+/// Execute `update_global` — update a global document.
+pub(in crate::mcp::tools) fn exec_update_global(
+    args: &Value,
+    slug: &str,
+    registry: &Arc<Registry>,
+    pool: &DbPool,
+    runner: &HookRunner,
+) -> Result<String> {
+    let def = registry.globals.get(slug).context("Global not found")?;
+
+    let (data, join_data) = extract_data_from_args(args, &[]);
+
+    let (doc, _ctx) = update_global_document(
+        pool,
+        runner,
+        slug,
+        def,
+        WriteInput::builder(data, &join_data).build(),
+        None,
+    )?;
+
+    info!("MCP update global: {}", slug);
+
+    Ok(serde_json::to_string_pretty(&doc_to_json(&doc))?)
+}

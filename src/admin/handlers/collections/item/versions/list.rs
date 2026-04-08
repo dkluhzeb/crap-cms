@@ -60,14 +60,9 @@ fn fetch_version_data(
         Err(_) => return Err(Box::new(server_error(state, "Database error"))),
     };
 
-    let (version_snapshots, total) = crate::service::version_ops::list_versions(
-        &conn,
-        slug,
-        id,
-        Some(pg.per_page),
-        Some(pg.offset),
-    )
-    .unwrap_or_default();
+    let (version_snapshots, total) =
+        crate::service::list_versions(&conn, slug, id, Some(pg.per_page), Some(pg.offset))
+            .unwrap_or_default();
 
     let versions: Vec<Value> = version_snapshots.into_iter().map(version_to_json).collect();
 

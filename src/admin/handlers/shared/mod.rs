@@ -14,7 +14,7 @@ pub(super) use crate::admin::handlers::field_context::{
 };
 
 // Re-export query utilities from the dedicated module.
-pub(crate) use super::query_utils::{
+pub(crate) use super::query::{
     ListUrlContext, extract_where_params, is_column_eligible, parse_where_params, url_decode,
     validate_sort,
 };

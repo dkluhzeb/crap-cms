@@ -27,14 +27,8 @@ fn restore_from_version(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
 
-    let doc = crate::service::version_ops::restore_global_version(
-        &tx,
-        slug,
-        def,
-        version_id,
-        locale_config,
-    )
-    .map_err(|e| e.into_anyhow())?;
+    let doc = crate::service::restore_global_version(&tx, slug, def, version_id, locale_config)
+        .map_err(|e| e.into_anyhow())?;
 
     tx.commit().context("Commit")?;
     Ok(doc)

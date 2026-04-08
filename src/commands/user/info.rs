@@ -24,7 +24,7 @@ pub fn user_info(
     let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
 
     let conn = pool.get().context("Failed to get database connection")?;
-    let locked = query::is_locked(&conn, collection, &doc.id).unwrap_or(false);
+    let locked = crate::service::auth::is_locked(&conn, collection, &doc.id).unwrap_or(false);
     let has_pw = query::has_password(&conn, collection, &doc.id).unwrap_or(false);
 
     print_identity(&doc, collection);
@@ -55,7 +55,8 @@ fn print_status(
     cli::kv_status("Locked", if locked { "yes" } else { "no" }, !locked);
 
     if verify_email {
-        let verified = query::is_verified(conn, collection, &doc.id).unwrap_or(false);
+        let verified =
+            crate::service::auth::is_verified(conn, collection, &doc.id).unwrap_or(false);
         cli::kv_status("Verified", if verified { "yes" } else { "no" }, verified);
     }
 

@@ -18,8 +18,18 @@ use crate::mcp::{
     schema::{CrudOp, collection_input_schema, global_input_schema},
 };
 
-use super::crud_tools::*;
-use super::static_tools::*;
+use super::{
+    collection::{
+        read::{exec_find, exec_find_by_id},
+        write::{exec_create, exec_delete, exec_update},
+    },
+    globals::{exec_read_global, exec_update_global},
+    schema::{
+        exec_cli_reference, exec_describe_collection, exec_list_collections,
+        exec_list_config_files, exec_list_field_types, exec_read_config_file,
+        exec_write_config_file,
+    },
+};
 
 /// Parsed tool name: operation + target slug.
 #[derive(Debug, PartialEq)]

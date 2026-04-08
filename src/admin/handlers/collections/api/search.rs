@@ -9,13 +9,11 @@ use serde_json::{Value, json};
 use crate::{
     admin::{
         AdminState,
-        handlers::{collections::shared::thumbnail_url, shared::check_access_or_forbid},
+        handlers::{collections::shared::thumbnail_url, shared::get_user_doc},
     },
-    core::{CollectionDefinition, Document, auth::AuthUser, upload},
-    db::{
-        BoxedConnection,
-        query::{self, AccessResult, FindQuery, LocaleContext},
-    },
+    core::{Document, auth::AuthUser},
+    db::query::LocaleContext,
+    service,
 };
 
 /// Search query parameters for collection search.
@@ -69,42 +67,6 @@ fn build_search_result(
     item
 }
 
-/// Execute the search query and assemble upload sizes if applicable.
-fn fetch_search_results(
-    conn: &BoxedConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    search_term: &str,
-    limit: usize,
-    access_result: &AccessResult,
-    locale_ctx: Option<&LocaleContext>,
-) -> Option<Vec<Document>> {
-    let mut find_query = FindQuery::new();
-    find_query.limit = Some(limit as i64);
-
-    find_query.search = if search_term.is_empty() {
-        None
-    } else {
-        Some(search_term.to_string())
-    };
-
-    if let AccessResult::Constrained(constraint_filters) = access_result {
-        find_query.filters.extend(constraint_filters.clone());
-    }
-
-    let mut docs = query::find(conn, slug, def, &find_query, locale_ctx).ok()?;
-
-    if def.upload.as_ref().is_some_and(|u| u.enabled)
-        && let Some(upload_config) = &def.upload
-    {
-        for doc in &mut docs {
-            upload::assemble_sizes_object(doc, upload_config);
-        }
-    }
-
-    Some(docs)
-}
-
 /// GET /admin/api/search/{collection}?q=...&limit=20
 /// Returns JSON array of `{id, label}` for relationship field search.
 pub async fn search_collection(
@@ -117,16 +79,6 @@ pub async fn search_collection(
         return Json(json!([]));
     };
 
-    let access_result =
-        match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
-            Ok(r) => r,
-            Err(_) => return Json(json!([])),
-        };
-
-    if matches!(access_result, AccessResult::Denied) {
-        return Json(json!([]));
-    }
-
     let search_term = params.q.unwrap_or_default().to_lowercase();
     let limit = params
         .limit
@@ -138,18 +90,29 @@ pub async fn search_collection(
     };
 
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+    let user_doc = get_user_doc(&auth_user);
 
-    let docs = match fetch_search_results(
-        &conn,
-        &slug,
-        def,
-        &search_term,
-        limit,
-        &access_result,
-        locale_ctx.as_ref(),
-    ) {
-        Some(d) => d,
-        None => return Json(json!([])),
+    let read_hooks = service::RunnerReadHooks {
+        runner: &state.hook_runner,
+        conn: &conn,
+    };
+
+    let search = if search_term.is_empty() {
+        None
+    } else {
+        Some(search_term.as_str())
+    };
+
+    let search_opts = service::SearchOptions {
+        search,
+        limit: limit as i64,
+        locale_ctx: locale_ctx.as_ref(),
+        user: user_doc,
+    };
+
+    let docs = match service::search_documents(&conn, &read_hooks, &slug, def, &search_opts) {
+        Ok(d) => d,
+        Err(_) => return Json(json!([])),
     };
 
     let title_field = def.title_field().map(|s| s.to_string());

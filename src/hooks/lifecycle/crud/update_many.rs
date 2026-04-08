@@ -238,7 +238,7 @@ fn update_many_documents(
             let r_lock = reg
                 .read()
                 .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-            crate::service::write_hooks::apply_richtext_before_validate(
+            crate::service::hooks::apply_richtext_before_validate(
                 lua,
                 &def.fields,
                 &mut hook_data,

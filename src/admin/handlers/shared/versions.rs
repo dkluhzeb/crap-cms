@@ -29,7 +29,7 @@ pub fn fetch_version_sidebar_data(
         return (vec![], 0);
     };
 
-    match crate::service::version_ops::list_versions(&conn, table_name, parent_id, Some(3), None) {
+    match crate::service::list_versions(&conn, table_name, parent_id, Some(3), None) {
         Ok((versions, total)) => {
             let vers = versions.into_iter().map(version_to_json).collect();
             (vers, total)

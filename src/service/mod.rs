@@ -4,102 +4,50 @@
 //! DB operation → commit) shared between admin handlers and the gRPC service. They are meant
 //! to be called from within `spawn_blocking`.
 
-mod after_change_input_builder;
 pub mod auth;
-mod collections;
+mod collection;
 pub mod document_info;
 mod email;
+mod error;
 mod globals;
+pub mod helpers;
+pub mod hooks;
 mod persist;
-mod persist_options_builder;
 pub mod read;
-pub mod read_hooks;
 mod types;
-pub mod version_ops;
-mod version_snapshot_ctx_builder;
 pub(crate) mod versions;
 pub mod write;
-pub mod write_hooks;
-mod write_input_builder;
 
-pub(crate) use after_change_input_builder::AfterChangeInputBuilder;
-pub use persist_options_builder::PersistOptionsBuilder;
+pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
-pub use types::{PersistOptions, ServiceError, WriteInput, WriteResult};
-pub use write_input_builder::WriteInputBuilder;
+pub use types::{
+    PersistOptions, PersistOptionsBuilder, WriteInput, WriteInputBuilder, WriteResult,
+};
 
-pub use collections::{
+pub use collection::{
     create_document, create_document_with_conn, delete_document, delete_document_with_conn,
     restore_document, restore_document_core, unpublish_document, update_document,
     update_document_with_conn,
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};
+pub(crate) use helpers::{build_hook_data, run_after_change_hooks};
+pub use hooks::{
+    LuaReadHooks, LuaWriteHooks, ReadHooks, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
+};
 pub use persist::{
     persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
 };
 pub use read::{
-    FindResult, ReadOptions, count_documents, find_document_by_id, find_documents,
-    get_global_document,
+    FindResult, ReadOptions, SearchOptions, count_documents, find_document_by_id, find_documents,
+    get_global_document, search_documents,
 };
-pub use read_hooks::{LuaReadHooks, ReadHooks, RunnerReadHooks};
 pub use versions::unpublish_with_snapshot;
+pub use versions::{list_versions, restore_collection_version, restore_global_version};
 pub use write::{
     DeleteResult, ValidateContext, create_document_core, delete_document_core,
     update_document_core, validate_document,
 };
-pub use write_hooks::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};
-
-use std::collections::HashMap;
-
-use serde_json::Value;
-
-use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
-    db::DbConnection,
-    hooks::{HookContext, HookEvent},
-};
-
-/// Build the hook data map from form data + structured join data.
-/// Converts string values to JSON strings and merges in blocks/arrays/has-many.
-pub(crate) fn build_hook_data(
-    data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
-) -> HashMap<String, Value> {
-    let mut hook_data: HashMap<String, Value> = data
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-        .collect();
-    for (k, v) in join_data {
-        hook_data.insert(k.clone(), v.clone());
-    }
-    hook_data
-}
-
-/// Run after-change hooks and return the request-scoped context.
-/// This pattern is repeated across create, update, unpublish, and global update.
-pub(crate) fn run_after_change_hooks(
-    write_hooks: &dyn write_hooks::WriteHooks,
-    hooks: &Hooks,
-    fields: &[FieldDefinition],
-    doc: &Document,
-    input: AfterChangeInput<'_>,
-    tx: &dyn DbConnection,
-) -> anyhow::Result<HashMap<String, Value>> {
-    let mut after_data = doc.fields.clone();
-    after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
-    let after_ctx = HookContext::builder(input.slug, input.operation)
-        .data(after_data)
-        .draft(input.is_draft)
-        .locale(input.locale)
-        .context(input.req_context)
-        .user(input.user)
-        .ui_locale(input.ui_locale)
-        .build();
-    let after_result =
-        write_hooks.run_after_write(hooks, fields, HookEvent::AfterChange, after_ctx, tx)?;
-    Ok(after_result.context)
-}
 
 #[cfg(test)]
 mod tests {
@@ -107,6 +55,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::field::*;
     use rusqlite::Connection;
+    use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");

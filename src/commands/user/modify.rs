@@ -81,7 +81,9 @@ pub fn user_lock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    query::lock_user(&conn, collection, &doc.id).context("Failed to lock user")?;
+    crate::service::auth::lock_user(&conn, collection, &doc.id)
+        .map_err(|e| e.into_anyhow())
+        .context("Failed to lock user")?;
 
     cli::success(&format!(
         "Locked user {} ({}) in '{}'",
@@ -105,7 +107,9 @@ pub fn user_unlock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    query::unlock_user(&conn, collection, &doc.id).context("Failed to unlock user")?;
+    crate::service::auth::unlock_user(&conn, collection, &doc.id)
+        .map_err(|e| e.into_anyhow())
+        .context("Failed to unlock user")?;
 
     cli::success(&format!(
         "Unlocked user {} ({}) in '{}'",
@@ -130,7 +134,9 @@ pub fn user_verify(
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    query::mark_verified(&conn, collection, &doc.id).context("Failed to verify user")?;
+    crate::service::auth::mark_verified(&conn, collection, &doc.id)
+        .map_err(|e| e.into_anyhow())
+        .context("Failed to verify user")?;
 
     cli::success(&format!(
         "Verified user {} ({}) in '{}'",
@@ -155,7 +161,9 @@ pub fn user_unverify(
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    query::mark_unverified(&conn, collection, &doc.id).context("Failed to unverify user")?;
+    crate::service::auth::mark_unverified(&conn, collection, &doc.id)
+        .map_err(|e| e.into_anyhow())
+        .context("Failed to unverify user")?;
 
     cli::success(&format!(
         "Unverified user {} ({}) in '{}'",

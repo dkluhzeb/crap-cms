@@ -31,7 +31,7 @@ fn fetch_version_data(
     global_table: &str,
     pg: &Pagination,
 ) -> (Vec<Value>, i64) {
-    let (snapshots, total) = crate::service::version_ops::list_versions(
+    let (snapshots, total) = crate::service::list_versions(
         conn,
         global_table,
         "default",

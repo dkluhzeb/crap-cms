@@ -11,7 +11,7 @@ pub mod field_context;
 pub mod forms;
 /// Global document handlers (view/edit).
 pub mod globals;
-mod query_utils;
+mod query;
 pub mod shared;
 pub mod static_assets;
 /// File upload handlers.

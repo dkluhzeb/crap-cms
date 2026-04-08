@@ -29,7 +29,7 @@ use crate::{
         event::{EventOperation, EventTarget},
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
-    db::query::{self, LocaleContext, LocaleMode},
+    db::query::{LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
     service::{self, ServiceError},
 };
@@ -145,9 +145,9 @@ async fn spawn_update(
             let conn = pool.get().context("DB connection for lock update")?;
 
             if should_lock {
-                query::auth::lock_user(&conn, &slug_owned, &id_owned)?;
+                crate::service::auth::lock_user(&conn, &slug_owned, &id_owned)?;
             } else {
-                query::auth::unlock_user(&conn, &slug_owned, &id_owned)?;
+                crate::service::auth::unlock_user(&conn, &slug_owned, &id_owned)?;
             }
         }
 
