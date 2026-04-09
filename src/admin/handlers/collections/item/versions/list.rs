@@ -35,7 +35,7 @@ fn fetch_version_data(
     id: &str,
     pg: &Pagination,
 ) -> Result<(String, Vec<Value>, i64), Box<Response>> {
-    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
 
     let document = match ops::find_document_by_id(&state.pool, slug, def, id, locale_ctx.as_ref()) {
         Ok(Some(doc)) => doc,

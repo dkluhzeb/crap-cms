@@ -58,7 +58,8 @@ pub async fn validate_global(
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
-        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
     let gtable = global_table(&slug);
     let pool = state.pool.clone();

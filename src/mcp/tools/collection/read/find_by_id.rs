@@ -8,7 +8,7 @@ use serde_json::{Value, json, to_string_pretty};
 use crate::{
     config::CrapConfig,
     core::Registry,
-    db::DbPool,
+    db::{DbPool, LocaleContext},
     hooks::HookRunner,
     mcp::tools::collection::helpers::doc_to_json,
     service::{ReadOptions, RunnerReadHooks, find_document_by_id},
@@ -33,6 +33,9 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .context("Collection not found")?;
     let conn = pool.get().context("DB connection")?;
 
+    let locale = args.get("locale").and_then(|v| v.as_str());
+    let locale_ctx = LocaleContext::from_locale_string(locale, &config.locale)?;
+
     let depth = args
         .get("depth")
         .and_then(|v| v.as_i64())
@@ -42,6 +45,7 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
     let hooks = RunnerReadHooks::new(runner, &conn);
     let opts = ReadOptions::builder()
         .depth(depth)
+        .locale_ctx(locale_ctx.as_ref())
         .registry(Some(registry.as_ref()))
         .build();
 

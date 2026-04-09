@@ -6,7 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.4] — Unreleased
 
+### Changed
+
+- **BREAKING: `default_deny` now defaults to `true`** — Collections and
+  globals without explicit access functions now **deny all operations** by
+  default. This is a secure-by-default change. Previously, missing access
+  functions allowed all operations (`default_deny = false`). To restore
+  the old behavior, set `default_deny = false` in `[access]` in
+  `crap.toml`. Every collection and global in production should have
+  explicit access rules defined.
+
+- **Invalid locale now returns an error** — API requests (gRPC, Lua CRUD)
+  with an invalid locale code now receive `INVALID_ARGUMENT` /
+  `RuntimeError` instead of silently falling back to the default locale.
+  Valid locale codes are those listed in `[locale] locales` in
+  `crap.toml`, plus the special value `"all"`. Passing no locale still
+  defaults to the default locale.
+
 ### Added
+
+- **MCP locale support** — `find` and `find_by_id` MCP tools now accept
+  an optional `locale` parameter for querying locale-specific data,
+  matching the gRPC API's locale support.
+
+- **Per-collection ref count backfill** — The `_ref_count` backfill
+  migration now tracks which collections have been backfilled
+  individually. Adding a new collection to the config no longer requires
+  manually resetting the `ref_count_backfilled` flag — the backfill runs
+  automatically for newly added collections on the next startup.
 
 - **Event delivery modes** — per-collection `live` setting now supports a
   `mode` field (`"metadata"` or `"full"`) that controls what data events
@@ -36,18 +63,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   in-memory. Supports all filter operators (Equals, NotEquals, Contains,
   Like, GreaterThan/LessThan, In/NotIn, Exists/NotExists, Or groups).
   Used by event streams for row-level access control without DB queries.
-
-### Fixed
-
-- **Event stream data leak** — gRPC Subscribe previously sent full
-  document data without applying field-level read access checks. Events
-  now respect the same field access rules as `Find` and `FindByID`.
-
-- **Upload API event data ordering** — upload create/update handlers now
-  strip field-level read-denied fields before publishing events, ensuring
-  event data never contains fields the publishing user's access would deny.
-
-### Changed
 
 - **BREAKING: "Restore" renamed to "Undelete" for trash operations** —
   The operation that un-deletes a soft-deleted document is now called
@@ -344,6 +359,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `crap.email.send()` remains available for immediate blocking delivery.
 
 ### Fixed
+
+- **Invalid locale silently accepted** — `LocaleContext::from_locale_string`
+  returned `None` for both "localization disabled" and "invalid locale
+  code", making it impossible for callers to distinguish the two cases.
+  Invalid locales now produce an error. Affects all API surfaces (gRPC,
+  Lua hooks). Admin UI form submissions gracefully fall back to the
+  default locale (locales are validated upstream from cookies).
+
+- **Job pagination offset unbounded** — `ListJobRuns` accepted arbitrary
+  `offset` values including negative numbers. Now clamped to `>= 0`.
+
+- **MCP tools missing locale** — MCP `find` and `find_by_id` tools did
+  not support the `locale` parameter, unlike their gRPC counterparts.
+  Claude (via MCP) could not query locale-specific data.
+
+- **Ref count backfill skipped for new collections** — The one-time
+  `_ref_count` backfill was gated by a global flag in `_crap_meta`. If a
+  new collection was added after the initial backfill, its documents'
+  incoming reference counts were never computed. Now tracked
+  per-collection.
+
+- **README field type count** — README stated "14 field types" but the
+  actual count is 20 (text, number, textarea, richtext, select, radio,
+  checkbox, date, email, json, code, relationship, upload, array, group,
+  blocks, row, collapsible, tabs, join).
+
+- **`[live] default_mode` missing from docs** — The `default_mode`
+  configuration option was documented in the live-updates overview but
+  missing from the `crap-toml.md` configuration reference table. Now
+  listed in both the example block and the reference table.
+
+- **Event stream data leak** — gRPC Subscribe previously sent full
+  document data without applying field-level read access checks. Events
+  now respect the same field access rules as `Find` and `FindByID`.
+
+- **Upload API event data ordering** — upload create/update handlers now
+  strip field-level read-denied fields before publishing events, ensuring
+  event data never contains fields the publishing user's access would deny.
 
 - **Upload file deletion broken on localized collections** — The
   delete cleanup path used `LocaleConfig::default()` (empty) instead

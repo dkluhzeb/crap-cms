@@ -14,26 +14,72 @@ use crate::{
 
 const META_KEY: &str = "ref_count_backfilled";
 
-/// Run the ref count backfill if not already done.
+/// Build the per-collection meta key for tracking backfill status.
+fn collection_meta_key(slug: &str) -> String {
+    format!("ref_count_backfilled:{}", slug)
+}
+
+/// Check if a specific collection/global has been backfilled.
+fn is_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<bool> {
+    let p1 = conn.placeholder(1);
+    let row = conn.query_one(
+        &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
+        &[DbValue::Text(collection_meta_key(slug))],
+    )?;
+    Ok(row.is_some())
+}
+
+/// Mark a collection/global as backfilled.
+fn mark_backfilled(conn: &dyn DbConnection, slug: &str) -> Result<()> {
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    conn.execute(
+        &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
+        &[
+            DbValue::Text(collection_meta_key(slug)),
+            DbValue::Text("true".to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Run the ref count backfill for any collections/globals not yet backfilled.
 /// Must be called within a transaction after tables have been synced.
+/// Tracks backfill status per-collection so newly added collections are covered.
 pub fn backfill_if_needed(
     conn: &dyn DbConnection,
     registry: &Registry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
+    // Check legacy flag — if present, all collections at that time were covered.
     let p1 = conn.placeholder(1);
-    let row = conn.query_one(
-        &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
-        &[DbValue::Text(META_KEY.to_string())],
-    )?;
+    let has_legacy_flag = conn
+        .query_one(
+            &format!("SELECT value FROM _crap_meta WHERE key = {p1}"),
+            &[DbValue::Text(META_KEY.to_string())],
+        )?
+        .is_some();
 
-    if row.is_some() {
+    // Collect which collections/globals need backfilling.
+    let needs_backfill_collections: Vec<_> = registry
+        .collections
+        .iter()
+        .filter(|(slug, _)| !has_legacy_flag && !is_backfilled(conn, slug).unwrap_or(true))
+        .collect();
+
+    let needs_backfill_globals: Vec<_> = registry
+        .globals
+        .iter()
+        .filter(|(slug, _)| !has_legacy_flag && !is_backfilled(conn, slug).unwrap_or(true))
+        .collect();
+
+    if needs_backfill_collections.is_empty() && needs_backfill_globals.is_empty() {
         return Ok(());
     }
 
     info!("Backfilling _ref_count columns from existing relationship data...");
 
-    // Reset all ref_counts to 0 first
+    // Phase 1: Reset ref counts to 0 for ALL collections (not just new ones),
+    // because new collections may be referenced by existing ones.
     for slug in registry.collections.keys() {
         conn.execute(&format!("UPDATE \"{}\" SET _ref_count = 0", slug), &[])?;
     }
@@ -45,25 +91,37 @@ pub fn backfill_if_needed(
         )?;
     }
 
-    // Walk each collection and global's fields, counting outgoing refs
+    // Phase 2: Walk ALL collections/globals to count outgoing refs.
+    // We must re-walk everything because existing collections may reference
+    // newly added ones.
     for (slug, def) in &registry.collections {
         backfill_collection(conn, slug, &def.fields, locale_config)?;
     }
 
     for (slug, def) in &registry.globals {
-        let table = global_table(slug);
-        backfill_collection(conn, &table, &def.fields, locale_config)?;
+        backfill_collection(conn, &global_table(slug), &def.fields, locale_config)?;
     }
 
-    // Mark as done
-    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-    conn.execute(
-        &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
-        &[
-            DbValue::Text(META_KEY.to_string()),
-            DbValue::Text("true".to_string()),
-        ],
-    )?;
+    // Phase 3: Mark newly backfilled collections.
+    for (slug, _) in &needs_backfill_collections {
+        mark_backfilled(conn, slug)?;
+    }
+
+    for (slug, _) in &needs_backfill_globals {
+        mark_backfilled(conn, slug)?;
+    }
+
+    // Set legacy flag if not present.
+    if !has_legacy_flag {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        conn.execute(
+            &format!("INSERT INTO _crap_meta (key, value) VALUES ({p1}, {p2})"),
+            &[
+                DbValue::Text(META_KEY.to_string()),
+                DbValue::Text("true".to_string()),
+            ],
+        )?;
+    }
 
     info!("Ref count backfill complete");
 
@@ -447,7 +505,7 @@ mod tests {
                 path: "test.db".to_string(),
                 ..Default::default()
             },
-            ..Default::default()
+            ..CrapConfig::test_default()
         };
         let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
 
@@ -502,7 +560,7 @@ mod tests {
 
         // Clear the backfill flag so it runs again
         conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
             &[],
         )
         .unwrap();
@@ -553,7 +611,7 @@ mod tests {
         .unwrap();
 
         conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
             &[],
         )
         .unwrap();
@@ -585,7 +643,7 @@ mod tests {
             .unwrap();
 
         conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
             &[],
         )
         .unwrap();
@@ -639,7 +697,7 @@ mod tests {
         ).unwrap();
 
         conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
             &[],
         )
         .unwrap();
@@ -671,7 +729,7 @@ mod tests {
             .unwrap();
 
         conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
             &[],
         )
         .unwrap();
@@ -716,7 +774,7 @@ mod tests {
         .unwrap();
 
         conn.execute(
-            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            "DELETE FROM _crap_meta WHERE key LIKE 'ref_count_backfilled%'",
             &[],
         )
         .unwrap();

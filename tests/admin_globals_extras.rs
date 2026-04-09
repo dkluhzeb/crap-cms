@@ -80,7 +80,7 @@ struct TestApp {
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
@@ -273,7 +273,7 @@ fn tiny_png() -> Vec<u8> {
 
 #[tokio::test]
 async fn global_update_with_locale() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -833,7 +833,7 @@ async fn global_restore_nonversioned_redirects() {
 
 #[tokio::test]
 async fn global_edit_with_locale() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -1080,7 +1080,7 @@ async fn cors_disabled_by_default() {
 
 #[tokio::test]
 async fn cors_preflight_returns_headers() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["http://localhost:8080".to_string()];
@@ -1112,7 +1112,7 @@ async fn cors_preflight_returns_headers() {
 
 #[tokio::test]
 async fn cors_wildcard_returns_star() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["*".to_string()];
@@ -1141,7 +1141,7 @@ async fn cors_wildcard_returns_star() {
 
 #[tokio::test]
 async fn cors_non_matching_origin_not_reflected() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["http://allowed.com".to_string()];
@@ -1169,7 +1169,7 @@ async fn cors_non_matching_origin_not_reflected() {
 
 #[tokio::test]
 async fn require_auth_blocks_when_no_auth_collection() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = true;
@@ -1194,7 +1194,7 @@ async fn require_auth_blocks_when_no_auth_collection() {
 
 #[tokio::test]
 async fn require_auth_false_allows_open_admin() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;

@@ -746,7 +746,7 @@ fn doc_to_json_without_timestamps() {
 #[test]
 fn execute_tool_config_tools_disabled_returns_error() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     // config_tools is false by default
     assert!(!config.mcp.config_tools);
@@ -778,7 +778,7 @@ fn execute_tool_config_tools_disabled_returns_error() {
 #[test]
 fn execute_tool_unknown_tool_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
 
     let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
@@ -810,7 +810,7 @@ fn execute_tool_unknown_tool_errors() {
 #[test]
 fn execute_tool_excluded_collection_returns_error() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.mcp.exclude_collections = vec!["posts".to_string()];
 
@@ -851,7 +851,7 @@ fn execute_tool_excluded_collection_returns_error() {
 #[test]
 fn execute_tool_included_collection_succeeds() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     // Only include "posts", exclude everything else implicitly
     config.mcp.include_collections = vec!["posts".to_string()];

@@ -99,7 +99,7 @@ fn setup_service(
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -178,7 +178,7 @@ fn setup_service_with_locale(
     locales: Vec<&str>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale.locales = locales.iter().map(|s| s.to_string()).collect();

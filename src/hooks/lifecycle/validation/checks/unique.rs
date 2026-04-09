@@ -235,7 +235,7 @@ mod tests {
             &fields,
             &data,
             &ValidationCtx::builder(&conn, "test")
-                .locale_ctx(Some(&locale_ctx))
+                .locale_ctx(locale_ctx.as_ref())
                 .build(),
         );
         assert!(
@@ -252,7 +252,7 @@ mod tests {
             &fields,
             &data,
             &ValidationCtx::builder(&conn, "test")
-                .locale_ctx(Some(&locale_ctx))
+                .locale_ctx(locale_ctx.as_ref())
                 .build(),
         );
         assert!(
@@ -295,7 +295,7 @@ mod tests {
             &fields,
             &data,
             &ValidationCtx::builder(&conn, "test")
-                .locale_ctx(Some(&locale_ctx))
+                .locale_ctx(locale_ctx.as_ref())
                 .build(),
         );
         assert!(
@@ -311,7 +311,7 @@ mod tests {
             &fields,
             &data,
             &ValidationCtx::builder(&conn, "test")
-                .locale_ctx(Some(&locale_ctx))
+                .locale_ctx(locale_ctx.as_ref())
                 .build(),
         );
         assert_eq!(result.unwrap_err().errors[0].field, "seo__slug");

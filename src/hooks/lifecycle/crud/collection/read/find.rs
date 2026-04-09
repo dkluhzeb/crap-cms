@@ -154,7 +154,8 @@ fn find_inner(
         .unwrap_or(0)
         .clamp(0, 10);
     let locale_str = get_opt_string(&query_table, "locale")?;
-    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc);
+    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
+        .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = get_opt_bool(&query_table, "overrideAccess", false)?;
     let draft = get_opt_bool(&query_table, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;

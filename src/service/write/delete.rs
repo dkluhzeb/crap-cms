@@ -57,7 +57,7 @@ pub fn delete_document_core(
     // Pre-load upload doc for file cleanup (before deletion removes it)
     let upload_doc_fields = if def.is_upload_collection() {
         let lc = locale_config.cloned().unwrap_or_default();
-        let locale_ctx = LocaleContext::from_locale_string(None, &lc);
+        let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
         query::find_by_id(conn, slug, def, id, locale_ctx.as_ref())
             .ok()
             .flatten()

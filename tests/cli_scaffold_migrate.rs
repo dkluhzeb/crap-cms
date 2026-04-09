@@ -1748,7 +1748,7 @@ fn init_with_locales_and_nested_localized_crud() {
     assert!(title_field.localized, "title field should be localized");
 
     // Create a document with localized column names (pass locale context)
-    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale);
+    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale).unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();

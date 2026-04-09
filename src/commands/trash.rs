@@ -86,7 +86,7 @@ fn run_list(
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
     let conn = pool.get().context("Failed to get DB connection")?;
-    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale);
+    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale)?;
     let fq = deleted_filter();
 
     let mut table = Table::new(vec!["ID", "Title", "Collection", "Deleted At"]);

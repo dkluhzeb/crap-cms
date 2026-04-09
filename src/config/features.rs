@@ -502,13 +502,19 @@ impl Default for HooksConfig {
 
 /// Access control defaults.
 /// When `default_deny` is true, collections/globals without explicit access functions
-/// deny all operations instead of allowing them. Default: false (backward compatible).
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+/// deny all operations instead of allowing them. Default: true (secure by default).
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AccessConfig {
-    /// When true, operations on collections/globals without an explicit access function
-    /// are denied by default. When false (default), missing access functions allow all.
+    /// When true (default), operations on collections/globals without an explicit access
+    /// function are denied. When false, missing access functions allow all.
     pub default_deny: bool,
+}
+
+impl Default for AccessConfig {
+    fn default() -> Self {
+        Self { default_deny: true }
+    }
 }
 
 /// Log rotation strategy for file-based logging.
@@ -776,9 +782,9 @@ mod tests {
     }
 
     #[test]
-    fn access_config_default_deny_false_by_default() {
+    fn access_config_default_deny_true_by_default() {
         let config = crate::config::CrapConfig::default();
-        assert!(!config.access.default_deny);
+        assert!(config.access.default_deny);
     }
 
     #[test]

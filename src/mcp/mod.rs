@@ -38,7 +38,7 @@ mod tests {
     /// Build a full McpServer backed by a real SQLite pool and HookRunner.
     fn make_server_with(collections: Vec<CollectionDefinition>) -> (tempfile::TempDir, McpServer) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let mut config = CrapConfig::default();
+        let mut config = CrapConfig::test_default();
         config.database.path = "test.db".to_string();
 
         let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");

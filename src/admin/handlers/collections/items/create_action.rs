@@ -219,7 +219,8 @@ pub async fn create_action(
 
     let form_locale = form_data.remove("_locale");
     let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
     let form_data_clone = form_data.clone();
     let join_data_clone = join_data.clone();

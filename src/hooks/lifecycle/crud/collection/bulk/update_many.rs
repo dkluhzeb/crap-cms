@@ -35,7 +35,8 @@ fn update_many_documents(
     let conn = unsafe { &*conn_ptr };
 
     let locale_str = get_opt_string(opts, "locale")?;
-    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc);
+    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
+        .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = get_opt_bool(opts, "overrideAccess", false)?;
     let run_hooks = get_opt_bool(opts, "hooks", true)?;
     let draft = get_opt_bool(opts, "draft", false)?;

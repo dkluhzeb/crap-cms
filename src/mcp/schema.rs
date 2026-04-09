@@ -256,7 +256,8 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
             "type": "object",
             "properties": {
                 "id": { "type": "string" },
-                "depth": { "type": "integer", "description": "Relationship population depth" }
+                "depth": { "type": "integer", "description": "Relationship population depth" },
+                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
             },
             "required": ["id"]
         }),
@@ -273,7 +274,8 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                 "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
                 "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
                 "depth": { "type": "integer", "description": "Relationship population depth" },
-                "search": { "type": "string", "description": "Full-text search query" }
+                "search": { "type": "string", "description": "Full-text search query" },
+                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
             }
         }),
         CrudOp::Count => json!({

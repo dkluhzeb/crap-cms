@@ -177,7 +177,8 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     let draft = action == "save_draft";
     let form_locale = form_data.remove("_locale");
     let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
     let mut upload_result = None;
 

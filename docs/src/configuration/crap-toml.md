@@ -204,6 +204,7 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
+default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
@@ -222,7 +223,7 @@ auto_purge = "7d"            # Auto-purge completed/failed runs older than this
 image_queue_batch_size = 10  # Pending image conversions to process per poll
 
 [access]
-default_deny = false     # When true, deny all operations without explicit access functions
+default_deny = true      # When true (default), deny all operations without explicit access functions
 
 [cors]
 allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (default)
@@ -427,6 +428,7 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
+| `default_mode` | string | `"metadata"` | Default event delivery mode. `"metadata"` sends only event type, collection, and document ID. `"full"` sends the complete document payload. |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
 | `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
 | `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
@@ -456,7 +458,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default_deny` | boolean | `false` | When `true`, collections and globals without an explicit access function deny all operations. When `false` (default), missing access functions allow all operations. |
+| `default_deny` | boolean | `true` | When `true` (default), collections and globals without an explicit access function deny all operations. Set to `false` to allow all operations when no access function is defined. |
 
 Enable this to enforce a "secure by default" posture — every collection must explicitly declare its access rules. Without it, collections without access functions are open to any authenticated (or anonymous) user.
 

@@ -46,7 +46,7 @@ pub fn build_locale_template_data(
     }
 
     let current = requested_locale.unwrap_or(&config.default_locale);
-    let locale_ctx = LocaleContext::from_locale_string(Some(current), config);
+    let locale_ctx = LocaleContext::from_locale_string(Some(current), config).unwrap_or(None);
 
     let locales: Vec<Value> = config
         .locales

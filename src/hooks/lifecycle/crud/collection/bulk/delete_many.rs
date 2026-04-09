@@ -47,7 +47,8 @@ fn find_docs_for_deletion(
     let locale_ctx = LocaleContext::from_locale_string(
         get_opt_string(&Some(query_table.clone()), "locale")?.as_deref(),
         lc,
-    );
+    )
+    .map_err(|e| RuntimeError(e.to_string()))?;
 
     let (mut find_query, _) = lua_table_to_find_query(query_table)?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);

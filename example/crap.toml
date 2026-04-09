@@ -70,7 +70,7 @@ allowed_headers = ["Content-Type", "Authorization"]
 max_age = "1h"
 
 [access]
-# default_deny = false
+# default_deny = true
 
 [logging]
 file = true

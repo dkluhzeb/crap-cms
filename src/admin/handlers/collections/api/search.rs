@@ -89,7 +89,7 @@ pub async fn search_collection(
         return Json(json!([]));
     };
 
-    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
     let user_doc = get_user_doc(&auth_user);
 
     let read_hooks = service::RunnerReadHooks::new(&state.hook_runner, &conn);

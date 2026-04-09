@@ -332,7 +332,8 @@ pub async fn list_items(
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let locale_ctx =
-        LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
     let state_clone = state.clone();
     let slug_owned = slug.clone();

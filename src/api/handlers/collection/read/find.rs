@@ -48,7 +48,8 @@ impl ContentService {
             .map_err(Status::invalid_argument)?;
 
         let locale_ctx =
-            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
         let cursor_enabled = self.pagination_ctx.cursor_enabled;
         let has_timestamps = def.timestamps;

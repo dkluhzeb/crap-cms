@@ -26,7 +26,8 @@ impl ContentService {
         let def = self.get_collection_def(&req.collection)?;
 
         let locale_ctx =
-            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();

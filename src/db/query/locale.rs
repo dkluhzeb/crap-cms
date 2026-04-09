@@ -29,27 +29,32 @@ pub struct LocaleContext {
 
 impl LocaleContext {
     /// Build a `LocaleContext` from an optional locale string and config.
-    /// Returns `None` if localization is disabled (empty `locales` vec).
+    /// Returns `Ok(None)` if localization is disabled (empty `locales` vec).
+    /// Returns `Err` if the locale string is not a valid configured locale.
     /// `"all"` → `All`, a specific code → `Single`, `None` → `Default`.
-    pub fn from_locale_string(locale: Option<&str>, config: &LocaleConfig) -> Option<Self> {
+    pub fn from_locale_string(locale: Option<&str>, config: &LocaleConfig) -> Result<Option<Self>> {
         if !config.is_enabled() {
-            return None;
+            return Ok(None);
         }
 
         let mode = match locale {
             Some("all") => LocaleMode::All,
             Some(l) => {
                 if !config.locales.iter().any(|loc| loc == l) {
-                    return None;
+                    anyhow::bail!(
+                        "Invalid locale '{}'. Available locales: {}",
+                        l,
+                        config.locales.join(", ")
+                    );
                 }
                 LocaleMode::Single(l.to_string())
             }
             None => LocaleMode::Default,
         };
-        Some(Self {
+        Ok(Some(Self {
             mode,
             config: config.clone(),
-        })
+        }))
     }
 }
 
@@ -290,7 +295,7 @@ mod tests {
     #[test]
     fn locale_context_disabled() {
         let config = LocaleConfig::default();
-        let ctx = LocaleContext::from_locale_string(None, &config);
+        let ctx = LocaleContext::from_locale_string(None, &config).unwrap();
         assert!(
             ctx.is_none(),
             "Should be None when localization is disabled"
@@ -300,7 +305,7 @@ mod tests {
     #[test]
     fn locale_context_all() {
         let config = make_locale_config();
-        let ctx = LocaleContext::from_locale_string(Some("all"), &config);
+        let ctx = LocaleContext::from_locale_string(Some("all"), &config).unwrap();
         assert!(ctx.is_some());
         assert!(matches!(ctx.unwrap().mode, LocaleMode::All));
     }
@@ -308,7 +313,7 @@ mod tests {
     #[test]
     fn locale_context_specific() {
         let config = make_locale_config();
-        let ctx = LocaleContext::from_locale_string(Some("de"), &config);
+        let ctx = LocaleContext::from_locale_string(Some("de"), &config).unwrap();
         assert!(ctx.is_some());
         match ctx.unwrap().mode {
             LocaleMode::Single(locale) => assert_eq!(locale, "de"),
@@ -317,16 +322,22 @@ mod tests {
     }
 
     #[test]
-    fn locale_context_nonexistent_locale_returns_none() {
+    fn locale_context_nonexistent_locale_returns_error() {
         let config = make_locale_config();
-        let ctx = LocaleContext::from_locale_string(Some("fr"), &config);
-        assert!(ctx.is_none(), "Non-existent locale should return None");
+        let result = LocaleContext::from_locale_string(Some("fr"), &config);
+        assert!(result.is_err(), "Non-existent locale should return Err");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid locale 'fr'"),
+            "Error should mention the invalid locale, got: {}",
+            err
+        );
     }
 
     #[test]
     fn locale_context_default() {
         let config = make_locale_config();
-        let ctx = LocaleContext::from_locale_string(None, &config);
+        let ctx = LocaleContext::from_locale_string(None, &config).unwrap();
         assert!(ctx.is_some());
         assert!(matches!(ctx.unwrap().mode, LocaleMode::Default));
     }

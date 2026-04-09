@@ -178,7 +178,8 @@ pub async fn update_action(
     let action = form_data.remove("_action").unwrap_or_default();
     let form_locale = form_data.remove("_locale");
     let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
     // Field write access is now checked inside service::update_global_core.
 

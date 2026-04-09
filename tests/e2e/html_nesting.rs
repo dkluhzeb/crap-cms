@@ -644,7 +644,7 @@ fn make_locale_nesting_def() -> CollectionDefinition {
 }
 
 fn make_locale_nesting_config() -> CrapConfig {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
@@ -813,7 +813,7 @@ async fn nested_groups_locale_roundtrip() {
     // Create document in EN locale
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config);
+    let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
     let en_data = std::collections::HashMap::from([
         ("name".to_string(), "Widget".to_string()),
         ("details__title".to_string(), "Great Widget".to_string()),
@@ -833,7 +833,7 @@ async fn nested_groups_locale_roundtrip() {
             .unwrap();
 
     // Update DE locale translations for localized fields
-    let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config);
+    let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
     let de_data = std::collections::HashMap::from([
         ("details__title".to_string(), "Tolles Widget".to_string()),
         (
@@ -2054,7 +2054,7 @@ fn make_localized_group_array_blocks_def() -> CollectionDefinition {
 }
 
 fn make_locale_config() -> CrapConfig {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
@@ -2087,7 +2087,7 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     // Create in EN: headline, 2 array rows, 1 block
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config);
+    let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
     let en_data = std::collections::HashMap::from([
         ("slug".to_string(), "hello".to_string()),
         ("content__headline".to_string(), "EN Headline".to_string()),
@@ -2117,7 +2117,7 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     .unwrap();
 
     // Update DE locale
-    let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config);
+    let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
     let de_data = std::collections::HashMap::from([(
         "content__headline".to_string(),
         "DE Schlagzeile".to_string(),
@@ -2379,7 +2379,7 @@ async fn mixed_locale_group_crud_roundtrip() {
     // Create in EN
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config);
+    let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
     let en_data =
         std::collections::HashMap::from([("title".to_string(), "Test Article".to_string())]);
     let doc_record =
@@ -2408,7 +2408,7 @@ async fn mixed_locale_group_crud_roundtrip() {
     .unwrap();
 
     // Save DE tags only (layout is non-localized, shared)
-    let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config);
+    let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
     let de_join_data =
         std::collections::HashMap::from([("meta__tags".to_string(), json!([{"tag": "rost"}]))]);
     crap_cms::db::query::save_join_table_data(

@@ -12,7 +12,7 @@ fn fixture_dir() -> PathBuf {
 
 fn setup_lua() -> HookRunner {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
     HookRunner::builder()
         .config_dir(&config_dir)
@@ -26,7 +26,7 @@ fn setup_lua() -> HookRunner {
 /// This uses a temporary in-memory DB for the eval.
 fn eval_lua(runner: &HookRunner, code: &str) -> String {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -40,12 +40,12 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 #[allow(dead_code)]
 fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
 
     // Create a pool and sync tables from Lua-defined collections/globals
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync failed");
@@ -491,7 +491,7 @@ crap.collections.define("items", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
@@ -500,7 +500,7 @@ crap.collections.define("items", {
         .build()
         .expect("HookRunner");
 
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -545,7 +545,7 @@ crap.collections.define("posts", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
@@ -554,7 +554,7 @@ crap.collections.define("posts", {
         .build()
         .expect("HookRunner");
 
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -613,7 +613,7 @@ crap.collections.define("pages", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
@@ -622,7 +622,7 @@ crap.collections.define("pages", {
         .build()
         .expect("HookRunner");
 
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -684,7 +684,7 @@ crap.collections.define("pages", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -694,7 +694,7 @@ crap.collections.define("pages", {
         .expect("HookRunner::new");
 
     let tmp2 = tempfile::tempdir().expect("tempdir2");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -746,7 +746,7 @@ crap.collections.define("posts", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -756,7 +756,7 @@ crap.collections.define("posts", {
         .expect("HookRunner::new");
 
     let tmp2 = tempfile::tempdir().expect("tempdir2");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -815,7 +815,7 @@ crap.collections.define("users", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -825,7 +825,7 @@ crap.collections.define("users", {
         .expect("HookRunner::new");
 
     let tmp2 = tempfile::tempdir().expect("tempdir2");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -877,7 +877,7 @@ crap.collections.define("posts", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -887,7 +887,7 @@ crap.collections.define("posts", {
         .expect("HookRunner::new");
 
     let tmp2 = tempfile::tempdir().expect("tempdir2");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -934,7 +934,7 @@ crap.collections.define("pages", {
 
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
@@ -965,7 +965,7 @@ crap.collections.define("pages", {
 
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();

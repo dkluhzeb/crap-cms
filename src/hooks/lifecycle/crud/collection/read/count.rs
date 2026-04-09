@@ -30,7 +30,8 @@ fn count_inner(
     let conn = unsafe { &*conn_ptr };
 
     let locale_ctx =
-        LocaleContext::from_locale_string(get_opt_string(&query_table, "locale")?.as_deref(), lc);
+        LocaleContext::from_locale_string(get_opt_string(&query_table, "locale")?.as_deref(), lc)
+            .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = get_opt_bool(&query_table, "overrideAccess", false)?;
     let draft = get_opt_bool(&query_table, "draft", false)?;
     let user = hook_user(lua);

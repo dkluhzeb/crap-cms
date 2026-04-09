@@ -42,7 +42,8 @@ impl ContentService {
             .unwrap_or_default();
 
         let locale_ctx =
-            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let operation = if req.id.is_some() { "update" } else { "create" };
 

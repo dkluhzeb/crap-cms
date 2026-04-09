@@ -28,7 +28,7 @@ impl ContentService {
         let slug = req.slug.clone();
         let status = req.status.clone();
         let limit = req.limit.unwrap_or(50).min(1000);
-        let offset = req.offset.unwrap_or(0);
+        let offset = req.offset.unwrap_or(0).max(0);
 
         let runs = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {

@@ -43,7 +43,8 @@ impl ContentService {
         };
 
         let locale_ctx =
-            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let use_draft_version =
             req.draft.unwrap_or(false) && def.has_drafts() && def.has_versions();

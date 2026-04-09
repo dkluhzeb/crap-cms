@@ -28,7 +28,7 @@ curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.ta
 
 ## Features
 
-- **Collections** with 14 field types (text, richtext, select, relationship, upload, blocks, array, group, ...)
+- **Collections** with 20 field types (text, number, textarea, richtext, select, radio, checkbox, date, email, json, code, relationship, upload, array, group, blocks, row, collapsible, tabs, join)
 - **Globals** — single-document collections for site-wide settings
 - **Lua hooks** at three levels (field, collection, global) with full CRUD access inside transactions
 - **Access control** — collection-level and field-level, with filter constraints

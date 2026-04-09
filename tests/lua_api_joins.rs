@@ -18,11 +18,11 @@ fn fixture_dir() -> PathBuf {
 
 fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync failed");
@@ -63,7 +63,7 @@ fn setup_custom_db(
     }
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     if let Some(l) = locales {
         config.locale.locales = l.iter().map(|s| s.to_string()).collect();
         config.locale.default_locale = l.first().unwrap_or(&"en").to_string();
@@ -105,7 +105,7 @@ fn setup_custom_db_with_hooks(
     }
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
     let mut db_config = config.clone();

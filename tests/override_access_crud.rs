@@ -19,7 +19,7 @@ fn setup() -> (
     HookRunner,
 ) {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
 
     let tmp = tempfile::tempdir().unwrap();

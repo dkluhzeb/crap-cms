@@ -191,7 +191,8 @@ pub fn enrich_field_contexts(
         Err(_) => return,
     };
 
-    let rel_locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+    let rel_locale_ctx =
+        LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
 
     let enrich_ctx = EnrichCtx {
         state,

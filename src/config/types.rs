@@ -101,6 +101,16 @@ impl CrapConfig {
         }
     }
 
+    /// Create a configuration with permissive defaults for testing.
+    ///
+    /// Same as `Default` but with `access.default_deny = false` so tests that don't
+    /// configure access functions aren't blocked.
+    pub fn test_default() -> Self {
+        let mut config = Self::default();
+        config.access.default_deny = false;
+        config
+    }
+
     /// Validate configuration for common misconfigurations.
     ///
     /// Returns errors for fatal issues (e.g., pool_max_size = 0) and logs
@@ -380,7 +390,7 @@ mod tests {
         assert!(!config.admin.dev_mode);
         assert!(config.admin.require_auth);
         assert!(config.admin.access.is_none());
-        assert!(!config.access.default_deny);
+        assert!(config.access.default_deny);
         assert_eq!(config.pagination.default_limit, 20);
         assert_eq!(config.pagination.max_limit, 1000);
         assert_eq!(config.pagination.mode, PaginationMode::Page);

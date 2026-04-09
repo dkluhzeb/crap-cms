@@ -49,7 +49,8 @@ pub async fn validate_update(
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
-        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let slug_owned = slug.clone();

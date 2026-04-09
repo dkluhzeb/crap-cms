@@ -83,7 +83,7 @@ fn setup_service(
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -527,7 +527,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -664,7 +664,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -789,7 +789,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -920,7 +920,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -1049,7 +1049,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 

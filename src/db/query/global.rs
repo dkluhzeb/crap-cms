@@ -214,7 +214,7 @@ mod tests {
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
         };
-        let locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config);
+        let locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
 
         let doc = get_global(&conn, "site", &def, locale_ctx.as_ref()).unwrap();
         assert_eq!(doc.id, "default");

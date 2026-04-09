@@ -132,7 +132,7 @@ pub fn update_upload(
     locale_config: &LocaleConfig,
     upload_max_file_size: u64,
 ) -> Result<UploadUpdateResult, ServiceError> {
-    let locale_ctx = LocaleContext::from_locale_string(None, locale_config);
+    let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
 
     // Load old document for file cleanup (before processing new file)
     let old_doc_fields = if file.is_some() {

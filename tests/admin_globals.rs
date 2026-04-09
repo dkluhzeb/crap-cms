@@ -80,7 +80,7 @@ struct TestApp {
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
@@ -589,7 +589,7 @@ async fn global_restore_non_versioned_redirects() {
 
 #[tokio::test]
 async fn localized_global_edit_returns_200() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -616,7 +616,7 @@ async fn localized_global_edit_returns_200() {
 
 #[tokio::test]
 async fn localized_global_edit_non_default_locale() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -643,7 +643,7 @@ async fn localized_global_edit_non_default_locale() {
 
 #[tokio::test]
 async fn localized_global_update_with_locale() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();

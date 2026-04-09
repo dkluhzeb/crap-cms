@@ -27,7 +27,8 @@ fn globals_get_inner(
     let conn = unsafe { &*conn_ptr };
 
     let locale_str = get_opt_string(&opts, "locale")?;
-    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc);
+    let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
+        .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);

@@ -51,7 +51,7 @@ fn make_nonversioned_def() -> CollectionDefinition {
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
     (tmp, db_pool)
@@ -86,7 +86,7 @@ struct TestSetup {
 
 fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");

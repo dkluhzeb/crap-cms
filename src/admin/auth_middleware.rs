@@ -311,7 +311,7 @@ pub(crate) fn load_auth_user(
     locale_config: &LocaleConfig,
 ) -> Option<AuthUser> {
     let def = registry.get_collection(&claims.collection)?.clone();
-    let locale_ctx = query::LocaleContext::from_locale_string(None, locale_config);
+    let locale_ctx = query::LocaleContext::from_locale_string(None, locale_config).unwrap_or(None);
 
     let conn = pool.get().ok()?;
 
