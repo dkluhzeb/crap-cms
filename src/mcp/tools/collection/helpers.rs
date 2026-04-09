@@ -127,6 +127,7 @@ fn parse_scalar_op(op_name: &str, val: String) -> Option<query::FilterOp> {
     }
 }
 
+/// Convert a bool to a SQLite-compatible `"1"` or `"0"` string.
 fn bool_to_string(b: bool) -> String {
     if b { "1" } else { "0" }.to_string()
 }

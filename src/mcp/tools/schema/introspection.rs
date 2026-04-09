@@ -1,7 +1,7 @@
 //! Introspection tools: list collections, describe collection, field types, CLI reference.
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_string_pretty};
 
 use crate::{
     config::McpConfig,
@@ -12,6 +12,7 @@ use crate::{
     },
 };
 
+/// List all collections and globals with metadata.
 pub(in crate::mcp::tools) fn exec_list_collections(
     registry: &Registry,
     mcp_config: &McpConfig,
@@ -38,9 +39,10 @@ pub(in crate::mcp::tools) fn exec_list_collections(
             "fields": def.fields.len(),
         }));
     }
-    Ok(serde_json::to_string_pretty(&result)?)
+    Ok(to_string_pretty(&result)?)
 }
 
+/// Describe a single collection or global by slug, including its full schema.
 pub(in crate::mcp::tools) fn exec_describe_collection(
     args: &Value,
     registry: &Registry,
@@ -67,7 +69,7 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
             "schema": schema,
         });
 
-        return Ok(serde_json::to_string_pretty(&result)?);
+        return Ok(to_string_pretty(&result)?);
     }
 
     if let Some(def) = registry.globals.get(slug) {
@@ -79,12 +81,13 @@ pub(in crate::mcp::tools) fn exec_describe_collection(
             "schema": schema,
         });
 
-        return Ok(serde_json::to_string_pretty(&result)?);
+        return Ok(to_string_pretty(&result)?);
     }
 
     bail!("Unknown collection or global: {}", slug)
 }
 
+/// List all available field types with their capabilities.
 pub(in crate::mcp::tools) fn exec_list_field_types() -> Result<String> {
     let types = json!([
         { "name": "text", "description": "Single-line text input", "json_schema_type": "string", "supports_has_many": false, "supports_sub_fields": false, "supports_options": false },
@@ -108,9 +111,10 @@ pub(in crate::mcp::tools) fn exec_list_field_types() -> Result<String> {
         { "name": "tabs", "description": "Layout-only tabbed container. Sub-fields promoted to parent level (no prefix)", "json_schema_type": "null", "supports_has_many": false, "supports_sub_fields": true, "supports_options": false },
         { "name": "join", "description": "Virtual reverse-relationship field. Shows documents from another collection that reference this document. No stored data.", "json_schema_type": "null", "supports_has_many": false, "supports_sub_fields": false, "supports_options": false },
     ]);
-    Ok(serde_json::to_string_pretty(&types)?)
+    Ok(to_string_pretty(&types)?)
 }
 
+/// Return CLI reference documentation, optionally filtered by command name.
 pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> {
     let command = args.get("command").and_then(|v| v.as_str());
 
@@ -140,7 +144,7 @@ pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> 
                     { "name": "mcp", "description": "Start the MCP (Model Context Protocol) server (stdio transport)" },
                 ]
             });
-            Ok(serde_json::to_string_pretty(&overview)?)
+            Ok(to_string_pretty(&overview)?)
         }
         Some(cmd) => {
             let detail = match cmd {
@@ -485,7 +489,7 @@ pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> 
                     json!({ "error": format!("Unknown command: '{}'. Call cli_reference without a command argument to see all available commands.", cmd) })
                 }
             };
-            Ok(serde_json::to_string_pretty(&detail)?)
+            Ok(to_string_pretty(&detail)?)
         }
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::Value;
+use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
@@ -37,5 +37,5 @@ pub(in crate::mcp::tools) fn exec_update_global(
 
     info!("MCP update global: {}", slug);
 
-    Ok(serde_json::to_string_pretty(&doc_to_json(&doc))?)
+    Ok(to_string_pretty(&doc_to_json(&doc))?)
 }

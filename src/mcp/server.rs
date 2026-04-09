@@ -2,7 +2,8 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use serde_json::{Value, json};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, from_value, json, to_value};
 
 use crate::{config::CrapConfig, core::Registry, db::DbPool, hooks::HookRunner};
 
@@ -19,6 +20,28 @@ pub struct McpServer {
     pub runner: HookRunner,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
+}
+
+/// Parse required JSON-RPC params, returning an error response on failure.
+fn parse_params<T: DeserializeOwned>(
+    id: &Option<Value>,
+    params: Option<Value>,
+) -> Result<T, Box<JsonRpcResponse>> {
+    let Some(p) = params else {
+        return Err(Box::new(JsonRpcResponse::error(
+            id.clone(),
+            INVALID_PARAMS,
+            "Missing params",
+        )));
+    };
+
+    from_value(p).map_err(|e| {
+        Box::new(JsonRpcResponse::error(
+            id.clone(),
+            INVALID_PARAMS,
+            format!("Invalid params: {e}"),
+        ))
+    })
 }
 
 impl McpServer {
@@ -48,19 +71,11 @@ impl McpServer {
         }
     }
 
+    /// Respond with server capabilities and protocol version.
     fn handle_initialize(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let _params: InitializeParams = match params {
-            Some(p) => match serde_json::from_value(p) {
-                Ok(p) => p,
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        id,
-                        INVALID_PARAMS,
-                        format!("Invalid params: {}", e),
-                    );
-                }
-            },
-            None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
+        let _params: InitializeParams = match parse_params(&id, params) {
+            Ok(p) => p,
+            Err(resp) => return *resp,
         };
 
         JsonRpcResponse::success(
@@ -79,31 +94,25 @@ impl McpServer {
         )
     }
 
+    /// List all available MCP tools.
     fn handle_tools_list(&self, id: Option<Value>) -> JsonRpcResponse {
         let tool_defs = tools::generate_tools(&self.registry, &self.config.mcp);
         let tools_json: Vec<Value> = tool_defs
             .iter()
-            .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+            .map(|t| to_value(t).unwrap_or(Value::Null))
             .collect();
+
         JsonRpcResponse::success(id, json!({ "tools": tools_json }))
     }
 
+    /// Execute a tool call and return the result.
     fn handle_tools_call(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let call: ToolCallParams = match params {
-            Some(p) => match serde_json::from_value(p) {
-                Ok(c) => c,
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        id,
-                        INVALID_PARAMS,
-                        format!("Invalid params: {}", e),
-                    );
-                }
-            },
-            None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
+        let call: ToolCallParams = match parse_params(&id, params) {
+            Ok(c) => c,
+            Err(resp) => return *resp,
         };
 
-        match tools::execute_tool(
+        let result = tools::execute_tool(
             &call.name,
             &call.arguments,
             &self.pool,
@@ -111,65 +120,54 @@ impl McpServer {
             &self.runner,
             &self.config_dir,
             &self.config,
-        ) {
-            Ok(result_text) => JsonRpcResponse::success(
+        );
+
+        match result {
+            Ok(text) => JsonRpcResponse::success(
                 id,
-                json!({
-                    "content": [{
-                        "type": "text",
-                        "text": result_text,
-                    }]
-                }),
+                json!({ "content": [{ "type": "text", "text": text }] }),
             ),
             Err(e) => JsonRpcResponse::success(
                 id,
                 json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("Error: {}", e),
-                    }],
+                    "content": [{ "type": "text", "text": format!("Error: {e}") }],
                     "isError": true,
                 }),
             ),
         }
     }
 
+    /// List all available MCP resources.
     fn handle_resources_list(&self, id: Option<Value>) -> JsonRpcResponse {
         let resource_defs = resources::list_resources();
         let resources_json: Vec<Value> = resource_defs
             .iter()
-            .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+            .map(|r| to_value(r).unwrap_or(Value::Null))
             .collect();
+
         JsonRpcResponse::success(id, json!({ "resources": resources_json }))
     }
 
+    /// Read a single resource by URI.
     fn handle_resources_read(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let read_params: ResourceReadParams = match params {
-            Some(p) => match serde_json::from_value(p) {
-                Ok(r) => r,
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        id,
-                        INVALID_PARAMS,
-                        format!("Invalid params: {}", e),
-                    );
-                }
-            },
-            None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
+        let read_params: ResourceReadParams = match parse_params(&id, params) {
+            Ok(r) => r,
+            Err(resp) => return *resp,
         };
 
-        match resources::read_resource(&read_params.uri, &self.registry, &self.config) {
-            Some(content) => JsonRpcResponse::success(
-                id,
-                json!({
-                    "contents": [serde_json::to_value(&content).unwrap_or(Value::Null)]
-                }),
-            ),
-            None => JsonRpcResponse::error(
+        let Some(content) =
+            resources::read_resource(&read_params.uri, &self.registry, &self.config)
+        else {
+            return JsonRpcResponse::error(
                 id,
                 INTERNAL_ERROR,
                 format!("Resource not found: {}", read_params.uri),
-            ),
-        }
+            );
+        };
+
+        JsonRpcResponse::success(
+            id,
+            json!({ "contents": [to_value(&content).unwrap_or(Value::Null)] }),
+        )
     }
 }

@@ -1,6 +1,7 @@
 //! MCP resource definitions and handlers.
 
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::{Map, Value, json, to_string_pretty, to_value};
 use tracing::error;
 
 use crate::mcp::{
@@ -34,6 +35,77 @@ pub fn list_resources() -> Vec<ResourceDefinition> {
     ]
 }
 
+/// Serialize a value to pretty JSON, logging and returning `"{}"` on failure.
+fn serialize_pretty(value: &impl Serialize, label: &str) -> String {
+    match to_string_pretty(value) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to serialize MCP {label}: {e}");
+            "{}".to_string()
+        }
+    }
+}
+
+/// Build a [`ResourceContent`] with `application/json` mime type.
+fn json_resource(uri: &str, text: String) -> ResourceContent {
+    ResourceContent {
+        uri: uri.to_string(),
+        mime_type: Some("application/json".to_string()),
+        text,
+    }
+}
+
+/// Build the schema map for all visible collections.
+fn collections_schema(registry: &Registry, config: &CrapConfig) -> Map<String, Value> {
+    let mut schemas = Map::new();
+
+    for (slug, def) in &registry.collections {
+        if !should_include(slug, &config.mcp) {
+            continue;
+        }
+
+        let schema = collection_input_schema(def, CrudOp::Create);
+        schemas.insert(
+            slug.to_string(),
+            json!({
+                "label": def.display_name(),
+                "timestamps": def.timestamps,
+                "has_auth": def.is_auth_collection(),
+                "has_upload": def.is_upload_collection(),
+                "has_drafts": def.has_drafts(),
+                "schema": schema,
+            }),
+        );
+    }
+
+    schemas
+}
+
+/// Build the schema map for all globals.
+fn globals_schema(registry: &Registry) -> Map<String, Value> {
+    let mut schemas = Map::new();
+
+    for (slug, def) in &registry.globals {
+        let schema = global_input_schema(def, CrudOp::Update);
+        schemas.insert(
+            slug.to_string(),
+            json!({
+                "label": def.display_name(),
+                "schema": schema,
+            }),
+        );
+    }
+
+    schemas
+}
+
+/// Serialize the sanitized config to pretty JSON.
+fn config_resource(config: &CrapConfig) -> String {
+    // auth.secret, email.smtp_pass, and mcp.api_key are auto-redacted via Serialize impls
+    let config_json = to_value(config).unwrap_or(Value::Null);
+    serialize_pretty(&config_json, "config")
+}
+
 /// Read a resource by URI.
 pub fn read_resource(
     uri: &str,
@@ -42,77 +114,20 @@ pub fn read_resource(
 ) -> Option<ResourceContent> {
     match uri {
         "crap://schema/collections" => {
-            let mut schemas = Map::new();
-            for (slug, def) in &registry.collections {
-                if !should_include(slug, &config.mcp) {
-                    continue;
-                }
-                let schema = collection_input_schema(def, CrudOp::Create);
-                schemas.insert(
-                    slug.to_string(),
-                    json!({
-                        "label": def.display_name(),
-                        "timestamps": def.timestamps,
-                        "has_auth": def.is_auth_collection(),
-                        "has_upload": def.is_upload_collection(),
-                        "has_drafts": def.has_drafts(),
-                        "schema": schema,
-                    }),
-                );
-            }
-            Some(ResourceContent {
-                uri: uri.to_string(),
-                mime_type: Some("application/json".to_string()),
-                text: match serde_json::to_string_pretty(&schemas) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Failed to serialize MCP collection schemas: {}", e);
-                        "{}".to_string()
-                    }
-                },
-            })
+            let schemas = collections_schema(registry, config);
+            Some(json_resource(
+                uri,
+                serialize_pretty(&schemas, "collection schemas"),
+            ))
         }
         "crap://schema/globals" => {
-            let mut schemas = Map::new();
-            for (slug, def) in &registry.globals {
-                let schema = global_input_schema(def, CrudOp::Update);
-                schemas.insert(
-                    slug.to_string(),
-                    json!({
-                        "label": def.display_name(),
-                        "schema": schema,
-                    }),
-                );
-            }
-            Some(ResourceContent {
-                uri: uri.to_string(),
-                mime_type: Some("application/json".to_string()),
-                text: match serde_json::to_string_pretty(&schemas) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Failed to serialize MCP global schemas: {}", e);
-                        "{}".to_string()
-                    }
-                },
-            })
+            let schemas = globals_schema(registry);
+            Some(json_resource(
+                uri,
+                serialize_pretty(&schemas, "global schemas"),
+            ))
         }
-        "crap://config" => {
-            // Sanitize config: redact secrets
-            let config_json = serde_json::to_value(config).unwrap_or(Value::Null);
-
-            // auth.secret, email.smtp_pass, and mcp.api_key are auto-redacted via Serialize impls
-            Some(ResourceContent {
-                uri: uri.to_string(),
-                mime_type: Some("application/json".to_string()),
-                text: match serde_json::to_string_pretty(&config_json) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Failed to serialize MCP config: {}", e);
-                        "{}".to_string()
-                    }
-                },
-            })
-        }
+        "crap://config" => Some(json_resource(uri, config_resource(config))),
         _ => None,
     }
 }
@@ -120,7 +135,10 @@ pub fn read_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{CollectionDefinition, GlobalDefinition};
+    use crate::core::{
+        JwtSecret,
+        collection::{CollectionDefinition, GlobalDefinition},
+    };
 
     #[test]
     fn list_resources_returns_three() {
@@ -157,7 +175,7 @@ mod tests {
     fn read_config_sanitizes_secrets() {
         let reg = Registry::new();
         let mut config = CrapConfig::default();
-        config.auth.secret = crate::core::JwtSecret::new("super-secret");
+        config.auth.secret = JwtSecret::new("super-secret");
         let content = read_resource("crap://config", &reg, &config).unwrap();
         assert!(!content.text.contains("super-secret"));
         assert!(content.text.contains("[REDACTED]"));

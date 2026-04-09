@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_string_pretty, to_value};
 use tracing::info;
 
 use crate::{
@@ -39,7 +39,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
 
     let version_values: Vec<Value> = versions
         .iter()
-        .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+        .map(|v| to_value(v).unwrap_or(Value::Null))
         .collect();
 
     let output = json!({
@@ -47,7 +47,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         "total": total,
     });
 
-    Ok(serde_json::to_string_pretty(&output)?)
+    Ok(to_string_pretty(&output)?)
 }
 
 /// Execute `restore_version` — restore a document to a specific version.
@@ -80,5 +80,5 @@ pub(in crate::mcp::tools) fn exec_restore_version(
 
     info!("MCP restore_version {}: {} -> {}", slug, id, version_id);
 
-    Ok(serde_json::to_string_pretty(&doc_to_json(&doc))?)
+    Ok(to_string_pretty(&doc_to_json(&doc))?)
 }

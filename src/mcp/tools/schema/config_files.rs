@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_string_pretty};
 use tracing::info;
 
 /// Safely resolve a relative path within the config directory.
@@ -55,6 +55,7 @@ pub(in crate::mcp::tools) fn safe_config_path(
     Ok(full_path)
 }
 
+/// Read a file from the config directory.
 pub(in crate::mcp::tools) fn exec_read_config_file(
     args: &Value,
     config_dir: &Path,
@@ -69,6 +70,7 @@ pub(in crate::mcp::tools) fn exec_read_config_file(
     Ok(content)
 }
 
+/// Write a file to the config directory, creating parent directories as needed.
 pub(in crate::mcp::tools) fn exec_write_config_file(
     args: &Value,
     config_dir: &Path,
@@ -92,6 +94,7 @@ pub(in crate::mcp::tools) fn exec_write_config_file(
     Ok(json!({ "written": path }).to_string())
 }
 
+/// List files and directories within a config subdirectory.
 pub(in crate::mcp::tools) fn exec_list_config_files(
     args: &Value,
     config_dir: &Path,
@@ -115,5 +118,5 @@ pub(in crate::mcp::tools) fn exec_list_config_files(
             }));
         }
     }
-    Ok(serde_json::to_string_pretty(&files)?)
+    Ok(to_string_pretty(&files)?)
 }

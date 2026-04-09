@@ -10,7 +10,7 @@ use crate::{
     db::{migrate, pool, query},
     hooks::lifecycle::HookRunner,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value, from_str, json};
 
 fn make_registry() -> Registry {
     let mut reg = Registry::new();
@@ -145,7 +145,7 @@ fn introspection_tools_always_present() {
 #[test]
 fn list_field_types_returns_all_types() {
     let result = exec_list_field_types().unwrap();
-    let types: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let types: Vec<Value> = from_str(&result).unwrap();
     assert_eq!(types.len(), 20);
 
     // Verify all expected field types are present
@@ -189,7 +189,7 @@ fn list_field_types_returns_all_types() {
 #[test]
 fn cli_reference_all_commands() {
     let result = exec_cli_reference(&json!({})).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     let commands = parsed["commands"].as_array().unwrap();
     assert!(commands.len() >= 15);
 
@@ -205,7 +205,7 @@ fn cli_reference_all_commands() {
 #[test]
 fn cli_reference_specific_command() {
     let result = exec_cli_reference(&json!({ "command": "migrate" })).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     assert!(parsed.get("subcommands").is_some());
     let subs = parsed["subcommands"].as_array().unwrap();
     let sub_names: Vec<&str> = subs.iter().map(|s| s["name"].as_str().unwrap()).collect();
@@ -219,7 +219,7 @@ fn cli_reference_specific_command() {
 #[test]
 fn cli_reference_unknown_command() {
     let result = exec_cli_reference(&json!({ "command": "nonexistent" })).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     assert!(parsed.get("error").is_some());
 }
 
@@ -493,7 +493,7 @@ fn exec_list_collections_returns_all() {
     let reg = make_registry();
     let config = McpConfig::default();
     let result = super::exec_list_collections(&reg, &config).unwrap();
-    let items: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let items: Vec<Value> = from_str(&result).unwrap();
     // posts, users (collections) + settings (global)
     assert!(items.len() >= 3);
     let slugs: Vec<&str> = items
@@ -512,7 +512,7 @@ fn exec_list_collections_respects_exclude() {
         ..Default::default()
     };
     let result = super::exec_list_collections(&reg, &config).unwrap();
-    let items: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let items: Vec<Value> = from_str(&result).unwrap();
     let slugs: Vec<&str> = items
         .iter()
         .map(|i| i["slug"].as_str().unwrap_or(""))
@@ -526,7 +526,7 @@ fn exec_list_collections_empty_registry() {
     let reg = Registry::new();
     let config = McpConfig::default();
     let result = super::exec_list_collections(&reg, &config).unwrap();
-    let items: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let items: Vec<Value> = from_str(&result).unwrap();
     assert!(items.is_empty());
 }
 
@@ -538,7 +538,7 @@ fn exec_describe_collection_for_collection() {
     let config = McpConfig::default();
     let args = json!({ "slug": "posts" });
     let result = super::exec_describe_collection(&args, &reg, &config).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     assert_eq!(parsed["slug"], "posts");
     assert_eq!(parsed["type"], "collection");
     assert!(parsed["schema"].is_object());
@@ -550,7 +550,7 @@ fn exec_describe_collection_for_global() {
     let config = McpConfig::default();
     let args = json!({ "slug": "settings" });
     let result = super::exec_describe_collection(&args, &reg, &config).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     assert_eq!(parsed["slug"], "settings");
     assert_eq!(parsed["type"], "global");
     assert!(parsed["schema"].is_object());
@@ -619,7 +619,7 @@ fn exec_write_config_file_success() {
     let dir = tempfile::tempdir().unwrap();
     let args = json!({ "path": "output.txt", "content": "hello" });
     let result = super::exec_write_config_file(&args, dir.path()).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     assert_eq!(parsed["written"], "output.txt");
     let written = fs::read_to_string(dir.path().join("output.txt")).unwrap();
     assert_eq!(written, "hello");
@@ -630,7 +630,7 @@ fn exec_write_config_file_creates_parent_dirs() {
     let dir = tempfile::tempdir().unwrap();
     let args = json!({ "path": "subdir/nested/file.txt", "content": "data" });
     let result = super::exec_write_config_file(&args, dir.path()).unwrap();
-    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let parsed: Value = from_str(&result).unwrap();
     assert_eq!(parsed["written"], "subdir/nested/file.txt");
     let content = fs::read_to_string(dir.path().join("subdir/nested/file.txt")).unwrap();
     assert_eq!(content, "data");
@@ -661,7 +661,7 @@ fn exec_list_config_files_root() {
 
     let args = json!({});
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
-    let files: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let files: Vec<Value> = from_str(&result).unwrap();
     assert!(files.len() >= 3);
     let names: Vec<&str> = files
         .iter()
@@ -685,7 +685,7 @@ fn exec_list_config_files_subdirectory() {
 
     let args = json!({ "path": "collections" });
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
-    let files: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let files: Vec<Value> = from_str(&result).unwrap();
     let names: Vec<&str> = files
         .iter()
         .map(|f| f["name"].as_str().unwrap_or(""))
@@ -700,7 +700,7 @@ fn exec_list_config_files_nonexistent_dir_returns_empty() {
     // but the dir is not a directory so files is empty
     let args = json!({ "path": "nonexistent" });
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
-    let files: Vec<Value> = serde_json::from_str(&result).unwrap();
+    let files: Vec<Value> = from_str(&result).unwrap();
     assert!(files.is_empty());
 }
 

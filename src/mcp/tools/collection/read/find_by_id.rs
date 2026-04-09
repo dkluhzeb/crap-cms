@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_string_pretty};
 
 use crate::{
     config::CrapConfig,
@@ -49,7 +49,7 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         find_document_by_id(&conn, &hooks, slug, def, id, &opts).map_err(|e| e.into_anyhow())?;
 
     match doc {
-        Some(d) => Ok(serde_json::to_string_pretty(&doc_to_json(&d))?),
+        Some(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
         None => Ok(json!({ "error": "Document not found" }).to_string()),
     }
 }

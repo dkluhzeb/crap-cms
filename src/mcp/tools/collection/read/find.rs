@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_string_pretty, to_value};
 
 use crate::{
     config::CrapConfig,
@@ -107,7 +107,7 @@ pub(in crate::mcp::tools) fn exec_find(
     let doc_values: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
     let output = json!({
         "docs": doc_values,
-        "pagination": serde_json::to_value(&pr)?,
+        "pagination": to_value(&pr)?,
     });
-    Ok(serde_json::to_string_pretty(&output)?)
+    Ok(to_string_pretty(&output)?)
 }
