@@ -7,11 +7,12 @@ use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
     db::LocaleContext,
-    hooks::lifecycle::converters::document_to_lua_table,
+    hooks::lifecycle::{
+        converters::document_to_lua_table,
+        crud::{get_tx_conn, helpers::*},
+    },
     service::{LuaReadHooks, get_global_document},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.globals.get`.
 fn globals_get_inner(
@@ -32,12 +33,11 @@ fn globals_get_inner(
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(reg, &slug)?;
 
-    let hooks = LuaReadHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-    };
+    let hooks = LuaReadHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .build();
 
     let doc = get_global_document(
         conn,

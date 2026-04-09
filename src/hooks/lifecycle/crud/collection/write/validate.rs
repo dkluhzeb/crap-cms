@@ -10,13 +10,12 @@ use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
     db::LocaleContext,
-    hooks::lifecycle::converters::{
-        flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map,
+    hooks::lifecycle::{
+        converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
+        crud::{get_tx_conn, helpers::*},
     },
     service::{LuaWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.collections.validate`.
 fn validate_inner(
@@ -58,15 +57,12 @@ fn validate_inner(
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
 
-    let write_hooks = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-        registry: Some(&r),
-        hooks_enabled: true,
-        run_validation: true,
-    };
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .build();
 
     let operation = if exclude_id.is_some() {
         "update"

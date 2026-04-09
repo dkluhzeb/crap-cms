@@ -7,7 +7,8 @@ use crate::{
     db::{AccessResult, DbPool, query},
     hooks::{HookContext, HookEvent, HookRunner},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceError, WriteHooks, run_after_change_hooks,
+        AfterChangeInput, RunnerWriteHooks, ServiceError, WriteHooks, persist_unpublish,
+        run_after_change_hooks,
     },
 };
 
@@ -27,11 +28,7 @@ pub fn unpublish_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let wh = RunnerWriteHooks {
-        runner,
-        hooks_enabled: true,
-        conn: Some(&tx),
-    };
+    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
 
     // Access check — unpublish requires update access
     let access = wh.check_access(def.access.update.as_deref(), user, Some(id), None)?;
@@ -51,7 +48,7 @@ pub fn unpublish_document(
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx)?;
 
-    crate::service::persist_unpublish(&tx, slug, id, def)?;
+    persist_unpublish(&tx, slug, id, def)?;
 
     run_after_change_hooks(
         &wh,

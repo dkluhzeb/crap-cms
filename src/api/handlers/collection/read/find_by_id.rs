@@ -9,13 +9,14 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, convert::document_to_proto},
+        handlers::{
+            ContentService, collection::helpers::strip_read_denied_proto_fields,
+            convert::document_to_proto,
+        },
     },
     db::LocaleContext,
-    service::ServiceError,
+    service::{ReadOptions, RunnerReadHooks, ServiceError, find_document_by_id},
 };
-
-use crate::api::handlers::collection::helpers::strip_read_denied_proto_fields;
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -68,32 +69,20 @@ impl ContentService {
 
             // Access check is handled by service::find_document_by_id
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let read_hooks = crate::service::RunnerReadHooks {
-                runner: &runner,
-                conn: &conn,
-            };
-            let read_opts = crate::service::ReadOptions {
-                depth,
-                hydrate: true,
-                select: select.as_deref(),
-                locale_ctx: locale_ctx.as_ref(),
-                registry: Some(&registry),
-                user: user_doc,
-                ui_locale: None,
-                use_draft: use_draft_version,
-                cache: Some(&*pop_cache),
-                ..Default::default()
-            };
+            let read_hooks = RunnerReadHooks::new(&runner, &conn);
+            let read_opts = ReadOptions::builder()
+                .depth(depth)
+                .select(select.as_deref())
+                .locale_ctx(locale_ctx.as_ref())
+                .registry(Some(&registry))
+                .user(user_doc)
+                .use_draft(use_draft_version)
+                .cache(Some(&*pop_cache))
+                .build();
 
-            let doc = crate::service::find_document_by_id(
-                &conn,
-                &read_hooks,
-                &collection,
-                &def_owned,
-                &id,
-                &read_opts,
-            )
-            .map_err(Status::from)?;
+            let doc =
+                find_document_by_id(&conn, &read_hooks, &collection, &def_owned, &id, &read_opts)
+                    .map_err(Status::from)?;
 
             match doc {
                 Some(d) => {

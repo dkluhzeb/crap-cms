@@ -5,6 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use nanoid::nanoid;
 use serde_json::json;
+use tracing::{error, warn};
 
 use crate::{
     config::{EmailConfig, ServerConfig},
@@ -28,7 +29,7 @@ pub fn send_verification_email(
 ) {
     tokio::task::spawn_blocking(move || {
         if !is_configured(&email_config) {
-            tracing::warn!(
+            warn!(
                 "Email not configured — skipping verification email for {}",
                 user_email
             );
@@ -42,14 +43,14 @@ pub fn send_verification_email(
         let conn = match pool.get() {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("DB connection for verification token: {}", e);
+                error!("DB connection for verification token: {}", e);
 
                 return;
             }
         };
 
         if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token, exp) {
-            tracing::error!("Failed to set verification token: {}", e);
+            error!("Failed to set verification token: {}", e);
 
             return;
         }
@@ -60,7 +61,7 @@ pub fn send_verification_email(
         let html = match email_renderer.render("verify_email", &data) {
             Ok(h) => h,
             Err(e) => {
-                tracing::error!("Failed to render verify email template: {}", e);
+                error!("Failed to render verify email template: {}", e);
 
                 return;
             }
@@ -75,7 +76,7 @@ pub fn send_verification_email(
             email_config.queue_retries + 1,
             &email_config.queue_name,
         ) {
-            tracing::error!("Failed to queue verification email: {}", e);
+            error!("Failed to queue verification email: {}", e);
         }
     });
 }

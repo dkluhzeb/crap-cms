@@ -14,7 +14,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::{Slug, auth::ClaimsBuilder},
-    service::{self, ServiceError},
+    service::{self, ServiceError, auth::authenticate_local},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -68,7 +68,7 @@ impl ContentService {
 
             // Try local email+password authentication via service layer
             if !disable_local {
-                match crate::service::auth::authenticate_local(
+                match authenticate_local(
                     &conn,
                     &slug,
                     &def_owned,

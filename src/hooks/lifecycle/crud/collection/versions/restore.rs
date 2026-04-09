@@ -4,11 +4,14 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::{
-    config::LocaleConfig, core::SharedRegistry,
-    hooks::lifecycle::converters::document_to_lua_table, service::restore_collection_version,
+    config::LocaleConfig,
+    core::SharedRegistry,
+    hooks::lifecycle::{
+        converters::document_to_lua_table,
+        crud::{get_tx_conn, helpers::*},
+    },
+    service::restore_collection_version,
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.collections.restore_version`.
 fn restore_version_inner(

@@ -34,7 +34,7 @@ use crate::{
         query::{AccessResult, FilterClause, LocaleContext},
     },
     hooks::HookRunner,
-    service::{ReadOptions, RunnerReadHooks, find_document_by_id},
+    service::{ReadOptions, RunnerReadHooks, auth::is_locked, find_document_by_id},
 };
 
 /// Parameters for the blocking document-read task.
@@ -55,18 +55,14 @@ struct ReadParams {
 fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
     let conn = params.pool.get().context("DB connection")?;
 
-    let hooks = RunnerReadHooks {
-        runner: &params.runner,
-        conn: &conn,
-    };
-    let opts = ReadOptions {
-        use_draft: params.has_drafts,
-        access_constraints: params.access_constraints,
-        locale_ctx: params.locale_ctx.as_ref(),
-        user: params.user_doc.as_ref(),
-        ui_locale: params.user_ui_locale.as_deref(),
-        ..Default::default()
-    };
+    let hooks = RunnerReadHooks::new(&params.runner, &conn);
+    let opts = ReadOptions::builder()
+        .use_draft(params.has_drafts)
+        .access_constraints(params.access_constraints)
+        .locale_ctx(params.locale_ctx.as_ref())
+        .user(params.user_doc.as_ref())
+        .ui_locale(params.user_ui_locale.as_deref())
+        .build();
 
     find_document_by_id(&conn, &hooks, &params.slug, &params.def, &params.id, &opts)
         .map_err(|e| e.into_anyhow())
@@ -86,7 +82,7 @@ fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &s
     let is_locked = pool
         .get()
         .ok()
-        .and_then(|conn| crate::service::auth::is_locked(&conn, slug, id).ok())
+        .and_then(|conn| is_locked(&conn, slug, id).ok())
         .unwrap_or(false);
 
     fields.push(json!({

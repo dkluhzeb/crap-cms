@@ -5,10 +5,9 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     core::SharedRegistry,
+    hooks::lifecycle::crud::{get_tx_conn, helpers::*},
     service::{self, LuaWriteHooks},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Undelete a soft-deleted document by ID.
 ///
@@ -36,15 +35,12 @@ fn undelete_document(
         )));
     }
 
-    let wh = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: None,
-        override_access,
-        registry: None,
-        hooks_enabled: false,
-        run_validation: false,
-    };
+    let wh = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .hooks_enabled(false)
+        .run_validation(false)
+        .build();
 
     service::undelete_document_core(conn, &wh, collection, id, &def, user.as_ref())
         .map_err(|e| RuntimeError(format!("{e}")))?;

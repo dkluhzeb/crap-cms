@@ -9,6 +9,7 @@ use crate::{
     admin::{AdminState, handlers::shared::check_access_or_forbid},
     core::auth::AuthUser,
     db::query::AccessResult,
+    service::document_info::find_back_references,
 };
 
 /// GET /admin/collections/{slug}/{id}/back-references — lazy-load detailed back-references
@@ -41,18 +42,13 @@ pub async fn back_references(
         Err(_) => return Json(json!({ "error": "DB connection error" })).into_response(),
     };
 
-    let back_refs = match crate::service::document_info::find_back_references(
-        &conn,
-        &state.registry,
-        &slug,
-        &id,
-        &state.config.locale,
-    ) {
-        Ok(refs) => refs,
-        Err(_) => {
-            return Json(json!({ "error": "Back-reference scan failed" })).into_response();
-        }
-    };
+    let back_refs =
+        match find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale) {
+            Ok(refs) => refs,
+            Err(_) => {
+                return Json(json!({ "error": "Back-reference scan failed" })).into_response();
+            }
+        };
 
     Json(json!(back_refs)).into_response()
 }

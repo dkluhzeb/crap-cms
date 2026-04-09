@@ -11,11 +11,15 @@ use std::{path::Path, sync::Arc};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::{config::McpConfig, core::Registry, db::DbPool, hooks::HookRunner};
-
-use crate::mcp::{
-    protocol::ToolDefinition,
-    schema::{CrudOp, collection_input_schema, global_input_schema},
+use crate::{
+    config::McpConfig,
+    core::Registry,
+    db::DbPool,
+    hooks::HookRunner,
+    mcp::{
+        protocol::ToolDefinition,
+        schema::{CrudOp, collection_input_schema, global_input_schema},
+    },
 };
 
 use super::{

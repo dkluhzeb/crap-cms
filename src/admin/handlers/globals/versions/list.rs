@@ -23,6 +23,7 @@ use crate::{
         BoxedConnection,
         query::{self, AccessResult, helpers::global_table},
     },
+    service::list_versions,
 };
 
 /// Fetch paginated version list for a global.
@@ -31,7 +32,7 @@ fn fetch_version_data(
     global_table: &str,
     pg: &Pagination,
 ) -> (Vec<Value>, i64) {
-    let (snapshots, total) = crate::service::list_versions(
+    let (snapshots, total) = list_versions(
         conn,
         global_table,
         "default",

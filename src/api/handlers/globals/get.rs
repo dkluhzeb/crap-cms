@@ -13,6 +13,7 @@ use crate::{
         },
     },
     db::LocaleContext,
+    service::{RunnerReadHooks, get_global_document},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -49,12 +50,9 @@ impl ContentService {
 
             // Access check is handled by service::get_global_document
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let read_hooks = crate::service::RunnerReadHooks {
-                runner: &runner,
-                conn: &conn,
-            };
+            let read_hooks = RunnerReadHooks::new(&runner, &conn);
 
-            let doc = crate::service::get_global_document(
+            let doc = get_global_document(
                 &conn,
                 &read_hooks,
                 &slug,

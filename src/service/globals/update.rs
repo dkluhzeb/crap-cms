@@ -4,12 +4,14 @@ use anyhow::Context as _;
 
 use crate::{
     core::{Document, collection::GlobalDefinition},
-    db::{DbPool, query, query::helpers::global_table},
+    db::{AccessResult, DbConnection, DbPool, query, query::helpers::global_table},
     hooks::{HookContext, HookRunner, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceError, WriteInput, WriteResult, build_hook_data,
+        hooks::WriteHooks,
         run_after_change_hooks,
         versions::{self, VersionSnapshotCtx},
+        write::helpers::strip_denied_fields,
     },
 };
 
@@ -28,11 +30,7 @@ pub fn update_global_document(
 ) -> Result<WriteResult> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks {
-        runner,
-        hooks_enabled: true,
-        conn: Some(&tx),
-    };
+    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
     let result = update_global_core(&tx, &wh, slug, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)
@@ -40,8 +38,8 @@ pub fn update_global_document(
 
 /// Core logic for global update -- accepts `&dyn WriteHooks` for hook abstraction.
 pub fn update_global_core(
-    conn: &dyn crate::db::DbConnection,
-    write_hooks: &dyn crate::service::hooks::WriteHooks,
+    conn: &dyn DbConnection,
+    write_hooks: &dyn WriteHooks,
     slug: &str,
     def: &GlobalDefinition,
     mut input: WriteInput<'_>,
@@ -49,7 +47,7 @@ pub fn update_global_core(
 ) -> Result<WriteResult> {
     // Collection-level access check
     let access = write_hooks.check_access(def.access.update.as_deref(), user, None, None)?;
-    if matches!(access, crate::db::AccessResult::Denied) {
+    if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
@@ -59,11 +57,7 @@ pub fn update_global_core(
 
     // Strip write-denied fields before hook processing
     let denied = write_hooks.field_write_denied(&def.fields, user, "update");
-    let join_data = crate::service::write::helpers::strip_denied_fields(
-        &denied,
-        &mut input.data,
-        input.join_data,
-    );
+    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
 
     let hook_data = build_hook_data(&input.data, &join_data);
     let hook_ctx = HookContext::builder(slug, "update")

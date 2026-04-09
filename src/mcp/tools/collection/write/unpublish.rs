@@ -6,9 +6,10 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 use tracing::info;
 
-use crate::{core::Registry, db::DbPool, hooks::HookRunner, service::unpublish_document};
-
-use crate::mcp::tools::collection::helpers::doc_to_json;
+use crate::{
+    core::Registry, db::DbPool, hooks::HookRunner, mcp::tools::collection::helpers::doc_to_json,
+    service::unpublish_document,
+};
 
 /// Execute `unpublish` — set a document to draft status.
 pub(in crate::mcp::tools) fn exec_unpublish(

@@ -10,11 +10,12 @@ use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
     db::LocaleContext,
-    hooks::lifecycle::converters::*,
+    hooks::lifecycle::{
+        converters::*,
+        crud::{get_tx_conn, helpers::*},
+    },
     service::{LuaWriteHooks, WriteInput, create_document_core},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Execute the `crap.collections.create` operation.
 fn create_document(
@@ -62,15 +63,13 @@ fn create_document(
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-    let write_hooks = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-        registry: Some(&r),
-        hooks_enabled,
-        run_validation: true,
-    };
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .hooks_enabled(hooks_enabled)
+        .build();
 
     let write_input = WriteInput::builder(flat, &join_data)
         .password(password.as_deref())

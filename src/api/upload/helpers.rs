@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
+use tracing::warn;
 
 use crate::{
     admin::{AdminState, server::load_auth_user},
@@ -138,7 +139,7 @@ pub fn check_upload_access(
         .check_access(access_ref, user_doc, id, None, &tx);
 
     if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
+        warn!("tx commit failed: {e}");
     }
 
     match result {
@@ -208,6 +209,7 @@ pub fn service_error_to_response(err: ServiceError) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
     use axum::body::to_bytes;
     use serde_json::json;
 
@@ -356,8 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_error_internal_returns_500_generic_message() {
-        let resp =
-            service_error_to_response(ServiceError::Internal(anyhow::anyhow!("secret details")));
+        let resp = service_error_to_response(ServiceError::Internal(anyhow!("secret details")));
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
@@ -367,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_error_transient_returns_503() {
-        let resp = service_error_to_response(ServiceError::Transient(anyhow::anyhow!("db locked")));
+        let resp = service_error_to_response(ServiceError::Transient(anyhow!("db locked")));
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

@@ -7,6 +7,7 @@ use tracing::error;
 use crate::{
     api::{content, handlers::ContentService},
     db::AccessResult,
+    service::list_versions,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -60,8 +61,7 @@ impl ContentService {
             }
 
             let (versions, _total) =
-                crate::service::list_versions(&conn, &collection, &id, limit, None)
-                    .map_err(Status::from)?;
+                list_versions(&conn, &collection, &id, limit, None).map_err(Status::from)?;
             Ok(versions)
         })
         .await

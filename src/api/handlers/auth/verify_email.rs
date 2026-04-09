@@ -5,7 +5,10 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::api::{content, handlers::ContentService};
+use crate::{
+    api::{content, handlers::ContentService},
+    service::auth::consume_verification_token,
+};
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -39,8 +42,7 @@ impl ContentService {
             let mut conn = pool.get().context("DB connection")?;
             let tx = conn.transaction().context("Start transaction")?;
 
-            let verified =
-                crate::service::auth::consume_verification_token(&tx, &slug, &def_owned, &token)?;
+            let verified = consume_verification_token(&tx, &slug, &def_owned, &token)?;
             tx.commit().context("Commit transaction")?;
 
             Ok::<_, anyhow::Error>(verified)

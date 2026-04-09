@@ -63,6 +63,7 @@ fn register_collection_functions(
     collection::write::update::register_update(lua, &collections, registry.clone(), locale_config)?;
     collection::write::delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
     collection::write::undelete::register_undelete(lua, &collections, registry.clone())?;
+    collection::write::unpublish::register_unpublish(lua, &collections, registry.clone())?;
     collection::write::validate::register_validate(
         lua,
         &collections,

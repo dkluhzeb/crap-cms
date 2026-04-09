@@ -1,10 +1,12 @@
 //! Version helpers — JSON mapping, sidebar data, missing relations, doc status.
 
 use serde_json::{Value, json};
+use tracing::error;
 
 use crate::{
     core::{Document, FieldDefinition, Registry, document::VersionSnapshot},
     db::{BoxedConnection, DbPool},
+    service::{document_info::find_missing_relations, find_version_by_id, list_versions},
 };
 
 /// Map a `VersionSnapshot` to the JSON object used in templates.
@@ -29,7 +31,7 @@ pub fn fetch_version_sidebar_data(
         return (vec![], 0);
     };
 
-    match crate::service::list_versions(&conn, table_name, parent_id, Some(3), None) {
+    match list_versions(&conn, table_name, parent_id, Some(3), None) {
         Ok((versions, total)) => {
             let vers = versions.into_iter().map(version_to_json).collect();
             (vers, total)
@@ -47,21 +49,16 @@ pub fn load_version_with_missing_relations(
     version_id: &str,
     fields: &[FieldDefinition],
 ) -> Result<(VersionSnapshot, Vec<crate::db::query::MissingRelation>), &'static str> {
-    let version = match crate::service::find_version_by_id(conn, table, version_id) {
+    let version = match find_version_by_id(conn, table, version_id) {
         Ok(Some(v)) => v,
         Ok(None) => return Err("Version not found"),
         Err(e) => {
-            tracing::error!("Find version error: {}", e);
+            error!("Find version error: {}", e);
             return Err("Database error");
         }
     };
 
-    let missing = crate::service::document_info::find_missing_relations(
-        conn,
-        registry,
-        &version.snapshot,
-        fields,
-    );
+    let missing = find_missing_relations(conn, registry, &version.snapshot, fields);
 
     Ok((version, missing))
 }

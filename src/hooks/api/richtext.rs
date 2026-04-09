@@ -163,7 +163,7 @@ fn render(lua: &Lua, content: String) -> mlua::Result<String> {
         match render_fn.call::<String>(attrs_lua) {
             Ok(html) => Some(html),
             Err(e) => {
-                tracing::warn!("Render function for '{}' failed: {}", node_type, e);
+                warn!("Render function for '{}' failed: {}", node_type, e);
                 None
             }
         }

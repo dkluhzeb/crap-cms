@@ -10,10 +10,9 @@ use crate::{
     core::Registry,
     db::DbPool,
     hooks::HookRunner,
+    mcp::tools::collection::helpers::doc_to_json,
     service::{ReadOptions, RunnerReadHooks, find_document_by_id},
 };
-
-use crate::mcp::tools::collection::helpers::doc_to_json;
 
 /// Execute `find_by_id` — single document lookup with population.
 pub(in crate::mcp::tools) fn exec_find_by_id(
@@ -40,15 +39,11 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
         .unwrap_or(config.depth.default_depth as i64) as i32;
     let depth = depth.min(config.depth.max_depth);
 
-    let hooks = RunnerReadHooks {
-        runner,
-        conn: &conn,
-    };
-    let opts = ReadOptions {
-        depth,
-        registry: Some(registry.as_ref()),
-        ..Default::default()
-    };
+    let hooks = RunnerReadHooks::new(runner, &conn);
+    let opts = ReadOptions::builder()
+        .depth(depth)
+        .registry(Some(registry.as_ref()))
+        .build();
 
     let doc =
         find_document_by_id(&conn, &hooks, slug, def, id, &opts).map_err(|e| e.into_anyhow())?;

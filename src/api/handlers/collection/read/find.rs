@@ -8,14 +8,14 @@ use crate::{
     api::{
         content,
         handlers::{
-            ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
+            ContentService,
+            collection::{filter_builder::FilterBuilder, helpers::strip_read_denied_proto_fields},
+            convert::document_to_proto,
         },
     },
     db::{AccessResult, FindQuery, LocaleContext, query},
-    service::ServiceError,
+    service::{ReadOptions, RunnerReadHooks, ServiceError, find_documents},
 };
-
-use crate::api::handlers::collection::helpers::strip_read_denied_proto_fields;
 
 use super::helpers::pagination_result_to_proto;
 
@@ -118,23 +118,17 @@ impl ContentService {
             let select_slice = select.as_deref();
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-            let read_hooks = crate::service::RunnerReadHooks {
-                runner: &runner,
-                conn: &conn,
-            };
-            let read_opts = crate::service::ReadOptions {
-                depth,
-                hydrate: true,
-                select: select_slice,
-                locale_ctx: locale_ctx.as_ref(),
-                registry: Some(&registry),
-                user: user_doc,
-                ui_locale: None,
-                cache: Some(&*pop_cache),
-                ..Default::default()
-            };
+            let read_hooks = RunnerReadHooks::new(&runner, &conn);
+            let read_opts = ReadOptions::builder()
+                .depth(depth)
+                .select(select_slice)
+                .locale_ctx(locale_ctx.as_ref())
+                .registry(Some(&registry))
+                .user(user_doc)
+                .cache(Some(&*pop_cache))
+                .build();
 
-            let result = crate::service::find_documents(
+            let result = find_documents(
                 &conn,
                 &read_hooks,
                 &collection,

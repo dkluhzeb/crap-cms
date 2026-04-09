@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Value, json};
 
 use crate::{
@@ -10,10 +10,9 @@ use crate::{
     core::Registry,
     db::{DbPool, FindQuery, query},
     hooks::HookRunner,
+    mcp::tools::collection::helpers::{doc_to_json, parse_where_filters},
     service::{ReadOptions, RunnerReadHooks, find_documents},
 };
-
-use crate::mcp::tools::collection::helpers::{doc_to_json, parse_where_filters};
 
 /// Execute `find` — paginated query with filters, search, and population.
 pub(in crate::mcp::tools) fn exec_find(
@@ -42,7 +41,7 @@ pub(in crate::mcp::tools) fn exec_find(
     );
     let pagination = pg_ctx
         .validate(limit, page, after_cursor, before_cursor)
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .map_err(|e| anyhow!(e))?;
 
     let order_by = args
         .get("order_by")
@@ -76,15 +75,11 @@ pub(in crate::mcp::tools) fn exec_find(
     }
 
     let fq = fq.build();
-    let hooks = RunnerReadHooks {
-        runner,
-        conn: &conn,
-    };
-    let opts = ReadOptions {
-        depth,
-        registry: Some(registry.as_ref()),
-        ..Default::default()
-    };
+    let hooks = RunnerReadHooks::new(runner, &conn);
+    let opts = ReadOptions::builder()
+        .depth(depth)
+        .registry(Some(registry.as_ref()))
+        .build();
 
     let result =
         find_documents(&conn, &hooks, slug, def, &fq, &opts).map_err(|e| e.into_anyhow())?;

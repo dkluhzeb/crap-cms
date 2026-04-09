@@ -9,13 +9,12 @@ use crate::{
         FindQuery, LocaleContext,
         query::{self, filter::normalize_filter_fields},
     },
-    hooks::lifecycle::converters::{
-        lua_table_to_find_query, lua_table_to_hashmap, lua_table_to_json_map,
+    hooks::lifecycle::{
+        converters::{lua_table_to_find_query, lua_table_to_hashmap, lua_table_to_json_map},
+        crud::{get_tx_conn, helpers::*},
     },
     service::{self, LuaWriteHooks, WriteInput},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Update multiple documents matching a query with the given data.
 ///
@@ -81,15 +80,14 @@ fn update_many_documents(
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
 
-    let write_hooks = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-        registry: Some(&r),
-        hooks_enabled,
-        run_validation: run_hooks,
-    };
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .hooks_enabled(hooks_enabled)
+        .run_validation(run_hooks)
+        .build();
 
     let mut modified = 0i64;
 

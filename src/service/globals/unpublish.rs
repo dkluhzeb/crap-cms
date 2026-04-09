@@ -8,6 +8,7 @@ use crate::{
     hooks::{HookContext, HookEvent, HookRunner},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceError, WriteHooks, run_after_change_hooks,
+        unpublish_with_snapshot,
     },
 };
 
@@ -26,11 +27,7 @@ pub fn unpublish_global_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let wh = RunnerWriteHooks {
-        runner,
-        hooks_enabled: true,
-        conn: Some(&tx),
-    };
+    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
 
     // Access check — unpublish requires update access
     let access = wh.check_access(def.access.update.as_deref(), user, None, None)?;
@@ -50,7 +47,7 @@ pub fn unpublish_global_document(
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx)?;
 
-    crate::service::unpublish_with_snapshot(
+    unpublish_with_snapshot(
         &tx,
         &gtable,
         "default",

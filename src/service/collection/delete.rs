@@ -8,9 +8,9 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Document, upload, upload::StorageBackend},
-    db::DbPool,
+    db::{BoxedConnection, DbPool},
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceError},
+    service::{RunnerWriteHooks, ServiceError, delete_document_core},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -48,7 +48,7 @@ pub fn delete_document(
 /// Like [`delete_document`], but accepts an existing connection.
 #[allow(clippy::too_many_arguments)]
 pub fn delete_document_with_conn(
-    conn: &mut crate::db::BoxedConnection,
+    conn: &mut BoxedConnection,
     runner: &HookRunner,
     slug: &str,
     id: &str,
@@ -59,8 +59,7 @@ pub fn delete_document_with_conn(
 ) -> Result<HashMap<String, Value>> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
     let wh = RunnerWriteHooks::new(runner);
-    let result =
-        crate::service::delete_document_core(&tx, &wh, slug, id, def, user, locale_config)?;
+    let result = delete_document_core(&tx, &wh, slug, id, def, user, locale_config)?;
     tx.commit().context("Commit transaction")?;
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)

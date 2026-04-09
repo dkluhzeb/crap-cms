@@ -5,6 +5,7 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
+use tracing::error;
 
 use crate::{
     admin::{
@@ -23,6 +24,7 @@ use crate::{
         ops, query,
         query::{AccessResult, LocaleContext},
     },
+    service::list_versions,
 };
 
 /// Fetch the document title and paginated version list.
@@ -44,7 +46,7 @@ fn fetch_version_data(
             )));
         }
         Err(e) => {
-            tracing::error!("Document versions query error: {}", e);
+            error!("Document versions query error: {}", e);
             return Err(Box::new(server_error(state, "An internal error occurred.")));
         }
     };
@@ -61,8 +63,7 @@ fn fetch_version_data(
     };
 
     let (version_snapshots, total) =
-        crate::service::list_versions(&conn, slug, id, Some(pg.per_page), Some(pg.offset))
-            .unwrap_or_default();
+        list_versions(&conn, slug, id, Some(pg.per_page), Some(pg.offset)).unwrap_or_default();
 
     let versions: Vec<Value> = version_snapshots.into_iter().map(version_to_json).collect();
 

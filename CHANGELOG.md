@@ -72,7 +72,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - `service::version_ops` for version restore/list
   - `service::document_info` for ref counts and back-references
   - `service::user_settings` for per-user preferences
+  - `service::jobs` for job queue/run operations with access control
+  - `service::upload` for file upload orchestration
   - Write operations now hydrate + strip read-denied fields before returning
+
+- **Surface parity** — all API surfaces now expose a consistent set of operations:
+  - MCP: added `undelete`, `count`, `unpublish`, `list_versions`, `restore_version` tools
+  - Lua: added `crap.collections.unpublish()`, `list_versions()`, `restore_version()`,
+    `ref_count()`, `validate()` functions
+  - gRPC: added `Validate`, `LockAccount`, `UnlockAccount`, `VerifyAccount`,
+    `UnverifyAccount` RPCs
+  - Lua access API: `crap.auth.user()`, `crap.access.check()`,
+    `crap.access.field_read_denied()`, `crap.access.field_write_denied()`
+  - Lua `crap.jobs.queue()` now checks job access control
+
+- **Module restructuring** — service layer and all surfaces restructured into
+  consistent subdirectory hierarchy matching domain concerns:
+  - `service/` — 11 subdirectories: types, hooks, read, write, collection,
+    globals, persist, versions, jobs, plus auth, upload, user_settings, document_info
+  - `api/service/` renamed to `api/handlers/` to avoid confusion with service layer
+  - MCP tools split into `collection/{read,write}/`, `globals/`, `schema/`
+  - Lua CRUD split into `collection/{read,write,bulk,versions}/`, `globals/`, `jobs/`
+  - Admin `forms.rs` (912 lines) → `forms/`; `query_utils.rs` (518 lines) → `query/`
+  - gRPC `convert.rs` (881 lines) → `convert/` with document, data, filters, schema
+
+- **Code quality** — namespaced macro calls replaced with top-level imports
+  across service + all surfaces (tracing, anyhow, nanoid). Removed unused
+  `rpassword` dependency.
 
 - **Internal code quality refactoring** — large files split into focused
   modules following one-handler-per-file and no-logic-in-mod.rs rules.

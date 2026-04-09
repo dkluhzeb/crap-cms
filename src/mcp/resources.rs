@@ -1,6 +1,7 @@
 //! MCP resource definitions and handlers.
 
 use serde_json::{Map, Value, json};
+use tracing::error;
 
 use crate::mcp::{
     protocol::{ResourceContent, ResourceDefinition},
@@ -65,7 +66,7 @@ pub fn read_resource(
                 text: match serde_json::to_string_pretty(&schemas) {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::error!("Failed to serialize MCP collection schemas: {}", e);
+                        error!("Failed to serialize MCP collection schemas: {}", e);
                         "{}".to_string()
                     }
                 },
@@ -89,7 +90,7 @@ pub fn read_resource(
                 text: match serde_json::to_string_pretty(&schemas) {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::error!("Failed to serialize MCP global schemas: {}", e);
+                        error!("Failed to serialize MCP global schemas: {}", e);
                         "{}".to_string()
                     }
                 },
@@ -106,7 +107,7 @@ pub fn read_resource(
                 text: match serde_json::to_string_pretty(&config_json) {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::error!("Failed to serialize MCP config: {}", e);
+                        error!("Failed to serialize MCP config: {}", e);
                         "{}".to_string()
                     }
                 },

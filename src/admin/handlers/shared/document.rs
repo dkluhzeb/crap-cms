@@ -9,6 +9,7 @@ use crate::{
     core::{FieldAdmin, FieldDefinition, FieldType, field, validate::ValidationError},
     db::DbPool,
     hooks::HookRunner,
+    service::document_info::get_ref_count,
 };
 
 /// Auto-generate a label from a field name (e.g. "my_field" -> "My Field").
@@ -127,7 +128,7 @@ pub fn translate_validation_errors(
 pub fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
     pool.get()
         .ok()
-        .map(|conn| crate::service::document_info::get_ref_count(&conn, slug, id).unwrap_or(0))
+        .map(|conn| get_ref_count(&conn, slug, id).unwrap_or(0))
         .unwrap_or(0)
 }
 

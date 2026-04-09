@@ -3,9 +3,11 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
-use crate::{core::SharedRegistry, service::list_versions};
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
+use crate::{
+    core::SharedRegistry,
+    hooks::lifecycle::crud::{get_tx_conn, helpers::*},
+    service::list_versions,
+};
 
 /// Core logic for `crap.collections.list_versions`.
 fn list_versions_inner(

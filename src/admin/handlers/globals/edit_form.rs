@@ -50,10 +50,7 @@ struct ReadParams {
 fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
     let conn = params.pool.get()?;
 
-    let hooks = RunnerReadHooks {
-        runner: &params.runner,
-        conn: &conn,
-    };
+    let hooks = RunnerReadHooks::new(&params.runner, &conn);
 
     get_global_document(
         &conn,

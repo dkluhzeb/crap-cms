@@ -1,6 +1,8 @@
 //! Builds enriched sub-field contexts for array/blocks rows and recursively
 //! enriches nested relationship/upload fields with DB-fetched options.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
 use super::enrich_types::build_upload_item;
@@ -98,7 +100,7 @@ fn enrich_sub_richtext(
     sub_ctx: &mut Value,
     sf: &FieldDefinition,
     indexed_name: &str,
-    errors: &std::collections::HashMap<String, String>,
+    errors: &HashMap<String, String>,
 ) {
     sub_ctx["resizable"] = json!(sf.admin.resizable);
 

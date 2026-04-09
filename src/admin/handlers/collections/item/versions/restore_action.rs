@@ -14,6 +14,7 @@ use crate::{
     },
     core::{CollectionDefinition, Document, auth::AuthUser},
     db::DbPool,
+    service::restore_collection_version,
 };
 
 /// Find the version snapshot and restore it inside a transaction.
@@ -28,9 +29,8 @@ fn restore_from_version(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
 
-    let doc =
-        crate::service::restore_collection_version(&tx, slug, def, id, version_id, locale_config)
-            .map_err(|e| e.into_anyhow())?;
+    let doc = restore_collection_version(&tx, slug, def, id, version_id, locale_config)
+        .map_err(|e| e.into_anyhow())?;
 
     tx.commit().context("Commit")?;
     Ok(doc)

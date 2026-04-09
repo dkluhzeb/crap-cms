@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Document},
-    db::{DbConnection, LocaleContext, query},
+    db::{AccessResult, DbConnection, LocaleContext, query},
     hooks::{HookContext, HookEvent},
     service::hooks::WriteHooks,
 };
@@ -45,7 +45,7 @@ pub fn delete_document_core(
         def.access.delete.as_deref()
     };
     let access = write_hooks.check_access(access_ref, user, Some(id), None)?;
-    if matches!(access, crate::db::AccessResult::Denied) {
+    if matches!(access, AccessResult::Denied) {
         let msg = if def.soft_delete {
             "Trash access denied"
         } else {

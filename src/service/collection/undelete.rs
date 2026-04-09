@@ -4,9 +4,9 @@ use anyhow::Context as _;
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::{DbConnection, DbPool, query},
+    db::{AccessResult, DbConnection, DbPool, query},
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceError},
+    service::{RunnerWriteHooks, ServiceError, WriteHooks},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -18,14 +18,14 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Returns the undeleted document on success.
 pub fn undelete_document_core(
     conn: &dyn DbConnection,
-    write_hooks: &dyn crate::service::WriteHooks,
+    write_hooks: &dyn WriteHooks,
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
     user: Option<&Document>,
 ) -> Result<Document> {
     let access = write_hooks.check_access(def.access.resolve_trash(), user, Some(id), None)?;
-    if matches!(access, crate::db::AccessResult::Denied) {
+    if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Undelete access denied".into()));
     }
 
@@ -61,11 +61,7 @@ pub fn undelete_document(
 ) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks {
-        runner,
-        hooks_enabled: true,
-        conn: Some(&tx),
-    };
+    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
 
     let doc = undelete_document_core(&tx, &wh, slug, id, def, user)?;
 

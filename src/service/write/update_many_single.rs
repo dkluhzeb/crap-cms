@@ -3,7 +3,7 @@
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Document},
-    db::{DbConnection, query},
+    db::{AccessResult, DbConnection, query},
     hooks::{HookContext, ValidationCtx},
     service::{
         AfterChangeInput, WriteInput, WriteResult, build_hook_data, hooks::WriteHooks,
@@ -33,7 +33,7 @@ pub fn update_many_single_core(
 ) -> Result<WriteResult> {
     // Collection-level access check
     let access = write_hooks.check_access(def.access.update.as_deref(), user, Some(id), None)?;
-    if matches!(access, crate::db::AccessResult::Denied) {
+    if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 

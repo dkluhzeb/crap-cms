@@ -5,6 +5,8 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
+use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
+
 use crate::{
     api::{
         content,
@@ -16,12 +18,8 @@ use crate::{
     },
     core::event::EventOperation,
     db::{AccessResult, LocaleContext},
-    service::{self, RunnerWriteHooks, WriteInput},
+    service::{self, RunnerWriteHooks, ServiceError, WriteInput},
 };
-
-use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
-
-use crate::service::ServiceError;
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -124,11 +122,9 @@ impl ContentService {
                     "Update access denied",
                 )?;
 
-                let wh = RunnerWriteHooks {
-                    runner: &hook_runner,
-                    hooks_enabled: run_hooks,
-                    conn: Some(&tx),
-                };
+                let wh = RunnerWriteHooks::new(&hook_runner)
+                    .with_hooks_enabled(run_hooks)
+                    .with_conn(&tx);
 
                 let mut count = 0i64;
                 let mut ids = Vec::new();

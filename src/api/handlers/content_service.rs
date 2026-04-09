@@ -9,7 +9,7 @@ use std::{
 use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     api::{
@@ -128,7 +128,7 @@ impl ContentService {
         auth_user: &Option<AuthUser>,
     ) {
         if let Err(e) = self.cache.clear() {
-            tracing::warn!("Cache clear failed: {:#}", e);
+            warn!("Cache clear failed: {:#}", e);
         }
 
         if let Ok(def) = self.get_collection_def(collection) {

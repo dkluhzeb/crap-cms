@@ -9,10 +9,9 @@ use crate::{
     core::Registry,
     db::DbPool,
     hooks::HookRunner,
+    mcp::tools::collection::helpers::parse_where_filters,
     service::{RunnerReadHooks, count_documents},
 };
-
-use crate::mcp::tools::collection::helpers::parse_where_filters;
 
 /// Execute `count` — count documents matching filters.
 pub(in crate::mcp::tools) fn exec_count(
@@ -31,10 +30,7 @@ pub(in crate::mcp::tools) fn exec_count(
     let filters = parse_where_filters(args);
     let include_deleted = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let hooks = RunnerReadHooks {
-        runner,
-        conn: &conn,
-    };
+    let hooks = RunnerReadHooks::new(runner, &conn);
 
     let count = count_documents(
         &conn,

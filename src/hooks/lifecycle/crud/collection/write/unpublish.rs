@@ -3,17 +3,21 @@
 use mlua::{Error::RuntimeError, Lua, Table};
 use serde_json::Value;
 
+use anyhow::Result;
+
 use crate::{
-    core::{CollectionDefinition, Document},
+    core::{CollectionDefinition, Document, SharedRegistry},
     db::{DbConnection, query},
     hooks::{
         HookContext, HookEvent,
-        lifecycle::{converters::document_to_lua_table, execution::run_hooks_inner},
+        lifecycle::{
+            converters::document_to_lua_table,
+            crud::{get_tx_conn, helpers::*},
+            execution::run_hooks_inner,
+        },
     },
     service::persist_unpublish,
 };
-
-use crate::hooks::lifecycle::crud::helpers::check_hook_depth;
 
 /// Parameters for the unpublish operation.
 pub(super) struct UnpublishCtx<'a> {
@@ -155,4 +159,61 @@ impl<'a> UnpublishCtxBuilder<'a> {
             hook_ui_locale: self.hook_ui_locale,
         }
     }
+}
+
+/// Standalone `crap.collections.unpublish(collection, id, opts?)`.
+fn unpublish_document(
+    lua: &Lua,
+    reg: &SharedRegistry,
+    collection: String,
+    id: String,
+    opts: Option<Table>,
+) -> mlua::Result<Table> {
+    let conn_ptr = get_tx_conn(lua)?;
+    let conn = unsafe { &*conn_ptr };
+
+    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
+    let user = hook_user(lua);
+    let ui_locale = hook_ui_locale(lua);
+    let def = resolve_collection(reg, &collection)?;
+
+    if !def.has_versions() {
+        return Err(RuntimeError(format!(
+            "Collection '{}' does not have versioning enabled",
+            collection
+        )));
+    }
+
+    // Access check — unpublish requires update access
+    enforce_access(
+        lua,
+        false,
+        def.access.update.as_deref(),
+        Some(&id),
+        &mut vec![],
+        "Update access denied",
+    )?;
+
+    handle_unpublish(
+        lua,
+        conn,
+        &UnpublishCtx::builder(&collection, &id, &def)
+            .run_hooks(run_hooks)
+            .hook_user(user.as_ref())
+            .hook_ui_locale(ui_locale.as_deref())
+            .build(),
+    )
+}
+
+/// Register `crap.collections.unpublish(collection, id, opts?)`.
+#[cfg(not(tarpaulin_include))]
+pub(crate) fn register_unpublish(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+    let unpublish_fn = lua.create_function(
+        move |lua, (collection, id, opts): (String, String, Option<Table>)| {
+            unpublish_document(lua, &registry, collection, id, opts)
+        },
+    )?;
+    table.set("unpublish", unpublish_fn)?;
+
+    Ok(())
 }

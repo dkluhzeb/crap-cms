@@ -1,7 +1,7 @@
 //! Shared post-processing for read operations (populate, upload sizes,
 //! select stripping, field-level access, after_read hooks).
 
-use std::collections::HashSet;
+use std::{collections::HashSet, mem};
 
 use crate::{
     core::{CollectionDefinition, Document, upload},
@@ -74,7 +74,7 @@ pub(super) fn post_process_single(
 
     // Swap in a placeholder, run hooks, swap back
     let placeholder = Document::new("".to_string());
-    let owned = std::mem::replace(doc, placeholder);
+    let owned = mem::replace(doc, placeholder);
     *doc = hooks.after_read_one(&ar_ctx, owned);
 }
 
@@ -154,6 +154,6 @@ pub(super) fn post_process_docs(
         ui_locale: opts.ui_locale,
     };
 
-    let processed = hooks.after_read_many(&ar_ctx, std::mem::take(docs));
+    let processed = hooks.after_read_many(&ar_ctx, mem::take(docs));
     *docs = processed;
 }

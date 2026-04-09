@@ -85,7 +85,6 @@ tower = { version = "0.5", features = ["util", "timeout"] }
 url = "2"
 
 # Utilities
-rpassword = "7"
 nanoid = "0.4"
 dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }

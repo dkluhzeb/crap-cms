@@ -113,11 +113,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
         }
     });
 
-    let wh = service::RunnerWriteHooks {
-        runner: p.runner,
-        hooks_enabled: true,
-        conn: Some(&tx),
-    };
+    let wh = service::RunnerWriteHooks::new(p.runner).with_conn(&tx);
 
     let input = service::WriteInput::builder(p.form_data.clone(), p.join_data)
         .locale_ctx(p.locale_ctx)

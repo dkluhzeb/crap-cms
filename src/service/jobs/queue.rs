@@ -2,7 +2,7 @@
 
 use crate::{
     core::{Document, job::JobDefinition, job::JobRun},
-    db::{AccessResult, DbConnection},
+    db::{AccessResult, DbConnection, query},
     hooks::HookRunner,
     service::ServiceError,
 };
@@ -33,7 +33,7 @@ pub fn queue_job(
         }
     }
 
-    let job_run = crate::db::query::jobs::insert_job(
+    let job_run = query::jobs::insert_job(
         conn,
         slug,
         data.unwrap_or("{}"),

@@ -2,7 +2,7 @@
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::{DbConnection, query},
+    db::{AccessResult, DbConnection, query},
     hooks::{HookContext, ValidationCtx},
     service::{
         AfterChangeInput, PersistOptions, WriteInput, WriteResult, build_hook_data,
@@ -28,7 +28,7 @@ pub fn create_document_core(
 ) -> Result<WriteResult> {
     // Collection-level access check
     let access = write_hooks.check_access(def.access.create.as_deref(), user, None, None)?;
-    if matches!(access, crate::db::AccessResult::Denied) {
+    if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Create access denied".into()));
     }
 

@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
+use tracing::info;
 
 /// Safely resolve a relative path within the config directory.
 /// Rejects absolute paths, `..` components, and symlinks escaping the boundary.
@@ -85,7 +86,7 @@ pub(in crate::mcp::tools) fn exec_write_config_file(
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    tracing::info!("MCP write_config_file: {}", path);
+    info!("MCP write_config_file: {}", path);
     fs::write(&full_path, content)
         .with_context(|| format!("Failed to write {}", full_path.display()))?;
     Ok(json!({ "written": path }).to_string())

@@ -2,7 +2,7 @@
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::{DbConnection, query},
+    db::{AccessResult, DbConnection, query},
     hooks::{HookContext, ValidationCtx},
     service::{
         AfterChangeInput, PersistOptions, WriteInput, WriteResult, build_hook_data,
@@ -30,7 +30,7 @@ pub fn update_document_core(
 ) -> Result<WriteResult> {
     // Collection-level access check
     let access = write_hooks.check_access(def.access.update.as_deref(), user, Some(id), None)?;
-    if matches!(access, crate::db::AccessResult::Denied) {
+    if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 

@@ -29,7 +29,7 @@ use crate::{
     },
     db::{BoxedConnection, DbPool},
     hooks::HookRunner,
-    service,
+    service::{self, ServiceError, auth::authenticate_local},
 };
 
 /// Successful login result containing the user document and session version.
@@ -83,7 +83,7 @@ async fn verify_credentials(
 
         // Try local email+password authentication via service layer
         if !params.disable_local {
-            match crate::service::auth::authenticate_local(
+            match authenticate_local(
                 &conn,
                 slug,
                 def,
@@ -98,15 +98,15 @@ async fn verify_credentials(
                         session_version: result.session_version,
                     })));
                 }
-                Err(crate::service::ServiceError::AccountLocked) => {
+                Err(ServiceError::AccountLocked) => {
                     debug!("Login denied: account locked");
                     return Ok(None);
                 }
-                Err(crate::service::ServiceError::EmailNotVerified) => {
+                Err(ServiceError::EmailNotVerified) => {
                     debug!("Login denied: email not verified");
                     return Ok(None);
                 }
-                Err(crate::service::ServiceError::InvalidCredentials) => {}
+                Err(ServiceError::InvalidCredentials) => {}
                 Err(e) => return Err(e.into_anyhow()),
             }
         }

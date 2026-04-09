@@ -10,9 +10,8 @@ use crate::{
         handlers::{ContentService, collection::filter_builder::FilterBuilder},
     },
     db::{AccessResult, LocaleContext},
+    service::{RunnerReadHooks, ServiceError, count_documents},
 };
-
-use crate::service::ServiceError;
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -57,12 +56,9 @@ impl ContentService {
                 .build()?;
 
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let read_hooks = crate::service::RunnerReadHooks {
-                runner: &runner,
-                conn: &conn,
-            };
+            let read_hooks = RunnerReadHooks::new(&runner, &conn);
 
-            crate::service::count_documents(
+            count_documents(
                 &conn,
                 &read_hooks,
                 &collection,

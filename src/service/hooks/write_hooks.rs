@@ -1,16 +1,22 @@
 //! `WriteHooks` trait and implementations for abstracting write hook execution
 //! across different API surfaces (pool-based vs inline Lua VM).
 
+use std::collections::HashMap;
+
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::{
     core::{Document, FieldDefinition, Registry, collection::Hooks},
-    db::DbConnection,
+    db::{AccessResult, DbConnection},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
             FieldHookEvent,
-            access::{check_field_read_access_with_lua, check_field_write_access_with_lua},
+            access::{
+                check_access_with_lua, check_field_read_access_with_lua,
+                check_field_write_access_with_lua,
+            },
             run_field_hooks_inner, run_hooks_inner, validate_fields_inner,
         },
     },
@@ -63,8 +69,8 @@ pub trait WriteHooks {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&std::collections::HashMap<String, serde_json::Value>>,
-    ) -> Result<crate::db::AccessResult>;
+        data: Option<&HashMap<String, Value>>,
+    ) -> Result<AccessResult>;
 
     /// Field-level write access: returns denied field names to strip before persistence.
     fn field_write_denied(
@@ -94,6 +100,18 @@ impl<'a> RunnerWriteHooks<'a> {
             hooks_enabled: true,
             conn: None,
         }
+    }
+
+    /// Set the connection for field-level access checks.
+    pub fn with_conn(mut self, conn: &'a dyn DbConnection) -> Self {
+        self.conn = Some(conn);
+        self
+    }
+
+    /// Set whether hooks are enabled.
+    pub fn with_hooks_enabled(mut self, hooks_enabled: bool) -> Self {
+        self.hooks_enabled = hooks_enabled;
+        self
     }
 }
 
@@ -159,10 +177,10 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&std::collections::HashMap<String, serde_json::Value>>,
-    ) -> Result<crate::db::AccessResult> {
+        data: Option<&HashMap<String, Value>>,
+    ) -> Result<AccessResult> {
         let Some(conn) = self.conn else {
-            return Ok(crate::db::AccessResult::Allowed);
+            return Ok(AccessResult::Allowed);
         };
         self.runner.check_access(access_ref, user, id, data, conn)
     }
@@ -192,6 +210,80 @@ pub struct LuaWriteHooks<'a> {
     pub hooks_enabled: bool,
     /// Whether validation should run (`hooks` option from Lua API).
     pub run_validation: bool,
+}
+
+impl<'a> LuaWriteHooks<'a> {
+    /// Create a builder with the required Lua VM reference.
+    pub fn builder(lua: &'a mlua::Lua) -> LuaWriteHooksBuilder<'a> {
+        LuaWriteHooksBuilder::new(lua)
+    }
+}
+
+/// Builder for [`LuaWriteHooks`]. Created via [`LuaWriteHooks::builder`].
+pub struct LuaWriteHooksBuilder<'a> {
+    pub(in crate::service) lua: &'a mlua::Lua,
+    pub(in crate::service) user: Option<&'a Document>,
+    pub(in crate::service) ui_locale: Option<&'a str>,
+    pub(in crate::service) override_access: bool,
+    pub(in crate::service) registry: Option<&'a Registry>,
+    pub(in crate::service) hooks_enabled: bool,
+    pub(in crate::service) run_validation: bool,
+}
+
+impl<'a> LuaWriteHooksBuilder<'a> {
+    pub fn new(lua: &'a mlua::Lua) -> Self {
+        Self {
+            lua,
+            user: None,
+            ui_locale: None,
+            override_access: false,
+            registry: None,
+            hooks_enabled: true,
+            run_validation: true,
+        }
+    }
+
+    pub fn user(mut self, user: Option<&'a Document>) -> Self {
+        self.user = user;
+        self
+    }
+
+    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
+        self.ui_locale = ui_locale;
+        self
+    }
+
+    pub fn override_access(mut self, override_access: bool) -> Self {
+        self.override_access = override_access;
+        self
+    }
+
+    pub fn registry(mut self, registry: Option<&'a Registry>) -> Self {
+        self.registry = registry;
+        self
+    }
+
+    pub fn hooks_enabled(mut self, hooks_enabled: bool) -> Self {
+        self.hooks_enabled = hooks_enabled;
+        self
+    }
+
+    pub fn run_validation(mut self, run_validation: bool) -> Self {
+        self.run_validation = run_validation;
+        self
+    }
+
+    pub fn build(self) -> LuaWriteHooks<'a> {
+        LuaWriteHooks {
+            lua: self.lua,
+            user: self.user,
+            ui_locale: self.ui_locale,
+            override_access: self.override_access,
+            registry: self.registry,
+            hooks_enabled: self.hooks_enabled,
+            run_validation: self.run_validation,
+        }
+    }
 }
 
 impl WriteHooks for LuaWriteHooks<'_> {
@@ -289,12 +381,12 @@ impl WriteHooks for LuaWriteHooks<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&std::collections::HashMap<String, serde_json::Value>>,
-    ) -> Result<crate::db::AccessResult> {
+        data: Option<&HashMap<String, Value>>,
+    ) -> Result<AccessResult> {
         if self.override_access {
-            return Ok(crate::db::AccessResult::Allowed);
+            return Ok(AccessResult::Allowed);
         }
-        crate::hooks::lifecycle::access::check_access_with_lua(self.lua, access_ref, user, id, data)
+        check_access_with_lua(self.lua, access_ref, user, id, data)
     }
 
     fn field_read_denied(

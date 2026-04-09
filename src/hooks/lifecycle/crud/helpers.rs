@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     core::{CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition},
@@ -89,12 +90,9 @@ pub(crate) fn check_hook_depth<'a>(
     let hooks_enabled = run_hooks && current_depth < max_depth;
 
     if run_hooks && current_depth >= max_depth {
-        tracing::warn!(
+        warn!(
             "Hook depth {} reached max {}, skipping hooks for {} on {}",
-            current_depth,
-            max_depth,
-            operation,
-            collection
+            current_depth, max_depth, operation, collection
         );
     }
 

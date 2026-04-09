@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 
+use anyhow::anyhow;
 use serde_json::Value;
 use tracing::warn;
 
 use crate::{
+    admin::handlers::forms::extract_join_data_from_form,
     config::LocaleConfig,
     core::{
         CollectionDefinition, Document,
@@ -17,10 +19,11 @@ use crate::{
             CleanupGuard, SharedStorage, UploadedFile, delete_upload_files, enqueue_conversions,
             inject_upload_metadata, process_upload,
         },
+        validate::{FieldError, ValidationError},
     },
     db::{DbPool, LocaleContext, query},
     hooks::HookRunner,
-    service::WriteInput,
+    service::{WriteInput, create_document, update_document},
 };
 
 use super::ServiceError;
@@ -57,7 +60,7 @@ pub fn create_upload(
     let upload_config = def
         .upload
         .clone()
-        .ok_or_else(|| ServiceError::Internal(anyhow::anyhow!("Upload config missing")))?;
+        .ok_or_else(|| ServiceError::Internal(anyhow!("Upload config missing")))?;
 
     let (processed, mut guard) = process_upload(
         file,
@@ -67,9 +70,10 @@ pub fn create_upload(
         upload_max_file_size,
     )
     .map_err(|e| {
-        ServiceError::Validation(crate::core::validate::ValidationError::new(vec![
-            crate::core::validate::FieldError::new("_file", e.to_string()),
-        ]))
+        ServiceError::Validation(ValidationError::new(vec![FieldError::new(
+            "_file",
+            e.to_string(),
+        )]))
     })?;
 
     let queued_conversions = processed.queued_conversions.clone();
@@ -80,12 +84,11 @@ pub fn create_upload(
     } else {
         None
     };
-    let join_data =
-        crate::admin::handlers::forms::extract_join_data_from_form(&form_data, &def.fields);
+    let join_data = extract_join_data_from_form(&form_data, &def.fields);
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
 
-    let (doc, req_context) = crate::service::create_document(
+    let (doc, req_context) = create_document(
         pool,
         runner,
         slug,
@@ -156,9 +159,10 @@ pub fn update_upload(
             upload_max_file_size,
         )
         .map_err(|e| {
-            ServiceError::Validation(crate::core::validate::ValidationError::new(vec![
-                crate::core::validate::FieldError::new("_file", e.to_string()),
-            ]))
+            ServiceError::Validation(ValidationError::new(vec![FieldError::new(
+                "_file",
+                e.to_string(),
+            )]))
         })?;
 
         queued_conversions = processed.queued_conversions.clone();
@@ -171,12 +175,11 @@ pub fn update_upload(
     } else {
         None
     };
-    let join_data =
-        crate::admin::handlers::forms::extract_join_data_from_form(&form_data, &def.fields);
+    let join_data = extract_join_data_from_form(&form_data, &def.fields);
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
 
-    let (doc, req_context) = crate::service::update_document(
+    let (doc, req_context) = update_document(
         pool,
         runner,
         slug,

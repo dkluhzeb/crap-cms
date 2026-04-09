@@ -4,9 +4,9 @@ use anyhow::Context as _;
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::DbPool,
+    db::{BoxedConnection, DbPool},
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceError, WriteInput, WriteResult},
+    service::{RunnerWriteHooks, ServiceError, WriteInput, WriteResult, update_document_core},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -32,7 +32,7 @@ pub fn update_document(
 
 /// Like [`update_document`], but accepts an existing connection.
 pub fn update_document_with_conn(
-    conn: &mut crate::db::BoxedConnection,
+    conn: &mut BoxedConnection,
     runner: &HookRunner,
     slug: &str,
     id: &str,
@@ -41,12 +41,8 @@ pub fn update_document_with_conn(
     user: Option<&Document>,
 ) -> Result<WriteResult> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks {
-        runner,
-        hooks_enabled: true,
-        conn: Some(&tx),
-    };
-    let result = crate::service::update_document_core(&tx, &wh, slug, id, def, input, user)?;
+    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let result = update_document_core(&tx, &wh, slug, id, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)
 }

@@ -16,6 +16,7 @@ use crate::{
     },
     core::Registry,
     db::DbPool,
+    service::auth::consume_verification_token as service_consume_verification_token,
 };
 
 /// Find a verification token across all auth collections, validate it,
@@ -40,7 +41,7 @@ fn consume_verification_token(
             continue;
         }
 
-        match crate::service::auth::consume_verification_token(&tx, &def.slug, def, token)? {
+        match service_consume_verification_token(&tx, &def.slug, def, token)? {
             true => {
                 tx.commit()?;
                 return Ok(true);

@@ -11,6 +11,7 @@ use crate::{
     },
     core::event::EventOperation,
     db::AccessResult,
+    service::restore_collection_version,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -70,7 +71,7 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let doc = crate::service::restore_collection_version(
+            let doc = restore_collection_version(
                 &tx,
                 &collection,
                 &def_owned,

@@ -20,7 +20,7 @@ use crate::{
         query::{self, Filter, FilterClause, FilterOp, FindQuery},
     },
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceError},
+    service::{RunnerWriteHooks, ServiceError, delete_document_core},
 };
 
 /// Find all trashed documents and permanently delete them (skipping referenced ones).
@@ -51,15 +51,7 @@ fn empty_trash(
     let mut upload_fields = Vec::new();
 
     for doc in &docs {
-        match crate::service::delete_document_core(
-            &tx,
-            &wh,
-            slug,
-            &doc.id,
-            &hard_def,
-            None,
-            Some(locale_cfg),
-        ) {
+        match delete_document_core(&tx, &wh, slug, &doc.id, &hard_def, None, Some(locale_cfg)) {
             Ok(result) => {
                 if let Some(fields) = result.upload_doc_fields {
                     upload_fields.push(fields);

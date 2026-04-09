@@ -7,11 +7,12 @@ use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
     db::LocaleContext,
-    hooks::lifecycle::converters::*,
+    hooks::lifecycle::{
+        converters::*,
+        crud::{get_tx_conn, helpers::*},
+    },
     service::{LuaWriteHooks, WriteInput, update_global_core},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.globals.update`.
 fn globals_update_inner(
@@ -48,15 +49,13 @@ fn globals_update_inner(
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-    let write_hooks = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-        registry: Some(&r),
-        hooks_enabled,
-        run_validation: true,
-    };
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .hooks_enabled(hooks_enabled)
+        .build();
 
     let write_input = WriteInput::builder(data, &join_data)
         .locale_ctx(locale_ctx.as_ref())

@@ -161,10 +161,9 @@ pub fn evaluate_condition_results(
 
     for (field_name, func_ref) in &req.conditions {
         if !valid_refs.contains(func_ref.as_str()) {
-            tracing::warn!(
+            warn!(
                 "evaluate_conditions: rejecting unknown func_ref '{}' for field '{}'",
-                func_ref,
-                field_name,
+                func_ref, field_name,
             );
             results.insert(field_name.clone(), json!(true));
             continue;
@@ -208,7 +207,7 @@ pub fn has_read_access(
         .check_access(access_ref, user_doc, None, None, &tx);
 
     if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
+        warn!("tx commit failed: {e}");
     }
 
     matches!(

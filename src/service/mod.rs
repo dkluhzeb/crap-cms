@@ -36,14 +36,15 @@ pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};
 pub(crate) use helpers::{build_hook_data, run_after_change_hooks};
 pub use hooks::{
-    LuaReadHooks, LuaWriteHooks, ReadHooks, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
+    LuaReadHooks, LuaReadHooksBuilder, LuaWriteHooks, LuaWriteHooksBuilder, ReadHooks,
+    RunnerReadHooks, RunnerWriteHooks, WriteHooks,
 };
 pub use persist::{
     persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
 };
 pub use read::{
-    FindResult, ReadOptions, SearchOptions, count_documents, find_document_by_id, find_documents,
-    get_global_document, search_documents,
+    FindResult, ReadOptions, ReadOptionsBuilder, SearchOptions, count_documents,
+    find_document_by_id, find_documents, get_global_document, search_documents,
 };
 pub use versions::unpublish_with_snapshot;
 pub use versions::{

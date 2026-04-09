@@ -10,11 +10,13 @@ use crate::{
         DbConnection, FindQuery, LocaleContext,
         query::{self, filter::normalize_filter_fields},
     },
-    hooks::lifecycle::{LuaStorage, converters::lua_table_to_find_query},
-    service::{LuaWriteHooks, ServiceError},
+    hooks::lifecycle::{
+        LuaStorage,
+        converters::lua_table_to_find_query,
+        crud::{get_tx_conn, helpers::*},
+    },
+    service::{LuaWriteHooks, ServiceError, delete_document_core},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Context for bulk delete operations.
 struct DeleteManyCtx<'a> {
@@ -113,15 +115,13 @@ fn delete_many_documents(
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-    let write_hooks = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-        registry: Some(&r),
-        hooks_enabled,
-        run_validation: true,
-    };
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .hooks_enabled(hooks_enabled)
+        .build();
 
     let mut service_def = def.clone();
     if force_hard_delete {
@@ -132,7 +132,7 @@ fn delete_many_documents(
     let mut skipped = 0i64;
 
     for doc in &docs {
-        match crate::service::delete_document_core(
+        match delete_document_core(
             conn,
             &write_hooks,
             collection,

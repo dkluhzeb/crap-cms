@@ -15,5 +15,5 @@ pub use count::count_documents;
 pub use find::{FindResult, find_documents};
 pub use find_by_id::find_document_by_id;
 pub use get_global::get_global_document;
-pub use options::ReadOptions;
+pub use options::{ReadOptions, ReadOptionsBuilder};
 pub use search::{SearchOptions, search_documents};

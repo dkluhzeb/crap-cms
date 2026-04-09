@@ -1,5 +1,7 @@
 //! Richtext before-validate hook helpers for running node attribute hooks.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::{
@@ -15,7 +17,7 @@ use crate::{
 pub(crate) fn apply_richtext_before_validate(
     lua: &mlua::Lua,
     fields: &[FieldDefinition],
-    data: &mut std::collections::HashMap<String, Value>,
+    data: &mut HashMap<String, Value>,
     registry: &Registry,
     collection: &str,
 ) {

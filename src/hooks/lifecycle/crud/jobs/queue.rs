@@ -6,10 +6,14 @@ use mlua::{Error::RuntimeError, Lua, Table, Value};
 use crate::{
     core::SharedRegistry,
     db::{AccessResult, query},
-    hooks::{api, lifecycle::access::check_access_with_lua},
+    hooks::{
+        api,
+        lifecycle::{
+            access::check_access_with_lua,
+            crud::{get_tx_conn, helpers::hook_user},
+        },
+    },
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::hook_user};
 
 /// Core logic for `crap.jobs.queue`.
 fn queue_job_inner(

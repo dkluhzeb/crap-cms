@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use prost_types::{Struct, Value, value::Kind};
 use serde_json::{Map, Number, Value as JsonValue};
+use tracing::warn;
 
 use crate::{api::content, core::Document};
 
@@ -40,7 +41,7 @@ pub(in crate::api::handlers) fn json_to_prost_value(v: &JsonValue) -> Value {
         },
         JsonValue::Number(n) => Value {
             kind: Some(Kind::NumberValue(n.as_f64().unwrap_or_else(|| {
-                tracing::warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
+                warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
                 0.0
             }))),
         },
@@ -102,7 +103,7 @@ pub(in crate::api::handlers) fn prost_value_to_json(v: &Value) -> JsonValue {
             Number::from_f64(*n)
                 .map(JsonValue::Number)
                 .unwrap_or_else(|| {
-                    tracing::warn!(
+                    warn!(
                         "Non-finite float {} in gRPC response, converting to null",
                         n
                     );

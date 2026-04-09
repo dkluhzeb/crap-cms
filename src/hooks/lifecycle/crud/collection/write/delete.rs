@@ -6,11 +6,12 @@ use mlua::{Error::RuntimeError, Lua, Table};
 use crate::{
     config::LocaleConfig,
     core::{SharedRegistry, upload},
-    hooks::lifecycle::LuaStorage,
+    hooks::lifecycle::{
+        LuaStorage,
+        crud::{get_tx_conn, helpers::*},
+    },
     service::{LuaWriteHooks, delete_document_core},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Execute the delete operation.
 fn delete_document(
@@ -41,15 +42,12 @@ fn delete_document(
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-    let write_hooks = LuaWriteHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: None,
-        override_access,
-        registry: Some(&r),
-        hooks_enabled,
-        run_validation: true,
-    };
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .hooks_enabled(hooks_enabled)
+        .build();
 
     let result = delete_document_core(
         conn,

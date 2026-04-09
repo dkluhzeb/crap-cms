@@ -3,9 +3,11 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
-use crate::{core::SharedRegistry, service::document_info};
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
+use crate::{
+    core::SharedRegistry,
+    hooks::lifecycle::crud::{get_tx_conn, helpers::*},
+    service::document_info,
+};
 
 /// Core logic for `crap.collections.ref_count`.
 fn ref_count_inner(

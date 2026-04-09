@@ -29,7 +29,7 @@ use crate::{
         auth::{AuthUser, Claims},
     },
     db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
-    service::{ReadOptions, RunnerReadHooks, find_documents},
+    service::{ReadOptions, RunnerReadHooks, find_documents, user_settings::get_user_settings},
 };
 
 /// Fetch documents via the shared service layer read lifecycle.
@@ -45,17 +45,13 @@ fn fetch_list_documents(
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
     let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
-    let hooks = RunnerReadHooks {
-        runner: &state.hook_runner,
-        conn: &conn,
-    };
-    let opts = ReadOptions {
-        hydrate: false,
-        locale_ctx,
-        user: user_doc.as_ref(),
-        ui_locale: user_ui_locale.as_deref(),
-        ..Default::default()
-    };
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+    let opts = ReadOptions::builder()
+        .hydrate(false)
+        .locale_ctx(locale_ctx)
+        .user(user_doc.as_ref())
+        .ui_locale(user_ui_locale.as_deref())
+        .build();
 
     let result =
         find_documents(&conn, &hooks, slug, def, find_query, &opts).map_err(|e| e.into_anyhow())?;
@@ -221,8 +217,7 @@ fn load_user_columns(
 ) -> Option<Vec<String>> {
     let Extension(au) = auth_user.as_ref()?;
     let conn = state.pool.get().ok()?;
-    let settings_json =
-        crate::service::user_settings::get_user_settings(&conn, &au.claims.sub).ok()??;
+    let settings_json = get_user_settings(&conn, &au.claims.sub).ok()??;
     let settings: Value = from_str(&settings_json).ok()?;
     let cols = settings.get(slug)?.get("columns")?.as_array()?;
 

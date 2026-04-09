@@ -10,11 +10,12 @@ use crate::{
         LocaleContext,
         query::{self, filter::normalize_filter_fields},
     },
-    hooks::lifecycle::converters::lua_table_to_find_query,
+    hooks::lifecycle::{
+        converters::lua_table_to_find_query,
+        crud::{get_tx_conn, helpers::*},
+    },
     service::{LuaReadHooks, count_documents},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Core logic for `crap.collections.count`.
 fn count_inner(
@@ -45,12 +46,10 @@ fn count_inner(
     normalize_filter_fields(&mut filters, &def.fields);
     add_draft_filter(&def, draft, &mut filters);
 
-    let hooks = LuaReadHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: None,
-        override_access,
-    };
+    let hooks = LuaReadHooks::builder(lua)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
 
     count_documents(
         conn,

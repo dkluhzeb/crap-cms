@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use tonic::Status;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{api::content, config::PasswordPolicy};
 
@@ -65,7 +65,7 @@ pub(in crate::api::handlers) fn strip_read_denied_proto_fields(
     let tx = match conn.transaction() {
         Ok(t) => t,
         Err(e) => {
-            tracing::error!("Field access check tx error: {}", e);
+            error!("Field access check tx error: {}", e);
             return;
         }
     };

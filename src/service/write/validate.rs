@@ -1,6 +1,7 @@
 //! Document validation without persistence.
 
 use crate::{
+    core::{Document, FieldDefinition, collection::Hooks},
     db::DbConnection,
     hooks::{HookContext, ValidationCtx},
     service::{WriteInput, build_hook_data, hooks::WriteHooks},
@@ -15,8 +16,8 @@ pub struct ValidateContext<'a> {
     pub slug: &'a str,
     /// Table name for unique checks — collection slug or `_global_{slug}`.
     pub table_name: &'a str,
-    pub fields: &'a [crate::core::FieldDefinition],
-    pub hooks: &'a crate::core::collection::Hooks,
+    pub fields: &'a [FieldDefinition],
+    pub hooks: &'a Hooks,
     pub operation: &'a str,
     /// Exclude this document from unique checks (update path).
     pub exclude_id: Option<&'a str>,
@@ -32,7 +33,7 @@ pub fn validate_document(
     write_hooks: &dyn WriteHooks,
     ctx: &ValidateContext<'_>,
     mut input: WriteInput<'_>,
-    user: Option<&crate::core::Document>,
+    user: Option<&Document>,
 ) -> Result<()> {
     // Note: collection-level access check is intentionally skipped here.
     // Validation endpoints already check access before calling this function.

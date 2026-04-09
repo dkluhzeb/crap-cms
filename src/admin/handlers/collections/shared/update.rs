@@ -31,7 +31,10 @@ use crate::{
     },
     db::query::{LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
-    service::{self, ServiceError},
+    service::{
+        self, ServiceError,
+        auth::{lock_user, unlock_user},
+    },
 };
 
 use super::render_form_validation_errors;
@@ -145,9 +148,9 @@ async fn spawn_update(
             let conn = pool.get().context("DB connection for lock update")?;
 
             if should_lock {
-                crate::service::auth::lock_user(&conn, &slug_owned, &id_owned)?;
+                lock_user(&conn, &slug_owned, &id_owned)?;
             } else {
-                crate::service::auth::unlock_user(&conn, &slug_owned, &id_owned)?;
+                unlock_user(&conn, &slug_owned, &id_owned)?;
             }
         }
 

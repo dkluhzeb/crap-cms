@@ -9,7 +9,7 @@ use crate::{
     api::{content, handlers::ContentService},
     core::{event::EventOperation, upload},
     db::AccessResult,
-    service::{RunnerWriteHooks, ServiceError},
+    service::{RunnerWriteHooks, ServiceError, delete_document_core},
 };
 
 use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
@@ -103,11 +103,7 @@ impl ContentService {
                     &deny_msg_owned,
                 )?;
 
-                let wh = RunnerWriteHooks {
-                    runner: &hook_runner,
-                    hooks_enabled: run_hooks,
-                    conn: None,
-                };
+                let wh = RunnerWriteHooks::new(&hook_runner).with_hooks_enabled(run_hooks);
 
                 let mut hard_count = 0i64;
                 let mut soft_count = 0i64;
@@ -116,7 +112,7 @@ impl ContentService {
                 let mut deleted_ids = Vec::new();
 
                 for doc in &docs {
-                    match crate::service::delete_document_core(
+                    match delete_document_core(
                         &tx,
                         &wh,
                         &collection,

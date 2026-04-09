@@ -10,11 +10,12 @@ use crate::{
         FindQuery, LocaleContext,
         query::{self, PaginationResult, filter::normalize_filter_fields},
     },
-    hooks::lifecycle::converters::*,
+    hooks::lifecycle::{
+        converters::*,
+        crud::{get_tx_conn, helpers::*},
+    },
     service::{LuaReadHooks, ReadOptions, find_documents},
 };
-
-use crate::hooks::lifecycle::crud::{get_tx_conn, helpers::*};
 
 /// Parameters for the find operation, capturing all pre-cloned config values.
 struct FindParams {
@@ -165,21 +166,19 @@ fn find_inner(
     let r = reg
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-    let hooks = LuaReadHooks {
-        lua,
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        override_access,
-    };
-    let opts = ReadOptions {
-        depth,
-        locale_ctx: locale_ctx.as_ref(),
-        registry: Some(&r),
-        select: find_query.select.as_deref(),
-        user: user.as_ref(),
-        ui_locale: ui_locale.as_deref(),
-        ..Default::default()
-    };
+    let hooks = LuaReadHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .build();
+    let opts = ReadOptions::builder()
+        .depth(depth)
+        .locale_ctx(locale_ctx.as_ref())
+        .registry(Some(&r))
+        .select(find_query.select.as_deref())
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .build();
 
     let result = find_documents(conn, &hooks, &collection, &def, &find_query, &opts)
         .map_err(|e| RuntimeError(format!("{e}")))?;

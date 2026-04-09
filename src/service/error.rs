@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use anyhow::anyhow;
+
 use crate::core::validate::ValidationError;
 
 /// Typed service-layer errors that callers can match on for surface-specific handling.
@@ -164,7 +166,7 @@ impl ServiceError {
         match self {
             Self::Internal(inner) | Self::Transient(inner) => inner,
             Self::Validation(ve) => anyhow::Error::new(ve),
-            other => anyhow::anyhow!("{other}"),
+            other => anyhow!("{other}"),
         }
     }
 

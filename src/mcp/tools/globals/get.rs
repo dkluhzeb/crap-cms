@@ -9,10 +9,9 @@ use crate::{
     core::Registry,
     db::DbPool,
     hooks::HookRunner,
+    mcp::tools::collection::helpers::doc_to_json,
     service::{RunnerReadHooks, get_global_document},
 };
-
-use crate::mcp::tools::collection::helpers::doc_to_json;
 
 /// Execute `read_global` — read a global document.
 pub(in crate::mcp::tools) fn exec_read_global(
@@ -23,10 +22,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
 ) -> Result<String> {
     let def = registry.globals.get(slug).context("Global not found")?;
     let conn = pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks {
-        runner,
-        conn: &conn,
-    };
+    let hooks = RunnerReadHooks::new(runner, &conn);
 
     match get_global_document(&conn, &hooks, slug, def, None, None, None)
         .map_err(|e| e.into_anyhow())

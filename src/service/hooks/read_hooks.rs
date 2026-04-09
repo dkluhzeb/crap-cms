@@ -62,10 +62,16 @@ pub struct RunnerReadHooks<'a> {
     pub conn: &'a dyn DbConnection,
 }
 
+impl<'a> RunnerReadHooks<'a> {
+    pub fn new(runner: &'a HookRunner, conn: &'a dyn DbConnection) -> Self {
+        Self { runner, conn }
+    }
+}
+
 impl ReadHooks for RunnerReadHooks<'_> {
     fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()> {
         self.runner
-            .fire_before_read(hooks, slug, operation, std::collections::HashMap::new())
+            .fire_before_read(hooks, slug, operation, HashMap::new())
     }
 
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -103,6 +109,56 @@ pub struct LuaReadHooks<'a> {
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
     pub override_access: bool,
+}
+
+impl<'a> LuaReadHooks<'a> {
+    /// Create a builder with the required Lua VM reference.
+    pub fn builder(lua: &'a mlua::Lua) -> LuaReadHooksBuilder<'a> {
+        LuaReadHooksBuilder::new(lua)
+    }
+}
+
+/// Builder for [`LuaReadHooks`]. Created via [`LuaReadHooks::builder`].
+pub struct LuaReadHooksBuilder<'a> {
+    pub(in crate::service) lua: &'a mlua::Lua,
+    pub(in crate::service) user: Option<&'a Document>,
+    pub(in crate::service) ui_locale: Option<&'a str>,
+    pub(in crate::service) override_access: bool,
+}
+
+impl<'a> LuaReadHooksBuilder<'a> {
+    pub fn new(lua: &'a mlua::Lua) -> Self {
+        Self {
+            lua,
+            user: None,
+            ui_locale: None,
+            override_access: false,
+        }
+    }
+
+    pub fn user(mut self, user: Option<&'a Document>) -> Self {
+        self.user = user;
+        self
+    }
+
+    pub fn ui_locale(mut self, ui_locale: Option<&'a str>) -> Self {
+        self.ui_locale = ui_locale;
+        self
+    }
+
+    pub fn override_access(mut self, override_access: bool) -> Self {
+        self.override_access = override_access;
+        self
+    }
+
+    pub fn build(self) -> LuaReadHooks<'a> {
+        LuaReadHooks {
+            lua: self.lua,
+            user: self.user,
+            ui_locale: self.ui_locale,
+            override_access: self.override_access,
+        }
+    }
 }
 
 impl ReadHooks for LuaReadHooks<'_> {

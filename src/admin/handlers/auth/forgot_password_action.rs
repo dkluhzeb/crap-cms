@@ -19,6 +19,7 @@ use crate::{
     config::EmailConfig,
     core::{CollectionDefinition, email, email::EmailRenderer},
     db::DbPool,
+    service::auth::generate_reset_token,
 };
 
 /// Everything needed to look up a user and send the password-reset email.
@@ -63,7 +64,7 @@ fn send_reset_email(params: ResetEmailParams) {
         }
     };
 
-    let token_result = match crate::service::auth::generate_reset_token(
+    let token_result = match generate_reset_token(
         &conn,
         &params.slug,
         &params.def,

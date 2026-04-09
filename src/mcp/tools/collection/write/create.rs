@@ -11,10 +11,9 @@ use crate::{
     core::Registry,
     db::DbPool,
     hooks::HookRunner,
+    mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
     service::{WriteInput, create_document},
 };
-
-use crate::mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args};
 
 /// Execute `create` — create a new document.
 pub(in crate::mcp::tools) fn exec_create(
