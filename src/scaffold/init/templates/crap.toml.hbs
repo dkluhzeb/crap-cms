@@ -1,0 +1,153 @@
+crap_version = "{{version}}"
+
+[server]
+admin_port = {{admin_port}}
+grpc_port = {{grpc_port}}
+host = "0.0.0.0"
+# compression = "off"             # "off" (default), "gzip", "br", "all"
+# grpc_reflection = false          # enable gRPC server reflection (default: false)
+# grpc_rate_limit_requests = 0    # per-IP request limit (0 = disabled)
+# grpc_rate_limit_window = 60     # sliding window in seconds (or "1m")
+# grpc_max_message_size = "16MB"  # max gRPC message size (default 16MB)
+
+[database]
+path = "data/crap.db"
+# pool_max_size = 64             # max connections in pool
+# busy_timeout = "30s"          # SQLite busy timeout (ms or "30s", "1m")
+# connection_timeout = 5          # pool checkout timeout (seconds or "5s")
+# cache_size = -16384            # page cache in KB (negative = KB; default 16MB)
+# mmap_size = 268435456          # memory-mapped I/O in bytes (default 256MB, 0 = off)
+# wal_autocheckpoint = 1000      # WAL auto-checkpoint threshold in pages
+
+[admin]
+dev_mode = false
+# require_auth = true               # block admin when no auth collection exists (default: true)
+# access = "access.admin_panel"     # Lua function: which users can access the admin UI
+
+# [admin.csp]                       # Content-Security-Policy header (enabled by default)
+# enabled = true
+# script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com"]
+# style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
+# font_src = ["'self'", "https://fonts.gstatic.com"]
+# img_src = ["'self'", "data:"]
+# connect_src = ["'self'"]
+# frame_ancestors = ["'none'"]
+# form_action = ["'self'"]
+# base_uri = ["'self'"]
+
+[auth]
+secret = "{{{auth_secret}}}"
+# token_expiry = 7200              # seconds, default 2 hours
+# max_login_attempts = 5           # failed logins before lockout
+# login_lockout_seconds = 300      # lockout duration (5 minutes)
+# reset_token_expiry = 3600        # password reset token lifetime (1 hour)
+# max_forgot_password_attempts = 3 # rate limit forgot-password per email
+# forgot_password_window_seconds = 900  # rate limit window (15 minutes)
+
+# [auth.password_policy]
+# min_length = 12               # minimum password length
+# max_length = 128              # maximum password length
+# require_uppercase = false     # require uppercase letter
+# require_lowercase = false     # require lowercase letter
+# require_digit = false         # require digit
+# require_special = false       # require special character
+
+[live]
+# enabled = true                # enable SSE + gRPC Subscribe for live mutation events
+# channel_capacity = 1024       # broadcast channel buffer size
+# max_sse_connections = 1000    # max concurrent SSE connections (0 = unlimited)
+# max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
+
+{{#if has_locales}}
+[locale]
+default_locale = "{{default_locale}}"
+locales = [{{{locales_str}}}]
+fallback = true
+{{else}}
+# [locale]
+# default_locale = "en"         # default locale for content
+# locales = ["en", "de"]        # supported locales (empty = disabled)
+# fallback = true               # fall back to default locale if field is empty
+{{/if}}
+
+# [depth]
+# default_depth = 1              # default relationship population depth for FindByID
+# max_depth = 10                 # hard cap on population depth
+
+# [cache]
+# backend = "memory"             # cache backend: "memory" (default), "redis", "none"
+# max_entries = 10000             # soft cap for memory backend
+# max_age_secs = 0                # periodic full clear (0 = disabled, only write-through invalidation)
+# redis_url = "redis://127.0.0.1:6379"  # Redis URL (only for redis backend)
+# prefix = "crap:"               # key prefix for Redis
+
+# [pagination]
+# default_limit = 20            # default page size when no limit specified
+# max_limit = 1000               # maximum allowed limit (requests above this are clamped)
+# mode = "page"                  # pagination mode: "page" (offset-based) or "cursor" (keyset-based)
+
+# [upload]
+# storage = "local"              # "local" (default), "s3" (requires --features s3-storage), or "custom"
+# max_file_size = "50MB"         # global max upload size (integer bytes or "50MB", "1GB")
+# [upload.s3]                    # S3-compatible storage (MinIO, R2, B2, etc.)
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = ""                  # custom endpoint for non-AWS providers
+# access_key = "${AWS_ACCESS_KEY}"
+# secret_key = "${AWS_SECRET_KEY}"
+# path_style = false             # true for MinIO
+
+# [email]
+# provider = "smtp"               # "smtp" (default), "webhook", "log", or "custom"
+# smtp_host = ""                 # SMTP server (empty = falls back to log provider)
+# smtp_port = 587
+# smtp_user = ""
+# smtp_pass = ""
+# smtp_tls = "starttls"           # "starttls" (default), "tls" (implicit), "none" (plain)
+# from_address = "noreply@example.com"
+# from_name = "Crap CMS"
+# smtp_timeout = 30               # SMTP connection/send timeout (seconds or "30s")
+# webhook_url = ""               # URL for webhook provider (POST JSON)
+# webhook_headers = {}            # extra HTTP headers for webhook
+
+# [hooks]
+# on_init = []                   # hook functions to run at startup
+# max_depth = 3                  # max hook recursion depth (hook > CRUD > hook)
+# vm_pool_size = 8               # Lua VMs for concurrent hooks (default: number of CPU cores)
+# max_instructions = 10000000    # max Lua instructions per hook invocation
+# max_memory = "50MB"            # max Lua memory per VM
+# allow_private_networks = false # allow Lua HTTP requests to private/internal networks
+# http_max_response_bytes = "10MB" # max HTTP response body size for crap.http.request
+
+# [jobs]
+# max_concurrent = 10             # max concurrent job executions
+# poll_interval = 1              # seconds between job queue polls
+# cron_interval = 60             # seconds between cron schedule checks
+# heartbeat_interval = 10        # seconds between running job heartbeats
+# auto_purge = 604800            # auto-purge completed/failed jobs older than N seconds (7 days)
+# image_queue_batch_size = 10    # image conversions per scheduler poll
+
+# [cors]
+# allowed_origins = []           # empty = CORS disabled; ["*"] = allow any origin
+# allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+# allowed_headers = ["Content-Type", "Authorization"]
+# exposed_headers = []           # response headers exposed to the browser
+# max_age = 3600                   # seconds or human-readable ("1h", "30m")
+# allow_credentials = false      # cannot be used with wildcard origin
+
+# [access]
+# default_deny = false           # when true, collections without access functions deny all
+
+# [logging]
+# file = false                   # enable file logging (default: false, auto-enabled with --detach)
+# path = "data/logs"             # log directory (relative to config dir, or absolute)
+# rotation = "daily"             # rotation strategy: "daily", "hourly", or "never"
+# max_files = 30                 # rotated files to keep (pruned on startup)
+
+# [mcp]
+# enabled = false                # enable MCP (Model Context Protocol) server
+# http = false                   # enable HTTP transport on /mcp (POST)
+# config_tools = false           # enable config generation tools (write access to config dir)
+# api_key = ""                   # API key for HTTP transport auth (empty = no auth)
+# include_collections = []       # whitelist (empty = all)
+# exclude_collections = []       # blacklist (takes precedence over include)

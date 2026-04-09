@@ -9,6 +9,7 @@ pub mod hook;
 pub mod init;
 pub mod job;
 pub mod migration;
+pub(crate) mod render;
 pub mod templates;
 pub mod wizard;
 
@@ -23,7 +24,7 @@ pub use self::collection::{
 pub use self::global::make_global;
 pub use self::hook::{ConditionFieldInfo, HookType, MakeHookOptions, make_hook};
 pub use self::init::{InitOptions, init};
-pub use self::job::make_job;
+pub use self::job::{MakeJobOptions, make_job};
 pub use self::migration::make_migration;
 pub use self::templates::{proto_export, templates_extract, templates_list};
 pub use self::wizard::interactive_field_wizard;

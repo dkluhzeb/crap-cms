@@ -1,0 +1,52 @@
+crap.collections.define("{{slug}}", {
+    labels = {
+        singular = "{{label_singular}}",
+        plural = "{{label_plural}}",
+    },
+    timestamps = {{timestamps}},
+{{#if auth}}
+    auth = true,
+    -- Full auth config (uncomment and customize):
+    -- auth = {
+    --     verify_email = false,
+    --     strategies = {},
+    -- },
+{{/if}}
+{{#if upload}}
+    upload = true,
+    -- Full upload config (uncomment and customize):
+    -- upload = {
+    --     mime_types = { "image/*", "application/pdf" },
+    --     max_file_size = "50MB",
+    --     image_sizes = {
+    --         { name = "thumbnail", width = 300, height = 300, fit = "cover" },
+    --     },
+    -- },
+{{/if}}
+{{#if versions}}
+    versions = true,
+{{/if}}
+    admin = {
+{{#if title_field}}
+        use_as_title = "{{title_field}}",
+{{/if}}
+{{#unless no_timestamps}}
+        default_sort = "-created_at",
+{{/unless}}
+{{#if title_field}}
+        list_searchable_fields = { "{{title_field}}" },
+{{/if}}
+    },
+    fields = {
+{{{fields_lua}}}    },
+    -- access = {
+    --     read   = "access.anyone",
+    --     create = "access.authenticated",
+    --     update = "access.authenticated",
+    --     delete = "access.admin_only",
+    -- },
+    -- indexes = {
+    --     { fields = { "status", "created_at" } },
+    --     { fields = { "slug" }, unique = true },
+    -- },
+})

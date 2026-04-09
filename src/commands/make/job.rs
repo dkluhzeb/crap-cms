@@ -32,13 +32,13 @@ pub fn run_job(config_dir: &Path, action: MakeAction) -> Result<()> {
             .context("Failed to read job slug")?,
     };
 
-    scaffold::make_job(
+    scaffold::make_job(&scaffold::MakeJobOptions {
         config_dir,
-        &slug,
-        schedule.as_deref(),
-        queue.as_deref(),
+        slug: &slug,
+        schedule: schedule.as_deref(),
+        queue: queue.as_deref(),
         retries,
         timeout,
         force,
-    )
+    })
 }

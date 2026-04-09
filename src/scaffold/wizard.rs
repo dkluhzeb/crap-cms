@@ -23,6 +23,7 @@ pub fn interactive_field_wizard(locales_enabled: bool) -> anyhow::Result<Vec<Fie
     field_loop(locales_enabled, &[])
 }
 
+/// Recursive field prompt loop — collects fields until an empty name is entered.
 #[cfg(not(tarpaulin_include))]
 fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Vec<FieldStub>> {
     let depth = breadcrumb.len();
@@ -111,6 +112,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
     Ok(fields)
 }
 
+/// Prompt loop for block definitions within a blocks field.
 #[cfg(not(tarpaulin_include))]
 fn block_loop(
     locales_enabled: bool,
@@ -163,6 +165,7 @@ fn block_loop(
     Ok(blocks)
 }
 
+/// Prompt loop for tab definitions within a tabs field.
 #[cfg(not(tarpaulin_include))]
 fn tab_loop(
     locales_enabled: bool,
@@ -210,10 +213,10 @@ fn tab_loop(
 
 #[cfg(test)]
 mod tests {
-    use crate::scaffold::to_title_case;
+    use super::*;
 
     #[test]
-    fn test_to_title_case() {
+    fn title_case() {
         assert_eq!(to_title_case("posts"), "Posts");
         assert_eq!(to_title_case("site_settings"), "Site Settings");
         assert_eq!(to_title_case("my_cool_thing"), "My Cool Thing");
