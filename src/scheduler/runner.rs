@@ -5,6 +5,7 @@ use std::{str::FromStr, time::Instant};
 use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
 use cron::Schedule;
+use serde_json::from_str;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -31,12 +32,9 @@ pub fn execute_job(
 ) -> Result<()> {
     let start = Instant::now();
 
-    tracing::info!(
+    info!(
         "Executing job {} ({}) attempt {}/{}",
-        job_run.id,
-        job_run.slug,
-        job_run.attempt,
-        job_run.max_attempts
+        job_run.id, job_run.slug, job_run.attempt, job_run.max_attempts
     );
 
     // System email job: handle directly without Lua VM
@@ -113,8 +111,7 @@ fn execute_system_email(
     let provider = email_provider
         .ok_or_else(|| anyhow!("System email job requires email provider but none configured"))?;
 
-    let data: EmailJobData =
-        serde_json::from_str(&job_run.data).context("Invalid email job data")?;
+    let data: EmailJobData = from_str(&job_run.data).context("Invalid email job data")?;
 
     let result = provider.send(&data.to, &data.subject, &data.html, data.text.as_deref());
 
@@ -318,10 +315,9 @@ pub fn purge_soft_deleted(
         };
 
         let Some(seconds) = parse_retention_seconds(retention) else {
-            tracing::warn!(
+            warn!(
                 "Invalid soft_delete_retention '{}' for collection '{}'",
-                retention,
-                slug
+                retention, slug
             );
             continue;
         };

@@ -51,15 +51,7 @@ fn render_global_lua(slug: &str, fields: Option<&[FieldStub]>) -> Result<String>
     let fields = match fields {
         Some(f) => f,
         None => {
-            default_fields = [FieldStub {
-                name: "title".to_string(),
-                field_type: "text".to_string(),
-                required: true,
-                localized: false,
-                fields: vec![],
-                blocks: vec![],
-                tabs: vec![],
-            }];
+            default_fields = [FieldStub::builder("title", "text").required(true).build()];
             &default_fields
         }
     };

@@ -36,6 +36,7 @@ pub(super) fn render(registry: &Registry) -> String {
     out
 }
 
+/// Render type definitions for a single collection.
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
@@ -48,7 +49,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
         };
         writeln!(out, "---@class crap.{namespace}.{sub_pascal}").expect("write to String");
         for sf in &stf.field.fields {
-            write_field(out, sf);
+            write_field(out, sf, &sub_pascal);
         }
         out.push('\n');
     }
@@ -56,7 +57,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // crap.data.* — hook ctx.data (mutable input)
     writeln!(out, "---@class crap.data.{pascal}").expect("write to String");
     for f in &col.fields {
-        write_field(out, f);
+        write_field(out, f, &pascal);
     }
     out.push('\n');
 
@@ -64,7 +65,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     writeln!(out, "---@class crap.doc.{pascal}").expect("write to String");
     writeln!(out, "---@field id string").expect("write to String");
     for f in &col.fields {
-        write_field(out, f);
+        write_field(out, f, &pascal);
     }
     if col.timestamps {
         writeln!(out, "---@field created_at? string").expect("write to String");
@@ -85,6 +86,8 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     writeln!(out, "---@field hook_depth integer").expect("write to String");
     writeln!(out, "---@field locale? string").expect("write to String");
     writeln!(out, "---@field draft? boolean").expect("write to String");
+    writeln!(out, "---@field user? table").expect("write to String");
+    writeln!(out, "---@field ui_locale? string").expect("write to String");
     out.push('\n');
 
     // crap.find_result.*
@@ -107,6 +110,8 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     writeln!(out, "---@field collection \"{}\"", col.slug).expect("write to String");
     writeln!(out, "---@field operation string").expect("write to String");
     writeln!(out, "---@field data crap.data.{pascal}").expect("write to String");
+    writeln!(out, "---@field user? table").expect("write to String");
+    writeln!(out, "---@field ui_locale? string").expect("write to String");
     out.push('\n');
 
     // crap.where.* — typed filter keys
@@ -131,19 +136,20 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     out.push('\n');
 }
 
+/// Render type definitions for a single global.
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
     // Sub-type classes (Array rows and Group shapes)
     for stf in collect_sub_type_fields(&global.fields) {
-        let sub_pascal = to_pascal_case(&stf.field.name);
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
         let namespace = match stf.kind {
             SubTypeKind::Array => "array_row",
             SubTypeKind::Group => "group",
         };
         writeln!(out, "---@class crap.{namespace}.{sub_pascal}").expect("write to String");
         for sf in &stf.field.fields {
-            write_field(out, sf);
+            write_field(out, sf, &sub_pascal);
         }
         out.push('\n');
     }
@@ -151,7 +157,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     // crap.global_data.*
     writeln!(out, "---@class crap.global_data.{pascal}").expect("write to String");
     for f in &global.fields {
-        write_field(out, f);
+        write_field(out, f, &pascal);
     }
     out.push('\n');
 
@@ -159,7 +165,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     writeln!(out, "---@class crap.global_doc.{pascal}").expect("write to String");
     writeln!(out, "---@field id string").expect("write to String");
     for f in &global.fields {
-        write_field(out, f);
+        write_field(out, f, &pascal);
     }
     writeln!(out, "---@field created_at? string").expect("write to String");
     writeln!(out, "---@field updated_at? string").expect("write to String");
@@ -167,24 +173,29 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
 
     // crap.hook.global_*
     writeln!(out, "---@class crap.hook.global_{}", global.slug).expect("write to String");
-    writeln!(out, "---@field global \"{}\"", global.slug).expect("write to String");
+    writeln!(out, "---@field collection \"{}\"", global.slug).expect("write to String");
     writeln!(out, "---@field operation \"update\" | \"get_global\"").expect("write to String");
     writeln!(out, "---@field data crap.global_data.{pascal}").expect("write to String");
     writeln!(out, "---@field context table<string, any>").expect("write to String");
     writeln!(out, "---@field hook_depth integer").expect("write to String");
     writeln!(out, "---@field locale? string").expect("write to String");
     writeln!(out, "---@field draft? boolean").expect("write to String");
+    writeln!(out, "---@field user? table").expect("write to String");
+    writeln!(out, "---@field ui_locale? string").expect("write to String");
     out.push('\n');
 
     // crap.field_hook.global_* — typed FieldHookContext for globals
     writeln!(out, "---@class crap.field_hook.global_{}", global.slug).expect("write to String");
     writeln!(out, "---@field field_name string").expect("write to String");
-    writeln!(out, "---@field global \"{}\"", global.slug).expect("write to String");
+    writeln!(out, "---@field collection \"{}\"", global.slug).expect("write to String");
     writeln!(out, "---@field operation string").expect("write to String");
     writeln!(out, "---@field data crap.global_data.{pascal}").expect("write to String");
+    writeln!(out, "---@field user? table").expect("write to String");
+    writeln!(out, "---@field ui_locale? string").expect("write to String");
     out.push('\n');
 }
 
+/// Render typed overload annotations for find/findById/create/update.
 fn render_find_overloads(out: &mut String, registry: &Registry) {
     let mut slugs: Vec<&crate::core::Slug> = registry.collections.keys().collect();
     slugs.sort();
@@ -230,18 +241,19 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
     out.push('\n');
 }
 
-fn write_field(out: &mut String, field: &FieldDefinition) {
+/// Write a single field's type definition.
+fn write_field(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
     // Row is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Row {
         for sub in &field.fields {
-            write_field(out, sub);
+            write_field(out, sub, parent_pascal);
         }
         return;
     }
     // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Collapsible {
         for sub in &field.fields {
-            write_field(out, sub);
+            write_field(out, sub, parent_pascal);
         }
         return;
     }
@@ -249,7 +261,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
     if field.field_type == FieldType::Tabs {
         for tab in &field.tabs {
             for sub in &tab.fields {
-                write_field(out, sub);
+                write_field(out, sub, parent_pascal);
             }
         }
         return;
@@ -263,12 +275,13 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         writeln!(out, "--- Polymorphic relationship — targets: {}", targets)
             .expect("write to String");
     }
-    let lua_type = field_to_lua_type(field);
+    let lua_type = field_to_lua_type(field, parent_pascal);
     let opt = if is_optional(field) { "?" } else { "" };
     writeln!(out, "---@field {}{opt} {lua_type}", field.name).expect("write to String");
 }
 
-fn field_to_lua_type(field: &FieldDefinition) -> String {
+/// Map a field definition to its Lua type string.
+fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
         FieldType::Text => {
             if field.has_many {
@@ -320,14 +333,15 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
             _ => "string".to_string(),
         },
         FieldType::Array => {
-            let pascal = to_pascal_case(&field.name);
-            format!("crap.array_row.{}[]", pascal)
+            let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
+            format!("crap.array_row.{}[]", sub)
         }
         FieldType::Group => {
             if field.fields.is_empty() {
                 "table".to_string()
             } else {
-                format!("crap.group.{}", to_pascal_case(&field.name))
+                let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
+                format!("crap.group.{}", sub)
             }
         }
         FieldType::Row => "table".to_string(), // layout-only; sub-fields are promoted
@@ -381,30 +395,30 @@ mod tests {
     #[test]
     fn field_type_mapping() {
         let f = text_field("x", true);
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
 
         let mut f = text_field("x", true);
         f.field_type = FieldType::Number;
-        assert_eq!(field_to_lua_type(&f), "number");
+        assert_eq!(field_to_lua_type(&f, "Test"), "number");
 
         let f = checkbox_field("x");
-        assert_eq!(field_to_lua_type(&f), "boolean");
+        assert_eq!(field_to_lua_type(&f, "Test"), "boolean");
 
         let mut f = text_field("x", true);
         f.field_type = FieldType::Json;
-        assert_eq!(field_to_lua_type(&f), "any");
+        assert_eq!(field_to_lua_type(&f, "Test"), "any");
     }
 
     #[test]
     fn select_with_options() {
         let f = select_field("status", true, &["draft", "published"]);
-        assert_eq!(field_to_lua_type(&f), "\"draft\" | \"published\"");
+        assert_eq!(field_to_lua_type(&f, "Test"), "\"draft\" | \"published\"");
     }
 
     #[test]
     fn select_without_options() {
         let f = select_field("status", true, &[]);
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
@@ -494,6 +508,64 @@ mod tests {
     }
 
     #[test]
+    fn hook_context_has_user_and_ui_locale() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![text_field("title", true)];
+
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+
+        // crap.hook.* must include user and ui_locale (set at runtime)
+        assert!(out.contains("---@class crap.hook.Posts"));
+        assert!(
+            out.contains("---@field user? table"),
+            "hook context missing user field:\n{out}"
+        );
+        assert!(
+            out.contains("---@field ui_locale? string"),
+            "hook context missing ui_locale field:\n{out}"
+        );
+
+        // crap.field_hook.* must also include them
+        assert!(out.contains("---@class crap.field_hook.Posts"));
+        // Count to verify both hook and field_hook have user/ui_locale
+        assert_eq!(
+            out.matches("---@field user? table").count(),
+            2,
+            "both hook and field_hook need user"
+        );
+        assert_eq!(
+            out.matches("---@field ui_locale? string").count(),
+            2,
+            "both hook and field_hook need ui_locale"
+        );
+    }
+
+    #[test]
+    fn global_hook_context_uses_collection_field() {
+        let mut global = GlobalDefinition::new("site_settings");
+        global.fields = vec![text_field("site_name", true)];
+
+        let mut out = String::new();
+        render_global(&mut out, &global);
+
+        // Runtime sets "collection" not "global" — verify generated types match
+        assert!(out.contains("---@class crap.hook.global_site_settings"));
+        assert!(
+            out.contains("---@field collection \"site_settings\""),
+            "global hook context must use 'collection' field (matching runtime), got:\n{out}"
+        );
+        assert!(
+            !out.contains("---@field global"),
+            "global hook context must NOT use 'global' field"
+        );
+
+        // user and ui_locale must be present
+        assert!(out.contains("---@field user? table"));
+        assert!(out.contains("---@field ui_locale? string"));
+    }
+
+    #[test]
     fn render_global_array_row() {
         let mut global = GlobalDefinition::new("navigation");
         global.fields = vec![
@@ -506,8 +578,8 @@ mod tests {
         render_global(&mut out, &global);
 
         assert!(
-            out.contains("---@class crap.array_row.MainNav"),
-            "global array should emit sub-type class, got:\n{out}"
+            out.contains("---@class crap.array_row.NavigationMainNav"),
+            "global array should emit prefixed sub-type class, got:\n{out}"
         );
         assert!(out.contains("---@field label string"));
     }
@@ -585,7 +657,7 @@ mod tests {
         let f = FieldDefinition::builder("tags", FieldType::Relationship)
             .relationship(RelationshipConfig::new("tags", true))
             .build();
-        assert_eq!(field_to_lua_type(&f), "string[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string[]");
     }
 
     #[test]
@@ -597,7 +669,7 @@ mod tests {
             .relationship(rc)
             .build();
         // Polymorphic has-one stores "collection/id" composite as string
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
@@ -608,7 +680,7 @@ mod tests {
             .relationship(rc)
             .build();
         // Polymorphic has-many stores array of "collection/id" composites
-        assert_eq!(field_to_lua_type(&f), "string[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string[]");
     }
 
     #[test]
@@ -647,7 +719,7 @@ mod tests {
             .required(true)
             .relationship(RelationshipConfig::new("users", false))
             .build();
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
@@ -655,13 +727,13 @@ mod tests {
         let f = FieldDefinition::builder("items", FieldType::Array)
             .fields(vec![text_field("label", true)])
             .build();
-        assert_eq!(field_to_lua_type(&f), "crap.array_row.Items[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "crap.array_row.TestItems[]");
     }
 
     #[test]
     fn lua_group_type_empty() {
         let f = FieldDefinition::builder("seo", FieldType::Group).build();
-        assert_eq!(field_to_lua_type(&f), "table");
+        assert_eq!(field_to_lua_type(&f, "Test"), "table");
     }
 
     #[test]
@@ -672,13 +744,13 @@ mod tests {
                 text_field("description", false),
             ])
             .build();
-        assert_eq!(field_to_lua_type(&f), "crap.group.Seo");
+        assert_eq!(field_to_lua_type(&f, "Test"), "crap.group.TestSeo");
     }
 
     #[test]
     fn lua_upload_type() {
         let f = FieldDefinition::builder("image", FieldType::Upload).build();
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
@@ -686,13 +758,13 @@ mod tests {
         let f = FieldDefinition::builder("images", FieldType::Upload)
             .relationship(RelationshipConfig::new("", true))
             .build();
-        assert_eq!(field_to_lua_type(&f), "string[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string[]");
     }
 
     #[test]
     fn lua_blocks_type() {
         let f = FieldDefinition::builder("content", FieldType::Blocks).build();
-        assert_eq!(field_to_lua_type(&f), "table[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "table[]");
     }
 
     #[test]
@@ -700,7 +772,7 @@ mod tests {
         let f = FieldDefinition::builder("tags", FieldType::Text)
             .has_many(true)
             .build();
-        assert_eq!(field_to_lua_type(&f), "string[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string[]");
     }
 
     #[test]
@@ -708,31 +780,31 @@ mod tests {
         let f = FieldDefinition::builder("scores", FieldType::Number)
             .has_many(true)
             .build();
-        assert_eq!(field_to_lua_type(&f), "number[]");
+        assert_eq!(field_to_lua_type(&f, "Test"), "number[]");
     }
 
     #[test]
     fn lua_email_type() {
         let f = FieldDefinition::builder("email", FieldType::Email).build();
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
     fn lua_date_type() {
         let f = FieldDefinition::builder("at", FieldType::Date).build();
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
     fn lua_richtext_type() {
         let f = FieldDefinition::builder("body", FieldType::Richtext).build();
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
     fn lua_textarea_type() {
         let f = FieldDefinition::builder("notes", FieldType::Textarea).build();
-        assert_eq!(field_to_lua_type(&f), "string");
+        assert_eq!(field_to_lua_type(&f, "Test"), "string");
     }
 
     #[test]
@@ -756,9 +828,9 @@ mod tests {
         let f_code = FieldDefinition::builder("snippet", FieldType::Code).build();
         let f_join = FieldDefinition::builder("refs", FieldType::Join).build();
         let f_radio = FieldDefinition::builder("color", FieldType::Radio).build();
-        assert_eq!(field_to_lua_type(&f_code), "string");
-        assert_eq!(field_to_lua_type(&f_join), "table[]");
-        assert_eq!(field_to_lua_type(&f_radio), "string");
+        assert_eq!(field_to_lua_type(&f_code, "Test"), "string");
+        assert_eq!(field_to_lua_type(&f_join, "Test"), "table[]");
+        assert_eq!(field_to_lua_type(&f_radio, "Test"), "string");
     }
 
     #[test]
@@ -772,7 +844,7 @@ mod tests {
                 SelectOption::new(LocalizedString::Plain("B".into()), "b"),
             ])
             .build();
-        let result = field_to_lua_type(&f_with_opts);
+        let result = field_to_lua_type(&f_with_opts, "Test");
         assert!(
             result.contains("\"a\""),
             "should include option 'a': {}",
@@ -793,7 +865,7 @@ mod tests {
         let f_no_opts = FieldDefinition::builder("cats", FieldType::Select)
             .has_many(true)
             .build();
-        assert_eq!(field_to_lua_type(&f_no_opts), "string[]");
+        assert_eq!(field_to_lua_type(&f_no_opts, "Test"), "string[]");
     }
 
     #[test]
@@ -948,8 +1020,8 @@ mod tests {
         let mut out = String::new();
         render_global(&mut out, &global);
         assert!(
-            out.contains("---@class crap.group.Seo"),
-            "global group sub-type should be emitted: {}",
+            out.contains("---@class crap.group.SettingsSeo"),
+            "global group sub-type should be prefixed: {}",
             out
         );
     }

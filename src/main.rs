@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use dialoguer::Select;
 use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{Layer, Registry, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crap_cms::{
     cli::{self, crap_theme},
@@ -251,7 +251,8 @@ enum Command {
     },
 }
 
-#[cfg(not(tarpaulin_include))] // binary entrypoint — not unit-testable
+/// Binary entrypoint — parses CLI args and dispatches to the appropriate command.
+#[cfg(not(tarpaulin_include))]
 #[tokio::main]
 async fn main() {
     let cli_args = Cli::parse();
@@ -262,6 +263,7 @@ async fn main() {
     }
 }
 
+/// Dispatch the parsed CLI command to the appropriate handler.
 #[cfg(not(tarpaulin_include))]
 async fn run(cli: Cli) -> Result<()> {
     let use_json = matches!(&cli.command, Command::Serve { json: true, .. })
@@ -522,8 +524,6 @@ fn init_logging(
     default_filter: &str,
     serve_logging: Option<&(PathBuf, crap_cms::config::LoggingConfig)>,
 ) -> Option<WorkerGuard> {
-    use tracing_subscriber::Registry;
-
     type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
     let mut guard = None;

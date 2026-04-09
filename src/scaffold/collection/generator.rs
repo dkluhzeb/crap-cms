@@ -79,15 +79,7 @@ fn render_collection_lua(
         Some(f) => f,
         None if opts.upload || opts.auth => &[] as &[FieldStub],
         None => {
-            default_fields = [FieldStub {
-                name: "title".to_string(),
-                field_type: "text".to_string(),
-                required: true,
-                localized: false,
-                fields: vec![],
-                blocks: vec![],
-                tabs: vec![],
-            }];
+            default_fields = [FieldStub::builder("title", "text").required(true).build()];
             &default_fields
         }
     };

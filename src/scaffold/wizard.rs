@@ -98,15 +98,15 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
             sub_tabs = tab_loop(locales_enabled, breadcrumb, &name)?;
         }
 
-        fields.push(FieldStub {
-            name,
-            field_type: field_type.to_string(),
-            required,
-            localized,
-            fields: sub_fields,
-            blocks: sub_blocks,
-            tabs: sub_tabs,
-        });
+        fields.push(
+            FieldStub::builder(name, field_type)
+                .required(required)
+                .localized(localized)
+                .fields(sub_fields)
+                .blocks(sub_blocks)
+                .tabs(sub_tabs)
+                .build(),
+        );
     }
 
     Ok(fields)
@@ -155,11 +155,7 @@ fn block_loop(
         child_bc.push(block_type.clone());
         let sub_fields = field_loop(locales_enabled, &child_bc)?;
 
-        blocks.push(BlockStub {
-            block_type,
-            label,
-            fields: sub_fields,
-        });
+        blocks.push(BlockStub::new(block_type, label, sub_fields));
     }
 
     Ok(blocks)
@@ -202,10 +198,7 @@ fn tab_loop(
         child_bc.push(label.clone());
         let sub_fields = field_loop(locales_enabled, &child_bc)?;
 
-        tabs.push(TabStub {
-            label,
-            fields: sub_fields,
-        });
+        tabs.push(TabStub::new(label, sub_fields));
     }
 
     Ok(tabs)

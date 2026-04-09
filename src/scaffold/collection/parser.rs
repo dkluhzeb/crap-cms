@@ -163,15 +163,13 @@ fn parse_field_token(token: &str) -> Result<FieldStub> {
     let (required, localized) = parse_modifiers(&segments[2..], &name)?;
     let (fields, blocks, tabs) = parse_subfield_content(&field_type, subfield_content)?;
 
-    Ok(FieldStub {
-        name,
-        field_type,
-        required,
-        localized,
-        fields,
-        blocks,
-        tabs,
-    })
+    Ok(FieldStub::builder(name, field_type)
+        .required(required)
+        .localized(localized)
+        .fields(fields)
+        .blocks(blocks)
+        .tabs(tabs)
+        .build())
 }
 
 /// Validate that a field name is a safe identifier.
@@ -306,11 +304,7 @@ fn parse_block_entries(s: &str) -> Result<Vec<BlockStub>> {
             );
         }
 
-        blocks.push(BlockStub {
-            block_type,
-            label,
-            fields,
-        });
+        blocks.push(BlockStub::new(block_type, label, fields));
     }
 
     if blocks.is_empty() {
@@ -348,7 +342,7 @@ fn parse_tab_entries(s: &str) -> Result<Vec<TabStub>> {
             bail!("Tab label cannot be empty");
         }
 
-        tabs.push(TabStub { label, fields });
+        tabs.push(TabStub::new(label, fields));
     }
 
     if tabs.is_empty() {
