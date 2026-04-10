@@ -201,7 +201,7 @@ pub(in crate::admin::handlers) fn create_session_token(
 
     let claims = ClaimsBuilder::new(user_id, Slug::new(collection))
         .email(email)
-        .exp((Utc::now().timestamp() as u64) + expiry)
+        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
         .session_version(session_version)
         .build()
         .map_err(|e| format!("Claims build error: {}", e))?;

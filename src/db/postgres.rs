@@ -134,7 +134,7 @@ macro_rules! pg_shared_methods {
         }
 
         fn build_insert_ignore(&self, table: &str, columns: &str, values: &str) -> String {
-            format!("INSERT INTO {table} ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING")
+            format!("INSERT INTO \"{table}\" ({columns}) VALUES ({values}) ON CONFLICT DO NOTHING")
         }
 
         fn build_upsert(
@@ -156,7 +156,7 @@ macro_rules! pg_shared_methods {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "INSERT INTO {table} ({cols}) VALUES ({values}) \
+                "INSERT INTO \"{table}\" ({cols}) VALUES ({values}) \
                  ON CONFLICT (\"{key_col}\") DO UPDATE SET {updates}"
             )
         }

@@ -33,6 +33,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
         def,
         WriteInput::builder(data, &join_data).build(),
         None,
+        true,
     )?;
 
     info!("MCP update global: {}", slug);

@@ -152,6 +152,7 @@ async fn spawn_create(
                 .ui_locale(ui_locale)
                 .build(),
             user_doc.as_ref(),
+            false,
         )
     })
     .await

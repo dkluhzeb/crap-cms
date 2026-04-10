@@ -90,6 +90,9 @@ pub struct RunnerWriteHooks<'a> {
     /// Optional connection for field-level write access checks. When provided,
     /// `field_write_denied` actually checks access via Lua. When `None`, returns empty.
     pub conn: Option<&'a dyn DbConnection>,
+    /// When true, all access checks return Allowed unconditionally.
+    /// Used by MCP (trusted local transport) to bypass access control.
+    pub override_access: bool,
 }
 
 impl<'a> RunnerWriteHooks<'a> {
@@ -99,6 +102,7 @@ impl<'a> RunnerWriteHooks<'a> {
             runner,
             hooks_enabled: true,
             conn: None,
+            override_access: false,
         }
     }
 
@@ -111,6 +115,13 @@ impl<'a> RunnerWriteHooks<'a> {
     /// Set whether hooks are enabled.
     pub fn with_hooks_enabled(mut self, hooks_enabled: bool) -> Self {
         self.hooks_enabled = hooks_enabled;
+        self
+    }
+
+    /// Bypass all access checks (returns Allowed unconditionally).
+    /// Used by MCP tools which run on a trusted local transport.
+    pub fn with_override_access(mut self) -> Self {
+        self.override_access = true;
         self
     }
 }
@@ -166,6 +177,9 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         fields: &[FieldDefinition],
         user: Option<&Document>,
     ) -> Vec<String> {
+        if self.override_access {
+            return Vec::new();
+        }
         let Some(conn) = self.conn else {
             return Vec::new();
         };
@@ -179,6 +193,9 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         id: Option<&str>,
         data: Option<&HashMap<String, Value>>,
     ) -> Result<AccessResult> {
+        if self.override_access {
+            return Ok(AccessResult::Allowed);
+        }
         let Some(conn) = self.conn else {
             return Ok(AccessResult::Allowed);
         };
@@ -191,6 +208,9 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         user: Option<&Document>,
         operation: &str,
     ) -> Vec<String> {
+        if self.override_access {
+            return Vec::new();
+        }
         let Some(conn) = self.conn else {
             return Vec::new();
         };

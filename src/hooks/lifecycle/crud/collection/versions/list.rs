@@ -6,7 +6,7 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use crate::{
     core::SharedRegistry,
     hooks::lifecycle::crud::{get_tx_conn, helpers::*},
-    service::list_versions,
+    service::{LuaReadHooks, list_versions},
 };
 
 /// Core logic for `crap.collections.list_versions`.
@@ -31,8 +31,23 @@ fn list_versions_inner(
         .as_ref()
         .and_then(|o| o.get::<Option<i64>>("offset").ok().flatten());
 
-    let (versions, total) = list_versions(conn, &collection, &id, limit, offset)
-        .map_err(|e| RuntimeError(format!("{e}")))?;
+    let user = hook_user(lua);
+    let hooks = LuaReadHooks::builder(lua)
+        .user(user.as_ref())
+        .override_access(true)
+        .build();
+
+    let (versions, total) = list_versions(
+        conn,
+        &hooks,
+        &collection,
+        &id,
+        None,
+        user.as_ref(),
+        limit,
+        offset,
+    )
+    .map_err(|e| RuntimeError(format!("{e}")))?;
 
     let result = lua.create_table()?;
     result.set("total", total)?;

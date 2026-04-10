@@ -12,11 +12,11 @@ use tokio::task;
 use tracing::error;
 
 use crate::{
-    admin::AdminState,
+    admin::{AdminState, handlers::shared::check_access_or_forbid},
     config::LocaleConfig,
     core::{CollectionDefinition, auth::AuthUser, upload, upload::StorageBackend},
     db::{
-        DbPool,
+        AccessResult, DbPool,
         query::{self, Filter, FilterClause, FilterOp, FindQuery},
     },
     hooks::HookRunner,
@@ -43,7 +43,7 @@ fn empty_trash(
     })];
 
     let docs = query::find(&tx, slug, def, &fq, None)?;
-    let wh = RunnerWriteHooks::new(runner);
+    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
     let mut hard_def = def.clone();
     hard_def.soft_delete = false;
 
@@ -77,7 +77,7 @@ fn empty_trash(
 pub async fn empty_trash_action(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
-    _auth_user: Option<Extension<AuthUser>>,
+    auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
@@ -90,6 +90,12 @@ pub async fn empty_trash_action(
             "Collection does not support soft delete",
         )
             .into_response();
+    }
+
+    // Collection-level trash access check — reject early before iterating documents
+    let access = check_access_or_forbid(&state, def.access.resolve_trash(), &auth_user, None, None);
+    if let Ok(AccessResult::Denied) | Err(_) = access {
+        return StatusCode::FORBIDDEN.into_response();
     }
 
     let pool = state.pool.clone();

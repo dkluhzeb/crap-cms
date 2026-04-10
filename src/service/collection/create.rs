@@ -24,9 +24,10 @@ pub fn create_document(
     def: &CollectionDefinition,
     input: WriteInput<'_>,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<WriteResult> {
     let mut conn = pool.get().context("DB connection")?;
-    create_document_with_conn(&mut conn, runner, slug, def, input, user)
+    create_document_with_conn(&mut conn, runner, slug, def, input, user, override_access)
 }
 
 /// Like [`create_document`], but accepts an existing connection (avoids a second pool.get()).
@@ -37,9 +38,15 @@ pub fn create_document_with_conn(
     def: &CollectionDefinition,
     input: WriteInput<'_>,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<WriteResult> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+
+    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    if override_access {
+        wh = wh.with_override_access();
+    }
+
     let result = create_document_core(&tx, &wh, slug, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)

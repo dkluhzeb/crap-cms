@@ -196,12 +196,7 @@ fn import_single_document(
 
     let col_refs: Vec<&str> = row.parent_cols.iter().map(String::as_str).collect();
 
-    let sql = tx.build_upsert(
-        &format!("\"{}\"", slug),
-        &col_refs,
-        &placeholders.join(", "),
-        "id",
-    );
+    let sql = tx.build_upsert(slug, &col_refs, &placeholders.join(", "), "id");
 
     tx.execute(&sql, &row.parent_vals)
         .with_context(|| format!("Failed to insert document {} into '{}'", id, slug))?;

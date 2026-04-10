@@ -332,7 +332,7 @@ pub async fn edit_form(
     let doc_status = extract_doc_status(&document, has_drafts);
 
     let (versions, total_versions) = if has_versions {
-        fetch_version_sidebar_data(&state.pool, &slug, &document.id)
+        fetch_version_sidebar_data(&state.pool, &state.hook_runner, &slug, &document.id)
     } else {
         (vec![], 0)
     };

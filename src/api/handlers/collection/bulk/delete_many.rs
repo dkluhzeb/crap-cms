@@ -103,7 +103,9 @@ impl ContentService {
                     &deny_msg_owned,
                 )?;
 
-                let wh = RunnerWriteHooks::new(&hook_runner).with_hooks_enabled(run_hooks);
+                let wh = RunnerWriteHooks::new(&hook_runner)
+                    .with_hooks_enabled(run_hooks)
+                    .with_conn(&tx);
 
                 let mut hard_count = 0i64;
                 let mut soft_count = 0i64;

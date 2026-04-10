@@ -75,6 +75,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
             user_doc.as_ref(),
             Some(&*storage),
             Some(&locale_config),
+            false,
         )
     })
     .await;

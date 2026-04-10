@@ -29,8 +29,8 @@ pub use types::{
 
 pub use collection::{
     create_document, create_document_with_conn, delete_document, delete_document_with_conn,
-    undelete_document, undelete_document_core, unpublish_document, update_document,
-    update_document_with_conn,
+    undelete_document, undelete_document_core, unpublish_document, unpublish_document_core,
+    update_document, update_document_with_conn,
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};
@@ -46,6 +46,7 @@ pub use read::{
     FindResult, ReadOptions, ReadOptionsBuilder, SearchOptions, count_documents,
     find_document_by_id, find_documents, get_global_document, search_documents,
 };
+pub(crate) use versions::restore_collection_version_core;
 pub use versions::unpublish_with_snapshot;
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,

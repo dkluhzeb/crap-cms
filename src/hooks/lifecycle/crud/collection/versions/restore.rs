@@ -10,7 +10,7 @@ use crate::{
         converters::document_to_lua_table,
         crud::{get_tx_conn, helpers::*},
     },
-    service::restore_collection_version,
+    service::{LuaWriteHooks, restore_collection_version_core},
 };
 
 /// Core logic for `crap.collections.restore_version`.
@@ -26,10 +26,25 @@ fn restore_version_inner(
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
 
+    let user = hook_user(lua);
     let def = resolve_collection(reg, &collection)?;
 
-    let doc = restore_collection_version(conn, &collection, &def, &id, &version_id, lc)
-        .map_err(|e| RuntimeError(format!("{e}")))?;
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .override_access(true)
+        .build();
+
+    let doc = restore_collection_version_core(
+        conn,
+        &write_hooks,
+        &collection,
+        &def,
+        &id,
+        &version_id,
+        lc,
+        user.as_ref(),
+    )
+    .map_err(|e| RuntimeError(format!("{e}")))?;
 
     Ok(Value::Table(document_to_lua_table(lua, &doc)?))
 }

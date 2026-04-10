@@ -223,7 +223,7 @@ fn handle_mfa_challenge(
     // Create a short-lived MFA pending token (5 min)
     let claims = match ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
         .email(user_email.clone())
-        .exp((Utc::now().timestamp() as u64) + MFA_PENDING_EXPIRY)
+        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(MFA_PENDING_EXPIRY))
         .session_version(session_version)
         .build()
     {

@@ -302,7 +302,10 @@ fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &
     let reg = registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-    let def = &reg.collections[collection];
+    let def = reg
+        .collections
+        .get(collection)
+        .with_context(|| format!("Collection '{}' not found", collection))?;
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
@@ -341,7 +344,10 @@ fn run_empty(
         let reg = registry
             .read()
             .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-        reg.collections[collection].clone()
+        reg.collections
+            .get(collection)
+            .with_context(|| format!("Collection '{}' not found", collection))?
+            .clone()
     };
 
     let mut conn = pool.get().context("Failed to get DB connection")?;

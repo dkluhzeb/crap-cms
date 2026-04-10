@@ -10,7 +10,6 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::event::EventOperation,
-    db::AccessResult,
     service::restore_collection_version,
 };
 
@@ -40,51 +39,31 @@ impl ContentService {
         let collection = req.collection.clone();
         let document_id = req.document_id.clone();
         let version_id = req.version_id.clone();
-        let access_update = def.access.update.clone();
         let def_owned = def.clone();
         let locale_config = self.locale_config.clone();
 
         let (doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| {
+            let conn = pool.get().map_err(|e| {
                 error!("RestoreVersion pool error: {}", e);
                 Status::internal("Internal error")
             })?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            let access_result = ContentService::check_access_blocking(
-                access_update.as_deref(),
-                &auth_user,
-                Some(&document_id),
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Update access denied"));
-            }
-
-            let tx = conn.transaction_immediate().map_err(|e| {
-                error!("RestoreVersion tx error: {}", e);
-                Status::internal("Internal error")
-            })?;
+            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
             let doc = restore_collection_version(
-                &tx,
+                &pool,
+                &runner,
                 &collection,
                 &def_owned,
                 &document_id,
                 &version_id,
                 &locale_config,
+                user_doc.as_ref(),
+                false,
             )
             .map_err(Status::from)?;
-
-            tx.commit().map_err(|e| {
-                error!("RestoreVersion commit error: {}", e);
-                Status::internal("Internal error")
-            })?;
 
             let proto_doc = document_to_proto(&doc, &collection);
 

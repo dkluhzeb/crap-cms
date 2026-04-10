@@ -10,6 +10,7 @@ use crate::{
     config::CrapConfig,
     core::Registry,
     db::DbPool,
+    hooks::HookRunner,
     service::{list_versions, restore_collection_version},
 };
 
@@ -21,6 +22,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
     slug: &str,
     registry: &Arc<Registry>,
     pool: &DbPool,
+    runner: &HookRunner,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -35,7 +37,9 @@ pub(in crate::mcp::tools) fn exec_list_versions(
     let limit = args.get("limit").and_then(|v| v.as_i64());
     let offset = args.get("offset").and_then(|v| v.as_i64());
 
-    let (versions, total) = list_versions(&conn, slug, id, limit, offset)?;
+    // MCP operates with full access — pass None for access_ref and user
+    let hooks = crate::service::RunnerReadHooks::new(runner, &conn);
+    let (versions, total) = list_versions(&conn, &hooks, slug, id, None, None, limit, offset)?;
 
     let version_values: Vec<Value> = versions
         .iter()
@@ -56,6 +60,7 @@ pub(in crate::mcp::tools) fn exec_restore_version(
     slug: &str,
     registry: &Arc<Registry>,
     pool: &DbPool,
+    runner: &HookRunner,
     config: &CrapConfig,
 ) -> Result<String> {
     let id = args
@@ -71,12 +76,17 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .get(slug)
         .context("Collection not found")?;
 
-    let mut conn = pool.get().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
-
-    let doc = restore_collection_version(&tx, slug, def, id, version_id, &config.locale)?;
-
-    tx.commit().context("Commit transaction")?;
+    let doc = restore_collection_version(
+        pool,
+        runner,
+        slug,
+        def,
+        id,
+        version_id,
+        &config.locale,
+        None,
+        true,
+    )?;
 
     info!("MCP restore_version {}: {} -> {}", slug, id, version_id);
 

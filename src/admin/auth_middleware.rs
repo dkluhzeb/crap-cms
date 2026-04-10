@@ -95,7 +95,7 @@ fn try_strategy_auth(
 
                     let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
                         .email(user_email)
-                        .exp((Utc::now().timestamp() as u64) + expiry)
+                        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
                         .build()
                     {
                         Ok(c) => c,

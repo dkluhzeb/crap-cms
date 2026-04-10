@@ -52,6 +52,7 @@ pub(in crate::mcp::tools) fn exec_create(
             .password(password.as_deref())
             .build(),
         None,
+        true,
     )?;
 
     info!("MCP create {}: {}", slug, doc.id);

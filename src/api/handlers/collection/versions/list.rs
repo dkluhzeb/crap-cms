@@ -6,8 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    db::AccessResult,
-    service::list_versions,
+    service::{RunnerReadHooks, list_versions},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -39,7 +38,7 @@ impl ContentService {
         let access_read = def.access.read.clone();
 
         let versions = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| {
+            let conn = pool.get().map_err(|e| {
                 error!("ListVersions pool error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -47,21 +46,21 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let hooks = RunnerReadHooks::new(&runner, &conn);
+
+            let (versions, _total) = list_versions(
+                &conn,
+                &hooks,
+                &collection,
+                &id,
                 access_read.as_deref(),
-                &auth_user,
-                Some(&id),
+                user_doc,
+                limit,
                 None,
-                &runner,
-                &mut conn,
-            )?;
+            )
+            .map_err(Status::from)?;
 
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
-
-            let (versions, _total) =
-                list_versions(&conn, &collection, &id, limit, None).map_err(Status::from)?;
             Ok(versions)
         })
         .await

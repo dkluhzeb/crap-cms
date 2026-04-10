@@ -46,7 +46,12 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         );
     }
 
-    unsafe { libc::kill(i32::try_from(pid).unwrap(), libc::SIGTERM) };
+    unsafe {
+        libc::kill(
+            i32::try_from(pid).context("PID out of range")?,
+            libc::SIGTERM,
+        )
+    };
 
     let deadline = Instant::now() + Duration::from_secs(10);
 
@@ -66,7 +71,12 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         "Worker {pid} did not stop within 10s, sending SIGKILL"
     ));
 
-    unsafe { libc::kill(i32::try_from(pid).unwrap(), libc::SIGKILL) };
+    unsafe {
+        libc::kill(
+            i32::try_from(pid).context("PID out of range")?,
+            libc::SIGKILL,
+        )
+    };
 
     sleep(Duration::from_millis(500));
 

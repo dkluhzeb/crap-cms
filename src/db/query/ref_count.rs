@@ -5,8 +5,9 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Result};
-use tracing::{debug, trace, warn};
+use anyhow::{Context as _, Result, bail};
+use serde_json::Value;
+use tracing::{debug, error, trace};
 
 use crate::{
     config::LocaleConfig,
@@ -62,8 +63,38 @@ fn push_ref(
 /// Returns `None` if the document does not exist, `Some(count)` otherwise
 /// (defaulting to 0 when the column is NULL).
 pub fn get_ref_count(conn: &dyn DbConnection, collection: &str, id: &str) -> Result<Option<i64>> {
+    get_ref_count_inner(conn, collection, id, false)
+}
+
+/// Read `_ref_count` with a row-level lock (`SELECT ... FOR UPDATE` on Postgres).
+///
+/// Used by the delete path to prevent a concurrent create from incrementing the
+/// ref count between the check and the actual DELETE. On SQLite, `IMMEDIATE`
+/// transactions already serialize writes, so no lock suffix is needed.
+pub fn get_ref_count_locked(
+    conn: &dyn DbConnection,
+    collection: &str,
+    id: &str,
+) -> Result<Option<i64>> {
+    get_ref_count_inner(conn, collection, id, true)
+}
+
+fn get_ref_count_inner(
+    conn: &dyn DbConnection,
+    collection: &str,
+    id: &str,
+    lock: bool,
+) -> Result<Option<i64>> {
     let p1 = conn.placeholder(1);
-    let sql = format!("SELECT _ref_count FROM \"{}\" WHERE id = {p1}", collection);
+    let for_update = if lock && conn.kind() == "postgres" {
+        " FOR UPDATE"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT _ref_count FROM \"{}\" WHERE id = {p1}{for_update}",
+        collection
+    );
     let row = conn.query_one(&sql, &[DbValue::Text(id.to_string())])?;
 
     Ok(row.map(|r| {
@@ -74,6 +105,236 @@ pub fn get_ref_count(conn: &dyn DbConnection, collection: &str, id: &str) -> Res
             })
             .unwrap_or(0)
     }))
+}
+
+/// Extract outgoing ref targets from input data (before INSERT) and lock them
+/// with `SELECT ... FOR UPDATE` on Postgres. No-op on SQLite.
+///
+/// Must be called **before** any writes so that concurrent deletes of referenced
+/// documents are serialized. If a target no longer exists, returns an error —
+/// the caller's transaction should roll back.
+pub fn lock_ref_targets_from_data(
+    conn: &dyn DbConnection,
+    fields: &[FieldDefinition],
+    data: &HashMap<String, String>,
+    join_data: &HashMap<String, Value>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    if conn.kind() != "postgres" {
+        return Ok(());
+    }
+
+    let refs = extract_refs_from_data(fields, data, join_data, locale_config, "");
+
+    for r in &refs {
+        let p1 = conn.placeholder(1);
+        let sql = format!(
+            "SELECT id FROM \"{}\" WHERE id = {p1} FOR UPDATE",
+            r.target_collection
+        );
+        let row = conn.query_one(&sql, &[DbValue::Text(r.target_id.clone())])?;
+
+        if row.is_none() {
+            bail!(
+                "Referenced document {}/{} does not exist",
+                r.target_collection,
+                r.target_id
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract outgoing refs by walking field definitions against input data.
+fn extract_refs_from_data(
+    fields: &[FieldDefinition],
+    data: &HashMap<String, String>,
+    join_data: &HashMap<String, Value>,
+    locale_config: &LocaleConfig,
+    prefix: &str,
+) -> Vec<OutgoingRef> {
+    let mut refs = Vec::new();
+
+    for field in fields {
+        match field.field_type {
+            FieldType::Group => {
+                let p = prefixed_name(prefix, &field.name);
+                refs.extend(extract_refs_from_data(
+                    &field.fields,
+                    data,
+                    join_data,
+                    locale_config,
+                    &p,
+                ));
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                refs.extend(extract_refs_from_data(
+                    &field.fields,
+                    data,
+                    join_data,
+                    locale_config,
+                    prefix,
+                ));
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    refs.extend(extract_refs_from_data(
+                        &tab.fields,
+                        data,
+                        join_data,
+                        locale_config,
+                        prefix,
+                    ));
+                }
+            }
+
+            FieldType::Relationship | FieldType::Upload => {
+                let Some(rc) = &field.relationship else {
+                    continue;
+                };
+                let col = prefixed_name(prefix, &field.name);
+
+                if field.has_parent_column() {
+                    // has-one: value is in `data` (the flat string map)
+                    let columns: Vec<String> = if field.localized && locale_config.is_enabled() {
+                        locale_config
+                            .locales
+                            .iter()
+                            .filter_map(|l| locale_column(&col, l).ok())
+                            .collect()
+                    } else {
+                        vec![col.clone()]
+                    };
+
+                    for c in &columns {
+                        if let Some(val) = data.get(c) {
+                            push_ref(&mut refs, val, rc.is_polymorphic(), &rc.collection);
+                        }
+                    }
+                } else {
+                    // has-many: value is in `join_data` as JSON array
+                    if let Some(val) = join_data.get(&col) {
+                        extract_has_many_refs(val, &rc.collection, rc.is_polymorphic(), &mut refs);
+                    }
+                }
+            }
+
+            FieldType::Array => {
+                let key = prefixed_name(prefix, &field.name);
+                if let Some(Value::Array(rows)) = join_data.get(&key) {
+                    extract_array_refs(rows, &field.fields, &mut refs);
+                }
+            }
+
+            FieldType::Blocks => {
+                let key = prefixed_name(prefix, &field.name);
+                if let Some(Value::Array(rows)) = join_data.get(&key) {
+                    extract_blocks_refs(rows, &field.blocks, &mut refs);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    refs
+}
+
+/// Extract has-many ref targets from a JSON value (array of IDs or "collection/id" strings).
+fn extract_has_many_refs(
+    val: &Value,
+    default_collection: &str,
+    is_polymorphic: bool,
+    refs: &mut Vec<OutgoingRef>,
+) {
+    let ids = match val {
+        Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>(),
+        Value::String(s) => s
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        _ => return,
+    };
+
+    for id in ids {
+        push_ref(refs, id, is_polymorphic, default_collection);
+    }
+}
+
+/// Extract refs from array sub-field rows.
+fn extract_array_refs(rows: &[Value], fields: &[FieldDefinition], refs: &mut Vec<OutgoingRef>) {
+    let flat = flatten_array_sub_fields(fields);
+
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+
+        for sub in &flat {
+            if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
+                continue;
+            }
+
+            let Some(rc) = &sub.relationship else {
+                continue;
+            };
+
+            if rc.has_many {
+                continue;
+            }
+
+            if let Some(val) = obj.get(&sub.name).and_then(|v| v.as_str()) {
+                push_ref(refs, val, rc.is_polymorphic(), &rc.collection);
+            }
+        }
+    }
+}
+
+/// Extract refs from blocks rows.
+fn extract_blocks_refs(rows: &[Value], blocks: &[BlockDefinition], refs: &mut Vec<OutgoingRef>) {
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+
+        let block_type = obj
+            .get("_block_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let Some(block_def) = blocks.iter().find(|b| b.block_type == block_type) else {
+            continue;
+        };
+
+        // Blocks store everything as JSON in a `data` sub-object
+        let data_obj = obj.get("data").and_then(|v| v.as_object());
+
+        let flat = flatten_array_sub_fields(&block_def.fields);
+
+        for sub in &flat {
+            if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
+                continue;
+            }
+
+            let Some(rc) = &sub.relationship else {
+                continue;
+            };
+
+            if rc.has_many {
+                continue;
+            }
+
+            let val = data_obj
+                .and_then(|d| d.get(&sub.name))
+                .and_then(|v| v.as_str());
+
+            if let Some(v) = val {
+                push_ref(refs, v, rc.is_polymorphic(), &rc.collection);
+            }
+        }
+    }
 }
 
 /// Adjust ref counts after creating a new document.
@@ -446,7 +707,7 @@ fn collect_blocks_refs(
         ) {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("Ref count scan skipping {}: {}", blocks_table, e);
+                debug!("Ref count scan skipping {}: {}", blocks_table, e);
                 continue;
             }
         };
@@ -491,8 +752,37 @@ fn to_delta_map(
 }
 
 /// Apply ref count deltas to target collection tables.
+///
+/// On Postgres, acquires a `FOR UPDATE` row lock on the target before updating.
+/// This prevents a concurrent delete from reading `_ref_count = 0` while an
+/// increment is in flight. On SQLite, `IMMEDIATE` transactions already serialize
+/// all writes, so no extra lock is needed.
 fn apply_deltas(conn: &dyn DbConnection, deltas: &HashMap<(String, String), i64>) -> Result<()> {
+    let use_row_lock = conn.kind() == "postgres";
+
     for ((collection, id), delta) in deltas {
+        // On Postgres, lock the target row before updating to prevent concurrent
+        // deletes from seeing a stale _ref_count while this increment is in flight.
+        // If the target no longer exists, bail — the calling transaction will roll
+        // back, preventing a dangling reference.
+        if use_row_lock && *delta > 0 {
+            let p1 = conn.placeholder(1);
+            let lock_sql = format!(
+                "SELECT id FROM \"{}\" WHERE id = {p1} FOR UPDATE",
+                collection
+            );
+            let row = conn.query_one(&lock_sql, &[DbValue::Text(id.clone())])?;
+
+            if row.is_none() {
+                bail!(
+                    "Referenced document {}/{} no longer exists — \
+                     it may have been deleted concurrently",
+                    collection,
+                    id
+                );
+            }
+        }
+
         let p1 = conn.placeholder(1);
         let clamped = conn.greatest_expr("0", &format!("_ref_count + ({})", delta));
         let sql = format!(
@@ -510,8 +800,10 @@ fn apply_deltas(conn: &dyn DbConnection, deltas: &HashMap<(String, String), i64>
             })?;
 
         if affected == 0 && *delta > 0 {
-            warn!(
-                "Ref count target {}/{} not found — increment by {} lost (possibly deleted)",
+            error!(
+                "Ref count target {}/{} not found — increment by {} lost \
+                 (document may have been deleted concurrently). Referencing \
+                 document may hold a dangling reference.",
                 collection, id, delta
             );
         }

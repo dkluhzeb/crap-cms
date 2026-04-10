@@ -23,11 +23,15 @@ pub fn unpublish_global_document(
     slug: &str,
     def: &GlobalDefinition,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    if override_access {
+        wh = wh.with_override_access();
+    }
 
     // Access check — unpublish requires update access
     let access = wh.check_access(def.access.update.as_deref(), user, None, None)?;

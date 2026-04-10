@@ -94,6 +94,7 @@ impl ContentService {
                 &def_owned,
                 input,
                 user_doc.as_ref(),
+                false,
             )
             .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 

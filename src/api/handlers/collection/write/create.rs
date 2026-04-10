@@ -88,6 +88,7 @@ impl ContentService {
                     .ui_locale(ui_locale)
                     .build(),
                 user_doc.as_ref(),
+                false,
             )
             .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 

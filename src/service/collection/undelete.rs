@@ -58,10 +58,15 @@ pub fn undelete_document(
     id: &str,
     def: &CollectionDefinition,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+
+    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    if override_access {
+        wh = wh.with_override_access();
+    }
 
     let doc = undelete_document_core(&tx, &wh, slug, id, def, user)?;
 

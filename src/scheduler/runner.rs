@@ -361,8 +361,10 @@ fn purge_collection(
             _ => continue,
         };
 
-        // Skip documents that are still referenced — protect referential integrity
-        let ref_count = query::ref_count::get_ref_count(conn, slug, &id)?.unwrap_or(0);
+        // Skip documents that are still referenced — protect referential integrity.
+        // Uses locked variant to prevent concurrent creates from incrementing ref count
+        // between this check and the DELETE (Postgres only; SQLite serializes via IMMEDIATE).
+        let ref_count = query::ref_count::get_ref_count_locked(conn, slug, &id)?.unwrap_or(0);
         if ref_count > 0 {
             debug!(
                 "Skipping purge of {}/{}: referenced by {} document(s)",

@@ -66,9 +66,12 @@ pub fn delete_document_core(
         None
     };
 
-    // Ref count protection (hard delete only)
+    // Ref count protection (hard delete only).
+    // Uses get_ref_count_locked to acquire a FOR UPDATE row lock on Postgres,
+    // preventing a concurrent create from incrementing the ref count between
+    // this check and the actual DELETE.
     if !def.soft_delete {
-        let ref_count = query::ref_count::get_ref_count(conn, slug, id)?.unwrap_or(0);
+        let ref_count = query::ref_count::get_ref_count_locked(conn, slug, id)?.unwrap_or(0);
         if ref_count > 0 {
             return Err(ServiceError::Referenced {
                 id: id.to_string(),

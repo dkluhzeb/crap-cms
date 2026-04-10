@@ -25,7 +25,7 @@ pub(in crate::mcp::tools) fn exec_undelete(
         .get(slug)
         .context("Collection not found")?;
 
-    undelete_document(pool, runner, slug, id, def, None)?;
+    undelete_document(pool, runner, slug, id, def, None, true)?;
 
     info!("MCP undelete {}: {}", slug, id);
 

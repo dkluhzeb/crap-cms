@@ -1362,6 +1362,7 @@ fn service_update_draft_uses_locale_context() {
             .locale(Some("en".to_string()))
             .build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -1387,6 +1388,7 @@ fn service_update_draft_uses_locale_context() {
             .draft(true)
             .build(),
         None,
+        false,
     )
     .unwrap();
 

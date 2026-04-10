@@ -112,6 +112,12 @@ impl ContentService {
                 }
             }
 
+            // Equalize timing when all auth methods fail — prevents distinguishing
+            // "no valid user" (fast) from "wrong password" (Argon2-slow) via response time.
+            if !disable_local {
+                password_provider.dummy_verify();
+            }
+
             Ok::<_, AnyhowError>(None)
         })
         .await
@@ -142,7 +148,7 @@ impl ContentService {
 
         let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)
-            .exp((Utc::now().timestamp() as u64) + expiry)
+            .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
             .session_version(session_version)
             .build()
             .map_err(|e| {

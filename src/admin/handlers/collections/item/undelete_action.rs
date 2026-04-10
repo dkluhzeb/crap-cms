@@ -48,6 +48,7 @@ pub async fn undelete_action(
             &id_owned,
             &def_owned,
             user_doc.as_ref(),
+            false,
         )
     })
     .await;

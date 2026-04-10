@@ -302,7 +302,11 @@ impl ContentService {
         let stream = BroadcastStream::new(rx).filter_map(move |result| match result {
             Ok(event) => process_event(&event, &subscriber).map(Ok),
             Err(BroadcastStreamRecvError::Lagged(n)) => {
-                warn!("Subscribe stream lagged by {} events", n);
+                error!(
+                    "Subscribe stream lagged by {} events — client missed updates, \
+                     consider increasing [live] channel_capacity",
+                    n
+                );
 
                 None
             }

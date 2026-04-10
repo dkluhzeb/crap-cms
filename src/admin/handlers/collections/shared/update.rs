@@ -119,6 +119,7 @@ async fn spawn_update(
                 &id_owned,
                 &def_owned,
                 user_doc.as_ref(),
+                false,
             )?;
 
             Ok((doc, HashMap::new()))
@@ -137,6 +138,7 @@ async fn spawn_update(
                     .ui_locale(ui_locale)
                     .build(),
                 user_doc.as_ref(),
+                false,
             )
         };
 

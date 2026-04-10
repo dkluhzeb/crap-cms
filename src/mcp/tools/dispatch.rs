@@ -379,9 +379,9 @@ pub fn execute_tool(
             ToolOp::Delete => exec_delete(args, &parsed.slug, registry, pool, runner),
             ToolOp::Undelete => exec_undelete(args, &parsed.slug, registry, pool, runner),
             ToolOp::Unpublish => exec_unpublish(args, &parsed.slug, registry, pool, runner),
-            ToolOp::ListVersions => exec_list_versions(args, &parsed.slug, registry, pool),
+            ToolOp::ListVersions => exec_list_versions(args, &parsed.slug, registry, pool, runner),
             ToolOp::RestoreVersion => {
-                exec_restore_version(args, &parsed.slug, registry, pool, config)
+                exec_restore_version(args, &parsed.slug, registry, pool, runner, config)
             }
             ToolOp::ReadGlobal => exec_read_global(&parsed.slug, registry, pool, runner),
             ToolOp::UpdateGlobal => exec_update_global(args, &parsed.slug, registry, pool, runner),

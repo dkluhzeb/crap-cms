@@ -360,6 +360,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Access control bypass in bulk delete and empty trash** — The gRPC
+  `DeleteMany` handler and the admin "empty trash" handler created
+  `RunnerWriteHooks` without `.with_conn(&tx)`, causing all access
+  checks inside `delete_document_core` to short-circuit to `Allowed`.
+  Any authenticated user could bulk-delete or permanently purge trashed
+  documents regardless of configured permissions. Now both paths pass
+  the transaction connection to WriteHooks.
+
+- **Version restore missing access control in service layer** — The
+  `restore_collection_version` and `restore_global_version` service
+  functions did not check update access. The gRPC handler had its own
+  check, but admin and MCP handlers did not, allowing any authenticated
+  admin user to restore any version. Access check now lives in the
+  service layer, enforced for all callers.
+
+- **Ref count race on Postgres** — Under Postgres's `READ COMMITTED`
+  isolation, a concurrent create and delete could race: the delete reads
+  `_ref_count = 0` while the create's increment is still in flight,
+  allowing deletion of a document that is about to be referenced. Fixed
+  by acquiring `SELECT ... FOR UPDATE` row locks on referenced targets
+  **before** any writes (INSERT/UPDATE), and on the document's own row
+  before checking `_ref_count` in the delete path. This serializes
+  concurrent create+delete on the same target row. On SQLite this is a
+  no-op — `BEGIN IMMEDIATE` already serializes all write transactions.
+
+- **Potential panics in CLI commands** — Several CLI code paths used
+  infallible indexing or `.expect()` that could panic on edge cases:
+  `trash.rs` used `HashMap[key]` instead of `.get()` (panics if
+  collection removed between validation and access); `work.rs` used
+  `.unwrap()` on PID conversion (panics if PID > i32::MAX);
+  `user/helpers.rs` used `.expect()` on user selection index. All
+  replaced with proper error propagation.
+
+- **Rate limiter mutex poisoning could crash server** — The in-memory
+  rate limiter used `.expect()` on `Mutex::lock()`, which panics if the
+  mutex is poisoned. Now recovers from poison via `unwrap_or_else`.
+
+- **Broadcast stream lag silently ignored** — SSE and gRPC Subscribe
+  streams logged subscriber lag at `warn` level (or not at all for SSE)
+  with no actionable guidance. Upgraded to `error` with a message
+  recommending `[live] channel_capacity` increase.
+
+- **Timestamp expiry overflow** — JWT token expiry was computed as
+  `timestamp as u64 + expiry` without overflow protection. Now uses
+  `.max(0) as u64` and `saturating_add()` in all 4 production code
+  paths (gRPC login, admin login, MFA pending token, session refresh).
+
 - **Invalid locale silently accepted** — `LocaleContext::from_locale_string`
   returned `None` for both "localization disabled" and "invalid locale
   code", making it impossible for callers to distinguish the two cases.

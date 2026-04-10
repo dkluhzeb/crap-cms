@@ -13,7 +13,7 @@ use crate::{
         },
     },
     core::event::{EventOperation, EventTarget},
-    db::{AccessResult, LocaleContext},
+    db::LocaleContext,
     hooks::lifecycle::PublishEventInput,
     service::{self, WriteInput},
 };
@@ -53,7 +53,7 @@ impl ContentService {
         let def_owned = def;
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| {
+            let conn = pool.get().map_err(|e| {
                 error!("UpdateGlobal pool error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -61,21 +61,8 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.update.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &runner,
-                &mut conn,
-            )?;
-
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Update access denied"));
-            }
-
-            // Field write access is now checked inside service::update_global_core
-            // via WriteHooks::field_write_denied (using the transaction connection).
+            // Access control (collection + field level) is checked inside
+            // service::update_global_document via WriteHooks.
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
@@ -91,6 +78,7 @@ impl ContentService {
                     .ui_locale(ui_locale)
                     .build(),
                 user_doc.as_ref(),
+                false,
             )
             .map_err(|e| {
                 error!("UpdateGlobal error: {}", e);

@@ -912,4 +912,138 @@ async fn delete_many_with_where() {
     assert_eq!(count_resp.count, 2, "2 published posts should remain");
 }
 
+// ── Group 10b: Invalid Locale Validation (gRPC) ─────────────────────
+
+#[tokio::test]
+async fn find_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            locale: Some("zz".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn count_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            locale: Some("zz".to_string()),
+            r#where: None,
+            draft: None,
+            search: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn create_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            locale: Some("zz".to_string()),
+            draft: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn update_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    // Create a valid document first
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            locale: Some("en".to_string()),
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let err = ts
+        .service
+        .update(Request::new(content::UpdateRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("title", "Updated")])),
+            locale: Some("zz".to_string()),
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn find_by_id_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: "nonexistent".to_string(),
+            locale: Some("zz".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
 // ── Group 11: Versions (gRPC) ────────────────────────────────────────────

@@ -25,7 +25,7 @@ pub(in crate::mcp::tools) fn exec_delete(
         .get(slug)
         .context("Collection not found")?;
 
-    delete_document(pool, runner, slug, id, def, None, None, None)?;
+    delete_document(pool, runner, slug, id, def, None, None, None, true)?;
 
     info!("MCP delete {}: {}", slug, id);
 

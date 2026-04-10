@@ -31,6 +31,7 @@ pub fn delete_document(
     user: Option<&Document>,
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
+    override_access: bool,
 ) -> Result<HashMap<String, Value>> {
     let mut conn = pool.get().context("DB connection")?;
     delete_document_with_conn(
@@ -42,6 +43,7 @@ pub fn delete_document(
         user,
         storage,
         locale_config,
+        override_access,
     )
 }
 
@@ -56,9 +58,15 @@ pub fn delete_document_with_conn(
     user: Option<&Document>,
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
+    override_access: bool,
 ) -> Result<HashMap<String, Value>> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks::new(runner);
+
+    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    if override_access {
+        wh = wh.with_override_access();
+    }
+
     let result = delete_document_core(&tx, &wh, slug, id, def, user, locale_config)?;
     tx.commit().context("Commit transaction")?;
 

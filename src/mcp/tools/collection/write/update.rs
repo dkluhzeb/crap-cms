@@ -58,6 +58,7 @@ pub(in crate::mcp::tools) fn exec_update(
             .password(password.as_deref())
             .build(),
         None,
+        true,
     )?;
 
     info!("MCP update {}: {}", slug, id);

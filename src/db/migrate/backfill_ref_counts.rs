@@ -783,4 +783,81 @@ mod tests {
 
         assert_eq!(get_ref_count(&conn, "media", "m1"), 2);
     }
+
+    // ── New collection after initial backfill ───────────────────────────
+
+    #[test]
+    fn backfill_new_collection_after_initial() {
+        let media = CollectionDefinition::new("media");
+
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+
+        let mut pages = CollectionDefinition::new("pages");
+        pages.fields = vec![
+            FieldDefinition::builder("hero", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
+
+        // Initial setup creates all tables and runs backfill (sets legacy + per-collection flags).
+        let (_tmp, pool, registry) = setup_db(&[media, posts, pages], &[], &no_locale());
+        let conn = pool.get().unwrap();
+
+        // Insert media documents (bypassing ref counting).
+        conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO media (id) VALUES ('m2')", &[])
+            .unwrap();
+
+        // Posts referencing media (bypassing ref counting).
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p1', 'm1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p2', 'm1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id, image) VALUES ('p3', 'm2')", &[])
+            .unwrap();
+
+        // Pages referencing media (bypassing ref counting).
+        conn.execute("INSERT INTO pages (id, hero) VALUES ('pg1', 'm1')", &[])
+            .unwrap();
+        conn.execute("INSERT INTO pages (id, hero) VALUES ('pg2', 'm2')", &[])
+            .unwrap();
+
+        // Simulate "pages was just added": clear the legacy flag and the pages
+        // per-collection flag, but leave the posts per-collection flag intact.
+        conn.execute(
+            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled'",
+            &[],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM _crap_meta WHERE key = 'ref_count_backfilled:pages'",
+            &[],
+        )
+        .unwrap();
+
+        // Run backfill again — should detect pages as new, do a full re-walk of
+        // ALL collections (resetting counts to 0 first), and recompute everything.
+        backfill_if_needed(&conn, &registry, &no_locale()).unwrap();
+
+        // m1 is referenced by p1, p2 (posts) + pg1 (pages) = 3
+        assert_eq!(get_ref_count(&conn, "media", "m1"), 3);
+        // m2 is referenced by p3 (posts) + pg2 (pages) = 2
+        assert_eq!(get_ref_count(&conn, "media", "m2"), 2);
+
+        // Per-collection flags should be set for both.
+        assert!(
+            is_backfilled(&conn, "posts").unwrap(),
+            "posts per-collection flag should be set"
+        );
+        assert!(
+            is_backfilled(&conn, "pages").unwrap(),
+            "pages per-collection flag should be set"
+        );
+    }
 }

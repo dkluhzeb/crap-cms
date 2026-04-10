@@ -1,22 +1,32 @@
 //! Version list operation with pagination.
 
 use crate::{
-    core::document::VersionSnapshot,
-    db::{DbConnection, query},
-    service::ServiceError,
+    core::{Document, document::VersionSnapshot},
+    db::{AccessResult, DbConnection, query},
+    service::{ServiceError, hooks::ReadHooks},
 };
 
-/// List version snapshots for a document/global with pagination.
+/// List version snapshots for a document/global with pagination and access control.
 ///
-/// Returns `(versions, total_count)`. The `table` parameter is the collection slug
-/// for collections or the global table name for globals.
+/// Checks read access before listing. Returns `(versions, total_count)`.
+/// The `table` parameter is the collection slug for collections or
+/// the global table name for globals.
+#[allow(clippy::too_many_arguments)]
 pub fn list_versions(
     conn: &dyn DbConnection,
+    hooks: &dyn ReadHooks,
     table: &str,
     parent_id: &str,
+    access_ref: Option<&str>,
+    user: Option<&Document>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<(Vec<VersionSnapshot>, i64), ServiceError> {
+    let access = hooks.check_access(access_ref, user, Some(parent_id), None)?;
+    if matches!(access, AccessResult::Denied) {
+        return Err(ServiceError::AccessDenied("Read access denied".into()));
+    }
+
     let total = query::count_versions(conn, table, parent_id)?;
     let versions = query::list_versions(conn, table, parent_id, limit, offset)?;
 
@@ -25,19 +35,122 @@ pub fn list_versions(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
+    use anyhow::Result;
     use rusqlite::Connection;
+    use serde_json::{Value, json};
 
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, FieldDefinition, collection::VersionsConfig, field::FieldType,
+            CollectionDefinition, Document, FieldDefinition,
+            collection::{Hooks, VersionsConfig},
+            field::FieldType,
         },
-        service::versions::restore_collection_version,
+        db::AccessResult,
+        hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
+        service::{
+            hooks::{ReadHooks, WriteHooks},
+            versions::restore_collection_version_core,
+        },
     };
 
-    use serde_json::json;
+    /// Noop implementation of ReadHooks for unit tests — always allows access.
+    struct NoopReadHooks;
+
+    impl ReadHooks for NoopReadHooks {
+        fn before_read(&self, _hooks: &Hooks, _slug: &str, _op: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn after_read_one(&self, _ctx: &AfterReadCtx, doc: Document) -> Document {
+            doc
+        }
+
+        fn check_access(
+            &self,
+            _access_ref: Option<&str>,
+            _user: Option<&Document>,
+            _id: Option<&str>,
+            _data: Option<&HashMap<String, Value>>,
+        ) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn field_read_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// Noop implementation of WriteHooks for unit tests — always allows access.
+    struct NoopWriteHooks;
+
+    impl WriteHooks for NoopWriteHooks {
+        fn run_before_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            ctx: HookContext,
+            _val_ctx: &ValidationCtx,
+        ) -> Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_after_write(
+            &self,
+            _hooks: &Hooks,
+            _fields: &[FieldDefinition],
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn run_hooks_with_conn(
+            &self,
+            _hooks: &Hooks,
+            _event: HookEvent,
+            ctx: HookContext,
+            _conn: &dyn DbConnection,
+        ) -> Result<HookContext> {
+            Ok(ctx)
+        }
+
+        fn field_read_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn check_access(
+            &self,
+            _access_ref: Option<&str>,
+            _user: Option<&Document>,
+            _id: Option<&str>,
+            _data: Option<&HashMap<String, Value>>,
+        ) -> Result<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+
+        fn field_write_denied(
+            &self,
+            _fields: &[FieldDefinition],
+            _user: Option<&Document>,
+            _operation: &str,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+    }
 
     fn setup_versioned_collection() -> (Connection, CollectionDefinition) {
         let conn = Connection::open_in_memory().unwrap();
@@ -75,7 +188,8 @@ mod tests {
     #[test]
     fn list_versions_empty() {
         let (conn, _def) = setup_versioned_collection();
-        let (versions, total) = list_versions(&conn, "posts", "p1", None, None).unwrap();
+        let (versions, total) =
+            list_versions(&conn, &NoopReadHooks, "posts", "p1", None, None, None, None).unwrap();
         assert_eq!(total, 0);
         assert!(versions.is_empty());
     }
@@ -90,7 +204,8 @@ mod tests {
         )
         .unwrap();
 
-        let (versions, total) = list_versions(&conn, "posts", "p1", None, None).unwrap();
+        let (versions, total) =
+            list_versions(&conn, &NoopReadHooks, "posts", "p1", None, None, None, None).unwrap();
         assert_eq!(total, 2);
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].version, 2, "should be newest first");
@@ -107,7 +222,17 @@ mod tests {
         )
         .unwrap();
 
-        let (versions, total) = list_versions(&conn, "posts", "p1", Some(2), Some(0)).unwrap();
+        let (versions, total) = list_versions(
+            &conn,
+            &NoopReadHooks,
+            "posts",
+            "p1",
+            None,
+            None,
+            Some(2),
+            Some(0),
+        )
+        .unwrap();
         assert_eq!(total, 3);
         assert_eq!(versions.len(), 2);
     }
@@ -116,7 +241,17 @@ mod tests {
     fn restore_collection_version_not_found() {
         let (conn, def) = setup_versioned_collection();
         let lc = LocaleConfig::default();
-        let result = restore_collection_version(&conn, "posts", &def, "p1", "nonexistent", &lc);
+        let wh = NoopWriteHooks;
+        let result = restore_collection_version_core(
+            &conn,
+            &wh,
+            "posts",
+            &def,
+            "p1",
+            "nonexistent",
+            &lc,
+            None,
+        );
         assert!(matches!(result, Err(ServiceError::NotFound(_))));
     }
 
@@ -132,7 +267,9 @@ mod tests {
         .unwrap();
 
         let lc = LocaleConfig::default();
-        let doc = restore_collection_version(&conn, "posts", &def, "p1", "v1", &lc).unwrap();
+        let wh = NoopWriteHooks;
+        let doc = restore_collection_version_core(&conn, &wh, "posts", &def, "p1", "v1", &lc, None)
+            .unwrap();
         assert_eq!(doc.get_str("title"), Some("Restored Title"));
     }
 }

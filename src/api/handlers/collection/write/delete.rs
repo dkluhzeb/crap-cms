@@ -62,6 +62,7 @@ impl ContentService {
                 user_doc.as_ref(),
                 Some(&*storage),
                 Some(&locale_config),
+                false,
             )
             .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 

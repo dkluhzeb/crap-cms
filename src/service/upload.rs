@@ -99,6 +99,7 @@ pub fn create_upload(
             .ui_locale(ui_locale)
             .build(),
         user,
+        false,
     )?;
 
     guard.commit();
@@ -191,6 +192,7 @@ pub fn update_upload(
             .ui_locale(ui_locale)
             .build(),
         user,
+        false,
     )?;
 
     if let Some(mut g) = upload_guard {

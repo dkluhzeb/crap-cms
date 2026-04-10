@@ -152,7 +152,7 @@ fn sqlite_column_type_for_field(ft: &FieldType) -> &'static str {
 
 fn sqlite_build_insert_ignore(table: &str, columns: &str, values: &str) -> String {
     format!(
-        "INSERT OR IGNORE INTO {} ({}) VALUES ({})",
+        "INSERT OR IGNORE INTO \"{}\" ({}) VALUES ({})",
         table, columns, values
     )
 }
@@ -165,7 +165,7 @@ fn sqlite_build_upsert(table: &str, columns: &[&str], values: &str, _key_col: &s
         .join(", ");
 
     format!(
-        "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
+        "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
         table, cols, values
     )
 }

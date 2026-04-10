@@ -27,10 +27,16 @@ pub fn update_global_document(
     def: &GlobalDefinition,
     input: WriteInput<'_>,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<WriteResult> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+
+    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    if override_access {
+        wh = wh.with_override_access();
+    }
+
     let result = update_global_core(&tx, &wh, slug, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)

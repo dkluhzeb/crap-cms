@@ -119,7 +119,11 @@ impl EventBus {
 
         match self.sender.send(event.clone()) {
             Ok(_) => Some(event),
-            Err(_) => None, // no active receivers
+            Err(_) => {
+                // No active receivers, or channel full. This is normal when
+                // no SSE/Subscribe clients are connected.
+                None
+            }
         }
     }
 

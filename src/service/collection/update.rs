@@ -17,6 +17,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 // Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
 // Tested indirectly through CLI integration tests and gRPC API tests.
 #[cfg(not(tarpaulin_include))]
+#[allow(clippy::too_many_arguments)]
 pub fn update_document(
     pool: &DbPool,
     runner: &HookRunner,
@@ -25,12 +26,23 @@ pub fn update_document(
     def: &CollectionDefinition,
     input: WriteInput<'_>,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<WriteResult> {
     let mut conn = pool.get().context("DB connection")?;
-    update_document_with_conn(&mut conn, runner, slug, id, def, input, user)
+    update_document_with_conn(
+        &mut conn,
+        runner,
+        slug,
+        id,
+        def,
+        input,
+        user,
+        override_access,
+    )
 }
 
 /// Like [`update_document`], but accepts an existing connection.
+#[allow(clippy::too_many_arguments)]
 pub fn update_document_with_conn(
     conn: &mut BoxedConnection,
     runner: &HookRunner,
@@ -39,9 +51,15 @@ pub fn update_document_with_conn(
     def: &CollectionDefinition,
     input: WriteInput<'_>,
     user: Option<&Document>,
+    override_access: bool,
 ) -> Result<WriteResult> {
     let tx = conn.transaction_immediate().context("Start transaction")?;
-    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+
+    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    if override_access {
+        wh = wh.with_override_access();
+    }
+
     let result = update_document_core(&tx, &wh, slug, id, def, input, user)?;
     tx.commit().context("Commit transaction")?;
     Ok(result)

@@ -24,6 +24,16 @@ pub fn persist_update(
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
+
+    // Lock new ref targets before UPDATE (Postgres only).
+    query::ref_count::lock_ref_targets_from_data(
+        conn,
+        &def.fields,
+        final_data,
+        hook_data,
+        &locale_cfg,
+    )?;
+
     let old_refs =
         query::ref_count::snapshot_outgoing_refs(conn, slug, id, &def.fields, &locale_cfg)?;
 
@@ -68,6 +78,15 @@ pub fn persist_bulk_update(
     locale_ctx: Option<&LocaleContext>,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
+    // Lock new ref targets before UPDATE (Postgres only).
+    query::ref_count::lock_ref_targets_from_data(
+        conn,
+        &def.fields,
+        final_data,
+        hook_data,
+        locale_config,
+    )?;
+
     let old_refs =
         query::ref_count::snapshot_outgoing_refs(conn, slug, id, &def.fields, locale_config)?;
 
@@ -77,10 +96,6 @@ pub fn persist_bulk_update(
 
     query::ref_count::after_update(conn, slug, id, &def.fields, locale_config, old_refs)?;
 
-    if conn.supports_fts() {
-        query::fts::fts_upsert(conn, slug, &updated, Some(def))?;
-    }
-
     if def.has_versions() {
         let vs_ctx = versions::VersionSnapshotCtx::builder(slug, &updated.id)
             .fields(&def.fields)
@@ -88,6 +103,10 @@ pub fn persist_bulk_update(
             .has_drafts(def.has_drafts())
             .build();
         versions::create_version_snapshot(conn, &vs_ctx, "published", &updated)?;
+    }
+
+    if conn.supports_fts() {
+        query::fts::fts_upsert(conn, slug, &updated, Some(def))?;
     }
 
     Ok(updated)

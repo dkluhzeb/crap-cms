@@ -935,6 +935,7 @@ fn service_create_published_creates_version() {
         &def,
         service::WriteInput::builder(data, &HashMap::new()).build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -966,6 +967,7 @@ fn service_create_draft_creates_draft_version() {
             .draft(true)
             .build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -998,6 +1000,7 @@ fn service_update_draft_is_version_only() {
         &def,
         service::WriteInput::builder(data, &HashMap::new()).build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -1013,6 +1016,7 @@ fn service_update_draft_is_version_only() {
             .draft(true)
             .build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -1057,6 +1061,7 @@ fn service_update_publish_updates_main_table() {
             .draft(true)
             .build(), // create as draft
         None,
+        false,
     )
     .unwrap();
 
@@ -1070,6 +1075,7 @@ fn service_update_publish_updates_main_table() {
         &def,
         service::WriteInput::builder(update_data, &HashMap::new()).build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -1095,6 +1101,7 @@ fn service_nonversioned_create_no_version_created() {
         &def,
         service::WriteInput::builder(data, &HashMap::new()).build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -1138,6 +1145,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
         &def,
         service::WriteInput::builder(data, &join_data).build(),
         None,
+        false,
     )
     .unwrap();
 
@@ -1162,6 +1170,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
             .draft(true)
             .build(),
         None,
+        false,
     )
     .unwrap();
 

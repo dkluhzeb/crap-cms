@@ -128,13 +128,12 @@ fn select_user_interactive(
         .interact()
         .context("Failed to read user selection")?;
 
-    Ok((
-        def.clone(),
-        users
-            .into_iter()
-            .nth(selection)
-            .expect("selection within bounds"),
-    ))
+    let user = users
+        .into_iter()
+        .nth(selection)
+        .context("Selected user index out of bounds")?;
+
+    Ok((def.clone(), user))
 }
 
 /// Convert a JSON default value to a string.

@@ -35,7 +35,7 @@ impl MemoryRateLimitBackend {
 
 impl RateLimitBackend for MemoryRateLimitBackend {
     fn count(&self, key: &str, window_secs: u64) -> Result<u32> {
-        let mut map = self.events.lock().expect("rate limiter mutex poisoned");
+        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
         let window = Duration::from_secs(window_secs);
         let now = Instant::now();
 
@@ -48,7 +48,7 @@ impl RateLimitBackend for MemoryRateLimitBackend {
     }
 
     fn record(&self, key: &str, window_secs: u64) -> Result<()> {
-        let mut map = self.events.lock().expect("rate limiter mutex poisoned");
+        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
         let window = Duration::from_secs(window_secs);
         let now = Instant::now();
 
@@ -68,7 +68,7 @@ impl RateLimitBackend for MemoryRateLimitBackend {
     }
 
     fn check_and_record(&self, key: &str, max_count: u32, window_secs: u64) -> Result<bool> {
-        let mut map = self.events.lock().expect("rate limiter mutex poisoned");
+        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
         let window = Duration::from_secs(window_secs);
         let now = Instant::now();
 
@@ -93,7 +93,7 @@ impl RateLimitBackend for MemoryRateLimitBackend {
     }
 
     fn clear(&self, key: &str) -> Result<()> {
-        let mut map = self.events.lock().expect("rate limiter mutex poisoned");
+        let mut map = self.events.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(key);
         Ok(())
     }

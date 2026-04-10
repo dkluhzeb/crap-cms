@@ -12,19 +12,16 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            Pagination, PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden,
-            not_found, redirect_response, render_or_error, server_error, version_to_json,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found,
+            redirect_response, render_or_error, server_error, version_to_json,
         },
     },
     core::{
         CollectionDefinition, Document,
         auth::{AuthUser, Claims},
     },
-    db::{
-        ops, query,
-        query::{AccessResult, LocaleContext},
-    },
-    service::list_versions,
+    db::{ops, query, query::LocaleContext},
+    service::{RunnerReadHooks, list_versions},
 };
 
 /// Fetch the document title and paginated version list.
@@ -34,6 +31,7 @@ fn fetch_version_data(
     def: &CollectionDefinition,
     id: &str,
     pg: &Pagination,
+    user: Option<&Document>,
 ) -> Result<(String, Vec<Value>, i64), Box<Response>> {
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
 
@@ -62,8 +60,18 @@ fn fetch_version_data(
         Err(_) => return Err(Box::new(server_error(state, "Database error"))),
     };
 
-    let (version_snapshots, total) =
-        list_versions(&conn, slug, id, Some(pg.per_page), Some(pg.offset)).unwrap_or_default();
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+    let (version_snapshots, total) = list_versions(
+        &conn,
+        &hooks,
+        slug,
+        id,
+        def.access.read.as_deref(),
+        user,
+        Some(pg.per_page),
+        Some(pg.offset),
+    )
+    .unwrap_or_default();
 
     let versions: Vec<Value> = version_snapshots.into_iter().map(version_to_json).collect();
 
@@ -90,27 +98,14 @@ pub async fn list_versions_page(
         return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
     }
 
-    // Check read access
-    match check_access_or_forbid(
-        &state,
-        def.access.read.as_deref(),
-        &auth_user,
-        Some(&id),
-        None,
-    ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to view this item");
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
     let pg = params.resolve(&state.config.pagination);
+    let user_doc = get_user_doc(&auth_user);
 
-    let (doc_title, versions, total) = match fetch_version_data(&state, &slug, &def, &id, &pg) {
-        Ok(data) => data,
-        Err(resp) => return *resp,
-    };
+    let (doc_title, versions, total) =
+        match fetch_version_data(&state, &slug, &def, &id, &pg, user_doc) {
+            Ok(data) => data,
+            Err(resp) => return *resp,
+        };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);

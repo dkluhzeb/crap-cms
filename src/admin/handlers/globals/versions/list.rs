@@ -11,8 +11,8 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            Pagination, PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden,
-            not_found, redirect_response, render_or_error, server_error, version_to_json,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found,
+            redirect_response, render_or_error, server_error, version_to_json,
         },
     },
     core::{
@@ -21,21 +21,28 @@ use crate::{
     },
     db::{
         BoxedConnection,
-        query::{self, AccessResult, helpers::global_table},
+        query::{self, helpers::global_table},
     },
-    service::list_versions,
+    service::{RunnerReadHooks, list_versions},
 };
 
 /// Fetch paginated version list for a global.
 fn fetch_version_data(
+    state: &AdminState,
     conn: &BoxedConnection,
     global_table: &str,
+    access_ref: Option<&str>,
+    user: Option<&Document>,
     pg: &Pagination,
 ) -> (Vec<Value>, i64) {
+    let hooks = RunnerReadHooks::new(&state.hook_runner, conn);
     let (snapshots, total) = list_versions(
         conn,
+        &hooks,
         global_table,
         "default",
+        access_ref,
+        user,
         Some(pg.per_page),
         Some(pg.offset),
     )
@@ -64,22 +71,22 @@ pub async fn list_versions_page(
         return redirect_response(&format!("/admin/globals/{}", slug));
     }
 
-    match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to view this global");
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
     let conn = match state.pool.get() {
         Ok(c) => c,
         Err(_) => return server_error(&state, "Database error"),
     };
 
+    let user_doc = get_user_doc(&auth_user);
     let global_table = global_table(&slug);
     let pg = params.resolve(&state.config.pagination);
-    let (versions, total) = fetch_version_data(&conn, &global_table, &pg);
+    let (versions, total) = fetch_version_data(
+        &state,
+        &conn,
+        &global_table,
+        def.access.read.as_deref(),
+        user_doc,
+        &pg,
+    );
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);

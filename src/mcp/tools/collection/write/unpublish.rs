@@ -28,7 +28,7 @@ pub(in crate::mcp::tools) fn exec_unpublish(
         .get(slug)
         .context("Collection not found")?;
 
-    let doc = unpublish_document(pool, runner, slug, id, def, None)?;
+    let doc = unpublish_document(pool, runner, slug, id, def, None, true)?;
 
     info!("MCP unpublish {}: {}", slug, id);
 

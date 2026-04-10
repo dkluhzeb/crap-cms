@@ -97,6 +97,7 @@ pub(super) async fn delete_upload(
             user_doc_owned.as_ref(),
             Some(&*storage),
             Some(&locale_config),
+            false,
         )
     })
     .await;

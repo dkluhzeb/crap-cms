@@ -65,6 +65,7 @@ fn execute_update(
             &params.slug,
             &params.def,
             params.user_doc.as_ref(),
+            false,
         )?;
 
         Ok((doc, HashMap::new()))
@@ -81,6 +82,7 @@ fn execute_update(
                 .ui_locale(params.ui_locale)
                 .build(),
             params.user_doc.as_ref(),
+            false,
         )
     }
 }

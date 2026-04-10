@@ -20,9 +20,12 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use serde_json::{Map, Value, json};
-use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
+use tokio_stream::{
+    Stream, StreamExt,
+    wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
+};
 use tokio_util::sync::WaitForCancellationFutureOwned;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
@@ -318,7 +321,10 @@ pub async fn sse_handler(
                 subscriber_user_doc.as_ref(),
             )
             .map(Ok::<_, Infallible>),
-            Err(_) => None,
+            Err(BroadcastStreamRecvError::Lagged(n)) => {
+                error!("SSE stream lagged by {} events — client missed updates", n);
+                None
+            }
         });
 
         Box::pin(filtered) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>

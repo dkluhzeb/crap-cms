@@ -6,7 +6,10 @@ use tracing::error;
 use crate::{
     core::{Document, FieldDefinition, Registry, document::VersionSnapshot},
     db::{BoxedConnection, DbPool},
-    service::{document_info::find_missing_relations, find_version_by_id, list_versions},
+    hooks::HookRunner,
+    service::{
+        RunnerReadHooks, document_info::find_missing_relations, find_version_by_id, list_versions,
+    },
 };
 
 /// Map a `VersionSnapshot` to the JSON object used in templates.
@@ -24,6 +27,7 @@ pub fn version_to_json(v: VersionSnapshot) -> Value {
 /// Returns `(versions_json, total_count)`.
 pub fn fetch_version_sidebar_data(
     pool: &DbPool,
+    runner: &HookRunner,
     table_name: &str,
     parent_id: &str,
 ) -> (Vec<Value>, i64) {
@@ -31,7 +35,18 @@ pub fn fetch_version_sidebar_data(
         return (vec![], 0);
     };
 
-    match list_versions(&conn, table_name, parent_id, Some(3), None) {
+    // Access already checked by the parent page — pass None to skip re-checking.
+    let hooks = RunnerReadHooks::new(runner, &conn);
+    match list_versions(
+        &conn,
+        &hooks,
+        table_name,
+        parent_id,
+        None,
+        None,
+        Some(3),
+        None,
+    ) {
         Ok((versions, total)) => {
             let vers = versions.into_iter().map(version_to_json).collect();
             (vers, total)

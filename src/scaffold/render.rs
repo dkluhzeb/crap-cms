@@ -76,7 +76,9 @@ fn registry() -> &'static Handlebars<'static> {
     })
 }
 
-/// Register a template, panicking on parse errors (caught at first use, not at compile time).
+/// Register a compiled-in template. Panics on parse errors — these templates are
+/// embedded via `include_str!` and a parse failure is a developer bug, not a
+/// runtime condition (analogous to `Regex::new("literal").unwrap()`).
 fn reg(hbs: &mut Handlebars, name: &str, content: &str) {
     hbs.register_template_string(name, content)
         .unwrap_or_else(|e| panic!("Failed to parse scaffold template '{name}': {e}"));

@@ -177,8 +177,8 @@ fn create_junction_table(
 
     let sql = if has_locale_col {
         format!(
-            "CREATE TABLE {} (\
-                parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
+            "CREATE TABLE \"{}\" (\
+                parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
                 related_id TEXT NOT NULL, \
                 {}\
                 _order INTEGER NOT NULL DEFAULT 0, \
@@ -193,8 +193,8 @@ fn create_junction_table(
         )
     } else {
         format!(
-            "CREATE TABLE {} (\
-                parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
+            "CREATE TABLE \"{}\" (\
+                parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
                 related_id TEXT NOT NULL, \
                 {}\
                 _order INTEGER NOT NULL DEFAULT 0, \
@@ -300,7 +300,7 @@ fn alter_array_table(
     for sub_field in flat_subs {
         if !existing.contains(&sub_field.name) {
             let sql = format!(
-                "ALTER TABLE \"{}\" ADD COLUMN {} {}",
+                "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}",
                 table_name,
                 sub_field.name,
                 conn.column_type_for(&sub_field.field_type)
@@ -315,7 +315,10 @@ fn alter_array_table(
             let tz_col = tz_column(&sub_field.name);
 
             if !existing.contains(&tz_col) {
-                let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {} TEXT", table_name, tz_col);
+                let sql = format!(
+                    "ALTER TABLE \"{}\" ADD COLUMN \"{}\" TEXT",
+                    table_name, tz_col
+                );
                 info!("Adding column to {}: {}", table_name, tz_col);
                 conn.execute_ddl(&sql, &[]).with_context(|| {
                     format!("Failed to add column {} to {}", tz_col, table_name)
@@ -346,9 +349,9 @@ fn sync_blocks_table(
         };
 
         let sql = format!(
-            "CREATE TABLE {} (\
+            "CREATE TABLE \"{}\" (\
                 id TEXT PRIMARY KEY, \
-                parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
+                parent_id TEXT NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE, \
                 _order INTEGER NOT NULL DEFAULT 0, \
                 _block_type TEXT NOT NULL, \
                 data TEXT NOT NULL DEFAULT '{{}}'\

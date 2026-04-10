@@ -168,7 +168,7 @@ pub async fn edit_form(
 
     let gtable = global_table(&slug);
     let (versions, total_versions) = if has_versions {
-        fetch_version_sidebar_data(&state.pool, &gtable, "default")
+        fetch_version_sidebar_data(&state.pool, &state.hook_runner, &gtable, "default")
     } else {
         (vec![], 0)
     };
