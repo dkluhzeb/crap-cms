@@ -30,7 +30,9 @@ use crate::{
     scheduler, typegen,
 };
 
-use super::pid::{check_existing_pid, remove_pid_file, write_pid_file};
+#[cfg(unix)]
+use super::pid::check_existing_pid;
+use super::pid::{remove_pid_file, write_pid_file};
 
 /// Which server to start when using `--only`.
 #[derive(Clone, Copy, clap::ValueEnum)]

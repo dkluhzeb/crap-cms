@@ -1,21 +1,24 @@
 //! Process lifecycle management — detach, stop, restart, status.
 
-use anyhow::{Context as _, Result, bail};
+#[cfg(unix)]
+use anyhow::bail;
+use anyhow::{Context as _, Result};
 #[cfg(unix)]
 use std::io;
+use std::{env, path::Path, process};
+#[cfg(unix)]
 use std::{
-    env, fs,
-    path::Path,
-    process, thread,
+    fs, thread,
     time::{Duration, Instant},
 };
+#[cfg(unix)]
 use tracing::debug;
 
 use crate::cli;
 
-use super::pid::{
-    check_existing_pid, is_process_running, read_pid, remove_pid_file, write_pid_file,
-};
+use super::pid::write_pid_file;
+#[cfg(unix)]
+use super::pid::{check_existing_pid, is_process_running, read_pid, remove_pid_file};
 use super::startup::{ServeMode, validate_config_dir};
 
 /// Send a signal to a process by PID.
@@ -237,6 +240,7 @@ fn show_uptime(stat: &str) {
 }
 
 /// Format seconds into a human-readable duration string.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(super) fn format_duration(secs: u64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;
@@ -257,9 +261,12 @@ pub(super) fn format_duration(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
     use crate::commands::serve::pid::pid_file_path;
 
     #[test]
+    #[cfg(unix)]
     fn stop_no_pid_file_errors() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("crap.toml"), "").unwrap();
@@ -268,6 +275,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn stop_stale_pid_errors() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("crap.toml"), "").unwrap();
@@ -280,6 +288,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn status_no_pid_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("crap.toml"), "").unwrap();
@@ -288,6 +297,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn status_stale_pid_cleans_up() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("crap.toml"), "").unwrap();
