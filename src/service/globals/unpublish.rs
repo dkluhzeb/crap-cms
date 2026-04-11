@@ -2,6 +2,8 @@
 
 use anyhow::Context as _;
 
+use serde_json::Value;
+
 use crate::{
     core::Document,
     db::{AccessResult, query, query::helpers::global_table},
@@ -59,6 +61,10 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
         &doc,
     )?;
 
+    let mut doc = doc;
+    doc.fields
+        .insert("_status".to_string(), Value::String("draft".into()));
+
     run_after_change_hooks(
         &wh,
         &def.hooks,
@@ -70,8 +76,6 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
             .build(),
         &tx,
     )?;
-
-    let mut doc = doc;
 
     query::hydrate_document(&tx, &gtable, &def.fields, &mut doc, None, None)?;
 

@@ -161,11 +161,6 @@ pub fn set_polymorphic_related(
             )?;
         }
     } else {
-        let p1 = conn.placeholder(1);
-        conn.execute(
-            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
-            &[DbValue::Text(parent_id.to_string())],
-        )?;
         let (p1, p2, p3, p4) = (
             conn.placeholder(1),
             conn.placeholder(2),

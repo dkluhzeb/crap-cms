@@ -63,8 +63,7 @@ impl HookRunner {
     }
 
     /// Execute arbitrary Lua code within a transaction + user context.
-    /// The Lua code must return a string. Useful for testing CRUD closures.
-    #[allow(dead_code)]
+    /// Used by integration tests for CRUD closure testing.
     pub fn eval_lua_with_conn(
         &self,
         code: &str,

@@ -1,6 +1,7 @@
 //! Collection document unpublish.
 
 use anyhow::Context as _;
+use serde_json::Value;
 
 use crate::{
     core::Document,
@@ -48,6 +49,10 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
 
     persist_unpublish(ctx, id)?;
 
+    let mut doc = doc;
+    doc.fields
+        .insert("_status".to_string(), Value::String("draft".into()));
+
     run_after_change_hooks(
         write_hooks,
         &def.hooks,
@@ -59,8 +64,6 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
             .build(),
         conn,
     )?;
-
-    let mut doc = doc;
 
     query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
 

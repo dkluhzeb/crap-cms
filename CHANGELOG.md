@@ -571,6 +571,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   gRPC compression, and optimized depth/polling settings for better
   out-of-the-box demo performance.
 
+- **Unpublish returned stale `_status`** — The unpublish operation
+  (both collection and global) returned the document with
+  `_status: "published"` instead of `"draft"` in the response. The
+  database was updated correctly, but the in-memory document handed to
+  after-hooks and returned to the caller still carried the pre-unpublish
+  status. Now correctly sets `_status = "draft"` before after-hooks run.
+
+- **Redundant junction table delete** — `set_polymorphic_related()`
+  executed the same DELETE twice in the non-locale branch: once via the
+  `delete_junction_rows()` helper and once via a manual inline query.
+  Removed the redundant manual delete.
+
+- **Keyboard focus indicators suppressed** — `outline: 0` /
+  `outline: none` on focused form inputs and the search bar removed
+  the keyboard focus indicator, making the admin UI inaccessible for
+  keyboard-only users. Added `focus-visible` outline styles so keyboard
+  users see a visible focus ring while mouse users still get the clean
+  appearance.
+
 ## [0.1.0-alpha.3] — 2026-03-30
 
 ### Added

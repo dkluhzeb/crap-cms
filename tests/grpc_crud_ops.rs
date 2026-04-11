@@ -487,6 +487,58 @@ async fn grpc_unpublish_via_update() {
     );
 }
 
+/// Regression: unpublish response must report `_status = "draft"`, not the
+/// stale pre-unpublish status.
+#[tokio::test]
+async fn grpc_unpublish_response_has_draft_status() {
+    let ts = setup_service(vec![make_versioned_posts_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Will Unpublish")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let resp = ts
+        .service
+        .update(Request::new(content::UpdateRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: None,
+            locale: None,
+            draft: None,
+            unpublish: Some(true),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let updated = resp.document.unwrap();
+    let status = updated
+        .fields
+        .as_ref()
+        .and_then(|s| s.fields.get("_status"))
+        .and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) => Some(s.as_str()),
+            _ => None,
+        });
+
+    assert_eq!(
+        status,
+        Some("draft"),
+        "unpublish response must return _status = 'draft', got {:?}",
+        status
+    );
+}
+
 // ── Pagination ────────────────────────────────────────────────────────────
 
 #[tokio::test]
