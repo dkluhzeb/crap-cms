@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,16 +188,27 @@
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <p>In <code>crap.toml</code>:</p>
 <pre><code class="language-toml">[live]
-enabled = true           # default: true
-channel_capacity = 1024  # default: 1024
+enabled = true              # default: true
+default_mode = "metadata"   # default: "metadata" — global default for all collections
+channel_capacity = 1024     # default: 1024
 # max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
 </code></pre>
 <p>Set <code>enabled = false</code> to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.</p>
 <p>Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive <code>503 Service Unavailable</code> and new gRPC Subscribe calls receive <code>UNAVAILABLE</code> status. Existing connections are not affected.</p>
+<h2 id="event-delivery-modes"><a class="header" href="#event-delivery-modes">Event Delivery Modes</a></h2>
+<p>Each collection can control what data events carry:</p>
+<ul>
+<li>
+<p><strong><code>metadata</code></strong> (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data, no <code>after_read</code> hooks. Clients re-fetch via <code>FindByID</code> if needed. Fast, safe, zero hook overhead.</p>
+</li>
+<li>
+<p><strong><code>full</code></strong> — events carry complete document data, processed through <code>after_read</code> hooks and field-level access stripping — the same data a <code>Find</code> or <code>FindByID</code> call would return. Opt-in per collection.</p>
+</li>
+</ul>
+<p><strong>Performance note:</strong> In <code>full</code> mode, <code>after_read</code> hooks run once per event per subscriber. For collections with expensive hooks and many subscribers, use <code>metadata</code> mode and let clients re-fetch.</p>
 <h2 id="per-collection-control"><a class="header" href="#per-collection-control">Per-Collection Control</a></h2>
-<p>Each collection (and global) can control whether it emits events via the <code>live</code> field:</p>
-<pre><code class="language-lua">-- Broadcast all events (default when absent)
+<pre><code class="language-lua">-- Broadcast all events in metadata mode (default)
 crap.collections.define("posts", { ... })
 
 -- Disable broadcasting entirely
@@ -206,28 +217,58 @@ crap.collections.define("audit_log", {
     ...
 })
 
--- Dynamic: Lua function decides per-event
+-- Full data mode: events include document data with after_read hooks
+crap.collections.define("posts", {
+    live = { mode = "full" },
+    ...
+})
+
+-- Full data mode with a Lua filter function
+crap.collections.define("posts", {
+    live = { mode = "full", filter = "hooks.posts.should_broadcast" },
+    ...
+})
+
+-- Lua function decides per-event (metadata mode)
 crap.collections.define("posts", {
     live = "hooks.posts.should_broadcast",
     ...
 })
 </code></pre>
-<p>The function receives <code>{ collection, operation, data }</code> and returns <code>true</code> to broadcast or <code>false</code>/<code>nil</code> to suppress.</p>
-<h2 id="event-structure"><a class="header" href="#event-structure">Event Structure</a></h2>
-<p>Each event contains:</p>
+<p>The filter function receives <code>{ collection, operation, data }</code> and returns <code>true</code> to broadcast or <code>false</code>/<code>nil</code> to suppress.</p>
+<h2 id="access-control"><a class="header" href="#access-control">Access Control</a></h2>
+<p>Event streams enforce the same access rules as normal read operations:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Field</th><th>Description</th></tr>
+<tr><th>Layer</th><th style="text-align: center">metadata</th><th style="text-align: center">full</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>sequence</code></td><td>Monotonic sequence number</td></tr>
-<tr><td><code>timestamp</code></td><td>ISO 8601 timestamp</td></tr>
-<tr><td><code>target</code></td><td><code>"collection"</code> or <code>"global"</code></td></tr>
-<tr><td><code>operation</code></td><td><code>"create"</code>, <code>"update"</code>, or <code>"delete"</code></td></tr>
-<tr><td><code>collection</code></td><td>Collection or global slug</td></tr>
-<tr><td><code>document_id</code></td><td>Document ID</td></tr>
-<tr><td><code>data</code></td><td>Full document fields (empty for delete)</td></tr>
+<tr><td>Collection-level access</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td><td>Only collections the subscriber can read</td></tr>
+<tr><td>Row-level constraints</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td><td>Constraint filters evaluated in-memory per event</td></tr>
+<tr><td><code>after_read</code> hooks</td><td style="text-align: center">—</td><td style="text-align: center">✅</td><td>Data transformed per subscriber (same as Find)</td></tr>
+<tr><td>Field-level access</td><td style="text-align: center">—</td><td style="text-align: center">✅</td><td>Denied fields stripped per subscriber</td></tr>
+<tr><td><code>before_broadcast</code> hooks</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td><td>Can modify/suppress events before delivery</td></tr>
+</tbody>
+</table>
+</div>
+<p>Row-level constraints use in-memory evaluation of the same filters that <code>Find</code> uses as SQL WHERE conditions. For example, if a user’s access returns <code>{ owner = ctx.user.id }</code>, only events where <code>owner</code> matches are delivered.</p>
+<p>Access is snapshotted at subscribe time. Permission changes require reconnect.</p>
+<h2 id="event-structure"><a class="header" href="#event-structure">Event Structure</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th><th style="text-align: center">metadata</th><th style="text-align: center">full</th></tr>
+</thead>
+<tbody>
+<tr><td><code>sequence</code></td><td>Monotonic sequence number</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>timestamp</code></td><td>ISO 8601 timestamp</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>target</code></td><td><code>"collection"</code> or <code>"global"</code></td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>operation</code></td><td><code>"create"</code>, <code>"update"</code>, <code>"delete"</code></td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>collection</code></td><td>Collection or global slug</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>document_id</code></td><td>Document ID</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>data</code></td><td>Document fields (hook-processed)</td><td style="text-align: center">empty</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>edited_by</code></td><td>User who made the change</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
 </tbody>
 </table>
 </div>
@@ -237,19 +278,24 @@ crap.collections.define("posts", {
 
 After commit:
   -&gt; publish_event()
-       1. live setting check
-       2. before_broadcast hooks
+       1. live setting check (enabled/disabled/function)
+       2. before_broadcast hooks (can modify/suppress)
        3. EventBus.publish()
-            -&gt; gRPC Subscribe stream
-            -&gt; Admin SSE stream
+            -&gt; Per subscriber:
+                 a. collection access (cached)
+                 b. row-level constraints (cached, in-memory)
+                 c. mode:
+                    metadata → deliver metadata only
+                    full → after_read hooks → field strip → deliver
 </code></pre>
-<h2 id="limitations-v1"><a class="header" href="#limitations-v1">Limitations (V1)</a></h2>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
 <ul>
 <li>Events are <strong>ephemeral</strong> — missed events are not replayed</li>
 <li>Access is <strong>snapshotted at subscribe time</strong> — permission changes require reconnect</li>
 <li>No field-level subscription filters</li>
 <li>No event persistence or replay</li>
 <li><code>before_broadcast</code> hooks have no CRUD access (fires after commit)</li>
+<li>In <code>full</code> mode, <code>after_read</code> hooks run per subscriber — expensive hooks may impact performance at scale</li>
 </ul>
 
                     </main>

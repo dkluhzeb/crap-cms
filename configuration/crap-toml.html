@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -272,9 +272,12 @@ host = "0.0.0.0"        # Bind address
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
-pool_max_size = 32       # Max connections in the pool
+pool_max_size = 64       # Max connections in the pool
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
 connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
+mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
+wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
 
 [admin]
 dev_mode = false         # Reload templates per-request (enable in development)
@@ -313,8 +316,13 @@ max_length = 128            # Maximum password length (DoS protection)
 [depth]
 default_depth = 1        # Default population depth for FindByID (Find always defaults to 0)
 max_depth = 10           # Hard cap on population depth (prevents abuse)
-# populate_cache = false           # Cross-request populate cache (opt-in)
-# populate_cache_max_age_secs = 0  # Periodic cache clear for external DB mutations
+
+[cache]
+backend = "memory"       # Cache backend: "memory" (default), "redis", "none", "custom"
+# max_entries = 10000    # Soft cap for memory backend (default: 10000)
+# max_age_secs = 0       # Periodic full clear interval (0 = disabled)
+# redis_url = "redis://127.0.0.1:6379"  # Redis connection URL
+# prefix = "crap:"       # Key prefix for Redis backend
 
 [pagination]
 default_limit = 20      # Default limit for Find queries (when none is specified)
@@ -322,10 +330,22 @@ max_limit = 1000         # Hard cap on limit — requests above this are clamped
 # mode = "page"          # "page" (offset) or "cursor" (keyset)
 
 [upload]
+storage = "local"        # Storage backend: "local" (default), "s3", or "custom"
 max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
 
+# [upload.s3]            # S3-compatible storage (requires --features s3-storage)
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = ""          # custom endpoint for MinIO, R2, etc.
+# access_key = "${AWS_ACCESS_KEY}"
+# secret_key = "${AWS_SECRET_KEY}"
+# prefix = ""            # optional key prefix
+# public_url_base = ""   # CDN URL base (empty = S3 URLs)
+# path_style = false     # true for MinIO
+
 [email]
-smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+provider = "smtp"        # "smtp" (default), "webhook", "log", or "custom"
+smtp_host = ""           # SMTP server hostname. Empty = falls back to log provider
 smtp_port = 587          # SMTP port (587 for STARTTLS, 465 for TLS, 25/1025 for plain)
 smtp_user = ""           # SMTP username
 smtp_pass = ""           # SMTP password
@@ -333,12 +353,14 @@ smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit TLS), "none" (p
 from_address = "noreply@example.com"  # Sender email address
 from_name = "Crap CMS"  # Sender display name
 # smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")
+# webhook_url = ""      # URL for webhook provider (POST JSON)
+# webhook_headers = { Authorization = "Bearer ${API_KEY}" }  # Extra headers for webhook
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 # max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
-                         # Default: max(available_parallelism, 4), capped at 32
+                         # Default: number of CPU cores (fallback: 4)
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
@@ -346,6 +368,7 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
+default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
@@ -364,7 +387,7 @@ auto_purge = "7d"            # Auto-purge completed/failed runs older than this
 image_queue_batch_size = 10  # Pending image conversions to process per poll
 
 [access]
-default_deny = false     # When true, deny all operations without explicit access functions
+default_deny = true      # When true (default), deny all operations without explicit access functions
 
 [cors]
 allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (default)
@@ -415,7 +438,10 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 </thead>
 <tbody>
 <tr><td><code>path</code></td><td>string</td><td><code>"data/crap.db"</code></td><td>SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is.</td></tr>
-<tr><td><code>pool_max_size</code></td><td>integer</td><td><code>32</code></td><td>Maximum number of connections in the SQLite connection pool.</td></tr>
+<tr><td><code>pool_max_size</code></td><td>integer</td><td><code>64</code></td><td>Maximum number of connections in the SQLite connection pool.</td></tr>
+<tr><td><code>cache_size</code></td><td>integer</td><td><code>-16384</code></td><td>SQLite page cache size. Negative = KB, positive = pages. Default 16MB.</td></tr>
+<tr><td><code>mmap_size</code></td><td>integer</td><td><code>268435456</code></td><td>SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable.</td></tr>
+<tr><td><code>wal_autocheckpoint</code></td><td>integer</td><td><code>1000</code></td><td>WAL auto-checkpoint threshold in pages.</td></tr>
 <tr><td><code>busy_timeout</code></td><td>duration</td><td><code>30000</code> (<code>"30s"</code>)</td><td>SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
 <tr><td><code>connection_timeout</code></td><td>duration</td><td><code>5</code></td><td>Pool checkout timeout in seconds. How long <code>pool.get()</code> waits for a free connection before returning an error.</td></tr>
 </tbody>
@@ -497,6 +523,9 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><td><code>require_lowercase</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one lowercase letter (a-z).</td></tr>
 <tr><td><code>require_digit</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one digit (0-9).</td></tr>
 <tr><td><code>require_special</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one special (non-alphanumeric) character.</td></tr>
+<tr><td><code>rate_limit_backend</code></td><td>string</td><td><code>"memory"</code></td><td>Rate limit storage backend: <code>"memory"</code> (default, per-server), <code>"redis"</code> (shared across servers, requires <code>--features redis</code>), <code>"none"</code> (disabled).</td></tr>
+<tr><td><code>rate_limit_redis_url</code></td><td>string</td><td><code>""</code></td><td>Redis URL for rate limit backend. Falls back to <code>cache.redis_url</code> if empty.</td></tr>
+<tr><td><code>rate_limit_prefix</code></td><td>string</td><td><code>"crap:rl:"</code></td><td>Key prefix for Redis rate limit backend.</td></tr>
 </tbody>
 </table>
 </div>
@@ -509,8 +538,21 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tbody>
 <tr><td><code>default_depth</code></td><td>integer</td><td><code>1</code></td><td>Default population depth for <code>FindByID</code>. <code>Find</code> always defaults to <code>0</code>.</td></tr>
 <tr><td><code>max_depth</code></td><td>integer</td><td><code>10</code></td><td>Maximum allowed depth for any request. Hard cap to prevent excessive queries.</td></tr>
-<tr><td><code>populate_cache</code></td><td>boolean</td><td><code>false</code></td><td>Enable cross-request populate cache. Caches populated documents in memory, cleared on any write through the API. Improves read performance for repeated deep population. <strong>Opt-in</strong> because external DB modifications can cause stale reads.</td></tr>
-<tr><td><code>populate_cache_max_age_secs</code></td><td>integer</td><td><code>0</code></td><td>Periodic full cache clear interval in seconds. <code>0</code> = disabled (only write-through invalidation). Set <code>&gt; 0</code> to limit staleness when the database may be modified outside the API. Only used when <code>populate_cache = true</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="cache"><a class="header" href="#cache"><code>[cache]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>backend</code></td><td>string</td><td><code>"memory"</code></td><td>Cache backend: <code>"memory"</code> (in-memory DashMap), <code>"redis"</code> (shared, requires <code>--features redis</code>), <code>"none"</code> (disabled), or <code>"custom"</code> (Lua-delegated, planned).</td></tr>
+<tr><td><code>max_entries</code></td><td>integer</td><td><code>10000</code></td><td>Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear.</td></tr>
+<tr><td><code>max_age_secs</code></td><td>integer</td><td><code>0</code></td><td>Periodic full cache clear interval in seconds. <code>0</code> = disabled (only write-through invalidation). Set <code>&gt; 0</code> to limit staleness when the database may be modified outside the API.</td></tr>
+<tr><td><code>redis_url</code></td><td>string</td><td><code>"redis://127.0.0.1:6379"</code></td><td>Redis connection URL. Only used when <code>backend = "redis"</code>.</td></tr>
+<tr><td><code>prefix</code></td><td>string</td><td><code>"crap:"</code></td><td>Key prefix for the Redis backend. All keys are stored as <code>{prefix}{key}</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -534,7 +576,27 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
+<tr><td><code>storage</code></td><td>string</td><td><code>"local"</code></td><td>Storage backend: <code>"local"</code> (filesystem), <code>"s3"</code> (S3-compatible, requires <code>--features s3-storage</code>), or <code>"custom"</code> (Lua-delegated).</td></tr>
 <tr><td><code>max_file_size</code></td><td>integer/string</td><td><code>52428800</code> (<code>"50MB"</code>)</td><td>Global maximum file size. Accepts bytes (integer) or human-readable (<code>"50MB"</code>, <code>"1GB"</code>). Per-collection <code>max_file_size</code> overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding).</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="uploads3"><a class="header" href="#uploads3"><code>[upload.s3]</code></a></h3>
+<p>S3-compatible storage configuration. Only used when <code>storage = "s3"</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket</code></td><td>string</td><td>(required)</td><td>S3 bucket name.</td></tr>
+<tr><td><code>region</code></td><td>string</td><td><code>"us-east-1"</code></td><td>AWS region.</td></tr>
+<tr><td><code>endpoint</code></td><td>string</td><td>(AWS default)</td><td>Custom endpoint URL for MinIO, R2, B2, etc.</td></tr>
+<tr><td><code>access_key</code></td><td>string</td><td>(required)</td><td>AWS access key ID.</td></tr>
+<tr><td><code>secret_key</code></td><td>string</td><td>(required)</td><td>AWS secret access key.</td></tr>
+<tr><td><code>prefix</code></td><td>string</td><td><code>""</code></td><td>Optional key prefix prepended to all storage keys.</td></tr>
+<tr><td><code>public_url_base</code></td><td>string</td><td><code>""</code></td><td>Base URL for public file links (e.g., CDN). Empty = S3 URLs.</td></tr>
+<tr><td><code>path_style</code></td><td>boolean</td><td><code>false</code></td><td>Use path-style addressing (required for MinIO).</td></tr>
 </tbody>
 </table>
 </div>
@@ -545,7 +607,8 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>smtp_host</code></td><td>string</td><td><code>""</code> (empty)</td><td>SMTP server hostname. <strong>Empty = email disabled</strong> — all send attempts log a warning and return Ok.</td></tr>
+<tr><td><code>provider</code></td><td>string</td><td><code>"smtp"</code></td><td>Email provider: <code>"smtp"</code> (default), <code>"webhook"</code> (HTTP POST), <code>"log"</code> (dev mode), or <code>"custom"</code> (Lua).</td></tr>
+<tr><td><code>smtp_host</code></td><td>string</td><td><code>""</code> (empty)</td><td>SMTP server hostname. <strong>Empty with smtp provider = falls back to log provider.</strong></td></tr>
 <tr><td><code>smtp_port</code></td><td>integer</td><td><code>587</code></td><td>SMTP port. 587 is the standard STARTTLS port.</td></tr>
 <tr><td><code>smtp_user</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication username.</td></tr>
 <tr><td><code>smtp_pass</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication password.</td></tr>
@@ -553,10 +616,16 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><td><code>from_address</code></td><td>string</td><td><code>"noreply@example.com"</code></td><td>Sender email address for outgoing mail.</td></tr>
 <tr><td><code>from_name</code></td><td>string</td><td><code>"Crap CMS"</code></td><td>Sender display name.</td></tr>
 <tr><td><code>smtp_timeout</code></td><td>integer/string</td><td><code>30</code></td><td>SMTP connection and send timeout in seconds. Accepts integer or duration string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
+<tr><td><code>webhook_url</code></td><td>string</td><td><code>""</code></td><td>URL for the webhook email provider. Receives POST with JSON body.</td></tr>
+<tr><td><code>webhook_headers</code></td><td>map</td><td><code>{}</code></td><td>Extra HTTP headers for webhook requests (e.g., <code>{ Authorization = "Bearer ..." }</code>).</td></tr>
+<tr><td><code>queue_retries</code></td><td>integer</td><td><code>3</code></td><td>Retry count for emails sent via <code>crap.email.queue()</code>.</td></tr>
+<tr><td><code>queue_name</code></td><td>string</td><td><code>"email"</code></td><td>Job queue name for queued emails.</td></tr>
+<tr><td><code>queue_timeout</code></td><td>integer</td><td><code>30</code></td><td>Per-attempt timeout in seconds for queued email jobs.</td></tr>
+<tr><td><code>queue_concurrency</code></td><td>integer</td><td><code>5</code></td><td>Max concurrent queued email jobs processed by the scheduler.</td></tr>
 </tbody>
 </table>
 </div>
-<p>When configured, email enables password reset (“Forgot password?” link on login), email verification (optional per-collection), and the <code>crap.email.send()</code> Lua API.</p>
+<p>When configured, email enables password reset (“Forgot password?” link on login), email verification (optional per-collection), and the <code>crap.email.send()</code> Lua API. The <code>log</code> provider is useful for development — it logs email content to tracing without sending. The <code>custom</code> provider delegates to Lua via <code>crap.email.register()</code>.</p>
 <h3 id="hooks"><a class="header" href="#hooks"><code>[hooks]</code></a></h3>
 <div class="table-wrapper">
 <table>
@@ -566,7 +635,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tbody>
 <tr><td><code>on_init</code></td><td>string[]</td><td><code>[]</code></td><td>Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup.</td></tr>
 <tr><td><code>max_depth</code></td><td>integer</td><td><code>3</code></td><td>Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. <code>0</code> = never run hooks from Lua CRUD.</td></tr>
-<tr><td><code>vm_pool_size</code></td><td>integer</td><td><code>max(cpus, 4)</code> capped at 32</td><td>Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32.</td></tr>
+<tr><td><code>vm_pool_size</code></td><td>integer</td><td>CPU cores</td><td>Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores (fallback: 4 if detection fails).</td></tr>
 <tr><td><code>max_instructions</code></td><td>integer</td><td><code>10000000</code></td><td>Maximum Lua instructions per hook invocation. <code>0</code> = unlimited.</td></tr>
 <tr><td><code>max_memory</code></td><td>integer/string</td><td><code>52428800</code> (50 MB)</td><td>Maximum Lua memory per VM in bytes. Accepts integer or filesize string (<code>"50MB"</code>, <code>"100MB"</code>). <code>0</code> = unlimited.</td></tr>
 <tr><td><code>allow_private_networks</code></td><td>boolean</td><td><code>false</code></td><td>Allow <code>crap.http.request</code> to reach private/loopback/link-local IPs.</td></tr>
@@ -582,6 +651,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 </thead>
 <tbody>
 <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable live event streaming (SSE + gRPC Subscribe).</td></tr>
+<tr><td><code>default_mode</code></td><td>string</td><td><code>"metadata"</code></td><td>Default event delivery mode. <code>"metadata"</code> sends only event type, collection, and document ID. <code>"full"</code> sends the complete document payload.</td></tr>
 <tr><td><code>channel_capacity</code></td><td>integer</td><td><code>1024</code></td><td>Internal broadcast channel buffer size. Increase if subscribers lag.</td></tr>
 <tr><td><code>max_sse_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent SSE connections. When reached, new connections receive <code>503 Service Unavailable</code>. <code>0</code> = unlimited.</td></tr>
 <tr><td><code>max_subscribe_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive <code>UNAVAILABLE</code> status. <code>0</code> = unlimited.</td></tr>
@@ -625,7 +695,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>default_deny</code></td><td>boolean</td><td><code>false</code></td><td>When <code>true</code>, collections and globals without an explicit access function deny all operations. When <code>false</code> (default), missing access functions allow all operations.</td></tr>
+<tr><td><code>default_deny</code></td><td>boolean</td><td><code>true</code></td><td>When <code>true</code> (default), collections and globals without an explicit access function deny all operations. Set to <code>false</code> to allow all operations when no access function is defined.</td></tr>
 </tbody>
 </table>
 </div>

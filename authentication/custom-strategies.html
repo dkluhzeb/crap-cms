@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -272,6 +272,62 @@ return M
 <li>Only custom strategies can authenticate users</li>
 <li>The <code>Login</code> gRPC RPC is effectively disabled for this collection</li>
 </ul>
+<h2 id="auth-callbacks-oauth2--oidc"><a class="header" href="#auth-callbacks-oauth2--oidc">Auth Callbacks (OAuth2 / OIDC)</a></h2>
+<p>For redirect-based auth flows (OAuth2, OIDC, SAML), use the built-in callback route:</p>
+<pre><code>GET/POST /admin/auth/callback/{name}
+</code></pre>
+<p>This dispatches to a Lua hook <code>auth_callback.{name}</code> which receives request headers and query parameters. The hook returns a user document to create a session.</p>
+<pre><code class="language-lua">-- hooks/auth_callback/google.lua
+local M = {}
+
+function M.google(ctx)
+    -- ctx.headers._query_code contains the OAuth authorization code
+    local code = ctx.headers["_query_code"]
+    if not code then return nil end
+
+    -- Exchange code for tokens
+    local res = crap.http.request({
+        method = "POST",
+        url = "https://oauth2.googleapis.com/token",
+        json = {
+            code = code,
+            client_id = crap.env.get("GOOGLE_CLIENT_ID"),
+            client_secret = crap.env.get("GOOGLE_CLIENT_SECRET"),
+            redirect_uri = crap.env.get("GOOGLE_REDIRECT_URI"),
+            grant_type = "authorization_code",
+        },
+    })
+    if res.status ~= 200 then return nil end
+
+    local tokens = crap.json.decode(res.body)
+
+    -- Get user info
+    local info_res = crap.http.request({
+        url = "https://www.googleapis.com/oauth2/v2/userinfo",
+        headers = { Authorization = "Bearer " .. tokens.access_token },
+    })
+    local userinfo = crap.json.decode(info_res.body)
+
+    -- Find or create user
+    local users = crap.find("users", { where = { email = userinfo.email } })
+    if #users.documents &gt; 0 then return users.documents[1] end
+
+    return crap.create("users", {
+        email = userinfo.email,
+        name = userinfo.name,
+    })
+end
+
+return M
+</code></pre>
+<p>To initiate the OAuth flow, add a link on your login page pointing to the provider’s authorize URL with your <code>redirect_uri</code> set to <code>/admin/auth/callback/google</code>.</p>
+<h2 id="email-mfa"><a class="header" href="#email-mfa">Email MFA</a></h2>
+<p>Auth collections can require a second factor after password verification:</p>
+<pre><code class="language-lua">auth = {
+    mfa = "email",  -- "email" or false (default)
+}
+</code></pre>
+<p>When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use.</p>
 
                     </main>
 

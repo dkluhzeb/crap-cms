@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -250,7 +250,7 @@
 </table>
 </div>
 <h2 id="file-storage"><a class="header" href="#file-storage">File Storage</a></h2>
-<p>Files are stored at <code>&lt;config_dir&gt;/uploads/&lt;collection_slug&gt;/</code>:</p>
+<p>By default, files are stored on the local filesystem at <code>&lt;config_dir&gt;/uploads/&lt;collection_slug&gt;/</code>:</p>
 <pre><code>uploads/
 └── media/
     ├── a1b2c3_my-photo.jpg          # original
@@ -262,6 +262,81 @@
     └── a1b2c3_my-photo_card.avif
 </code></pre>
 <p>Filenames are sanitized (lowercase, characters that are not alphanumeric, hyphens, or underscores are replaced with hyphens) and prefixed with a random 10-character nanoid.</p>
+<h3 id="storage-backends"><a class="header" href="#storage-backends">Storage Backends</a></h3>
+<p>The storage backend is configurable via <code>[upload] storage</code> in <code>crap.toml</code>. Local filesystem is the default and recommended for most deployments.</p>
+<h4 id="local-default"><a class="header" href="#local-default">Local (default)</a></h4>
+<pre><code class="language-toml">[upload]
+storage = "local"  # or omit — local is the default
+</code></pre>
+<p>No additional configuration needed. Files stored at <code>{config_dir}/uploads/</code>.</p>
+<h4 id="s3-compatible-optional"><a class="header" href="#s3-compatible-optional">S3-Compatible (optional)</a></h4>
+<p>For multi-server deployments where multiple instances need to share uploaded files. Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, and DigitalOcean Spaces. Requires <code>--features s3-storage</code> at build time.</p>
+<pre><code class="language-toml">[upload]
+storage = "s3"
+
+[upload.s3]
+bucket = "my-uploads"
+region = "us-east-1"
+endpoint = "https://s3.amazonaws.com"    # or MinIO/R2 URL
+access_key = "${AWS_ACCESS_KEY}"
+secret_key = "${AWS_SECRET_KEY}"
+prefix = ""                              # optional key prefix
+public_url_base = ""                     # CDN URL (empty = S3 URLs)
+path_style = false                       # true for MinIO
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket</code></td><td>Yes</td><td>S3 bucket name</td></tr>
+<tr><td><code>region</code></td><td>No</td><td>AWS region (default: <code>us-east-1</code>)</td></tr>
+<tr><td><code>endpoint</code></td><td>No</td><td>Custom endpoint for non-AWS providers</td></tr>
+<tr><td><code>access_key</code></td><td>Yes</td><td>AWS access key ID</td></tr>
+<tr><td><code>secret_key</code></td><td>Yes</td><td>AWS secret access key</td></tr>
+<tr><td><code>prefix</code></td><td>No</td><td>Key prefix prepended to all storage keys</td></tr>
+<tr><td><code>public_url_base</code></td><td>No</td><td>Base URL for public file links (e.g., CDN)</td></tr>
+<tr><td><code>path_style</code></td><td>No</td><td>Use path-style URLs (required for MinIO)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Files are served through the CMS via <code>/uploads/...</code> (proxied from S3) so access control and content negotiation work identically to local storage.</p>
+<blockquote>
+<p><strong>Tip:</strong> Use <code>queue: true</code> on image format options (WebP, AVIF) when using S3. Deferred processing avoids upload latency from the extra S3 round trips.</p>
+</blockquote>
+<h4 id="custom-lua"><a class="header" href="#custom-lua">Custom (Lua)</a></h4>
+<p>For exotic storage providers, register custom functions in <code>init.lua</code>:</p>
+<pre><code class="language-lua">crap.storage.register({
+  put = function(key, data, content_type)
+    crap.http.request({
+      method = "PUT",
+      url = "https://storage.example.com/" .. key,
+      body = data,
+      headers = { ["Content-Type"] = content_type },
+    })
+  end,
+  get = function(key)
+    local resp = crap.http.request({
+      url = "https://storage.example.com/" .. key,
+    })
+    return resp.body
+  end,
+  delete = function(key)
+    crap.http.request({
+      method = "DELETE",
+      url = "https://storage.example.com/" .. key,
+    })
+  end,
+  url = function(key)
+    return "https://cdn.example.com/" .. key
+  end,
+})
+</code></pre>
+<pre><code class="language-toml">[upload]
+storage = "custom"
+</code></pre>
+<p>Binary data is passed natively between Rust and Lua (no base64 encoding). The <code>crap.http.request</code> function handles binary request/response bodies.</p>
 <h2 id="url-structure"><a class="header" href="#url-structure">URL Structure</a></h2>
 <p>Files are served at <code>/uploads/&lt;collection&gt;/&lt;filename&gt;</code>:</p>
 <pre><code>/uploads/media/a1b2c3_my-photo.jpg

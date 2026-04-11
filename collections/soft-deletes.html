@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -251,8 +251,8 @@ rpc Delete (DeleteRequest) returns (DeleteResponse);
 // Force permanent deletion
 DeleteRequest { collection: "posts", id: "abc", force_hard_delete: true }
 
-// Restore from trash
-rpc Restore (RestoreRequest) returns (RestoreResponse);
+// Undelete from trash
+rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
 </code></pre>
 <p>The <code>DeleteResponse</code> includes a <code>soft_deleted</code> boolean indicating whether the deletion was soft or hard.</p>
 <h3 id="lua"><a class="header" href="#lua">Lua</a></h3>
@@ -262,8 +262,8 @@ crap.collections.delete("posts", id)
 -- Force permanent delete
 crap.collections.delete("posts", id, { forceHardDelete = true })
 
--- Restore from trash
-crap.collections.restore("posts", id)
+-- Undelete from trash
+crap.collections.undelete("posts", id)
 </code></pre>
 <h3 id="mcp"><a class="header" href="#mcp">MCP</a></h3>
 <p>MCP delete tools automatically use soft delete when the collection has it enabled.</p>

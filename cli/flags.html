@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -247,6 +247,43 @@ crap-cms serve --only api         # gRPC API only
 crap-cms serve --no-scheduler     # both servers, no scheduler
 crap-cms serve --only admin --no-scheduler
 crap-cms serve -d --only api      # detached, API only
+</code></pre>
+<h3 id="work--run-a-standalone-job-worker"><a class="header" href="#work--run-a-standalone-job-worker"><code>work</code> — Run a standalone job worker</a></h3>
+<pre><code class="language-bash">crap-cms work [--detach] [--stop] [--restart] [--status] [--queues &lt;list&gt;] [--concurrency &lt;n&gt;] [--no-cron]
+</code></pre>
+<p>Runs a dedicated job worker without HTTP/gRPC servers. For multi-server deployments where app servers run <code>serve --no-scheduler</code> and dedicated workers process jobs.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-d</code>, <code>--detach</code></td><td>Run in the background</td></tr>
+<tr><td><code>--stop</code></td><td>Stop a running detached worker</td></tr>
+<tr><td><code>--restart</code></td><td>Restart a running detached worker</td></tr>
+<tr><td><code>--status</code></td><td>Show whether a detached worker is running</td></tr>
+<tr><td><code>--queues &lt;list&gt;</code></td><td>Comma-separated queue names to process (default: all)</td></tr>
+<tr><td><code>--concurrency &lt;n&gt;</code></td><td>Override <code>jobs.max_concurrent</code> for this worker</td></tr>
+<tr><td><code>--no-cron</code></td><td>Skip cron scheduling (let another worker handle it)</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-bash">crap-cms work                           # process all queues
+crap-cms work --queues email            # email queue only
+crap-cms work --queues heavy --concurrency 2  # heavy jobs, limited concurrency
+crap-cms work --no-cron                 # skip cron, just process queued jobs
+crap-cms work -d                        # detached
+crap-cms work --status                  # check if running
+crap-cms work --stop                    # stop detached worker
+</code></pre>
+<p><strong>Multi-server deployment:</strong></p>
+<pre><code class="language-bash"># App servers (no job processing)
+crap-cms serve --no-scheduler
+
+# Dedicated workers
+crap-cms work -d                        # general worker
+crap-cms work -d --queues email         # email-only worker
+crap-cms work -d --queues heavy --concurrency 2  # heavy processing
 </code></pre>
 <h3 id="status--show-project-status"><a class="header" href="#status--show-project-status"><code>status</code> — Show project status</a></h3>
 <pre><code class="language-bash">crap-cms status

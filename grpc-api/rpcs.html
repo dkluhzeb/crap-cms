@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -316,14 +316,14 @@ grpcurl -plaintext -d '{
     "force_hard_delete": true
 }' localhost:50051 crap.ContentAPI/Delete
 </code></pre>
-<h2 id="restore"><a class="header" href="#restore">Restore</a></h2>
-<p>Restore a soft-deleted document from trash. Only works on collections with <code>soft_delete = true</code>.</p>
-<pre><code class="language-protobuf">message RestoreRequest {
+<h2 id="undelete"><a class="header" href="#undelete">Undelete</a></h2>
+<p>Undelete a soft-deleted document from trash. Only works on collections with <code>soft_delete = true</code>.</p>
+<pre><code class="language-protobuf">message UndeleteRequest {
   string collection = 1;
   string id = 2;
 }
 
-message RestoreResponse {
+message UndeleteResponse {
   Document document = 1;
 }
 </code></pre>

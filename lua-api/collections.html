@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -381,10 +381,10 @@ crap.collections.delete("posts", "abc123", { overrideAccess = true })
 </tbody>
 </table>
 </div>
-<h2 id="crapcollectionsrestorecollection-id"><a class="header" href="#crapcollectionsrestorecollection-id">crap.collections.restore(collection, id)</a></h2>
-<p>Restore a soft-deleted document from trash. Returns <code>true</code> on success. Only works on collections with <code>soft_delete = true</code>. Re-syncs the FTS index after restore.</p>
+<h2 id="crapcollectionsundeletecollection-id"><a class="header" href="#crapcollectionsundeletecollection-id">crap.collections.undelete(collection, id)</a></h2>
+<p>Undelete a soft-deleted document from trash. Returns <code>true</code> on success. Only works on collections with <code>soft_delete = true</code>. Re-syncs the FTS index after undelete.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">crap.collections.restore("posts", "abc123")
+<pre><code class="language-lua">crap.collections.undelete("posts", "abc123")
 </code></pre>
 <h2 id="lifecycle-hooks-in-lua-crud"><a class="header" href="#lifecycle-hooks-in-lua-crud">Lifecycle Hooks in Lua CRUD</a></h2>
 <p>Lua CRUD operations run the <strong>same lifecycle hooks</strong> as the gRPC API and admin UI:</p>

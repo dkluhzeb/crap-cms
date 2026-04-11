@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5408acc1.js"></script>
+        <script src="toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -515,9 +515,12 @@ host = "0.0.0.0"        # Bind address
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
-pool_max_size = 32       # Max connections in the pool
+pool_max_size = 64       # Max connections in the pool
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
 connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
+mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
+wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
 
 [admin]
 dev_mode = false         # Reload templates per-request (enable in development)
@@ -556,8 +559,13 @@ max_length = 128            # Maximum password length (DoS protection)
 [depth]
 default_depth = 1        # Default population depth for FindByID (Find always defaults to 0)
 max_depth = 10           # Hard cap on population depth (prevents abuse)
-# populate_cache = false           # Cross-request populate cache (opt-in)
-# populate_cache_max_age_secs = 0  # Periodic cache clear for external DB mutations
+
+[cache]
+backend = "memory"       # Cache backend: "memory" (default), "redis", "none", "custom"
+# max_entries = 10000    # Soft cap for memory backend (default: 10000)
+# max_age_secs = 0       # Periodic full clear interval (0 = disabled)
+# redis_url = "redis://127.0.0.1:6379"  # Redis connection URL
+# prefix = "crap:"       # Key prefix for Redis backend
 
 [pagination]
 default_limit = 20      # Default limit for Find queries (when none is specified)
@@ -565,10 +573,22 @@ max_limit = 1000         # Hard cap on limit — requests above this are clamped
 # mode = "page"          # "page" (offset) or "cursor" (keyset)
 
 [upload]
+storage = "local"        # Storage backend: "local" (default), "s3", or "custom"
 max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
 
+# [upload.s3]            # S3-compatible storage (requires --features s3-storage)
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = ""          # custom endpoint for MinIO, R2, etc.
+# access_key = "${AWS_ACCESS_KEY}"
+# secret_key = "${AWS_SECRET_KEY}"
+# prefix = ""            # optional key prefix
+# public_url_base = ""   # CDN URL base (empty = S3 URLs)
+# path_style = false     # true for MinIO
+
 [email]
-smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+provider = "smtp"        # "smtp" (default), "webhook", "log", or "custom"
+smtp_host = ""           # SMTP server hostname. Empty = falls back to log provider
 smtp_port = 587          # SMTP port (587 for STARTTLS, 465 for TLS, 25/1025 for plain)
 smtp_user = ""           # SMTP username
 smtp_pass = ""           # SMTP password
@@ -576,12 +596,14 @@ smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit TLS), "none" (p
 from_address = "noreply@example.com"  # Sender email address
 from_name = "Crap CMS"  # Sender display name
 # smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")
+# webhook_url = ""      # URL for webhook provider (POST JSON)
+# webhook_headers = { Authorization = "Bearer ${API_KEY}" }  # Extra headers for webhook
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 # max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
-                         # Default: max(available_parallelism, 4), capped at 32
+                         # Default: number of CPU cores (fallback: 4)
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
@@ -589,6 +611,7 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
+default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
@@ -607,7 +630,7 @@ auto_purge = "7d"            # Auto-purge completed/failed runs older than this
 image_queue_batch_size = 10  # Pending image conversions to process per poll
 
 [access]
-default_deny = false     # When true, deny all operations without explicit access functions
+default_deny = true      # When true (default), deny all operations without explicit access functions
 
 [cors]
 allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (default)
@@ -658,7 +681,10 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 </thead>
 <tbody>
 <tr><td><code>path</code></td><td>string</td><td><code>"data/crap.db"</code></td><td>SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is.</td></tr>
-<tr><td><code>pool_max_size</code></td><td>integer</td><td><code>32</code></td><td>Maximum number of connections in the SQLite connection pool.</td></tr>
+<tr><td><code>pool_max_size</code></td><td>integer</td><td><code>64</code></td><td>Maximum number of connections in the SQLite connection pool.</td></tr>
+<tr><td><code>cache_size</code></td><td>integer</td><td><code>-16384</code></td><td>SQLite page cache size. Negative = KB, positive = pages. Default 16MB.</td></tr>
+<tr><td><code>mmap_size</code></td><td>integer</td><td><code>268435456</code></td><td>SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable.</td></tr>
+<tr><td><code>wal_autocheckpoint</code></td><td>integer</td><td><code>1000</code></td><td>WAL auto-checkpoint threshold in pages.</td></tr>
 <tr><td><code>busy_timeout</code></td><td>duration</td><td><code>30000</code> (<code>"30s"</code>)</td><td>SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
 <tr><td><code>connection_timeout</code></td><td>duration</td><td><code>5</code></td><td>Pool checkout timeout in seconds. How long <code>pool.get()</code> waits for a free connection before returning an error.</td></tr>
 </tbody>
@@ -740,6 +766,9 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><td><code>require_lowercase</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one lowercase letter (a-z).</td></tr>
 <tr><td><code>require_digit</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one digit (0-9).</td></tr>
 <tr><td><code>require_special</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one special (non-alphanumeric) character.</td></tr>
+<tr><td><code>rate_limit_backend</code></td><td>string</td><td><code>"memory"</code></td><td>Rate limit storage backend: <code>"memory"</code> (default, per-server), <code>"redis"</code> (shared across servers, requires <code>--features redis</code>), <code>"none"</code> (disabled).</td></tr>
+<tr><td><code>rate_limit_redis_url</code></td><td>string</td><td><code>""</code></td><td>Redis URL for rate limit backend. Falls back to <code>cache.redis_url</code> if empty.</td></tr>
+<tr><td><code>rate_limit_prefix</code></td><td>string</td><td><code>"crap:rl:"</code></td><td>Key prefix for Redis rate limit backend.</td></tr>
 </tbody>
 </table>
 </div>
@@ -752,8 +781,21 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tbody>
 <tr><td><code>default_depth</code></td><td>integer</td><td><code>1</code></td><td>Default population depth for <code>FindByID</code>. <code>Find</code> always defaults to <code>0</code>.</td></tr>
 <tr><td><code>max_depth</code></td><td>integer</td><td><code>10</code></td><td>Maximum allowed depth for any request. Hard cap to prevent excessive queries.</td></tr>
-<tr><td><code>populate_cache</code></td><td>boolean</td><td><code>false</code></td><td>Enable cross-request populate cache. Caches populated documents in memory, cleared on any write through the API. Improves read performance for repeated deep population. <strong>Opt-in</strong> because external DB modifications can cause stale reads.</td></tr>
-<tr><td><code>populate_cache_max_age_secs</code></td><td>integer</td><td><code>0</code></td><td>Periodic full cache clear interval in seconds. <code>0</code> = disabled (only write-through invalidation). Set <code>&gt; 0</code> to limit staleness when the database may be modified outside the API. Only used when <code>populate_cache = true</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="cache"><a class="header" href="#cache"><code>[cache]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>backend</code></td><td>string</td><td><code>"memory"</code></td><td>Cache backend: <code>"memory"</code> (in-memory DashMap), <code>"redis"</code> (shared, requires <code>--features redis</code>), <code>"none"</code> (disabled), or <code>"custom"</code> (Lua-delegated, planned).</td></tr>
+<tr><td><code>max_entries</code></td><td>integer</td><td><code>10000</code></td><td>Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear.</td></tr>
+<tr><td><code>max_age_secs</code></td><td>integer</td><td><code>0</code></td><td>Periodic full cache clear interval in seconds. <code>0</code> = disabled (only write-through invalidation). Set <code>&gt; 0</code> to limit staleness when the database may be modified outside the API.</td></tr>
+<tr><td><code>redis_url</code></td><td>string</td><td><code>"redis://127.0.0.1:6379"</code></td><td>Redis connection URL. Only used when <code>backend = "redis"</code>.</td></tr>
+<tr><td><code>prefix</code></td><td>string</td><td><code>"crap:"</code></td><td>Key prefix for the Redis backend. All keys are stored as <code>{prefix}{key}</code>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -777,7 +819,27 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
+<tr><td><code>storage</code></td><td>string</td><td><code>"local"</code></td><td>Storage backend: <code>"local"</code> (filesystem), <code>"s3"</code> (S3-compatible, requires <code>--features s3-storage</code>), or <code>"custom"</code> (Lua-delegated).</td></tr>
 <tr><td><code>max_file_size</code></td><td>integer/string</td><td><code>52428800</code> (<code>"50MB"</code>)</td><td>Global maximum file size. Accepts bytes (integer) or human-readable (<code>"50MB"</code>, <code>"1GB"</code>). Per-collection <code>max_file_size</code> overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding).</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="uploads3"><a class="header" href="#uploads3"><code>[upload.s3]</code></a></h3>
+<p>S3-compatible storage configuration. Only used when <code>storage = "s3"</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket</code></td><td>string</td><td>(required)</td><td>S3 bucket name.</td></tr>
+<tr><td><code>region</code></td><td>string</td><td><code>"us-east-1"</code></td><td>AWS region.</td></tr>
+<tr><td><code>endpoint</code></td><td>string</td><td>(AWS default)</td><td>Custom endpoint URL for MinIO, R2, B2, etc.</td></tr>
+<tr><td><code>access_key</code></td><td>string</td><td>(required)</td><td>AWS access key ID.</td></tr>
+<tr><td><code>secret_key</code></td><td>string</td><td>(required)</td><td>AWS secret access key.</td></tr>
+<tr><td><code>prefix</code></td><td>string</td><td><code>""</code></td><td>Optional key prefix prepended to all storage keys.</td></tr>
+<tr><td><code>public_url_base</code></td><td>string</td><td><code>""</code></td><td>Base URL for public file links (e.g., CDN). Empty = S3 URLs.</td></tr>
+<tr><td><code>path_style</code></td><td>boolean</td><td><code>false</code></td><td>Use path-style addressing (required for MinIO).</td></tr>
 </tbody>
 </table>
 </div>
@@ -788,7 +850,8 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>smtp_host</code></td><td>string</td><td><code>""</code> (empty)</td><td>SMTP server hostname. <strong>Empty = email disabled</strong> — all send attempts log a warning and return Ok.</td></tr>
+<tr><td><code>provider</code></td><td>string</td><td><code>"smtp"</code></td><td>Email provider: <code>"smtp"</code> (default), <code>"webhook"</code> (HTTP POST), <code>"log"</code> (dev mode), or <code>"custom"</code> (Lua).</td></tr>
+<tr><td><code>smtp_host</code></td><td>string</td><td><code>""</code> (empty)</td><td>SMTP server hostname. <strong>Empty with smtp provider = falls back to log provider.</strong></td></tr>
 <tr><td><code>smtp_port</code></td><td>integer</td><td><code>587</code></td><td>SMTP port. 587 is the standard STARTTLS port.</td></tr>
 <tr><td><code>smtp_user</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication username.</td></tr>
 <tr><td><code>smtp_pass</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication password.</td></tr>
@@ -796,10 +859,16 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><td><code>from_address</code></td><td>string</td><td><code>"noreply@example.com"</code></td><td>Sender email address for outgoing mail.</td></tr>
 <tr><td><code>from_name</code></td><td>string</td><td><code>"Crap CMS"</code></td><td>Sender display name.</td></tr>
 <tr><td><code>smtp_timeout</code></td><td>integer/string</td><td><code>30</code></td><td>SMTP connection and send timeout in seconds. Accepts integer or duration string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
+<tr><td><code>webhook_url</code></td><td>string</td><td><code>""</code></td><td>URL for the webhook email provider. Receives POST with JSON body.</td></tr>
+<tr><td><code>webhook_headers</code></td><td>map</td><td><code>{}</code></td><td>Extra HTTP headers for webhook requests (e.g., <code>{ Authorization = "Bearer ..." }</code>).</td></tr>
+<tr><td><code>queue_retries</code></td><td>integer</td><td><code>3</code></td><td>Retry count for emails sent via <code>crap.email.queue()</code>.</td></tr>
+<tr><td><code>queue_name</code></td><td>string</td><td><code>"email"</code></td><td>Job queue name for queued emails.</td></tr>
+<tr><td><code>queue_timeout</code></td><td>integer</td><td><code>30</code></td><td>Per-attempt timeout in seconds for queued email jobs.</td></tr>
+<tr><td><code>queue_concurrency</code></td><td>integer</td><td><code>5</code></td><td>Max concurrent queued email jobs processed by the scheduler.</td></tr>
 </tbody>
 </table>
 </div>
-<p>When configured, email enables password reset (“Forgot password?” link on login), email verification (optional per-collection), and the <code>crap.email.send()</code> Lua API.</p>
+<p>When configured, email enables password reset (“Forgot password?” link on login), email verification (optional per-collection), and the <code>crap.email.send()</code> Lua API. The <code>log</code> provider is useful for development — it logs email content to tracing without sending. The <code>custom</code> provider delegates to Lua via <code>crap.email.register()</code>.</p>
 <h3 id="hooks"><a class="header" href="#hooks"><code>[hooks]</code></a></h3>
 <div class="table-wrapper">
 <table>
@@ -809,7 +878,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tbody>
 <tr><td><code>on_init</code></td><td>string[]</td><td><code>[]</code></td><td>Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup.</td></tr>
 <tr><td><code>max_depth</code></td><td>integer</td><td><code>3</code></td><td>Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. <code>0</code> = never run hooks from Lua CRUD.</td></tr>
-<tr><td><code>vm_pool_size</code></td><td>integer</td><td><code>max(cpus, 4)</code> capped at 32</td><td>Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32.</td></tr>
+<tr><td><code>vm_pool_size</code></td><td>integer</td><td>CPU cores</td><td>Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores (fallback: 4 if detection fails).</td></tr>
 <tr><td><code>max_instructions</code></td><td>integer</td><td><code>10000000</code></td><td>Maximum Lua instructions per hook invocation. <code>0</code> = unlimited.</td></tr>
 <tr><td><code>max_memory</code></td><td>integer/string</td><td><code>52428800</code> (50 MB)</td><td>Maximum Lua memory per VM in bytes. Accepts integer or filesize string (<code>"50MB"</code>, <code>"100MB"</code>). <code>0</code> = unlimited.</td></tr>
 <tr><td><code>allow_private_networks</code></td><td>boolean</td><td><code>false</code></td><td>Allow <code>crap.http.request</code> to reach private/loopback/link-local IPs.</td></tr>
@@ -825,6 +894,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 </thead>
 <tbody>
 <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable live event streaming (SSE + gRPC Subscribe).</td></tr>
+<tr><td><code>default_mode</code></td><td>string</td><td><code>"metadata"</code></td><td>Default event delivery mode. <code>"metadata"</code> sends only event type, collection, and document ID. <code>"full"</code> sends the complete document payload.</td></tr>
 <tr><td><code>channel_capacity</code></td><td>integer</td><td><code>1024</code></td><td>Internal broadcast channel buffer size. Increase if subscribers lag.</td></tr>
 <tr><td><code>max_sse_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent SSE connections. When reached, new connections receive <code>503 Service Unavailable</code>. <code>0</code> = unlimited.</td></tr>
 <tr><td><code>max_subscribe_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive <code>UNAVAILABLE</code> status. <code>0</code> = unlimited.</td></tr>
@@ -868,7 +938,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>default_deny</code></td><td>boolean</td><td><code>false</code></td><td>When <code>true</code>, collections and globals without an explicit access function deny all operations. When <code>false</code> (default), missing access functions allow all operations.</td></tr>
+<tr><td><code>default_deny</code></td><td>boolean</td><td><code>true</code></td><td>When <code>true</code> (default), collections and globals without an explicit access function deny all operations. Set to <code>false</code> to allow all operations when no access function is defined.</td></tr>
 </tbody>
 </table>
 </div>
@@ -1259,6 +1329,43 @@ crap-cms serve --only api         # gRPC API only
 crap-cms serve --no-scheduler     # both servers, no scheduler
 crap-cms serve --only admin --no-scheduler
 crap-cms serve -d --only api      # detached, API only
+</code></pre>
+<h3 id="work--run-a-standalone-job-worker"><a class="header" href="#work--run-a-standalone-job-worker"><code>work</code> — Run a standalone job worker</a></h3>
+<pre><code class="language-bash">crap-cms work [--detach] [--stop] [--restart] [--status] [--queues &lt;list&gt;] [--concurrency &lt;n&gt;] [--no-cron]
+</code></pre>
+<p>Runs a dedicated job worker without HTTP/gRPC servers. For multi-server deployments where app servers run <code>serve --no-scheduler</code> and dedicated workers process jobs.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-d</code>, <code>--detach</code></td><td>Run in the background</td></tr>
+<tr><td><code>--stop</code></td><td>Stop a running detached worker</td></tr>
+<tr><td><code>--restart</code></td><td>Restart a running detached worker</td></tr>
+<tr><td><code>--status</code></td><td>Show whether a detached worker is running</td></tr>
+<tr><td><code>--queues &lt;list&gt;</code></td><td>Comma-separated queue names to process (default: all)</td></tr>
+<tr><td><code>--concurrency &lt;n&gt;</code></td><td>Override <code>jobs.max_concurrent</code> for this worker</td></tr>
+<tr><td><code>--no-cron</code></td><td>Skip cron scheduling (let another worker handle it)</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-bash">crap-cms work                           # process all queues
+crap-cms work --queues email            # email queue only
+crap-cms work --queues heavy --concurrency 2  # heavy jobs, limited concurrency
+crap-cms work --no-cron                 # skip cron, just process queued jobs
+crap-cms work -d                        # detached
+crap-cms work --status                  # check if running
+crap-cms work --stop                    # stop detached worker
+</code></pre>
+<p><strong>Multi-server deployment:</strong></p>
+<pre><code class="language-bash"># App servers (no job processing)
+crap-cms serve --no-scheduler
+
+# Dedicated workers
+crap-cms work -d                        # general worker
+crap-cms work -d --queues email         # email-only worker
+crap-cms work -d --queues heavy --concurrency 2  # heavy processing
 </code></pre>
 <h3 id="status--show-project-status"><a class="header" href="#status--show-project-status"><code>status</code> — Show project status</a></h3>
 <pre><code class="language-bash">crap-cms status
@@ -2509,8 +2616,8 @@ rpc Delete (DeleteRequest) returns (DeleteResponse);
 // Force permanent deletion
 DeleteRequest { collection: "posts", id: "abc", force_hard_delete: true }
 
-// Restore from trash
-rpc Restore (RestoreRequest) returns (RestoreResponse);
+// Undelete from trash
+rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
 </code></pre>
 <p>The <code>DeleteResponse</code> includes a <code>soft_deleted</code> boolean indicating whether the deletion was soft or hard.</p>
 <h3 id="lua"><a class="header" href="#lua">Lua</a></h3>
@@ -2520,8 +2627,8 @@ crap.collections.delete("posts", id)
 -- Force permanent delete
 crap.collections.delete("posts", id, { forceHardDelete = true })
 
--- Restore from trash
-crap.collections.restore("posts", id)
+-- Undelete from trash
+crap.collections.undelete("posts", id)
 </code></pre>
 <h3 id="mcp-1"><a class="header" href="#mcp-1">MCP</a></h3>
 <p>MCP delete tools automatically use soft delete when the collection has it enabled.</p>
@@ -4698,14 +4805,21 @@ local post = crap.collections.find_by_id("posts", id, { depth = 2 })
 </table>
 </div>
 <p>Join fields add one query per document per join field at each depth level.</p>
-<h3 id="populate-cache"><a class="header" href="#populate-cache">Populate Cache</a></h3>
-<p>For high-traffic deployments, an opt-in cross-request cache avoids redundant population queries. When enabled, populated documents are cached in memory and reused across requests. The cache is automatically cleared on any write operation (create, update, delete).</p>
-<pre><code class="language-toml">[depth]
-populate_cache = true              # Enable cross-request populate cache (default: false)
-populate_cache_max_age_secs = 60   # Optional: periodic full cache clear (default: 0 = off)
+<h3 id="cache-backend"><a class="header" href="#cache-backend">Cache Backend</a></h3>
+<p>A pluggable cache backend avoids redundant population queries across requests. The default <code>memory</code> backend caches populated documents in-process using DashMap. For multi-server deployments, use <code>redis</code> for a shared cache. The cache is automatically cleared on any write operation (create, update, delete).</p>
+<pre><code class="language-toml">[cache]
+backend = "memory"      # "memory" (default), "redis", "none", "custom"
+max_entries = 10000      # Soft cap for memory backend
+max_age_secs = 60        # Optional: periodic full cache clear (default: 0 = off)
 </code></pre>
-<p><strong>When to enable:</strong> High read traffic with repeated deep population of the same related documents (e.g., many posts referencing the same set of authors/categories).</p>
-<p><strong>Trade-off:</strong> If the database is modified outside the API (e.g., direct SQL, external tools), cached data can become stale. Set <code>populate_cache_max_age_secs</code> to limit staleness, or leave the cache disabled (default).</p>
+<p><strong>Backends:</strong></p>
+<ul>
+<li><code>"memory"</code> — In-process DashMap with soft entry cap. Default. Good for single-server.</li>
+<li><code>"redis"</code> — Shared Redis cache. Requires <code>--features redis</code>. Good for multi-server.</li>
+<li><code>"none"</code> — Cache disabled. Each request creates its own temporary cache (no cross-request sharing).</li>
+<li><code>"custom"</code> — Lua-delegated (planned, not yet implemented).</li>
+</ul>
+<p><strong>Trade-off:</strong> If the database is modified outside the API (e.g., direct SQL, external tools), cached data can become stale. Set <code>max_age_secs</code> to limit staleness, or use <code>backend = "none"</code> to disable.</p>
 <h3 id="recommendations"><a class="header" href="#recommendations">Recommendations</a></h3>
 <ul>
 <li><strong>Use <code>depth=0</code> for list endpoints.</strong> <code>Find</code> defaults to <code>depth=0</code> for this reason. Fetch related data when displaying a single document instead.</li>
@@ -5139,7 +5253,7 @@ return M
 <h2 id="concurrency"><a class="header" href="#concurrency">Concurrency</a></h2>
 <p>Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across requests. The pool size is configurable:</p>
 <pre><code class="language-toml">[hooks]
-vm_pool_size = 8  # default: max(available_parallelism, 4), capped at 32
+vm_pool_size = 8  # default: number of CPU cores
 </code></pre>
 <p>Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, <code>init.lua</code> execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.</p>
 <h2 id="resource-limits"><a class="header" href="#resource-limits">Resource Limits</a></h2>
@@ -6027,7 +6141,10 @@ require("plugins.seo_defaults").install() -- sets default values on seo fields
 <li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>).</li>
 <li><strong><code>_password_hash</code></strong> — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.</li>
 <li><strong><code>_locked</code></strong> — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See <a href="#account-locking">Auth Collections</a>.</li>
-<li><strong>Custom strategies</strong> — pluggable auth via Lua functions (API keys, LDAP, SSO).</li>
+<li><strong>Token/Password providers</strong> — <code>TokenProvider</code> (JWT) and <code>PasswordProvider</code> (Argon2id) traits abstract token and password primitives. Rarely swapped.</li>
+<li><strong>Strategy chain</strong> — <code>local</code> (email+password) is the built-in strategy. Per-collection Lua strategies are tried as fallback. OAuth2, Cloudflare Access, AD, and API key auth are implemented as Lua strategies.</li>
+<li><strong>Email MFA</strong> — built-in multi-factor authentication. Enable <code>mfa = "email"</code> on an auth collection to send a 6-digit code after password verification.</li>
+<li><strong>Auth callbacks</strong> — <code>/admin/auth/callback/{name}</code> catch-all route dispatches to Lua hooks for OAuth2/OIDC redirect flows.</li>
 <li><strong>Password reset</strong> — token-based forgot/reset password flow via admin UI and gRPC. Requires email configuration.</li>
 <li><strong>Email verification</strong> — optional per-collection. When enabled, users must verify their email before logging in.</li>
 </ul>
@@ -6441,6 +6558,62 @@ return M
 <li>Only custom strategies can authenticate users</li>
 <li>The <code>Login</code> gRPC RPC is effectively disabled for this collection</li>
 </ul>
+<h2 id="auth-callbacks-oauth2--oidc"><a class="header" href="#auth-callbacks-oauth2--oidc">Auth Callbacks (OAuth2 / OIDC)</a></h2>
+<p>For redirect-based auth flows (OAuth2, OIDC, SAML), use the built-in callback route:</p>
+<pre><code>GET/POST /admin/auth/callback/{name}
+</code></pre>
+<p>This dispatches to a Lua hook <code>auth_callback.{name}</code> which receives request headers and query parameters. The hook returns a user document to create a session.</p>
+<pre><code class="language-lua">-- hooks/auth_callback/google.lua
+local M = {}
+
+function M.google(ctx)
+    -- ctx.headers._query_code contains the OAuth authorization code
+    local code = ctx.headers["_query_code"]
+    if not code then return nil end
+
+    -- Exchange code for tokens
+    local res = crap.http.request({
+        method = "POST",
+        url = "https://oauth2.googleapis.com/token",
+        json = {
+            code = code,
+            client_id = crap.env.get("GOOGLE_CLIENT_ID"),
+            client_secret = crap.env.get("GOOGLE_CLIENT_SECRET"),
+            redirect_uri = crap.env.get("GOOGLE_REDIRECT_URI"),
+            grant_type = "authorization_code",
+        },
+    })
+    if res.status ~= 200 then return nil end
+
+    local tokens = crap.json.decode(res.body)
+
+    -- Get user info
+    local info_res = crap.http.request({
+        url = "https://www.googleapis.com/oauth2/v2/userinfo",
+        headers = { Authorization = "Bearer " .. tokens.access_token },
+    })
+    local userinfo = crap.json.decode(info_res.body)
+
+    -- Find or create user
+    local users = crap.find("users", { where = { email = userinfo.email } })
+    if #users.documents &gt; 0 then return users.documents[1] end
+
+    return crap.create("users", {
+        email = userinfo.email,
+        name = userinfo.name,
+    })
+end
+
+return M
+</code></pre>
+<p>To initiate the OAuth flow, add a link on your login page pointing to the provider’s authorize URL with your <code>redirect_uri</code> set to <code>/admin/auth/callback/google</code>.</p>
+<h2 id="email-mfa"><a class="header" href="#email-mfa">Email MFA</a></h2>
+<p>Auth collections can require a second factor after password verification:</p>
+<pre><code class="language-lua">auth = {
+    mfa = "email",  -- "email" or false (default)
+}
+</code></pre>
+<p>When enabled, after successful password/strategy authentication, a 6-digit code is emailed to the user. They must enter the code to complete login. Codes expire after 5 minutes and are single-use.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="cli-user-creation"><a class="header" href="#cli-user-creation">CLI User Creation</a></h1>
 <p>The <code>user create</code> command bootstraps users without the admin UI or gRPC API. Useful for creating the first admin user.</p>
@@ -6540,8 +6713,8 @@ crap-cms user delete -e user@example.com -y
 <li>A filter table (read only) — allowed with query constraints</li>
 </ul>
 <h2 id="opt-in"><a class="header" href="#opt-in">Opt-In</a></h2>
-<p>If no access control is configured, everything is allowed. This is fully backward compatible with existing setups.</p>
-<p>To enforce a “secure by default” posture, set <code>default_deny = true</code> in <code>[access]</code> in <code>crap.toml</code>. With this setting, collections and globals without explicit access functions <strong>deny all operations</strong> instead of allowing them. Every collection must then explicitly declare its access rules.</p>
+<p>By default, collections and globals without explicit access functions <strong>deny all operations</strong> (<code>default_deny = true</code>). Every collection must explicitly declare its access rules.</p>
+<p>To allow all operations on collections without access functions (e.g., during development), set <code>default_deny = false</code> in <code>[access]</code> in <code>crap.toml</code>.</p>
 <h2 id="three-levels"><a class="header" href="#three-levels">Three Levels</a></h2>
 <ol>
 <li><strong>Admin panel-level</strong> — <code>admin.access</code> in <code>crap.toml</code>. A Lua function that gates access to the entire admin UI, checked after login. See <a href="#access-2">Admin UI</a>.</li>
@@ -6701,6 +6874,7 @@ return M
 </ul>
 <h3 id="read-access"><a class="header" href="#read-access">Read Access</a></h3>
 <p>After a query, denied fields are <strong>stripped from the response</strong>. The field still exists in the database, but the user doesn’t see it.</p>
+<p>Fields with <code>admin.hidden = true</code> are also stripped from all API responses, regardless of access rules.</p>
 <h2 id="example-5"><a class="header" href="#example-5">Example</a></h2>
 <pre><code class="language-lua">-- hooks/access.lua
 local M = {}
@@ -6859,7 +7033,7 @@ end
 </table>
 </div>
 <h2 id="file-storage"><a class="header" href="#file-storage">File Storage</a></h2>
-<p>Files are stored at <code>&lt;config_dir&gt;/uploads/&lt;collection_slug&gt;/</code>:</p>
+<p>By default, files are stored on the local filesystem at <code>&lt;config_dir&gt;/uploads/&lt;collection_slug&gt;/</code>:</p>
 <pre><code>uploads/
 └── media/
     ├── a1b2c3_my-photo.jpg          # original
@@ -6871,6 +7045,81 @@ end
     └── a1b2c3_my-photo_card.avif
 </code></pre>
 <p>Filenames are sanitized (lowercase, characters that are not alphanumeric, hyphens, or underscores are replaced with hyphens) and prefixed with a random 10-character nanoid.</p>
+<h3 id="storage-backends"><a class="header" href="#storage-backends">Storage Backends</a></h3>
+<p>The storage backend is configurable via <code>[upload] storage</code> in <code>crap.toml</code>. Local filesystem is the default and recommended for most deployments.</p>
+<h4 id="local-default"><a class="header" href="#local-default">Local (default)</a></h4>
+<pre><code class="language-toml">[upload]
+storage = "local"  # or omit — local is the default
+</code></pre>
+<p>No additional configuration needed. Files stored at <code>{config_dir}/uploads/</code>.</p>
+<h4 id="s3-compatible-optional"><a class="header" href="#s3-compatible-optional">S3-Compatible (optional)</a></h4>
+<p>For multi-server deployments where multiple instances need to share uploaded files. Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, and DigitalOcean Spaces. Requires <code>--features s3-storage</code> at build time.</p>
+<pre><code class="language-toml">[upload]
+storage = "s3"
+
+[upload.s3]
+bucket = "my-uploads"
+region = "us-east-1"
+endpoint = "https://s3.amazonaws.com"    # or MinIO/R2 URL
+access_key = "${AWS_ACCESS_KEY}"
+secret_key = "${AWS_SECRET_KEY}"
+prefix = ""                              # optional key prefix
+public_url_base = ""                     # CDN URL (empty = S3 URLs)
+path_style = false                       # true for MinIO
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket</code></td><td>Yes</td><td>S3 bucket name</td></tr>
+<tr><td><code>region</code></td><td>No</td><td>AWS region (default: <code>us-east-1</code>)</td></tr>
+<tr><td><code>endpoint</code></td><td>No</td><td>Custom endpoint for non-AWS providers</td></tr>
+<tr><td><code>access_key</code></td><td>Yes</td><td>AWS access key ID</td></tr>
+<tr><td><code>secret_key</code></td><td>Yes</td><td>AWS secret access key</td></tr>
+<tr><td><code>prefix</code></td><td>No</td><td>Key prefix prepended to all storage keys</td></tr>
+<tr><td><code>public_url_base</code></td><td>No</td><td>Base URL for public file links (e.g., CDN)</td></tr>
+<tr><td><code>path_style</code></td><td>No</td><td>Use path-style URLs (required for MinIO)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Files are served through the CMS via <code>/uploads/...</code> (proxied from S3) so access control and content negotiation work identically to local storage.</p>
+<blockquote>
+<p><strong>Tip:</strong> Use <code>queue: true</code> on image format options (WebP, AVIF) when using S3. Deferred processing avoids upload latency from the extra S3 round trips.</p>
+</blockquote>
+<h4 id="custom-lua"><a class="header" href="#custom-lua">Custom (Lua)</a></h4>
+<p>For exotic storage providers, register custom functions in <code>init.lua</code>:</p>
+<pre><code class="language-lua">crap.storage.register({
+  put = function(key, data, content_type)
+    crap.http.request({
+      method = "PUT",
+      url = "https://storage.example.com/" .. key,
+      body = data,
+      headers = { ["Content-Type"] = content_type },
+    })
+  end,
+  get = function(key)
+    local resp = crap.http.request({
+      url = "https://storage.example.com/" .. key,
+    })
+    return resp.body
+  end,
+  delete = function(key)
+    crap.http.request({
+      method = "DELETE",
+      url = "https://storage.example.com/" .. key,
+    })
+  end,
+  url = function(key)
+    return "https://cdn.example.com/" .. key
+  end,
+})
+</code></pre>
+<pre><code class="language-toml">[upload]
+storage = "custom"
+</code></pre>
+<p>Binary data is passed natively between Rust and Lua (no base64 encoding). The <code>crap.http.request</code> function handles binary request/response bodies.</p>
 <h2 id="url-structure"><a class="header" href="#url-structure">URL Structure</a></h2>
 <p>Files are served at <code>/uploads/&lt;collection&gt;/&lt;filename&gt;</code>:</p>
 <pre><code>/uploads/media/a1b2c3_my-photo.jpg
@@ -7527,10 +7776,10 @@ crap.collections.delete("posts", "abc123", { overrideAccess = true })
 </tbody>
 </table>
 </div>
-<h2 id="crapcollectionsrestorecollection-id"><a class="header" href="#crapcollectionsrestorecollection-id">crap.collections.restore(collection, id)</a></h2>
-<p>Restore a soft-deleted document from trash. Returns <code>true</code> on success. Only works on collections with <code>soft_delete = true</code>. Re-syncs the FTS index after restore.</p>
+<h2 id="crapcollectionsundeletecollection-id"><a class="header" href="#crapcollectionsundeletecollection-id">crap.collections.undelete(collection, id)</a></h2>
+<p>Undelete a soft-deleted document from trash. Returns <code>true</code> on success. Only works on collections with <code>soft_delete = true</code>. Re-syncs the FTS index after undelete.</p>
 <p><strong>Only available inside hooks with transaction context.</strong></p>
-<pre><code class="language-lua">crap.collections.restore("posts", "abc123")
+<pre><code class="language-lua">crap.collections.undelete("posts", "abc123")
 </code></pre>
 <h2 id="lifecycle-hooks-in-lua-crud"><a class="header" href="#lifecycle-hooks-in-lua-crud">Lifecycle Hooks in Lua CRUD</a></h2>
 <p>Lua CRUD operations run the <strong>same lifecycle hooks</strong> as the gRPC API and admin UI:</p>
@@ -8195,6 +8444,7 @@ end
 <li>Available in both init.lua and hooks.</li>
 <li>Uses the same Argon2id implementation as the built-in auth system.</li>
 <li>Useful for custom auth strategies or migrating users from external systems.</li>
+<li>For custom authentication logic, use <a href="#custom-strategies">auth strategies</a> or <a href="#auth-callbacks">auth callbacks</a>.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crapenv"><a class="header" href="#crapenv">crap.env</a></h1>
@@ -8350,7 +8600,7 @@ local expiry = crap.config.get("auth.token_expiry")  -- 7200
 <tr><td><code>locale.fallback</code></td><td>boolean</td><td>true</td></tr>
 <tr><td><code>email.smtp_host</code></td><td>string</td><td>“”</td></tr>
 <tr><td><code>live.enabled</code></td><td>boolean</td><td>true</td></tr>
-<tr><td><code>access.default_deny</code></td><td>boolean</td><td>false</td></tr>
+<tr><td><code>access.default_deny</code></td><td>boolean</td><td>true</td></tr>
 </tbody>
 </table>
 </div>
@@ -8363,9 +8613,10 @@ local expiry = crap.config.get("auth.token_expiry")  -- 7200
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crapemail"><a class="header" href="#crapemail">crap.email</a></h1>
-<p>Send emails via SMTP. Requires the <code>[email]</code> section in <code>crap.toml</code> to be configured.</p>
+<p>Send emails via the configured email provider. Supports SMTP, webhooks (SendGrid, Mailgun, etc.), and custom Lua providers.</p>
 <h2 id="configuration-6"><a class="header" href="#configuration-6">Configuration</a></h2>
 <pre><code class="language-toml">[email]
+provider = "smtp"        # "smtp" (default), "webhook", "log", or "custom"
 smtp_host = "smtp.example.com"
 smtp_port = 587
 smtp_user = "noreply@example.com"
@@ -8373,11 +8624,16 @@ smtp_pass = "your-smtp-password"
 smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit), "none" (plain/test)
 from_address = "noreply@example.com"
 from_name = "My App"
+
+# Queue settings for crap.email.queue()
+queue_retries = 3        # retry count (default: 3)
+queue_name = "email"     # job queue name (default: "email")
+queue_timeout = 30       # per-attempt timeout in seconds (default: 30)
+queue_concurrency = 5    # max concurrent queued emails (default: 5)
 </code></pre>
-<p>If <code>smtp_host</code> is empty (default), all <code>crap.email.send()</code> calls log a warning and return <code>true</code> (no-op). The system remains fully functional without SMTP.</p>
+<p>If <code>smtp_host</code> is empty with the default <code>smtp</code> provider, emails are logged instead of sent (equivalent to <code>provider = "log"</code>).</p>
 <h2 id="crapemailsendopts"><a class="header" href="#crapemailsendopts">crap.email.send(opts)</a></h2>
-<p>Send an email.</p>
-<p><strong>Parameters:</strong></p>
+<p>Send an email immediately (blocking). Use when you need to know if the send succeeded.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -8392,7 +8648,6 @@ from_name = "My App"
 </table>
 </div>
 <p><strong>Returns:</strong> <code>true</code> on success.</p>
-<p><strong>Example:</strong></p>
 <pre><code class="language-lua">crap.email.send({
     to = "user@example.com",
     subject = "Welcome!",
@@ -8400,32 +8655,86 @@ from_name = "My App"
     text = "Welcome! Thanks for signing up.",
 })
 </code></pre>
-<h3 id="use-in-hooks"><a class="header" href="#use-in-hooks">Use in Hooks</a></h3>
-<p><code>crap.email.send()</code> is blocking (uses SMTP transport), which is correct because Lua hooks run inside <code>spawn_blocking</code>. Safe to call from any hook.</p>
-<pre><code class="language-lua">-- hooks/notifications.lua
-local M = {}
-
-function M.notify_on_create(ctx)
-    local admin_email = crap.env.get("CRAP_ADMIN_EMAIL")
-    if admin_email then
-        crap.email.send({
-            to = admin_email,
-            subject = "New " .. ctx.collection .. " created",
-            html = "&lt;p&gt;A new document was created in &lt;b&gt;" .. ctx.collection .. "&lt;/b&gt;.&lt;/p&gt;",
+<h2 id="crapemailqueueopts"><a class="header" href="#crapemailqueueopts">crap.email.queue(opts)</a></h2>
+<p>Queue an email for async delivery with automatic retries. Returns immediately — the email is processed by the scheduler with exponential backoff on failure (5s, 10s, 20s, …, max 300s).</p>
+<p>Requires a transaction context (available in <code>before_change</code>, <code>before_delete</code>, and other hooks with CRUD access).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>to</code></td><td>string</td><td>yes</td><td>Recipient email address</td></tr>
+<tr><td><code>subject</code></td><td>string</td><td>yes</td><td>Email subject line</td></tr>
+<tr><td><code>html</code></td><td>string</td><td>yes</td><td>HTML email body</td></tr>
+<tr><td><code>text</code></td><td>string</td><td>no</td><td>Plain text fallback body</td></tr>
+<tr><td><code>retries</code></td><td>integer</td><td>no</td><td>Override retry count from config (default: <code>email.queue_retries</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> Job run ID (string).</p>
+<pre><code class="language-lua">local job_id = crap.email.queue({
+    to = "user@example.com",
+    subject = "Your report is ready",
+    html = "&lt;p&gt;Download your report at ...&lt;/p&gt;",
+    retries = 5,  -- try up to 5 times
+})
+</code></pre>
+<blockquote>
+<p><strong>When to use <code>send</code> vs <code>queue</code>:</strong></p>
+<ul>
+<li>Use <code>send</code> when the email result matters for the current operation (e.g., inline error handling).</li>
+<li>Use <code>queue</code> for everything else — password resets, notifications, reports. The queue handles retries automatically, and failures don’t block the request.</li>
+</ul>
+</blockquote>
+<h2 id="crapemailregisterhandler"><a class="header" href="#crapemailregisterhandler">crap.email.register(handler)</a></h2>
+<p>Register a custom email provider. Only used when <code>[email] provider = "custom"</code> in <code>crap.toml</code>. Call in <code>init.lua</code>.</p>
+<pre><code class="language-lua">crap.email.register({
+    send = function(opts)
+        crap.http.request({
+            method = "POST",
+            url = "https://api.sendgrid.com/v3/mail/send",
+            headers = {
+                Authorization = "Bearer " .. crap.env.get("SENDGRID_KEY"),
+                ["Content-Type"] = "application/json",
+            },
+            body = crap.json.encode({
+                personalizations = {{ to = {{ email = opts.to }} }},
+                from = { email = "noreply@example.com" },
+                subject = opts.subject,
+                content = {{ type = "text/html", value = opts.html }},
+            }),
+        })
+    end,
+})
+</code></pre>
+<h2 id="providers"><a class="header" href="#providers">Providers</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Provider</th><th>Config</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>smtp</code></td><td><code>smtp_host</code>, <code>smtp_port</code>, etc.</td><td>Default. Standard SMTP via <code>lettre</code>.</td></tr>
+<tr><td><code>webhook</code></td><td><code>webhook_url</code>, <code>webhook_headers</code></td><td>HTTP POST with JSON body. Works with SendGrid, Mailgun, Resend.</td></tr>
+<tr><td><code>log</code></td><td>(none)</td><td>Logs emails to tracing. For development/testing.</td></tr>
+<tr><td><code>custom</code></td><td>(none)</td><td>Delegates to Lua via <code>crap.email.register()</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="use-in-hooks"><a class="header" href="#use-in-hooks">Use in Hooks</a></h2>
+<p>Both <code>send</code> and <code>queue</code> are safe to call from hooks. <code>send</code> is blocking (runs within <code>spawn_blocking</code>). <code>queue</code> inserts a job row and returns immediately.</p>
+<pre><code class="language-lua">-- hooks/welcome.lua — queue a welcome email on user creation
+return function(ctx)
+    if ctx.operation == "create" and ctx.data.email then
+        crap.email.queue({
+            to = ctx.data.email,
+            subject = "Welcome!",
+            html = "&lt;p&gt;Thanks for signing up.&lt;/p&gt;",
         })
     end
     return ctx
 end
-
-return M
-</code></pre>
-<pre><code class="language-lua">-- collections/posts.lua
-crap.collections.define("posts", {
-    hooks = {
-        after_change = { "hooks.notifications.notify_on_create" },
-    },
-    fields = { ... },
-})
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="craplocale"><a class="header" href="#craplocale">crap.locale</a></h1>
@@ -9291,14 +9600,14 @@ grpcurl -plaintext -d '{
     "force_hard_delete": true
 }' localhost:50051 crap.ContentAPI/Delete
 </code></pre>
-<h2 id="restore"><a class="header" href="#restore">Restore</a></h2>
-<p>Restore a soft-deleted document from trash. Only works on collections with <code>soft_delete = true</code>.</p>
-<pre><code class="language-protobuf">message RestoreRequest {
+<h2 id="undelete"><a class="header" href="#undelete">Undelete</a></h2>
+<p>Undelete a soft-deleted document from trash. Only works on collections with <code>soft_delete = true</code>.</p>
+<pre><code class="language-protobuf">message UndeleteRequest {
   string collection = 1;
   string id = 2;
 }
 
-message RestoreResponse {
+message UndeleteResponse {
   Document document = 1;
 }
 </code></pre>
@@ -10176,16 +10485,27 @@ def document_to_post(doc) -&gt; Post:
 <h2 id="configuration-8"><a class="header" href="#configuration-8">Configuration</a></h2>
 <p>In <code>crap.toml</code>:</p>
 <pre><code class="language-toml">[live]
-enabled = true           # default: true
-channel_capacity = 1024  # default: 1024
+enabled = true              # default: true
+default_mode = "metadata"   # default: "metadata" — global default for all collections
+channel_capacity = 1024     # default: 1024
 # max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
 </code></pre>
 <p>Set <code>enabled = false</code> to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.</p>
 <p>Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive <code>503 Service Unavailable</code> and new gRPC Subscribe calls receive <code>UNAVAILABLE</code> status. Existing connections are not affected.</p>
+<h2 id="event-delivery-modes"><a class="header" href="#event-delivery-modes">Event Delivery Modes</a></h2>
+<p>Each collection can control what data events carry:</p>
+<ul>
+<li>
+<p><strong><code>metadata</code></strong> (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data, no <code>after_read</code> hooks. Clients re-fetch via <code>FindByID</code> if needed. Fast, safe, zero hook overhead.</p>
+</li>
+<li>
+<p><strong><code>full</code></strong> — events carry complete document data, processed through <code>after_read</code> hooks and field-level access stripping — the same data a <code>Find</code> or <code>FindByID</code> call would return. Opt-in per collection.</p>
+</li>
+</ul>
+<p><strong>Performance note:</strong> In <code>full</code> mode, <code>after_read</code> hooks run once per event per subscriber. For collections with expensive hooks and many subscribers, use <code>metadata</code> mode and let clients re-fetch.</p>
 <h2 id="per-collection-control"><a class="header" href="#per-collection-control">Per-Collection Control</a></h2>
-<p>Each collection (and global) can control whether it emits events via the <code>live</code> field:</p>
-<pre><code class="language-lua">-- Broadcast all events (default when absent)
+<pre><code class="language-lua">-- Broadcast all events in metadata mode (default)
 crap.collections.define("posts", { ... })
 
 -- Disable broadcasting entirely
@@ -10194,28 +10514,58 @@ crap.collections.define("audit_log", {
     ...
 })
 
--- Dynamic: Lua function decides per-event
+-- Full data mode: events include document data with after_read hooks
+crap.collections.define("posts", {
+    live = { mode = "full" },
+    ...
+})
+
+-- Full data mode with a Lua filter function
+crap.collections.define("posts", {
+    live = { mode = "full", filter = "hooks.posts.should_broadcast" },
+    ...
+})
+
+-- Lua function decides per-event (metadata mode)
 crap.collections.define("posts", {
     live = "hooks.posts.should_broadcast",
     ...
 })
 </code></pre>
-<p>The function receives <code>{ collection, operation, data }</code> and returns <code>true</code> to broadcast or <code>false</code>/<code>nil</code> to suppress.</p>
-<h2 id="event-structure"><a class="header" href="#event-structure">Event Structure</a></h2>
-<p>Each event contains:</p>
+<p>The filter function receives <code>{ collection, operation, data }</code> and returns <code>true</code> to broadcast or <code>false</code>/<code>nil</code> to suppress.</p>
+<h2 id="access-control-2"><a class="header" href="#access-control-2">Access Control</a></h2>
+<p>Event streams enforce the same access rules as normal read operations:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Field</th><th>Description</th></tr>
+<tr><th>Layer</th><th style="text-align: center">metadata</th><th style="text-align: center">full</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>sequence</code></td><td>Monotonic sequence number</td></tr>
-<tr><td><code>timestamp</code></td><td>ISO 8601 timestamp</td></tr>
-<tr><td><code>target</code></td><td><code>"collection"</code> or <code>"global"</code></td></tr>
-<tr><td><code>operation</code></td><td><code>"create"</code>, <code>"update"</code>, or <code>"delete"</code></td></tr>
-<tr><td><code>collection</code></td><td>Collection or global slug</td></tr>
-<tr><td><code>document_id</code></td><td>Document ID</td></tr>
-<tr><td><code>data</code></td><td>Full document fields (empty for delete)</td></tr>
+<tr><td>Collection-level access</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td><td>Only collections the subscriber can read</td></tr>
+<tr><td>Row-level constraints</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td><td>Constraint filters evaluated in-memory per event</td></tr>
+<tr><td><code>after_read</code> hooks</td><td style="text-align: center">—</td><td style="text-align: center">✅</td><td>Data transformed per subscriber (same as Find)</td></tr>
+<tr><td>Field-level access</td><td style="text-align: center">—</td><td style="text-align: center">✅</td><td>Denied fields stripped per subscriber</td></tr>
+<tr><td><code>before_broadcast</code> hooks</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td><td>Can modify/suppress events before delivery</td></tr>
+</tbody>
+</table>
+</div>
+<p>Row-level constraints use in-memory evaluation of the same filters that <code>Find</code> uses as SQL WHERE conditions. For example, if a user’s access returns <code>{ owner = ctx.user.id }</code>, only events where <code>owner</code> matches are delivered.</p>
+<p>Access is snapshotted at subscribe time. Permission changes require reconnect.</p>
+<h2 id="event-structure"><a class="header" href="#event-structure">Event Structure</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th><th style="text-align: center">metadata</th><th style="text-align: center">full</th></tr>
+</thead>
+<tbody>
+<tr><td><code>sequence</code></td><td>Monotonic sequence number</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>timestamp</code></td><td>ISO 8601 timestamp</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>target</code></td><td><code>"collection"</code> or <code>"global"</code></td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>operation</code></td><td><code>"create"</code>, <code>"update"</code>, <code>"delete"</code></td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>collection</code></td><td>Collection or global slug</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>document_id</code></td><td>Document ID</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>data</code></td><td>Document fields (hook-processed)</td><td style="text-align: center">empty</td><td style="text-align: center">✅</td></tr>
+<tr><td><code>edited_by</code></td><td>User who made the change</td><td style="text-align: center">✅</td><td style="text-align: center">✅</td></tr>
 </tbody>
 </table>
 </div>
@@ -10225,19 +10575,24 @@ crap.collections.define("posts", {
 
 After commit:
   -&gt; publish_event()
-       1. live setting check
-       2. before_broadcast hooks
+       1. live setting check (enabled/disabled/function)
+       2. before_broadcast hooks (can modify/suppress)
        3. EventBus.publish()
-            -&gt; gRPC Subscribe stream
-            -&gt; Admin SSE stream
+            -&gt; Per subscriber:
+                 a. collection access (cached)
+                 b. row-level constraints (cached, in-memory)
+                 c. mode:
+                    metadata → deliver metadata only
+                    full → after_read hooks → field strip → deliver
 </code></pre>
-<h2 id="limitations-v1"><a class="header" href="#limitations-v1">Limitations (V1)</a></h2>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
 <ul>
 <li>Events are <strong>ephemeral</strong> — missed events are not replayed</li>
 <li>Access is <strong>snapshotted at subscribe time</strong> — permission changes require reconnect</li>
 <li>No field-level subscription filters</li>
 <li>No event persistence or replay</li>
 <li><code>before_broadcast</code> hooks have no CRUD access (fires after commit)</li>
+<li>In <code>full</code> mode, <code>after_read</code> hooks run per subscriber — expensive hooks may impact performance at scale</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="grpc-subscribe-rpc"><a class="header" href="#grpc-subscribe-rpc">gRPC Subscribe RPC</a></h1>
@@ -10272,7 +10627,7 @@ grpcurl -plaintext -d '{
   "token": "your-jwt-token"
 }' localhost:50051 crap.ContentAPI/Subscribe
 </code></pre>
-<h2 id="access-control-2"><a class="header" href="#access-control-2">Access Control</a></h2>
+<h2 id="access-control-3"><a class="header" href="#access-control-3">Access Control</a></h2>
 <ul>
 <li>Authentication via <code>token</code> field (same token as <code>Login</code> response)</li>
 <li>Read access is checked at subscribe time for each requested collection/global</li>
@@ -10308,7 +10663,7 @@ data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","o
 <li>Sends keepalive pings every 30 seconds</li>
 <li>Only activates on pages with the admin layout</li>
 </ul>
-<h2 id="access-control-3"><a class="header" href="#access-control-3">Access Control</a></h2>
+<h2 id="access-control-4"><a class="header" href="#access-control-4">Access Control</a></h2>
 <p>Same as gRPC Subscribe: read access is checked at connection time per collection/global. Events for inaccessible collections are filtered out.</p>
 <blockquote>
 <p><strong>Note:</strong> Access control is <strong>snapshotted at subscribe time</strong>. If a user’s permissions change after they subscribe to the SSE stream (e.g., their role is updated or access rules are modified), they will continue receiving events based on the original permissions until the SSE connection is closed. To force a re-evaluation, the client must reconnect.</p>
@@ -10765,7 +11120,7 @@ end
 <tr><td><code>unique</code></td><td>boolean</td><td>Whether the field has a unique constraint</td></tr>
 <tr><td><code>localized</code></td><td>boolean</td><td>Whether the field is localized</td></tr>
 <tr><td><code>admin.label</code></td><td>string/null</td><td>Display label</td></tr>
-<tr><td><code>admin.hidden</code></td><td>boolean</td><td>Whether the field is hidden in admin</td></tr>
+<tr><td><code>admin.hidden</code></td><td>boolean</td><td>Whether the field is hidden in admin and API responses</td></tr>
 <tr><td><code>admin.readonly</code></td><td>boolean</td><td>Whether the field is readonly</td></tr>
 <tr><td><code>admin.width</code></td><td>number/null</td><td>Column width hint</td></tr>
 <tr><td><code>admin.description</code></td><td>string/null</td><td>Help text</td></tr>
@@ -11801,12 +12156,18 @@ html[data-theme="tokyo-night"] {
 <p>Variables <strong>not</strong> typically overridden by themes (inherited from <code>:root</code>): <code>--radius-*</code>, <code>--space-*</code>, <code>--transition-*</code>, <code>--text-xs</code> through <code>--text-2xl</code>, <code>--sidebar-width</code>, <code>--input-height</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="database-1"><a class="header" href="#database-1">Database</a></h1>
-<p>Crap CMS uses SQLite as its database, accessed via rusqlite with an r2d2 connection pool.</p>
+<p>Crap CMS uses SQLite as its database — zero configuration, single file, no server to manage.</p>
 <h2 id="configuration-10"><a class="header" href="#configuration-10">Configuration</a></h2>
 <pre><code class="language-toml">[database]
-path = "data/crap.db"   # relative to config dir, or absolute
+path = "data/crap.db"       # relative to config dir, or absolute
+pool_max_size = 64           # connection pool size
+cache_size = -16384          # page cache in KB (16MB)
+mmap_size = 268435456        # memory-mapped I/O (256MB)
 </code></pre>
-<h2 id="wal-mode"><a class="header" href="#wal-mode">WAL Mode</a></h2>
+<blockquote>
+<p>For <a href="#multi-server-deployment">multi-server deployments</a>, a PostgreSQL backend is available via <code>--features postgres</code>.</p>
+</blockquote>
+<h2 id="wal-mode-sqlite"><a class="header" href="#wal-mode-sqlite">WAL Mode (SQLite)</a></h2>
 <p>The database runs in WAL (Write-Ahead Logging) mode for better concurrent read performance. This is set automatically when the connection pool is created.</p>
 <h2 id="schema"><a class="header" href="#schema">Schema</a></h2>
 <h3 id="collection-tables"><a class="header" href="#collection-tables">Collection Tables</a></h3>
@@ -11899,6 +12260,58 @@ CREATE TABLE posts_slides (
 5. Run after-hooks (inside same transaction, errors roll back)
 6. Commit transaction
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="cache-backend-1"><a class="header" href="#cache-backend-1">Cache Backend</a></h1>
+<p>Crap CMS uses a pluggable cache backend for cross-request caching of populated relationship documents. The cache is cleared automatically on any write operation (create, update, delete) and optionally on a periodic timer.</p>
+<h2 id="backends"><a class="header" href="#backends">Backends</a></h2>
+<h3 id="memory-default"><a class="header" href="#memory-default">Memory (default)</a></h3>
+<p>In-process <code>DashMap</code> with a configurable soft entry cap. Fast, zero infrastructure, but per-server — each instance has its own cache.</p>
+<pre><code class="language-toml">[cache]
+backend = "memory"
+max_entries = 10000
+</code></pre>
+<p><strong>When to use:</strong> Single-server deployments, development, or when you don’t need cross-server cache coherence.</p>
+<h3 id="redis"><a class="header" href="#redis">Redis</a></h3>
+<p>Shared cache via Redis. All servers read and write to the same cache, so a write on one server invalidates the cache for all. Requires building with <code>--features redis</code>.</p>
+<pre><code class="language-toml">[cache]
+backend = "redis"
+redis_url = "redis://redis.example.com:6379"
+prefix = "crap:"
+max_age_secs = 60
+</code></pre>
+<p>Keys are automatically prefixed with <code>prefix</code> for namespace isolation. When <code>max_age_secs &gt; 0</code>, each key is set with a Redis TTL — expired keys are evicted by Redis automatically, and the periodic clear task also runs as a safety net.</p>
+<p><strong>When to use:</strong> Multi-server deployments where stale cache data across servers is unacceptable.</p>
+<h3 id="none"><a class="header" href="#none">None</a></h3>
+<p>No-op backend. Cache operations are silently ignored. Each request’s relationship population runs fresh queries with no cross-request sharing.</p>
+<pre><code class="language-toml">[cache]
+backend = "none"
+</code></pre>
+<p><strong>When to use:</strong> When the database is modified outside the API (direct SQL, external tools) and stale reads are unacceptable, or when debugging cache-related issues.</p>
+<h2 id="cache-invalidation"><a class="header" href="#cache-invalidation">Cache Invalidation</a></h2>
+<p>The cache uses two invalidation strategies:</p>
+<ol>
+<li>
+<p><strong>Write-through invalidation</strong> — every <code>Create</code>, <code>Update</code>, <code>Delete</code>, <code>Restore</code>, <code>UpdateMany</code>, <code>DeleteMany</code>, <code>UpdateGlobal</code>, and <code>RestoreVersion</code> operation clears the entire cache. This is the primary invalidation mechanism.</p>
+</li>
+<li>
+<p><strong>Periodic full clear</strong> — when <code>max_age_secs &gt; 0</code>, a background task clears the entire cache on a timer. This handles external database mutations that bypass the API.</p>
+</li>
+</ol>
+<h2 id="configuration-reference"><a class="header" href="#configuration-reference">Configuration Reference</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>backend</code></td><td>string</td><td><code>"memory"</code></td><td><code>"memory"</code>, <code>"redis"</code>, or <code>"none"</code></td></tr>
+<tr><td><code>max_entries</code></td><td>integer</td><td><code>10000</code></td><td>Soft cap for memory backend. New keys are rejected at capacity; existing keys can still be updated.</td></tr>
+<tr><td><code>max_age_secs</code></td><td>integer</td><td><code>0</code></td><td>Periodic clear interval (seconds). <code>0</code> = disabled. For Redis, also sets per-key TTL.</td></tr>
+<tr><td><code>redis_url</code></td><td>string</td><td><code>"redis://127.0.0.1:6379"</code></td><td>Redis connection URL.</td></tr>
+<tr><td><code>prefix</code></td><td>string</td><td><code>"crap:"</code></td><td>Key prefix for Redis namespace isolation.</td></tr>
+</tbody>
+</table>
+</div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="api-surface-comparison"><a class="header" href="#api-surface-comparison">API Surface Comparison</a></h1>
 <p>This document compares the three API surfaces — <strong>Admin UI</strong>, <strong>gRPC API</strong>, and <strong>Lua CRUD</strong> (hook local API) — to track feature consistency.</p>
@@ -12019,6 +12432,153 @@ CREATE TABLE posts_slides (
 </tbody>
 </table>
 </div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="single-server-deployment"><a class="header" href="#single-server-deployment">Single Server Deployment</a></h1>
+<p>The default and recommended deployment for most use cases. Everything runs on one machine with a single command.</p>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick Start</a></h2>
+<pre><code class="language-bash">crap-cms serve
+</code></pre>
+<p>That’s it. The server starts the admin UI, gRPC API, and background job scheduler. SQLite stores everything in a single file (<code>data/crap.db</code>).</p>
+<h2 id="background-mode"><a class="header" href="#background-mode">Background Mode</a></h2>
+<pre><code class="language-bash">crap-cms serve --detach       # start in background
+crap-cms serve --status       # check if running
+crap-cms serve --stop         # graceful shutdown
+crap-cms serve --restart      # stop + start
+</code></pre>
+<h2 id="what-you-get"><a class="header" href="#what-you-get">What You Get</a></h2>
+<ul>
+<li><strong>Admin UI</strong> on port 3000</li>
+<li><strong>gRPC API</strong> on port 50051</li>
+<li><strong>Job scheduler</strong> processing cron jobs and queued tasks</li>
+<li><strong>Image processing</strong> for upload collections</li>
+<li><strong>Live updates</strong> via SSE and gRPC streaming</li>
+</ul>
+<h2 id="when-to-scale"><a class="header" href="#when-to-scale">When to Scale</a></h2>
+<p>A single server handles thousands of concurrent readers and hundreds of writes per second. This covers the vast majority of CMS workloads — content sites, editorial teams, headless API backends.</p>
+<p>Consider scaling when you need:</p>
+<ul>
+<li><strong>Multiple app servers</strong> behind a load balancer (high availability)</li>
+<li><strong>50+ simultaneous content editors</strong> (write throughput)</li>
+<li><strong>Dedicated job processing</strong> (heavy background work separate from request handling)</li>
+</ul>
+<p>See <a href="#multi-server-deployment">Multi-Server</a> for scaling options.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="multi-server-deployment"><a class="header" href="#multi-server-deployment">Multi-Server Deployment</a></h1>
+<p>For high availability and dedicated job processing. Requires a shared database and shared file storage.</p>
+<blockquote>
+<p><strong>Most projects don’t need this.</strong> A single server handles thousands of concurrent users. See <a href="#single-server-deployment">Single Server</a> for the recommended default.</p>
+</blockquote>
+<h2 id="architecture"><a class="header" href="#architecture">Architecture</a></h2>
+<pre><code>┌─────────────┐     ┌─────────────┐
+│  App Server  │     │  App Server  │
+│  serve       │     │  serve       │
+│  --no-sched  │     │  --no-sched  │
+└──────┬───────┘     └──────┬───────┘
+       │                    │
+       ▼                    ▼
+┌──────────────────────────────────┐
+│          Load Balancer           │
+└──────────────────────────────────┘
+       │                    │
+       ▼                    ▼
+┌─────────────┐     ┌─────────────┐
+│  PostgreSQL  │     │  S3 / MinIO │
+│  (shared DB) │     │ (shared FS) │
+└─────────────┘     └─────────────┘
+       ▲
+       │
+┌──────┴───────┐
+│   Worker     │
+│   work       │
+└──────────────┘
+</code></pre>
+<h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
+<ol>
+<li><strong>Shared database</strong> — PostgreSQL (build with <code>--features postgres</code>)</li>
+<li><strong>Shared file storage</strong> — S3-compatible (build with <code>--features s3-storage</code>) or shared filesystem (NFS/EFS)</li>
+<li><strong>Shared cache</strong> (recommended) — Redis (build with <code>--features redis</code>) for cross-server cache invalidation</li>
+<li><strong>Shared rate limits</strong> (recommended) — Redis for cross-server rate limit enforcement</li>
+</ol>
+<h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
+<h3 id="1-database"><a class="header" href="#1-database">1. Database</a></h3>
+<pre><code class="language-toml"># crap.toml (all servers share the same config)
+[database]
+backend = "postgres"
+url = "host=db.example.com user=crap dbname=crap_cms"
+</code></pre>
+<h3 id="2-file-storage"><a class="header" href="#2-file-storage">2. File Storage</a></h3>
+<pre><code class="language-toml">[upload]
+storage = "s3"
+
+[upload.s3]
+bucket = "my-uploads"
+endpoint = "https://s3.amazonaws.com"
+access_key = "${AWS_ACCESS_KEY}"
+secret_key = "${AWS_SECRET_KEY}"
+</code></pre>
+<h3 id="3-cache"><a class="header" href="#3-cache">3. Cache</a></h3>
+<p>Without a shared cache, each server maintains its own in-memory populate cache. Writes on one server won’t invalidate another’s cache. Use Redis for shared cache invalidation:</p>
+<pre><code class="language-toml">[cache]
+backend = "redis"
+redis_url = "redis://redis.example.com:6379"
+prefix = "crap:"
+</code></pre>
+<p>Alternatively, use <code>max_age_secs</code> with the memory backend to limit staleness:</p>
+<pre><code class="language-toml">[cache]
+backend = "memory"
+max_age_secs = 10
+</code></pre>
+<h3 id="4-rate-limits"><a class="header" href="#4-rate-limits">4. Rate Limits</a></h3>
+<p>Without shared rate limits, each server tracks login attempts independently. Use Redis to enforce global rate limits:</p>
+<pre><code class="language-toml">[auth]
+rate_limit_backend = "redis"
+# rate_limit_redis_url defaults to cache.redis_url if empty
+</code></pre>
+<h3 id="5-app-servers"><a class="header" href="#5-app-servers">5. App Servers</a></h3>
+<p>Run without the scheduler — job processing is handled by dedicated workers.</p>
+<pre><code class="language-bash">crap-cms serve --no-scheduler
+</code></pre>
+<h3 id="6-workers"><a class="header" href="#6-workers">6. Workers</a></h3>
+<p>One or more dedicated job workers process queues.</p>
+<pre><code class="language-bash"># General worker (all queues)
+crap-cms work --detach
+
+# Specialized workers
+crap-cms work --detach --queues email
+crap-cms work --detach --queues heavy --concurrency 2
+</code></pre>
+<p>Workers support the same lifecycle management as the server:</p>
+<pre><code class="language-bash">crap-cms work --status
+crap-cms work --stop
+crap-cms work --restart
+</code></pre>
+<h2 id="job-queue-safety"><a class="header" href="#job-queue-safety">Job Queue Safety</a></h2>
+<p>The job queue is multi-server safe:</p>
+<ul>
+<li><strong>Cron dedup</strong> — Cron jobs are deduplicated via the <code>_crap_cron_fired</code> table. Only one server fires each cron job per schedule window, regardless of how many instances run the scheduler.</li>
+<li><strong>Atomic claiming (Postgres)</strong> — Jobs are claimed using <code>FOR UPDATE SKIP LOCKED</code>. Workers never claim the same job, and per-slug concurrency limits are enforced in the database.</li>
+<li><strong>Atomic claiming (SQLite)</strong> — Claims run inside IMMEDIATE transactions, serializing concurrent workers.</li>
+</ul>
+<p>Multiple workers can safely run <code>crap-cms work</code> against the same database.</p>
+<h2 id="configuration-notes"><a class="header" href="#configuration-notes">Configuration Notes</a></h2>
+<ul>
+<li>All servers and workers share the same <code>crap.toml</code> and config directory</li>
+<li>Schema sync (<code>migrate up</code>) only needs to run once — any server that starts first handles it</li>
+<li><code>on_init</code> hooks run on every server/worker startup</li>
+<li>Email uses the job queue automatically — password resets and verification emails are processed by workers with retries</li>
+</ul>
+<h2 id="email-configuration"><a class="header" href="#email-configuration">Email Configuration</a></h2>
+<p>With dedicated workers, the <code>webhook</code> email provider is recommended over SMTP for better reliability:</p>
+<pre><code class="language-toml">[email]
+provider = "webhook"
+webhook_url = "https://api.sendgrid.com/v3/mail/send"
+webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
+</code></pre>
+<p>Emails are queued and processed by workers with automatic retries. Configure retry behavior:</p>
+<pre><code class="language-toml">[email]
+queue_retries = 5
+queue_concurrency = 10
+</code></pre>
 
                     </main>
 

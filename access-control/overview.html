@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,8 +185,8 @@
 <li>A filter table (read only) — allowed with query constraints</li>
 </ul>
 <h2 id="opt-in"><a class="header" href="#opt-in">Opt-In</a></h2>
-<p>If no access control is configured, everything is allowed. This is fully backward compatible with existing setups.</p>
-<p>To enforce a “secure by default” posture, set <code>default_deny = true</code> in <code>[access]</code> in <code>crap.toml</code>. With this setting, collections and globals without explicit access functions <strong>deny all operations</strong> instead of allowing them. Every collection must then explicitly declare its access rules.</p>
+<p>By default, collections and globals without explicit access functions <strong>deny all operations</strong> (<code>default_deny = true</code>). Every collection must explicitly declare its access rules.</p>
+<p>To allow all operations on collections without access functions (e.g., during development), set <code>default_deny = false</code> in <code>[access]</code> in <code>crap.toml</code>.</p>
 <h2 id="three-levels"><a class="header" href="#three-levels">Three Levels</a></h2>
 <ol>
 <li><strong>Admin panel-level</strong> — <code>admin.access</code> in <code>crap.toml</code>. A Lua function that gates access to the entire admin UI, checked after login. See <a href="../admin-ui/overview.html#access">Admin UI</a>.</li>

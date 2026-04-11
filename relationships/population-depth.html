@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -270,14 +270,21 @@ local post = crap.collections.find_by_id("posts", id, { depth = 2 })
 </table>
 </div>
 <p>Join fields add one query per document per join field at each depth level.</p>
-<h3 id="populate-cache"><a class="header" href="#populate-cache">Populate Cache</a></h3>
-<p>For high-traffic deployments, an opt-in cross-request cache avoids redundant population queries. When enabled, populated documents are cached in memory and reused across requests. The cache is automatically cleared on any write operation (create, update, delete).</p>
-<pre><code class="language-toml">[depth]
-populate_cache = true              # Enable cross-request populate cache (default: false)
-populate_cache_max_age_secs = 60   # Optional: periodic full cache clear (default: 0 = off)
+<h3 id="cache-backend"><a class="header" href="#cache-backend">Cache Backend</a></h3>
+<p>A pluggable cache backend avoids redundant population queries across requests. The default <code>memory</code> backend caches populated documents in-process using DashMap. For multi-server deployments, use <code>redis</code> for a shared cache. The cache is automatically cleared on any write operation (create, update, delete).</p>
+<pre><code class="language-toml">[cache]
+backend = "memory"      # "memory" (default), "redis", "none", "custom"
+max_entries = 10000      # Soft cap for memory backend
+max_age_secs = 60        # Optional: periodic full cache clear (default: 0 = off)
 </code></pre>
-<p><strong>When to enable:</strong> High read traffic with repeated deep population of the same related documents (e.g., many posts referencing the same set of authors/categories).</p>
-<p><strong>Trade-off:</strong> If the database is modified outside the API (e.g., direct SQL, external tools), cached data can become stale. Set <code>populate_cache_max_age_secs</code> to limit staleness, or leave the cache disabled (default).</p>
+<p><strong>Backends:</strong></p>
+<ul>
+<li><code>"memory"</code> — In-process DashMap with soft entry cap. Default. Good for single-server.</li>
+<li><code>"redis"</code> — Shared Redis cache. Requires <code>--features redis</code>. Good for multi-server.</li>
+<li><code>"none"</code> — Cache disabled. Each request creates its own temporary cache (no cross-request sharing).</li>
+<li><code>"custom"</code> — Lua-delegated (planned, not yet implemented).</li>
+</ul>
+<p><strong>Trade-off:</strong> If the database is modified outside the API (e.g., direct SQL, external tools), cached data can become stale. Set <code>max_age_secs</code> to limit staleness, or use <code>backend = "none"</code> to disable.</p>
 <h3 id="recommendations"><a class="header" href="#recommendations">Recommendations</a></h3>
 <ul>
 <li><strong>Use <code>depth=0</code> for list endpoints.</strong> <code>Find</code> defaults to <code>depth=0</code> for this reason. Fetch related data when displaying a single document instead.</li>

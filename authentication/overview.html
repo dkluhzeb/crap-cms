@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,7 +191,10 @@
 <li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>).</li>
 <li><strong><code>_password_hash</code></strong> — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.</li>
 <li><strong><code>_locked</code></strong> — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See <a href="auth-collections.html#account-locking">Auth Collections</a>.</li>
-<li><strong>Custom strategies</strong> — pluggable auth via Lua functions (API keys, LDAP, SSO).</li>
+<li><strong>Token/Password providers</strong> — <code>TokenProvider</code> (JWT) and <code>PasswordProvider</code> (Argon2id) traits abstract token and password primitives. Rarely swapped.</li>
+<li><strong>Strategy chain</strong> — <code>local</code> (email+password) is the built-in strategy. Per-collection Lua strategies are tried as fallback. OAuth2, Cloudflare Access, AD, and API key auth are implemented as Lua strategies.</li>
+<li><strong>Email MFA</strong> — built-in multi-factor authentication. Enable <code>mfa = "email"</code> on an auth collection to send a 6-digit code after password verification.</li>
+<li><strong>Auth callbacks</strong> — <code>/admin/auth/callback/{name}</code> catch-all route dispatches to Lua hooks for OAuth2/OIDC redirect flows.</li>
 <li><strong>Password reset</strong> — token-based forgot/reset password flow via admin UI and gRPC. Requires email configuration.</li>
 <li><strong>Email verification</strong> — optional per-collection. When enabled, users must verify their email before logging in.</li>
 </ul>

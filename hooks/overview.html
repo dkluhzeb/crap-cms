@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6b4cb108.js";
+            window.path_to_searchindex_js = "../searchindex-9b101746.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5408acc1.js"></script>
+        <script src="../toc-70c0d16d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -218,7 +218,7 @@ return M
 <h2 id="concurrency"><a class="header" href="#concurrency">Concurrency</a></h2>
 <p>Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across requests. The pool size is configurable:</p>
 <pre><code class="language-toml">[hooks]
-vm_pool_size = 8  # default: max(available_parallelism, 4), capped at 32
+vm_pool_size = 8  # default: number of CPU cores
 </code></pre>
 <p>Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, <code>init.lua</code> execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.</p>
 <h2 id="resource-limits"><a class="header" href="#resource-limits">Resource Limits</a></h2>
