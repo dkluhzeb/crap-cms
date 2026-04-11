@@ -4,20 +4,29 @@ use tonic::Status;
 use tracing::error;
 
 use crate::{
-    api::handlers::ContentService,
-    core::{
-        Document,
-        collection::CollectionDefinition,
-        event::{EventOperation, EventTarget},
-    },
-    db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
-    hooks::{HookRunner, lifecycle::PublishEventInput},
+    api::handlers::collection::filter_builder::FilterBuilder,
+    core::{Document, collection::CollectionDefinition},
+    db::{AccessResult, DbConnection, FilterClause, FindQuery, LocaleContext, query},
+    hooks::HookRunner,
     service::ServiceError,
 };
 
 /// Safety limit for bulk operations to prevent unbounded queries.
 /// Bulk ops load all matching documents into memory; this caps the maximum.
 pub const BULK_QUERY_LIMIT: i64 = 10_000;
+
+/// Build filters for a bulk operation from where-clause JSON and access constraints.
+pub fn build_bulk_filters(
+    def: &CollectionDefinition,
+    read_access: &AccessResult,
+    where_json: Option<&str>,
+    exclude_drafts: bool,
+) -> Result<Vec<FilterClause>, Status> {
+    FilterBuilder::new(&def.fields, read_access)
+        .where_json(where_json)
+        .draft_filter(def.has_drafts(), exclude_drafts)
+        .build()
+}
 
 /// Find matching documents, enforcing read access and the bulk query limit.
 pub fn find_matching_docs(
@@ -70,26 +79,4 @@ pub fn check_per_doc_access(
     }
 
     Ok(())
-}
-
-/// Publish mutation events for a list of document IDs.
-pub fn publish_bulk_events(
-    service: &ContentService,
-    collection: &str,
-    doc_ids: &[String],
-    operation: EventOperation,
-) {
-    if let Ok(def) = service.get_collection_def(collection) {
-        for doc_id in doc_ids {
-            service.hook_runner.publish_event(
-                &service.event_bus,
-                &def.hooks,
-                def.live.as_ref(),
-                PublishEventInput::builder(EventTarget::Collection, operation.clone())
-                    .collection(collection.to_string())
-                    .document_id(doc_id.clone())
-                    .build(),
-            );
-        }
-    }
 }

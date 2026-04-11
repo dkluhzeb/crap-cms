@@ -6,7 +6,8 @@ use serde_json::Value;
 use crate::{
     cli,
     core::{Document, SharedRegistry},
-    db::{BoxedConnection, DbPool, query},
+    db::{DbPool, query},
+    service::ServiceContext,
 };
 
 use super::helpers::{get_user_email, resolve_user};
@@ -24,11 +25,12 @@ pub fn user_info(
     let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
 
     let conn = pool.get().context("Failed to get database connection")?;
-    let locked = crate::service::auth::is_locked(&conn, collection, &doc.id).unwrap_or(false);
+    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    let locked = crate::service::auth::is_locked(&ctx, &doc.id).unwrap_or(false);
     let has_pw = query::has_password(&conn, collection, &doc.id).unwrap_or(false);
 
     print_identity(&doc, collection);
-    print_status(&conn, collection, &doc, locked, has_pw, verify_email);
+    print_status(&ctx, &doc, locked, has_pw, verify_email);
     print_timestamps(&doc);
     print_extra_fields(&doc);
 
@@ -44,8 +46,7 @@ fn print_identity(doc: &Document, collection: &str) {
 
 /// Print user status (locked, verified, password).
 fn print_status(
-    conn: &BoxedConnection,
-    collection: &str,
+    ctx: &ServiceContext,
     doc: &Document,
     locked: bool,
     has_pw: bool,
@@ -55,8 +56,7 @@ fn print_status(
     cli::kv_status("Locked", if locked { "yes" } else { "no" }, !locked);
 
     if verify_email {
-        let verified =
-            crate::service::auth::is_verified(conn, collection, &doc.id).unwrap_or(false);
+        let verified = crate::service::auth::is_verified(ctx, &doc.id).unwrap_or(false);
         cli::kv_status("Verified", if verified { "yes" } else { "no" }, verified);
     }
 

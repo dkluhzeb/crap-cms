@@ -91,6 +91,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - `service::upload` for file upload orchestration
   - Write operations now hydrate + strip read-denied fields before returning
 
+- **ServiceContext API harmonization** — every service function now follows
+  `fn operation(ctx: &ServiceContext, input)` with a unified calling
+  environment. `ServiceContext` carries connection (pool or direct),
+  hooks, user identity, slug, and definition. Eliminates all
+  `#[allow(clippy::too_many_arguments)]` from the service layer, all
+  `_with_conn` variants, and all loose parameter passing. Dedicated input
+  structs (`FindDocumentsInput`, `CountDocumentsInput`, `WriteInput`,
+  `QueueJobInput`, etc.) carry operation-specific data.
+
+- **Unified pagination** — all multi-result service functions now return
+  `PaginatedResult<T>` with docs, total count, and computed pagination
+  metadata (page or cursor mode). Pagination logic is built inside the
+  service layer — callers no longer duplicate `PaginationResult`
+  construction. Affected: `find_documents`, `search_documents`,
+  `list_versions`, `list_job_runs`.
+
+### Fixed
+
+- **BREAKING: `admin.hidden` fields now stripped from API responses** —
+  Fields with `admin.hidden = true` are no longer returned in gRPC, MCP,
+  or Lua API responses. Previously, `hidden` only affected admin form
+  rendering. This aligns with PayloadCMS behavior where hidden fields are
+  excluded from all responses. Upload metadata fields (`url`,
+  `mime_type`, `width`, `height`, `filesize`, `filename`) that were
+  auto-injected as `hidden` are affected — if your frontend relies on
+  these in API responses, remove `admin.hidden` from the field definition
+  or stop marking them hidden in your upload config.
+
+- **Group subfield access stripping** — read-denied fields inside groups
+  (e.g., `address.city` with read access denied) are now correctly
+  stripped from API responses after hydration. Previously, group subfields
+  stored as `address__city` were stripped before hydration but became
+  nested `{"address": {"city": ...}}` after hydration, bypassing the
+  strip. `Document::strip_fields()` now handles `__`-separated paths at
+  any nesting depth.
+
+- **Missing field stripping** — `undelete_document`, `restore_version`
+  (collection and global), `search_documents`, and `find_version_by_id`
+  now strip read-denied and hidden fields before returning. Previously
+  these functions returned unstripped documents.
+
+- **Version snapshot access control** — `find_version_by_id` now checks
+  read access and strips denied fields from the snapshot JSON. Previously
+  version snapshots were returned without access checks.
+
+- **Redundant proto-level stripping removed** — gRPC handlers no longer
+  perform a second pass of field stripping at the protobuf level. The
+  service layer handles all field access control, eliminating redundant
+  Lua VM access checks and unnecessary transaction opens per response.
+
 - **Surface parity** — all API surfaces now expose a consistent set of operations:
   - MCP: added `undelete`, `count`, `unpublish`, `list_versions`, `restore_version` tools
   - Lua: added `crap.collections.unpublish()`, `list_versions()`, `restore_version()`,

@@ -1,36 +1,45 @@
 //! Version list operation with pagination.
 
 use crate::{
-    core::{Document, document::VersionSnapshot},
-    db::{AccessResult, DbConnection, query},
-    service::{ServiceError, hooks::ReadHooks},
+    core::document::VersionSnapshot,
+    db::{AccessResult, query},
+    service::{ListVersionsInput, PaginatedResult, ServiceContext, ServiceError},
 };
 
 /// List version snapshots for a document/global with pagination and access control.
 ///
-/// Checks read access before listing. Returns `(versions, total_count)`.
-/// The `table` parameter is the collection slug for collections or
-/// the global table name for globals.
-#[allow(clippy::too_many_arguments)]
+/// Checks read access before listing. Returns paginated result with page metadata.
+/// Derives the version table name from `ctx.slug` + `ctx.def`.
 pub fn list_versions(
-    conn: &dyn DbConnection,
-    hooks: &dyn ReadHooks,
-    table: &str,
-    parent_id: &str,
-    access_ref: Option<&str>,
-    user: Option<&Document>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-) -> Result<(Vec<VersionSnapshot>, i64), ServiceError> {
-    let access = hooks.check_access(access_ref, user, Some(parent_id), None)?;
+    ctx: &ServiceContext,
+    input: &ListVersionsInput,
+) -> Result<PaginatedResult<VersionSnapshot>, ServiceError> {
+    let resolved = ctx.resolve_conn()?;
+    let conn = resolved.as_ref();
+    let hooks = ctx.read_hooks()?;
+    let table = ctx.version_table();
+
+    let access =
+        hooks.check_access(ctx.read_access_ref(), ctx.user, Some(input.parent_id), None)?;
+
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
-    let total = query::count_versions(conn, table, parent_id)?;
-    let versions = query::list_versions(conn, table, parent_id, limit, offset)?;
+    let total = query::count_versions(conn, &table, input.parent_id)?;
+    let versions = query::list_versions(conn, &table, input.parent_id, input.limit, input.offset)?;
 
-    Ok((versions, total))
+    let limit = input.limit.unwrap_or(total);
+    let offset = input.offset.unwrap_or(0);
+    let page = if limit > 0 { offset / limit + 1 } else { 1 };
+
+    let pagination = query::PaginationResult::builder(&[], total, limit).page(page, offset);
+
+    Ok(PaginatedResult {
+        docs: versions,
+        total,
+        pagination,
+    })
 }
 
 #[cfg(test)]
@@ -50,9 +59,10 @@ mod tests {
             collection::{Hooks, VersionsConfig},
             field::FieldType,
         },
-        db::AccessResult,
+        db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
         service::{
+            ServiceContext,
             hooks::{ReadHooks, WriteHooks},
             versions::restore_collection_version_core,
         },
@@ -187,16 +197,23 @@ mod tests {
 
     #[test]
     fn list_versions_empty() {
-        let (conn, _def) = setup_versioned_collection();
-        let (versions, total) =
-            list_versions(&conn, &NoopReadHooks, "posts", "p1", None, None, None, None).unwrap();
-        assert_eq!(total, 0);
-        assert!(versions.is_empty());
+        let (conn, def) = setup_versioned_collection();
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let input = ListVersionsInput::builder("p1").build();
+
+        let result = list_versions(&ctx, &input).unwrap();
+        assert_eq!(result.total, 0);
+        assert!(result.docs.is_empty());
     }
 
     #[test]
     fn list_versions_with_data() {
-        let (conn, _def) = setup_versioned_collection();
+        let (conn, def) = setup_versioned_collection();
         conn.execute_batch(
             "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
              VALUES ('v1', 'p1', 1, 'published', 0, '{\"title\": \"V1\"}'),
@@ -204,16 +221,23 @@ mod tests {
         )
         .unwrap();
 
-        let (versions, total) =
-            list_versions(&conn, &NoopReadHooks, "posts", "p1", None, None, None, None).unwrap();
-        assert_eq!(total, 2);
-        assert_eq!(versions.len(), 2);
-        assert_eq!(versions[0].version, 2, "should be newest first");
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let input = ListVersionsInput::builder("p1").build();
+
+        let result = list_versions(&ctx, &input).unwrap();
+        assert_eq!(result.total, 2);
+        assert_eq!(result.docs.len(), 2);
+        assert_eq!(result.docs[0].version, 2, "should be newest first");
     }
 
     #[test]
     fn list_versions_pagination() {
-        let (conn, _def) = setup_versioned_collection();
+        let (conn, def) = setup_versioned_collection();
         conn.execute_batch(
             "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
              VALUES ('v1', 'p1', 1, 'published', 0, '{}'),
@@ -222,19 +246,20 @@ mod tests {
         )
         .unwrap();
 
-        let (versions, total) = list_versions(
-            &conn,
-            &NoopReadHooks,
-            "posts",
-            "p1",
-            None,
-            None,
-            Some(2),
-            Some(0),
-        )
-        .unwrap();
-        assert_eq!(total, 3);
-        assert_eq!(versions.len(), 2);
+        let rh = NoopReadHooks;
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .read_hooks(&rh)
+            .build();
+
+        let input = ListVersionsInput::builder("p1")
+            .limit(Some(2))
+            .offset(Some(0))
+            .build();
+
+        let result = list_versions(&ctx, &input).unwrap();
+        assert_eq!(result.total, 3);
+        assert_eq!(result.docs.len(), 2);
     }
 
     #[test]
@@ -242,16 +267,11 @@ mod tests {
         let (conn, def) = setup_versioned_collection();
         let lc = LocaleConfig::default();
         let wh = NoopWriteHooks;
-        let result = restore_collection_version_core(
-            &conn,
-            &wh,
-            "posts",
-            &def,
-            "p1",
-            "nonexistent",
-            &lc,
-            None,
-        );
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .build();
+        let result = restore_collection_version_core(&ctx, "p1", "nonexistent", &lc);
         assert!(matches!(result, Err(ServiceError::NotFound(_))));
     }
 
@@ -268,8 +288,11 @@ mod tests {
 
         let lc = LocaleConfig::default();
         let wh = NoopWriteHooks;
-        let doc = restore_collection_version_core(&conn, &wh, "posts", &def, "p1", "v1", &lc, None)
-            .unwrap();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .write_hooks(&wh)
+            .build();
+        let doc = restore_collection_version_core(&ctx, "p1", "v1", &lc).unwrap();
         assert_eq!(doc.get_str("title"), Some("Restored Title"));
     }
 }

@@ -20,8 +20,12 @@ pub fn unpublish_with_snapshot(
     doc: &Document,
 ) -> Result<()> {
     query::set_document_status(conn, table, parent_id, "draft")?;
+
     let snapshot = query::build_snapshot(conn, table, fields, doc)?;
+
     query::create_version(conn, table, parent_id, "draft", &snapshot)?;
+
     prune_versions(conn, table, parent_id, versions)?;
+
     Ok(())
 }

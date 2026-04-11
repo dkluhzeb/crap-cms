@@ -7,22 +7,25 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document},
-    db::{DbConnection, LocaleContext, query},
-    service::{PersistOptions, versions},
+    core::Document,
+    db::{LocaleContext, query},
+    service::{PersistOptions, ServiceContext, versions},
 };
 
 /// Persist the DB write phase of a normal (non-draft) update operation.
 /// Performs: update -> join data -> password -> version snapshot (published).
 pub fn persist_update(
-    conn: &dyn DbConnection,
-    slug: &str,
+    ctx: &ServiceContext,
     id: &str,
-    def: &CollectionDefinition,
     final_data: &HashMap<String, String>,
     hook_data: &HashMap<String, Value>,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+    let slug = ctx.slug;
+
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
 
     // Lock new ref targets before UPDATE (Postgres only).
@@ -67,17 +70,18 @@ pub fn persist_update(
 ///
 /// Handles: partial update -> join data -> ref count adjustment -> FTS sync -> version snapshot.
 /// Used by both gRPC UpdateMany and Lua update_many to avoid duplicating per-doc persistence logic.
-#[allow(clippy::too_many_arguments)]
 pub fn persist_bulk_update(
-    conn: &dyn DbConnection,
-    slug: &str,
+    ctx: &ServiceContext,
     id: &str,
-    def: &CollectionDefinition,
     final_data: &HashMap<String, String>,
     hook_data: &HashMap<String, Value>,
     locale_ctx: Option<&LocaleContext>,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
     // Lock new ref targets before UPDATE (Postgres only).
     query::ref_count::lock_ref_targets_from_data(
         conn,
@@ -88,16 +92,16 @@ pub fn persist_bulk_update(
     )?;
 
     let old_refs =
-        query::ref_count::snapshot_outgoing_refs(conn, slug, id, &def.fields, locale_config)?;
+        query::ref_count::snapshot_outgoing_refs(conn, ctx.slug, id, &def.fields, locale_config)?;
 
-    let updated = query::update_partial(conn, slug, def, id, final_data, locale_ctx)?;
+    let updated = query::update_partial(conn, ctx.slug, def, id, final_data, locale_ctx)?;
 
-    query::save_join_table_data(conn, slug, &def.fields, id, hook_data, locale_ctx)?;
+    query::save_join_table_data(conn, ctx.slug, &def.fields, id, hook_data, locale_ctx)?;
 
-    query::ref_count::after_update(conn, slug, id, &def.fields, locale_config, old_refs)?;
+    query::ref_count::after_update(conn, ctx.slug, id, &def.fields, locale_config, old_refs)?;
 
     if def.has_versions() {
-        let vs_ctx = versions::VersionSnapshotCtx::builder(slug, &updated.id)
+        let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.slug, &updated.id)
             .fields(&def.fields)
             .versions(def.versions.as_ref())
             .has_drafts(def.has_drafts())
@@ -106,7 +110,7 @@ pub fn persist_bulk_update(
     }
 
     if conn.supports_fts() {
-        query::fts::fts_upsert(conn, slug, &updated, Some(def))?;
+        query::fts::fts_upsert(conn, ctx.slug, &updated, Some(def))?;
     }
 
     Ok(updated)

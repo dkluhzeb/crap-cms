@@ -34,7 +34,9 @@ use crate::{
         query::{AccessResult, FilterClause, LocaleContext},
     },
     hooks::HookRunner,
-    service::{ReadOptions, RunnerReadHooks, auth::is_locked, find_document_by_id},
+    service::{
+        FindByIdInput, RunnerReadHooks, ServiceContext, auth::is_locked, find_document_by_id,
+    },
 };
 
 /// Parameters for the blocking document-read task.
@@ -48,7 +50,6 @@ struct ReadParams {
     access_constraints: Option<Vec<FilterClause>>,
     has_drafts: bool,
     user_doc: Option<Document>,
-    user_ui_locale: Option<String>,
 }
 
 /// Fetch the document via the shared service layer read lifecycle.
@@ -56,16 +57,20 @@ fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
     let conn = params.pool.get().context("DB connection")?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
-    let opts = ReadOptions::builder()
+    let ctx = ServiceContext::collection(&params.slug, &params.def)
+        .pool(&params.pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(params.user_doc.as_ref())
+        .build();
+
+    let input = FindByIdInput::builder(&params.id)
         .use_draft(params.has_drafts)
         .access_constraints(params.access_constraints)
         .locale_ctx(params.locale_ctx.as_ref())
-        .user(params.user_doc.as_ref())
-        .ui_locale(params.user_ui_locale.as_deref())
         .build();
 
-    find_document_by_id(&conn, &hooks, &params.slug, &params.def, &params.id, &opts)
-        .map_err(|e| e.into_anyhow())
+    find_document_by_id(&ctx, &input).map_err(|e| e.into_anyhow())
 }
 
 /// Append auth-specific fields (password, locked checkbox) to the field list.
@@ -82,7 +87,10 @@ fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &s
     let is_locked = pool
         .get()
         .ok()
-        .and_then(|conn| is_locked(&conn, slug, id).ok())
+        .and_then(|conn| {
+            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+            is_locked(&ctx, id).ok()
+        })
         .unwrap_or(false);
 
     fields.push(json!({
@@ -288,7 +296,6 @@ pub async fn edit_form(
         access_constraints,
         has_drafts: def.has_drafts(),
         user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
-        user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
     };
 
     let read_result = task::spawn_blocking(move || read_document(read_params)).await;
@@ -332,7 +339,16 @@ pub async fn edit_form(
     let doc_status = extract_doc_status(&document, has_drafts);
 
     let (versions, total_versions) = if has_versions {
-        fetch_version_sidebar_data(&state.pool, &state.hook_runner, &slug, &document.id)
+        if let Ok(vc) = state.pool.get() {
+            let vh = RunnerReadHooks::new(&state.hook_runner, &vc);
+            let version_ctx = ServiceContext::collection(&slug, &def)
+                .conn(&vc)
+                .read_hooks(&vh)
+                .build();
+            fetch_version_sidebar_data(&version_ctx, &document.id)
+        } else {
+            (vec![], 0)
+        }
     } else {
         (vec![], 0)
     };

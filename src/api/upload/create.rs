@@ -92,18 +92,12 @@ pub(super) async fn create_upload(
     let max_file_size = state.config.upload.max_file_size;
 
     let result = task::spawn_blocking(move || {
-        service::upload::create_upload(
-            &pool,
-            &runner,
-            &storage,
-            &slug_owned,
-            &def_owned,
-            file,
-            form_data,
-            user_doc_owned.as_ref(),
-            ui_locale,
-            max_file_size,
-        )
+        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc_owned.as_ref())
+            .build();
+        service::upload::create_upload(&ctx, &storage, file, form_data, ui_locale, max_file_size)
     })
     .await;
 

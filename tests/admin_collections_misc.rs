@@ -1069,13 +1069,10 @@ async fn upload_api_create_returns_201_with_document() {
             .unwrap()
             .ends_with("photo.png")
     );
-    assert!(
-        json["document"]["url"]
-            .as_str()
-            .unwrap()
-            .starts_with("/uploads/media/")
-    );
-    assert_eq!(json["document"]["mime_type"], "image/png");
+
+    // Hidden fields (url, mime_type, filesize, width, height) are stripped from API responses
+    assert!(json["document"]["url"].is_null());
+    assert!(json["document"]["mime_type"].is_null());
 }
 
 #[tokio::test]

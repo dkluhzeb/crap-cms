@@ -1122,10 +1122,12 @@ fn persist_create_published() {
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
     let doc = service::persist_create(
-        &conn,
-        "articles",
-        &def,
+        &ctx,
         &final_data,
         &hook_data,
         &service::PersistOptions::default(),
@@ -1160,8 +1162,10 @@ fn persist_create_draft() {
         .collect();
 
     let opts = service::PersistOptions::builder().draft(true).build();
-    let doc =
-        service::persist_create(&conn, "articles", &def, &final_data, &hook_data, &opts).unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+    let doc = service::persist_create(&ctx, &final_data, &hook_data, &opts).unwrap();
 
     // Document should exist with _status = "draft"
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
@@ -1194,11 +1198,13 @@ fn persist_update_publishes() {
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
     let updated = service::persist_update(
-        &conn,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         &update_data,
         &hook_data,
         &service::PersistOptions::default(),
@@ -1239,8 +1245,11 @@ fn persist_draft_version_merges_data() {
     )]
     .into();
 
-    let existing =
-        service::persist_draft_version(&conn, "articles", &doc.id, &def, &hook_data, None).unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
+    let existing = service::persist_draft_version(&ctx, &doc.id, &hook_data, None).unwrap();
 
     // Returned doc is the existing (unchanged) doc
     assert_eq!(existing.get_str("title"), Some("Original"));
@@ -1280,7 +1289,11 @@ fn persist_unpublish_sets_draft_status() {
     query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
 
     // Call persist_unpublish
-    let result = service::persist_unpublish(&conn, "articles", &doc.id, &def).unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
+    let result = service::persist_unpublish(&ctx, &doc.id).unwrap();
     assert_eq!(result.get_str("title"), Some("To Unpublish"));
 
     // Status should now be "draft"
@@ -1352,17 +1365,16 @@ fn service_update_draft_uses_locale_context() {
         ("body".into(), "Body".into()),
     ]
     .into();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(&db_pool)
+        .runner(&hook_runner)
+        .build();
     let (doc, _) = service::create_document(
-        &db_pool,
-        &hook_runner,
-        "articles",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new())
             .locale_ctx(Some(&en_ctx))
             .locale(Some("en".to_string()))
             .build(),
-        None,
-        false,
     )
     .unwrap();
 
@@ -1377,18 +1389,13 @@ fn service_update_draft_uses_locale_context() {
     let draft_data: HashMap<String, String> =
         [("title".into(), "Neuer Deutscher Titel".into())].into();
     let (result, _) = service::update_document(
-        &db_pool,
-        &hook_runner,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         service::WriteInput::builder(draft_data, &HashMap::new())
             .locale_ctx(Some(&de_ctx))
             .locale(Some("de".to_string()))
             .draft(true)
             .build(),
-        None,
-        false,
     )
     .unwrap();
 

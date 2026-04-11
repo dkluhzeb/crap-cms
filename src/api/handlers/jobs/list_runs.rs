@@ -5,6 +5,7 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
+    api::handlers::convert::pagination_result_to_proto,
     api::{content, handlers::ContentService},
     service,
 };
@@ -43,15 +44,28 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            service::jobs::list_job_runs(&conn, slug.as_deref(), status.as_deref(), limit, offset)
-                .map_err(Status::from)
+            service::jobs::list_job_runs(
+                &conn,
+                &service::jobs::ListJobRunsInput {
+                    slug: slug.as_deref(),
+                    status: status.as_deref(),
+                    limit,
+                    offset,
+                },
+            )
+            .map_err(Status::from)
         })
         .await
         .inspect_err(|e| error!("ListJobRuns task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
 
-        let runs: Vec<content::GetJobRunResponse> = runs.iter().map(job_run_to_proto).collect();
+        let pagination = pagination_result_to_proto(&runs.pagination);
+        let proto_runs: Vec<content::GetJobRunResponse> =
+            runs.docs.iter().map(job_run_to_proto).collect();
 
-        Ok(Response::new(content::ListJobRunsResponse { runs }))
+        Ok(Response::new(content::ListJobRunsResponse {
+            runs: proto_runs,
+            pagination: Some(pagination),
+        }))
     }
 }

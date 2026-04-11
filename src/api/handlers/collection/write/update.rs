@@ -15,7 +15,7 @@ use crate::{
     },
     core::event::EventOperation,
     db::LocaleContext,
-    service::{self, ServiceError, WriteInput},
+    service::{self, ServiceContext, ServiceError, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -66,7 +66,7 @@ impl ContentService {
         let def_owned = def;
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool
+            let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
@@ -86,17 +86,14 @@ impl ContentService {
                 .ui_locale(ui_locale)
                 .build();
 
-            let (doc, _req_context) = service::update_document_with_conn(
-                &mut conn,
-                &runner,
-                &collection,
-                &id,
-                &def_owned,
-                input,
-                user_doc.as_ref(),
-                false,
-            )
-            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+
+            let (doc, _req_context) = service::update_document(&ctx, &id, input)
+                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             let proto_doc = document_to_proto(&doc, &collection);
 

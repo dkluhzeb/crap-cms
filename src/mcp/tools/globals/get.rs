@@ -10,7 +10,7 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::doc_to_json,
-    service::{RunnerReadHooks, get_global_document},
+    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
 };
 
 /// Execute `read_global` — read a global document.
@@ -24,9 +24,16 @@ pub(in crate::mcp::tools) fn exec_read_global(
     let conn = pool.get().context("DB connection")?;
     let hooks = RunnerReadHooks::new(runner, &conn);
 
-    match get_global_document(&conn, &hooks, slug, def, None, None, None)
-        .map_err(|e| e.into_anyhow())
-    {
+    let ctx = ServiceContext::global(slug, def)
+        .pool(pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .override_access(true)
+        .build();
+
+    let input = GetGlobalInput::new(None, None);
+
+    match get_global_document(&ctx, &input).map_err(|e| e.into_anyhow()) {
         Ok(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
         Err(e) => {
             // The global row may not exist yet (table missing or default row not inserted).

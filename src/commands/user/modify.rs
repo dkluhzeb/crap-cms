@@ -8,6 +8,7 @@ use crate::{
     config::{LocaleConfig, PasswordPolicy},
     core::SharedRegistry,
     db::{DbPool, query},
+    service::ServiceContext,
 };
 
 use super::helpers::{get_user_email, require_verify_email, resolve_user};
@@ -81,7 +82,8 @@ pub fn user_lock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::service::auth::lock_user(&conn, collection, &doc.id)
+    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    crate::service::auth::lock_user(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to lock user")?;
 
@@ -107,7 +109,8 @@ pub fn user_unlock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::service::auth::unlock_user(&conn, collection, &doc.id)
+    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    crate::service::auth::unlock_user(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to unlock user")?;
 
@@ -134,7 +137,8 @@ pub fn user_verify(
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::service::auth::mark_verified(&conn, collection, &doc.id)
+    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    crate::service::auth::mark_verified(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to verify user")?;
 
@@ -161,7 +165,8 @@ pub fn user_unverify(
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::service::auth::mark_unverified(&conn, collection, &doc.id)
+    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+    crate::service::auth::mark_unverified(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to unverify user")?;
 

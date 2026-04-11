@@ -12,7 +12,7 @@ use crate::{
         handlers::shared::{get_user_doc, htmx_redirect, redirect_response},
     },
     core::auth::AuthUser,
-    service::restore_collection_version,
+    service::{ServiceContext, restore_collection_version},
 };
 
 /// POST /admin/collections/{slug}/{id}/versions/{version_id}/restore — restore a version
@@ -37,17 +37,13 @@ pub async fn restore_version(
     let user_doc = get_user_doc(&auth_user).cloned();
 
     let result = task::spawn_blocking(move || {
-        restore_collection_version(
-            &pool,
-            &runner,
-            &slug,
-            &def,
-            &id,
-            &version_id,
-            &locale_config,
-            user_doc.as_ref(),
-            false,
-        )
+        let ctx = ServiceContext::collection(&slug, &def)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc.as_ref())
+            .build();
+
+        restore_collection_version(&ctx, &id, &version_id, &locale_config)
     })
     .await;
 

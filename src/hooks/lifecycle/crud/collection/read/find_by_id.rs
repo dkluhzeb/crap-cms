@@ -11,7 +11,7 @@ use crate::{
         converters::document_to_lua_table,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaReadHooks, ReadOptions, find_document_by_id},
+    service::{FindByIdInput, LuaReadHooks, ServiceContext, find_document_by_id},
 };
 
 /// Core logic for `crap.collections.find_by_id`.
@@ -58,18 +58,23 @@ fn find_by_id_inner(
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
         .build();
-    let opts = ReadOptions::builder()
+
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .read_hooks(&hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let input = FindByIdInput::builder(&id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(&r))
         .select(select.as_deref())
-        .user(user.as_ref())
-        .ui_locale(ui_locale.as_deref())
         .use_draft(use_draft)
         .build();
 
-    let doc = find_document_by_id(conn, &hooks, &collection, &def, &id, &opts)
-        .map_err(|e| RuntimeError(format!("{e}")))?;
+    let doc = find_document_by_id(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
 
     match doc {
         Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

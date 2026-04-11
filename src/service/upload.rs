@@ -1,7 +1,7 @@
 //! Upload service — file processing + document lifecycle for upload collections.
 //!
-//! Owns the full upload flow: process file → inject metadata → create/update document →
-//! commit guard → clean up old files → enqueue conversions. Surfaces only handle
+//! Owns the full upload flow: process file -> inject metadata -> create/update document ->
+//! commit guard -> clean up old files -> enqueue conversions. Surfaces only handle
 //! multipart parsing, auth, and response formatting.
 
 use std::collections::HashMap;
@@ -14,16 +14,15 @@ use crate::{
     admin::handlers::forms::extract_join_data_from_form,
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document,
+        Document,
         upload::{
             CleanupGuard, SharedStorage, UploadedFile, delete_upload_files, enqueue_conversions,
             inject_upload_metadata, process_upload,
         },
         validate::{FieldError, ValidationError},
     },
-    db::{DbPool, LocaleContext, query},
-    hooks::HookRunner,
-    service::{WriteInput, create_document, update_document},
+    db::{LocaleContext, query},
+    service::{ServiceContext, WriteInput, create_document, update_document},
 };
 
 use super::ServiceError;
@@ -42,21 +41,18 @@ pub struct UploadUpdateResult {
 
 /// Process a file and create an upload document.
 ///
-/// Full lifecycle: process file → inject metadata → create document → commit guard → enqueue conversions.
+/// Full lifecycle: process file -> inject metadata -> create document -> commit guard -> enqueue conversions.
 /// The caller is responsible for multipart parsing and auth — this function takes the parsed file and form data.
-#[allow(clippy::too_many_arguments)]
 pub fn create_upload(
-    pool: &DbPool,
-    runner: &HookRunner,
+    ctx: &ServiceContext,
     storage: &SharedStorage,
-    slug: &str,
-    def: &CollectionDefinition,
     file: UploadedFile,
     mut form_data: HashMap<String, String>,
-    user: Option<&Document>,
     ui_locale: Option<String>,
     upload_max_file_size: u64,
 ) -> Result<UploadCreateResult, ServiceError> {
+    let def = ctx.collection_def();
+
     let upload_config = def
         .upload
         .clone()
@@ -66,7 +62,7 @@ pub fn create_upload(
         file,
         &upload_config,
         storage.clone(),
-        slug,
+        ctx.slug,
         upload_max_file_size,
     )
     .map_err(|e| {
@@ -89,24 +85,20 @@ pub fn create_upload(
     let draft = action == "save_draft";
 
     let (doc, req_context) = create_document(
-        pool,
-        runner,
-        slug,
-        def,
+        ctx,
         WriteInput::builder(form_data, &join_data)
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
             .build(),
-        user,
-        false,
     )?;
 
     guard.commit();
 
     if !queued_conversions.is_empty()
+        && let Some(pool) = ctx.pool
         && let Ok(conn) = pool.get()
-        && let Err(e) = enqueue_conversions(&conn, slug, &doc.id, &queued_conversions)
+        && let Err(e) = enqueue_conversions(&conn, ctx.slug, &doc.id, &queued_conversions)
     {
         warn!("Failed to enqueue image conversions: {}", e);
     }
@@ -114,32 +106,40 @@ pub fn create_upload(
     Ok(UploadCreateResult { doc, req_context })
 }
 
+/// Input for [`update_upload`].
+pub struct UpdateUploadInput<'a> {
+    pub id: &'a str,
+    pub storage: &'a SharedStorage,
+    pub file: Option<UploadedFile>,
+    pub form_data: HashMap<String, String>,
+    pub ui_locale: Option<String>,
+    pub locale_config: &'a LocaleConfig,
+    pub upload_max_file_size: u64,
+}
+
 /// Process a file (optional) and update an upload document.
 ///
-/// Full lifecycle: load old doc → process file → inject metadata → update document →
-/// commit guard → delete old files → enqueue conversions.
-#[allow(clippy::too_many_arguments)]
+/// Full lifecycle: load old doc -> process file -> inject metadata -> update document ->
+/// commit guard -> delete old files -> enqueue conversions.
 pub fn update_upload(
-    pool: &DbPool,
-    runner: &HookRunner,
-    storage: &SharedStorage,
-    slug: &str,
-    id: &str,
-    def: &CollectionDefinition,
-    file: Option<UploadedFile>,
-    mut form_data: HashMap<String, String>,
-    user: Option<&Document>,
-    ui_locale: Option<String>,
-    locale_config: &LocaleConfig,
-    upload_max_file_size: u64,
+    ctx: &ServiceContext,
+    input: UpdateUploadInput<'_>,
 ) -> Result<UploadUpdateResult, ServiceError> {
+    let id = input.id;
+    let storage = input.storage;
+    let file = input.file;
+    let mut form_data = input.form_data;
+    let ui_locale = input.ui_locale;
+    let locale_config = input.locale_config;
+    let upload_max_file_size = input.upload_max_file_size;
+    let def = ctx.collection_def();
     let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
 
     // Load old document for file cleanup (before processing new file)
     let old_doc_fields = if file.is_some() {
-        pool.get()
-            .ok()
-            .and_then(|conn| query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref()).ok())
+        ctx.pool
+            .and_then(|p| p.get().ok())
+            .and_then(|conn| query::find_by_id(&conn, ctx.slug, def, id, locale_ctx.as_ref()).ok())
             .flatten()
             .map(|doc| doc.fields.clone())
     } else {
@@ -156,7 +156,7 @@ pub fn update_upload(
             f,
             &upload_config,
             storage.clone(),
-            slug,
+            ctx.slug,
             upload_max_file_size,
         )
         .map_err(|e| {
@@ -181,18 +181,13 @@ pub fn update_upload(
     let draft = action == "save_draft";
 
     let (doc, req_context) = update_document(
-        pool,
-        runner,
-        slug,
+        ctx,
         id,
-        def,
         WriteInput::builder(form_data, &join_data)
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
             .build(),
-        user,
-        false,
     )?;
 
     if let Some(mut g) = upload_guard {
@@ -204,8 +199,9 @@ pub fn update_upload(
     }
 
     if !queued_conversions.is_empty()
+        && let Some(pool) = ctx.pool
         && let Ok(conn) = pool.get()
-        && let Err(e) = enqueue_conversions(&conn, slug, &doc.id, &queued_conversions)
+        && let Err(e) = enqueue_conversions(&conn, ctx.slug, &doc.id, &queued_conversions)
     {
         warn!("Failed to enqueue image conversions: {}", e);
     }

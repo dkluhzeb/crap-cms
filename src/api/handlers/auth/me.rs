@@ -11,7 +11,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     db::query,
-    service,
+    service::{self, ServiceContext},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -53,10 +53,9 @@ impl ContentService {
                 query::hydrate_document(&conn, &collection, &def.fields, d, None, None)?;
             }
 
-            let sv = service::auth::get_session_version(&conn, &collection, &id)
-                .map_err(|e| e.into_anyhow())?;
-            let locked =
-                service::auth::is_locked(&conn, &collection, &id).map_err(|e| e.into_anyhow())?;
+            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            let sv = service::auth::get_session_version(&ctx, &id).map_err(|e| e.into_anyhow())?;
+            let locked = service::auth::is_locked(&ctx, &id).map_err(|e| e.into_anyhow())?;
 
             Ok::<_, AnyhowError>((doc, sv, locked))
         })

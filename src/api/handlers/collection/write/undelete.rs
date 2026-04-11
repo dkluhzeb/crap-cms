@@ -10,7 +10,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::event::EventOperation,
-    service::{self, ServiceError},
+    service::{self, ServiceContext, ServiceError},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -50,16 +50,14 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             drop(conn);
 
-            let doc = service::undelete_document(
-                &pool,
-                &runner,
-                &collection,
-                &id,
-                &def_clone,
-                user_doc.as_ref(),
-                false,
-            )
-            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
+            let ctx = ServiceContext::collection(&collection, &def_clone)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+
+            let doc = service::undelete_document(&ctx, &id)
+                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             let proto_doc = document_to_proto(&doc, &collection);
 

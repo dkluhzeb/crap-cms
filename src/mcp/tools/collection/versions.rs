@@ -11,7 +11,10 @@ use crate::{
     core::Registry,
     db::DbPool,
     hooks::HookRunner,
-    service::{list_versions, restore_collection_version},
+    service::{
+        ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions,
+        restore_collection_version,
+    },
 };
 
 use super::helpers::doc_to_json;
@@ -28,27 +31,39 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let _def = registry
+    let def = registry
         .collections
         .get(slug)
         .context("Collection not found")?;
-    let conn = pool.get().context("DB connection")?;
 
     let limit = args.get("limit").and_then(|v| v.as_i64());
     let offset = args.get("offset").and_then(|v| v.as_i64());
 
-    // MCP operates with full access — pass None for access_ref and user
-    let hooks = crate::service::RunnerReadHooks::new(runner, &conn);
-    let (versions, total) = list_versions(&conn, &hooks, slug, id, None, None, limit, offset)?;
+    // MCP operates with full access — override access checks
+    let conn = pool.get().context("DB connection")?;
+    let hooks = RunnerReadHooks::new(runner, &conn);
+    let ctx = ServiceContext::collection(slug, def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .override_access(true)
+        .build();
 
-    let version_values: Vec<Value> = versions
+    let input = ListVersionsInput::builder(id)
+        .limit(limit)
+        .offset(offset)
+        .build();
+
+    let result = list_versions(&ctx, &input)?;
+
+    let version_values: Vec<Value> = result
+        .docs
         .iter()
         .map(|v| to_value(v).unwrap_or(Value::Null))
         .collect();
 
     let output = json!({
         "versions": version_values,
-        "total": total,
+        "pagination": to_value(&result.pagination)?,
     });
 
     Ok(to_string_pretty(&output)?)
@@ -76,17 +91,13 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .get(slug)
         .context("Collection not found")?;
 
-    let doc = restore_collection_version(
-        pool,
-        runner,
-        slug,
-        def,
-        id,
-        version_id,
-        &config.locale,
-        None,
-        true,
-    )?;
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+
+    let doc = restore_collection_version(&ctx, id, version_id, &config.locale)?;
 
     info!("MCP restore_version {}: {} -> {}", slug, id, version_id);
 

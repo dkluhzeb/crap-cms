@@ -22,7 +22,7 @@ use crate::{
     },
     db::{DbPool, query},
     hooks::HookRunner,
-    service,
+    service::{self, ServiceContext},
 };
 
 use axum::extract::State;
@@ -325,8 +325,10 @@ pub(crate) fn load_auth_user(
     .ok()??;
 
     // Reject tokens with stale session version (password was changed).
-    let db_session_version =
-        service::auth::get_session_version(&conn, &claims.collection, &claims.sub).ok()?;
+    let ctx = ServiceContext::slug_only(&claims.collection)
+        .conn(&conn)
+        .build();
+    let db_session_version = service::auth::get_session_version(&ctx, &claims.sub).ok()?;
 
     if claims.session_version != db_session_version {
         return None;

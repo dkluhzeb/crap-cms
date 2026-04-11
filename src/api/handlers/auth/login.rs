@@ -14,7 +14,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::{Slug, auth::ClaimsBuilder},
-    service::{self, ServiceError, auth::authenticate_local},
+    service::{self, ServiceContext, ServiceError, auth::authenticate_local},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -68,10 +68,12 @@ impl ContentService {
 
             // Try local email+password authentication via service layer
             if !disable_local {
+                let ctx = ServiceContext::collection(&slug, &def_owned)
+                    .conn(&conn)
+                    .build();
+
                 match authenticate_local(
-                    &conn,
-                    &slug,
-                    &def_owned,
+                    &ctx,
                     &email,
                     &password,
                     &*password_provider,
@@ -94,18 +96,20 @@ impl ContentService {
                         &HashMap::new(),
                         &conn,
                     ) {
+                        let ctx = ServiceContext::slug_only(&slug).conn(&conn).build();
+
                         // Strategy-authenticated users still need locked/verified checks
-                        if service::auth::is_locked(&conn, &slug, &doc.id).unwrap_or(false) {
+                        if service::auth::is_locked(&ctx, &doc.id).unwrap_or(false) {
                             return Ok(None);
                         }
 
                         if check_verify_email
-                            && !service::auth::is_verified(&conn, &slug, &doc.id).unwrap_or(false)
+                            && !service::auth::is_verified(&ctx, &doc.id).unwrap_or(false)
                         {
                             return Ok(None);
                         }
 
-                        let sv = service::auth::get_session_version(&conn, &slug, &doc.id)
+                        let sv = service::auth::get_session_version(&ctx, &doc.id)
                             .map_err(|e| e.into_anyhow())?;
                         return Ok(Some((doc, sv)));
                     }

@@ -7,5 +7,5 @@ mod queue;
 
 pub use cancel::cancel_pending_jobs;
 pub use get_run::get_job_run;
-pub use list_runs::list_job_runs;
-pub use queue::queue_job;
+pub use list_runs::{ListJobRunsInput, list_job_runs};
+pub use queue::{QueueJobInput, queue_job};

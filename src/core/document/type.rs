@@ -49,6 +49,54 @@ impl Document {
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.fields.get(key).and_then(|v| v.as_str())
     }
+
+    /// Strip denied fields by name, handling both flat keys and `__`-separated
+    /// group subfields. After hydration, `address__city` becomes nested
+    /// `{"address": {"city": ...}}` — this method strips from both forms.
+    pub fn strip_fields(&mut self, names: &[String]) {
+        for name in names {
+            // Flat removal (pre-hydration top-level keys like "secret" or "address__city")
+            self.fields.remove(name);
+
+            // Nested removal (post-hydration group subfields)
+            let segments: Vec<&str> = name.split("__").collect();
+            if segments.len() >= 2 {
+                strip_nested(&mut self.fields, &segments);
+            }
+        }
+    }
+}
+
+/// Walk into nested objects following `__`-separated segments and remove the leaf.
+fn strip_nested(fields: &mut HashMap<String, Value>, segments: &[&str]) {
+    let Some((&first, rest)) = segments.split_first() else {
+        return;
+    };
+
+    let Some(Value::Object(map)) = fields.get_mut(first) else {
+        return;
+    };
+
+    if rest.len() == 1 {
+        map.remove(rest[0]);
+    } else {
+        strip_nested_value(map, rest);
+    }
+}
+
+/// Recurse into a serde_json::Map to remove a deeply nested field.
+fn strip_nested_value(map: &mut serde_json::Map<String, Value>, segments: &[&str]) {
+    let Some((&first, rest)) = segments.split_first() else {
+        return;
+    };
+
+    if rest.len() == 1 {
+        if let Some(Value::Object(inner)) = map.get_mut(first) {
+            inner.remove(rest[0]);
+        }
+    } else if let Some(Value::Object(inner)) = map.get_mut(first) {
+        strip_nested_value(inner, rest);
+    }
 }
 
 #[cfg(test)]
@@ -82,5 +130,67 @@ mod tests {
         assert_eq!(doc.get_str("title"), Some("Hello"));
         assert_eq!(doc.get_str("count"), None); // not a string
         assert_eq!(doc.get_str("missing"), None);
+    }
+
+    #[test]
+    fn strip_fields_top_level() {
+        let mut doc = Document::new("d1");
+        doc.fields.insert("title".into(), json!("Hello"));
+        doc.fields.insert("secret".into(), json!("hidden"));
+
+        doc.strip_fields(&["secret".into()]);
+
+        assert!(doc.fields.contains_key("title"));
+        assert!(!doc.fields.contains_key("secret"));
+    }
+
+    #[test]
+    fn strip_fields_flat_group_subfield() {
+        let mut doc = Document::new("d1");
+        doc.fields.insert("address__city".into(), json!("Berlin"));
+        doc.fields.insert("address__zip".into(), json!("10115"));
+
+        doc.strip_fields(&["address__city".into()]);
+
+        assert!(!doc.fields.contains_key("address__city"));
+        assert!(doc.fields.contains_key("address__zip"));
+    }
+
+    #[test]
+    fn strip_fields_nested_group_post_hydration() {
+        let mut doc = Document::new("d1");
+        doc.fields
+            .insert("address".into(), json!({"city": "Berlin", "zip": "10115"}));
+
+        doc.strip_fields(&["address__city".into()]);
+
+        let addr = doc.fields.get("address").unwrap();
+        assert!(addr.get("zip").is_some());
+        assert!(addr.get("city").is_none());
+    }
+
+    #[test]
+    fn strip_fields_deeply_nested_group() {
+        let mut doc = Document::new("d1");
+        doc.fields.insert(
+            "meta".into(),
+            json!({"address": {"city": "Berlin", "zip": "10115"}}),
+        );
+
+        doc.strip_fields(&["meta__address__city".into()]);
+
+        let addr = doc.fields.get("meta").unwrap().get("address").unwrap();
+        assert!(addr.get("zip").is_some());
+        assert!(addr.get("city").is_none());
+    }
+
+    #[test]
+    fn strip_fields_nonexistent_is_noop() {
+        let mut doc = Document::new("d1");
+        doc.fields.insert("title".into(), json!("Hello"));
+
+        doc.strip_fields(&["nonexistent".into(), "group__nonexistent".into()]);
+
+        assert_eq!(doc.fields.len(), 1);
     }
 }

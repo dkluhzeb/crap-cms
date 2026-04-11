@@ -15,7 +15,7 @@ use crate::{
         handlers::shared::{forbidden, htmx_redirect},
     },
     core::auth::AuthUser,
-    service::{self, ServiceError},
+    service::{self, ServiceContext, ServiceError},
 };
 
 /// POST /admin/collections/{slug}/{id}/undelete — undelete a soft-deleted item
@@ -41,15 +41,13 @@ pub async fn undelete_action(
     let user_doc = crate::admin::handlers::shared::get_user_doc(&auth_user).cloned();
 
     let result = task::spawn_blocking(move || {
-        service::undelete_document(
-            &pool,
-            &runner,
-            &slug_owned,
-            &id_owned,
-            &def_owned,
-            user_doc.as_ref(),
-            false,
-        )
+        let ctx = ServiceContext::collection(&slug_owned, &def_owned)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc.as_ref())
+            .build();
+
+        service::undelete_document(&ctx, &id_owned)
     })
     .await;
 

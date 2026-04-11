@@ -6,6 +6,7 @@ use crate::{
     cli::{self, Table},
     core::SharedRegistry,
     db::{DbPool, query},
+    service::ServiceContext,
 };
 
 use super::helpers::load_auth_collection;
@@ -32,18 +33,19 @@ pub fn user_list(pool: &DbPool, registry: &SharedRegistry, collection: &str) -> 
         Table::new(vec!["ID", "Email", "Locked"])
     };
 
+    let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
+
     for user in &users {
         let email = user
             .fields
             .get("email")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let locked = crate::service::auth::is_locked(&conn, collection, &user.id).unwrap_or(false);
+        let locked = crate::service::auth::is_locked(&ctx, &user.id).unwrap_or(false);
         let locked_str = if locked { "yes" } else { "no" };
 
         if verify_email {
-            let verified =
-                crate::service::auth::is_verified(&conn, collection, &user.id).unwrap_or(false);
+            let verified = crate::service::auth::is_verified(&ctx, &user.id).unwrap_or(false);
             let verified_str = if verified { "yes" } else { "no" };
 
             table.row(vec![&user.id, email, locked_str, verified_str]);

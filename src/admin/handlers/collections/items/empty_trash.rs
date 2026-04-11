@@ -20,7 +20,7 @@ use crate::{
         query::{self, Filter, FilterClause, FilterOp, FindQuery},
     },
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceError, delete_document_core},
+    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core},
 };
 
 /// Find all trashed documents and permanently delete them (skipping referenced ones).
@@ -47,11 +47,16 @@ fn empty_trash(
     let mut hard_def = def.clone();
     hard_def.soft_delete = false;
 
+    let ctx = ServiceContext::collection(slug, &hard_def)
+        .conn(&tx)
+        .write_hooks(&wh)
+        .build();
+
     let mut deleted = 0;
     let mut upload_fields = Vec::new();
 
     for doc in &docs {
-        match delete_document_core(&tx, &wh, slug, &doc.id, &hard_def, None, Some(locale_cfg)) {
+        match delete_document_core(&ctx, &doc.id, Some(locale_cfg)) {
             Ok(result) => {
                 if let Some(fields) = result.upload_doc_fields {
                     upload_fields.push(fields);

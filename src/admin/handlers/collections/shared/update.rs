@@ -32,7 +32,7 @@ use crate::{
     db::query::{LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
     service::{
-        self, ServiceError,
+        self, ServiceContext, ServiceError,
         auth::{lock_user, unlock_user},
     },
 };
@@ -111,25 +111,20 @@ async fn spawn_update(
     let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
     task::spawn_blocking(move || {
+        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc.as_ref())
+            .build();
+
         let result = if input.action == "unpublish" && def_owned.has_versions() {
-            let doc = service::unpublish_document(
-                &pool,
-                &runner,
-                &slug_owned,
-                &id_owned,
-                &def_owned,
-                user_doc.as_ref(),
-                false,
-            )?;
+            let doc = service::unpublish_document(&ctx, &id_owned)?;
 
             Ok((doc, HashMap::new()))
         } else {
             service::update_document(
-                &pool,
-                &runner,
-                &slug_owned,
+                &ctx,
                 &id_owned,
-                &def_owned,
                 service::WriteInput::builder(input.form_data, &input.join_data)
                     .password(input.password.as_deref())
                     .locale_ctx(input.locale_ctx.as_ref())
@@ -137,8 +132,6 @@ async fn spawn_update(
                     .draft(input.draft)
                     .ui_locale(ui_locale)
                     .build(),
-                user_doc.as_ref(),
-                false,
             )
         };
 
@@ -148,11 +141,12 @@ async fn spawn_update(
             let should_lock =
                 locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
             let conn = pool.get().context("DB connection for lock update")?;
+            let ctx = ServiceContext::slug_only(&slug_owned).conn(&conn).build();
 
             if should_lock {
-                lock_user(&conn, &slug_owned, &id_owned)?;
+                lock_user(&ctx, &id_owned)?;
             } else {
-                unlock_user(&conn, &slug_owned, &id_owned)?;
+                unlock_user(&ctx, &id_owned)?;
             }
         }
 

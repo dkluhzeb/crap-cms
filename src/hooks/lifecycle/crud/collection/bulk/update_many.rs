@@ -90,6 +90,13 @@ fn update_many_documents(
         .run_validation(run_hooks)
         .build();
 
+    let ctx = service::ServiceContext::collection(collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
     let mut modified = 0i64;
 
     for doc in &docs {
@@ -99,17 +106,8 @@ fn update_many_documents(
             .ui_locale(ui_locale.clone())
             .build();
 
-        service::update_many_single_core(
-            conn,
-            &write_hooks,
-            collection,
-            &doc.id,
-            &def,
-            input,
-            user.as_ref(),
-            lc,
-        )
-        .map_err(|e| RuntimeError(format!("{e:#}")))?;
+        service::update_many_single_core(&ctx, &doc.id, input, lc)
+            .map_err(|e| RuntimeError(format!("{e:#}")))?;
 
         modified += 1;
     }

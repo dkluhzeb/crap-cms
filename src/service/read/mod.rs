@@ -8,12 +8,12 @@ mod find;
 mod find_by_id;
 mod get_global;
 mod options;
-mod post_process;
+pub(crate) mod post_process;
 mod search;
 
 pub use count::count_documents;
-pub use find::{FindResult, find_documents};
+pub use find::find_documents;
 pub use find_by_id::find_document_by_id;
 pub use get_global::get_global_document;
 pub use options::{ReadOptions, ReadOptionsBuilder};
-pub use search::{SearchOptions, search_documents};
+pub use search::search_documents;

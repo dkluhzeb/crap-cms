@@ -16,7 +16,7 @@ use crate::{
     },
     core::event::EventOperation,
     db::LocaleContext,
-    service::{self, ServiceError, WriteInput},
+    service::{self, ServiceContext, ServiceError, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -62,33 +62,31 @@ impl ContentService {
         let def_owned = def;
 
         let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool
+            let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            // Collection-level + field-level access checks are handled inside
-            // via WriteHooks::field_write_denied (using the transaction connection).
-
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
 
-            let (doc, _req_context) = service::create_document_with_conn(
-                &mut conn,
-                &runner,
-                &collection,
-                &def_owned,
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+
+            let (doc, _req_context) = service::create_document(
+                &ctx,
                 WriteInput::builder(data, &join_data)
                     .password(password.as_deref())
                     .locale_ctx(locale_ctx.as_ref())
                     .draft(req.draft.unwrap_or(false))
                     .ui_locale(ui_locale)
                     .build(),
-                user_doc.as_ref(),
-                false,
             )
             .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 

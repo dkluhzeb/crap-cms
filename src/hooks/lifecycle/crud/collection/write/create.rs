@@ -14,7 +14,7 @@ use crate::{
         converters::*,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, WriteInput, create_document_core},
+    service::{LuaWriteHooks, ServiceContext, WriteInput, create_document_core},
 };
 
 /// Execute the `crap.collections.create` operation.
@@ -80,15 +80,15 @@ fn create_document(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (doc, _ctx) = create_document_core(
-        conn,
-        &write_hooks,
-        &collection,
-        &def,
-        write_input,
-        user.as_ref(),
-    )
-    .map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let (doc, _ctx) = create_document_core(&ctx, write_input)
+        .map_err(|e| RuntimeError(format!("create error: {e:#}")))?;
 
     // Hydration and read-denied field stripping are handled inside
     // create_document_core via WriteHooks.

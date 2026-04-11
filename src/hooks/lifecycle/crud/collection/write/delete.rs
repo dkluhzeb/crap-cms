@@ -10,7 +10,7 @@ use crate::{
         LuaStorage,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, delete_document_core},
+    service::{LuaWriteHooks, ServiceContext, delete_document_core},
 };
 
 /// Execute the delete operation.
@@ -49,16 +49,15 @@ fn delete_document(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    let result = delete_document_core(
-        conn,
-        &write_hooks,
-        &collection,
-        &id,
-        &def,
-        user.as_ref(),
-        Some(lc),
-    )
-    .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let result = delete_document_core(&ctx, &id, Some(lc))
+        .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;
 
     // Clean up upload files after successful delete (skip for soft-delete)
     if is_hard

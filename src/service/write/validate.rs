@@ -45,6 +45,7 @@ pub fn validate_document(
     let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
 
     let hook_data = build_hook_data(&input.data, &join_data);
+
     let hook_ctx = HookContext::builder(ctx.slug, ctx.operation)
         .data(hook_data)
         .locale(input.locale.clone())

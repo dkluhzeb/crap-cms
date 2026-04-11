@@ -1,4 +1,4 @@
-//! Shared helpers for read handlers: pagination conversion.
+//! Pagination conversion: `PaginationResult` -> gRPC `PaginationInfo`.
 
 use crate::{api::content, db::query};
 

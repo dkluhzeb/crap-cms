@@ -12,7 +12,7 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
-    service::{WriteInput, create_document},
+    service::{ServiceContext, WriteInput, create_document},
 };
 
 /// Execute `create` — create a new document.
@@ -43,16 +43,17 @@ pub(in crate::mcp::tools) fn exec_create(
 
     let (data, join_data) = extract_data_from_args(args, &["password"]);
 
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+
     let (doc, _ctx) = create_document(
-        pool,
-        runner,
-        slug,
-        def,
+        &ctx,
         WriteInput::builder(data, &join_data)
             .password(password.as_deref())
             .build(),
-        None,
-        true,
     )?;
 
     info!("MCP create {}: {}", slug, doc.id);

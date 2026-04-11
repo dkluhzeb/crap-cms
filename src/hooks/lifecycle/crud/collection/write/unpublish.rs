@@ -16,7 +16,7 @@ use crate::{
             execution::run_hooks_inner,
         },
     },
-    service::persist_unpublish,
+    service::{ServiceContext, persist_unpublish},
 };
 
 /// Parameters for the unpublish operation.
@@ -72,7 +72,11 @@ pub(super) fn handle_unpublish(
             .map_err(|e| RuntimeError(format!("before_change hook error: {e:#}")))?;
     }
 
-    persist_unpublish(conn, ctx.collection, ctx.id, ctx.def)
+    let svc_ctx = ServiceContext::collection(ctx.collection, ctx.def)
+        .conn(conn)
+        .build();
+
+    persist_unpublish(&svc_ctx, ctx.id)
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
 
     // Internal hook lifecycle lookup — fetches doc state after unpublish, not a user-facing read.

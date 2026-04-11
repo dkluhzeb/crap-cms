@@ -11,7 +11,7 @@ use crate::{
         converters::*,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, WriteInput, update_global_core},
+    service::{LuaWriteHooks, ServiceContext, WriteInput, update_global_core},
 };
 
 /// Core logic for `crap.globals.update`.
@@ -64,9 +64,15 @@ fn globals_update_inner(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (doc, _ctx) =
-        update_global_core(conn, &write_hooks, &slug, &def, write_input, user.as_ref())
-            .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
+    let ctx = ServiceContext::global(&slug, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let (doc, _ctx) = update_global_core(&ctx, write_input)
+        .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
 
     // Hydration and read-denied field stripping are handled inside
     // update_global_core via WriteHooks.

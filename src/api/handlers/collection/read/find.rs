@@ -8,16 +8,57 @@ use crate::{
     api::{
         content,
         handlers::{
-            ContentService,
-            collection::{filter_builder::FilterBuilder, helpers::strip_read_denied_proto_fields},
-            convert::document_to_proto,
+            ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
         },
     },
     db::{AccessResult, FindQuery, LocaleContext, query},
-    service::{ReadOptions, RunnerReadHooks, ServiceError, find_documents},
+    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };
 
-use super::helpers::pagination_result_to_proto;
+use crate::api::handlers::convert::pagination_result_to_proto;
+
+/// Build a FindQuery from the gRPC request parameters.
+fn build_find_query(
+    req: &content::FindRequest,
+    def: &crate::core::CollectionDefinition,
+    pagination: &query::FindPagination,
+    select: Option<&[String]>,
+) -> Result<FindQuery, Status> {
+    let filters = FilterBuilder::new(&def.fields, &AccessResult::Allowed)
+        .where_json(req.r#where.as_deref())
+        .draft_filter(def.has_drafts(), !req.draft.unwrap_or(false))
+        .build()?;
+
+    let mut fq = FindQuery::builder()
+        .filters(filters)
+        .limit(pagination.limit);
+
+    if let Some(ref ob) = req.order_by {
+        fq = fq.order_by(ob.clone());
+    }
+
+    if !pagination.has_cursor() {
+        fq = fq.offset(pagination.offset);
+    }
+
+    if let Some(s) = select {
+        fq = fq.select(s.to_vec());
+    }
+
+    if let Some(ref c) = pagination.after_cursor {
+        fq = fq.after_cursor(c.clone());
+    }
+
+    if let Some(ref c) = pagination.before_cursor {
+        fq = fq.before_cursor(c.clone());
+    }
+
+    if let Some(ref s) = req.search {
+        fq = fq.search(s.clone());
+    }
+
+    Ok(fq.build())
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -52,130 +93,57 @@ impl ContentService {
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
         let cursor_enabled = self.pagination_ctx.cursor_enabled;
-        let has_timestamps = def.timestamps;
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
-        let def_fields = def.fields.clone();
         let collection = req.collection.clone();
         let pop_cache = self.cache.clone();
-        let req_where = req.r#where.clone();
-        let has_drafts = def.has_drafts();
-        let draft = req.draft;
-        let order_by = req.order_by.clone();
-        let search = req.search.clone();
         let def_owned = def;
 
+        let find_query = build_find_query(&req, &def_owned, &pagination, select.as_deref())?;
+
         let (proto_docs, pagination_info) = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool
+            let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            // Access check is handled by service::find_documents — pass Allowed to FilterBuilder
-            let filters = FilterBuilder::new(&def_owned.fields, &AccessResult::Allowed)
-                .where_json(req_where.as_deref())
-                .draft_filter(has_drafts, !draft.unwrap_or(false))
-                .build()?;
-
-            let mut fq_builder = FindQuery::builder()
-                .filters(filters.clone())
-                .limit(pagination.limit);
-
-            if let Some(ref ob) = order_by {
-                fq_builder = fq_builder.order_by(ob.clone());
-            }
-
-            if !pagination.has_cursor() {
-                fq_builder = fq_builder.offset(pagination.offset);
-            }
-
-            if let Some(ref s) = select {
-                fq_builder = fq_builder.select(s.clone());
-            }
-
-            if let Some(ref c) = pagination.after_cursor {
-                fq_builder = fq_builder.after_cursor(c.clone());
-            }
-
-            if let Some(ref c) = pagination.before_cursor {
-                fq_builder = fq_builder.before_cursor(c.clone());
-            }
-
-            if let Some(s) = search {
-                fq_builder = fq_builder.search(s);
-            }
-
-            let find_query = fq_builder.build();
-
             query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-            let select_slice = select.as_deref();
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
             let read_hooks = RunnerReadHooks::new(&runner, &conn);
-            let read_opts = ReadOptions::builder()
-                .depth(depth)
-                .select(select_slice)
-                .locale_ctx(locale_ctx.as_ref())
-                .registry(Some(&registry))
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .conn(&conn)
+                .read_hooks(&read_hooks)
                 .user(user_doc)
-                .cache(Some(&*pop_cache))
                 .build();
 
-            let result = find_documents(
-                &conn,
-                &read_hooks,
-                &collection,
-                &def_owned,
-                &find_query,
-                &read_opts,
-            )
-            .map_err(Status::from)?;
+            let input = FindDocumentsInput::builder(&find_query)
+                .depth(depth)
+                .select(select.as_deref())
+                .locale_ctx(locale_ctx.as_ref())
+                .registry(Some(&registry))
+                .cache(Some(&*pop_cache))
+                .cursor_enabled(cursor_enabled)
+                .build();
 
-            let docs = result.docs;
-            let total = result.total;
+            let result = find_documents(&ctx, &input).map_err(Status::from)?;
 
-            let mut proto_docs: Vec<_> = docs
+            let proto_docs: Vec<_> = result
+                .docs
                 .iter()
                 .map(|doc| document_to_proto(doc, &collection))
                 .collect();
 
-            strip_read_denied_proto_fields(
-                &mut proto_docs,
-                &mut conn,
-                &runner,
-                &def_fields,
-                user_doc,
-            );
-
-            let pr = if cursor_enabled {
-                let cursor_has_more =
-                    if pagination.has_cursor() && (docs.len() as i64) < pagination.limit {
-                        Some(false)
-                    } else {
-                        None
-                    };
-
-                query::PaginationResult::builder(&docs, total, pagination.limit).cursor(
-                    order_by.as_deref(),
-                    has_timestamps,
-                    pagination.before_cursor.is_some(),
-                    pagination.has_cursor(),
-                    cursor_has_more,
-                )
-            } else {
-                query::PaginationResult::builder(&docs, total, pagination.limit)
-                    .page(pagination.page, pagination.offset)
-            };
-
-            Ok((proto_docs, pagination_result_to_proto(&pr)))
+            Ok((proto_docs, pagination_result_to_proto(&result.pagination)))
         })
         .await
         .inspect_err(|e| error!("Task error: {}", e))

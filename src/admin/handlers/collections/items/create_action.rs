@@ -139,11 +139,14 @@ async fn spawn_create(
     let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
     task::spawn_blocking(move || {
+        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc.as_ref())
+            .build();
+
         service::create_document(
-            &pool,
-            &runner,
-            &slug_owned,
-            &def_owned,
+            &ctx,
             service::WriteInput::builder(input.form_data, &input.join_data)
                 .password(input.password.as_deref())
                 .locale_ctx(input.locale_ctx.as_ref())
@@ -151,8 +154,6 @@ async fn spawn_create(
                 .draft(input.draft)
                 .ui_locale(ui_locale)
                 .build(),
-            user_doc.as_ref(),
-            false,
         )
     })
     .await

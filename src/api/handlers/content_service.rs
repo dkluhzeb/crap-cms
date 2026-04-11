@@ -32,7 +32,7 @@ use crate::{
         query::{self},
     },
     hooks::{HookRunner, lifecycle::PublishEventInput},
-    service,
+    service::{self, ServiceContext},
 };
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
@@ -127,13 +127,10 @@ impl ContentService {
         operation: EventOperation,
         auth_user: &Option<AuthUser>,
     ) {
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
-        }
+        self.clear_cache();
 
         if let Ok(def) = self.get_collection_def(collection) {
-            self.hook_runner.publish_event(
-                &self.event_bus,
+            self.publish_event(
                 &def.hooks,
                 def.live.as_ref(),
                 PublishEventInput::builder(EventTarget::Collection, operation)
@@ -143,6 +140,68 @@ impl ContentService {
                     .build(),
             );
         }
+    }
+
+    /// Publish mutation events for a list of document IDs (bulk operations).
+    pub(in crate::api::handlers) fn publish_bulk_mutation_events(
+        &self,
+        collection: &str,
+        doc_ids: &[String],
+        operation: EventOperation,
+    ) {
+        self.clear_cache();
+
+        if let Ok(def) = self.get_collection_def(collection) {
+            for doc_id in doc_ids {
+                self.publish_event(
+                    &def.hooks,
+                    def.live.as_ref(),
+                    PublishEventInput::builder(EventTarget::Collection, operation.clone())
+                        .collection(collection.to_string())
+                        .document_id(doc_id.clone())
+                        .build(),
+                );
+            }
+        }
+    }
+
+    /// Publish a mutation event for a global document.
+    pub(in crate::api::handlers) fn publish_global_mutation_event(
+        &self,
+        slug: &str,
+        doc_id: &str,
+        operation: EventOperation,
+        auth_user: &Option<AuthUser>,
+    ) {
+        self.clear_cache();
+
+        if let Ok(def) = self.get_global_def(slug) {
+            self.publish_event(
+                &def.hooks,
+                def.live.as_ref(),
+                PublishEventInput::builder(EventTarget::Global, operation)
+                    .collection(slug.to_string())
+                    .document_id(doc_id.to_string())
+                    .edited_by(Self::event_user_from(auth_user))
+                    .build(),
+            );
+        }
+    }
+
+    fn clear_cache(&self) {
+        if let Err(e) = self.cache.clear() {
+            warn!("Cache clear failed: {:#}", e);
+        }
+    }
+
+    fn publish_event(
+        &self,
+        hooks: &crate::core::collection::Hooks,
+        live: Option<&crate::core::collection::LiveSetting>,
+        input: PublishEventInput,
+    ) {
+        self.hook_runner
+            .publish_event(&self.event_bus, hooks, live, input);
     }
 }
 
@@ -225,9 +284,11 @@ impl ContentService {
         // Reject tokens with stale session version (password was changed).
         // On DB error, reject the token — do not silently default to 0 which
         // would let stale tokens through during transient failures.
-        let db_session_version =
-            service::auth::get_session_version(conn, &claims.collection, &claims.sub)
-                .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
+        let ctx = ServiceContext::slug_only(&claims.collection)
+            .conn(conn)
+            .build();
+        let db_session_version = service::auth::get_session_version(&ctx, &claims.sub)
+            .map_err(|_| Status::unauthenticated("Session version lookup failed"))?;
 
         if claims.session_version != db_session_version {
             return Err(Status::unauthenticated("Session invalidated"));

@@ -35,7 +35,7 @@ use crate::{
         query::{LocaleContext, LocaleMode},
     },
     hooks::{HookRunner, lifecycle::PublishEventInput},
-    service::{self, ServiceError},
+    service::{self, ServiceContext, ServiceError},
 };
 
 /// Parameters for the blocking global-update task.
@@ -58,31 +58,25 @@ struct UpdateParams {
 fn execute_update(
     params: UpdateParams,
 ) -> Result<(Document, HashMap<String, Value>), ServiceError> {
+    let ctx = ServiceContext::global(&params.slug, &params.def)
+        .pool(&params.pool)
+        .runner(&params.runner)
+        .user(params.user_doc.as_ref())
+        .build();
+
     if params.action == "unpublish" && params.def.has_versions() {
-        let doc = service::unpublish_global_document(
-            &params.pool,
-            &params.runner,
-            &params.slug,
-            &params.def,
-            params.user_doc.as_ref(),
-            false,
-        )?;
+        let doc = service::unpublish_global_document(&ctx)?;
 
         Ok((doc, HashMap::new()))
     } else {
         service::update_global_document(
-            &params.pool,
-            &params.runner,
-            &params.slug,
-            &params.def,
+            &ctx,
             service::WriteInput::builder(params.form_data, &params.join_data)
                 .locale_ctx(params.locale_ctx.as_ref())
                 .locale(params.locale)
                 .draft(params.draft)
                 .ui_locale(params.ui_locale)
                 .build(),
-            params.user_doc.as_ref(),
-            false,
         )
     }
 }

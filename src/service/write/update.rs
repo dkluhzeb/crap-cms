@@ -1,16 +1,16 @@
 //! Core update operation for collections.
 
 use crate::{
-    core::{CollectionDefinition, Document},
-    db::{AccessResult, DbConnection, query},
+    db::{AccessResult, query},
     hooks::{HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, PersistOptions, WriteInput, WriteResult, build_hook_data,
-        hooks::WriteHooks, persist_draft_version, persist_update, run_after_change_hooks,
+        AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult, build_hook_data,
+        persist_draft_version, persist_update, run_after_change_hooks,
     },
 };
 
 use super::{ServiceError, helpers::strip_denied_fields};
+use crate::service::helpers::collect_hidden_field_names;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -20,16 +20,19 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Handles draft-only version saves when `input.draft` is true.
 /// Does NOT manage transactions — caller must open/commit.
 pub fn update_document_core(
-    conn: &dyn DbConnection,
-    write_hooks: &dyn WriteHooks,
-    slug: &str,
+    ctx: &ServiceContext,
     id: &str,
-    def: &CollectionDefinition,
     mut input: WriteInput<'_>,
-    user: Option<&Document>,
 ) -> Result<WriteResult> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def();
+
     // Collection-level access check
-    let access = write_hooks.check_access(def.access.update.as_deref(), user, Some(id), None)?;
+    let access =
+        write_hooks.check_access(def.access.update.as_deref(), ctx.user, Some(id), None)?;
+
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
@@ -38,19 +41,20 @@ pub fn update_document_core(
     let ui_locale = input.ui_locale.as_deref();
 
     // Strip write-denied fields before hook processing
-    let denied = write_hooks.field_write_denied(&def.fields, user, "update");
+    let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
     let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
 
     let hook_data = build_hook_data(&input.data, &join_data);
-    let hook_ctx = HookContext::builder(slug, "update")
+
+    let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(hook_data)
         .locale(input.locale.clone())
         .draft(is_draft)
-        .user(user)
+        .user(ctx.user)
         .ui_locale(ui_locale)
         .build();
 
-    let val_ctx = ValidationCtx::builder(conn, slug)
+    let val_ctx = ValidationCtx::builder(conn, ctx.slug)
         .exclude_id(Some(id))
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
@@ -61,35 +65,35 @@ pub fn update_document_core(
     let final_data = final_ctx.to_string_map(&def.fields);
 
     let doc = if is_draft && def.has_versions() {
-        persist_draft_version(conn, slug, id, def, &final_ctx.data, input.locale_ctx)?
+        persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
     } else {
         let mut update_builder = PersistOptions::builder()
             .password(input.password)
             .locale_ctx(input.locale_ctx);
+
         if let Some(lctx) = input.locale_ctx {
             update_builder = update_builder.locale_config(&lctx.config);
         }
+
         persist_update(
-            conn,
-            slug,
+            ctx,
             id,
-            def,
             &final_data,
             &final_ctx.data,
             &update_builder.build(),
         )?
     };
 
-    let ctx = run_after_change_hooks(
+    let after_ctx = run_after_change_hooks(
         write_hooks,
         &def.hooks,
         &def.fields,
         &doc,
-        AfterChangeInput::builder(slug, "update")
+        AfterChangeInput::builder(ctx.slug, "update")
             .locale(input.locale)
             .draft(is_draft)
             .req_context(final_ctx.context)
-            .user(user)
+            .user(ctx.user)
             .ui_locale(ui_locale)
             .build(),
         conn,
@@ -97,13 +101,21 @@ pub fn update_document_core(
 
     // Hydrate join fields (arrays, blocks, has-many) so the returned document is complete
     let mut doc = doc;
-    query::hydrate_document(conn, slug, &def.fields, &mut doc, None, input.locale_ctx)?;
+
+    query::hydrate_document(
+        conn,
+        ctx.slug,
+        &def.fields,
+        &mut doc,
+        None,
+        input.locale_ctx,
+    )?;
 
     // Strip read-denied fields AFTER hydration
-    let read_denied = write_hooks.field_read_denied(&def.fields, user);
-    for name in &read_denied {
-        doc.fields.remove(name);
-    }
+    let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
+    read_denied.extend(collect_hidden_field_names(&def.fields, ""));
 
-    Ok((doc, ctx))
+    doc.strip_fields(&read_denied);
+
+    Ok((doc, after_ctx))
 }

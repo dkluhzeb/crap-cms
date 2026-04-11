@@ -10,7 +10,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::event::EventOperation,
-    service::restore_collection_version,
+    service::{ServiceContext, restore_collection_version},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -52,18 +52,14 @@ impl ContentService {
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
-            let doc = restore_collection_version(
-                &pool,
-                &runner,
-                &collection,
-                &def_owned,
-                &document_id,
-                &version_id,
-                &locale_config,
-                user_doc.as_ref(),
-                false,
-            )
-            .map_err(Status::from)?;
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+
+            let doc = restore_collection_version(&ctx, &document_id, &version_id, &locale_config)
+                .map_err(Status::from)?;
 
             let proto_doc = document_to_proto(&doc, &collection);
 

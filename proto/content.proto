@@ -1145,6 +1145,8 @@ message ListVersionsRequest {
 message ListVersionsResponse {
   // Versions sorted newest-first.
   repeated VersionInfo versions = 1;
+  // Pagination metadata for the version list.
+  PaginationInfo pagination = 2;
 }
 
 // VersionInfo summarizes a single version snapshot.
@@ -1304,6 +1306,8 @@ message ListJobRunsRequest {
 message ListJobRunsResponse {
   // Job runs matching the filter, newest first.
   repeated GetJobRunResponse runs = 1;
+  // Pagination metadata for the job run list.
+  PaginationInfo pagination = 2;
 }
 
 // ValidateRequest checks field data against collection rules without persisting.

@@ -11,7 +11,7 @@ use crate::{
         converters::document_to_lua_table,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaReadHooks, get_global_document},
+    service::{GetGlobalInput, LuaReadHooks, ServiceContext, get_global_document},
 };
 
 /// Core logic for `crap.globals.get`.
@@ -40,16 +40,16 @@ fn globals_get_inner(
         .override_access(override_access)
         .build();
 
-    let doc = get_global_document(
-        conn,
-        &hooks,
-        &slug,
-        &def,
-        locale_ctx.as_ref(),
-        user.as_ref(),
-        ui_locale.as_deref(),
-    )
-    .map_err(|e| RuntimeError(format!("{e}")))?;
+    let ctx = ServiceContext::global(&slug, &def)
+        .conn(conn)
+        .read_hooks(&hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let input = GetGlobalInput::new(locale_ctx.as_ref(), ui_locale.as_deref());
+
+    let doc = get_global_document(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
 
     document_to_lua_table(lua, &doc)
 }

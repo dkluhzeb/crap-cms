@@ -14,7 +14,7 @@ use crate::{
     },
     core::Registry,
     db::DbPool,
-    service,
+    service::{self, ServiceContext},
 };
 
 /// Check whether a reset token exists across all auth collections.
@@ -29,7 +29,11 @@ fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool
             continue;
         }
 
-        if service::auth::find_by_reset_token(&conn, &def.slug, def, token).unwrap_or(false) {
+        let ctx = ServiceContext::collection(&def.slug, def)
+            .conn(&conn)
+            .build();
+
+        if service::auth::find_by_reset_token(&ctx, token).unwrap_or(false) {
             return true;
         }
     }

@@ -11,7 +11,7 @@ use crate::{
     db::{DbPool, LocaleContext},
     hooks::HookRunner,
     mcp::tools::collection::helpers::doc_to_json,
-    service::{ReadOptions, RunnerReadHooks, find_document_by_id},
+    service::{FindByIdInput, RunnerReadHooks, ServiceContext, find_document_by_id},
 };
 
 /// Execute `find_by_id` — single document lookup with population.
@@ -43,14 +43,20 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
     let depth = depth.min(config.depth.max_depth);
 
     let hooks = RunnerReadHooks::new(runner, &conn);
-    let opts = ReadOptions::builder()
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .override_access(true)
+        .build();
+
+    let input = FindByIdInput::builder(id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(registry.as_ref()))
         .build();
 
-    let doc =
-        find_document_by_id(&conn, &hooks, slug, def, id, &opts).map_err(|e| e.into_anyhow())?;
+    let doc = find_document_by_id(&ctx, &input).map_err(|e| e.into_anyhow())?;
 
     match doc {
         Some(d) => Ok(to_string_pretty(&doc_to_json(&d))?),

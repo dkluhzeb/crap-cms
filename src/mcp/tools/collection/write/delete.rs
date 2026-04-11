@@ -6,7 +6,12 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::{core::Registry, db::DbPool, hooks::HookRunner, service::delete_document};
+use crate::{
+    core::Registry,
+    db::DbPool,
+    hooks::HookRunner,
+    service::{ServiceContext, delete_document},
+};
 
 /// Execute `delete` — delete a document by ID.
 pub(in crate::mcp::tools) fn exec_delete(
@@ -25,7 +30,12 @@ pub(in crate::mcp::tools) fn exec_delete(
         .get(slug)
         .context("Collection not found")?;
 
-    delete_document(pool, runner, slug, id, def, None, None, None, true)?;
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+    delete_document(&ctx, id, None, None)?;
 
     info!("MCP delete {}: {}", slug, id);
 

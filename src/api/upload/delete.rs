@@ -8,7 +8,12 @@ use axum::{
 use serde_json::json;
 use tokio::task;
 
-use crate::{admin::AdminState, core::event::EventOperation, db::query, service::delete_document};
+use crate::{
+    admin::AdminState,
+    core::event::EventOperation,
+    db::query,
+    service::{ServiceContext, delete_document},
+};
 
 use super::helpers::{
     check_upload_access, classify_delete_error, extract_bearer_user, json_error, json_ok,
@@ -88,17 +93,12 @@ pub(super) async fn delete_upload(
     let locale_config = state.config.locale.clone();
 
     let result = task::spawn_blocking(move || {
-        delete_document(
-            &pool,
-            &runner,
-            &slug_owned,
-            &id_owned,
-            &def_clone,
-            user_doc_owned.as_ref(),
-            Some(&*storage),
-            Some(&locale_config),
-            false,
-        )
+        let ctx = ServiceContext::collection(&slug_owned, &def_clone)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc_owned.as_ref())
+            .build();
+        delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
     })
     .await;
 

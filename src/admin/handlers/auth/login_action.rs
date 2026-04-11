@@ -29,7 +29,7 @@ use crate::{
     },
     db::{BoxedConnection, DbPool},
     hooks::HookRunner,
-    service::{self, ServiceError, auth::authenticate_local},
+    service::{self, ServiceContext, ServiceError, auth::authenticate_local},
 };
 
 /// Successful login result containing the user document and session version.
@@ -83,10 +83,10 @@ async fn verify_credentials(
 
         // Try local email+password authentication via service layer
         if !params.disable_local {
+            let ctx = ServiceContext::collection(slug, def).conn(&conn).build();
+
             match authenticate_local(
-                &conn,
-                slug,
-                def,
+                &ctx,
                 &params.email,
                 &params.password,
                 &*params.password_provider,
@@ -115,21 +115,23 @@ async fn verify_credentials(
         if let Some(runner) = &params.hook_runner
             && let Some(user) = try_strategy_auth(&conn, slug, def, runner, &params.headers)
         {
+            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+
             // Strategy-authenticated users still need locked/verified checks
-            if service::auth::is_locked(&conn, slug, &user.id).unwrap_or(false) {
+            if service::auth::is_locked(&ctx, &user.id).unwrap_or(false) {
                 debug!("Login denied for {}: account locked", user.id);
                 return Ok(None);
             }
 
             if params.verify_email_flag
-                && !service::auth::is_verified(&conn, slug, &user.id).unwrap_or(false)
+                && !service::auth::is_verified(&ctx, &user.id).unwrap_or(false)
             {
                 debug!("Login denied for {}: email not verified", user.id);
                 return Ok(None);
             }
 
-            let session_version = service::auth::get_session_version(&conn, slug, &user.id)
-                .map_err(|e| e.into_anyhow())?;
+            let session_version =
+                service::auth::get_session_version(&ctx, &user.id).map_err(|e| e.into_anyhow())?;
             return Ok(Some(Ok(LoginSuccess {
                 user,
                 session_version,
@@ -173,7 +175,9 @@ fn send_mfa_code(params: MfaCodeParams, code: &str) {
 
     let exp = Utc::now().timestamp() + MFA_PENDING_EXPIRY as i64;
 
-    if let Err(e) = service::auth::set_mfa_code(&conn, &params.slug, &params.user_id, code, exp) {
+    let ctx = ServiceContext::slug_only(&params.slug).conn(&conn).build();
+
+    if let Err(e) = service::auth::set_mfa_code(&ctx, &params.user_id, code, exp) {
         error!("Failed to store MFA code: {}", e);
         return;
     }

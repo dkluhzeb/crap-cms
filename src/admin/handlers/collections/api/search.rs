@@ -12,7 +12,7 @@ use crate::{
         handlers::{collections::shared::thumbnail_url, shared::get_user_doc},
     },
     core::{Document, auth::AuthUser},
-    db::query::LocaleContext,
+    db::{FindQuery, query::LocaleContext},
     service,
 };
 
@@ -97,18 +97,28 @@ pub async fn search_collection(
     let search = if search_term.is_empty() {
         None
     } else {
-        Some(search_term.as_str())
+        Some(search_term.to_string())
     };
 
-    let search_opts = service::SearchOptions {
-        search,
-        limit: limit as i64,
+    let mut fq = FindQuery::new();
+    fq.limit = Some(limit as i64);
+    fq.search = search;
+
+    let ctx = service::ServiceContext::collection(&slug, def)
+        .pool(&state.pool)
+        .conn(&conn)
+        .read_hooks(&read_hooks)
+        .user(user_doc)
+        .build();
+
+    let search_input = service::SearchDocumentsInput {
+        query: &fq,
         locale_ctx: locale_ctx.as_ref(),
-        user: user_doc,
+        cursor_enabled: false,
     };
 
-    let docs = match service::search_documents(&conn, &read_hooks, &slug, def, &search_opts) {
-        Ok(d) => d,
+    let result = match service::search_documents(&ctx, &search_input) {
+        Ok(r) => r,
         Err(_) => return Json(json!([])),
     };
 
@@ -119,7 +129,8 @@ pub async fn search_collection(
         .as_ref()
         .and_then(|u| u.admin_thumbnail.as_ref().cloned());
 
-    let results: Vec<_> = docs
+    let results: Vec<_> = result
+        .docs
         .iter()
         .map(|doc| {
             build_search_result(

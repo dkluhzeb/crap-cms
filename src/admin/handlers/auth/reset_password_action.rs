@@ -17,7 +17,9 @@ use crate::{
     },
     core::{Registry, auth::ResetTokenError},
     db::DbPool,
-    service::{ServiceError, auth::consume_reset_token as service_consume_reset_token},
+    service::{
+        ServiceContext, ServiceError, auth::consume_reset_token as service_consume_reset_token,
+    },
 };
 
 /// Render a reset password error page with the given error key and optional token.
@@ -65,7 +67,9 @@ fn consume_reset_token(
             continue;
         }
 
-        match service_consume_reset_token(&tx, &def.slug, def, token, password) {
+        let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
+
+        match service_consume_reset_token(&ctx, token, password) {
             Ok(()) => {
                 tx.commit()?;
                 return Ok(());

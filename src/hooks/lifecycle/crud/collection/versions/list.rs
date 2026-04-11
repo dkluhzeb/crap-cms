@@ -5,8 +5,11 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     core::SharedRegistry,
-    hooks::lifecycle::crud::{get_tx_conn, helpers::*},
-    service::{LuaReadHooks, list_versions},
+    hooks::lifecycle::{
+        converters::pagination_result_to_lua_table,
+        crud::{get_tx_conn, helpers::*},
+    },
+    service::{ListVersionsInput, LuaReadHooks, ServiceContext, list_versions},
 };
 
 /// Core logic for `crap.collections.list_versions`.
@@ -22,7 +25,7 @@ fn list_versions_inner(
     let conn = unsafe { &*conn_ptr };
 
     // Validate collection exists
-    let _def = resolve_collection(reg, &collection)?;
+    let def = resolve_collection(reg, &collection)?;
 
     let limit: Option<i64> = opts
         .as_ref()
@@ -37,23 +40,24 @@ fn list_versions_inner(
         .override_access(true)
         .build();
 
-    let (versions, total) = list_versions(
-        conn,
-        &hooks,
-        &collection,
-        &id,
-        None,
-        user.as_ref(),
-        limit,
-        offset,
-    )
-    .map_err(|e| RuntimeError(format!("{e}")))?;
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .read_hooks(&hooks)
+        .user(user.as_ref())
+        .override_access(true)
+        .build();
 
-    let result = lua.create_table()?;
-    result.set("total", total)?;
+    let input = ListVersionsInput::builder(&id)
+        .limit(limit)
+        .offset(offset)
+        .build();
+
+    let paginated = list_versions(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;
+
+    let pagination = pagination_result_to_lua_table(lua, &paginated.pagination)?;
 
     let docs = lua.create_table()?;
-    for (i, v) in versions.iter().enumerate() {
+    for (i, v) in paginated.docs.iter().enumerate() {
         let row = lua.create_table()?;
         row.set("id", v.id.as_str())?;
         row.set("version", v.version)?;
@@ -67,7 +71,9 @@ fn list_versions_inner(
         docs.set(i + 1, row)?;
     }
 
+    let result = lua.create_table()?;
     result.set("docs", docs)?;
+    result.set("pagination", pagination)?;
 
     Ok(result)
 }

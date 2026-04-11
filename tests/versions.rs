@@ -928,14 +928,13 @@ fn service_create_published_creates_version() {
         ("body".into(), "Content".into()),
     ]
     .into();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(pool)
+        .runner(runner)
+        .build();
     let (doc, _) = service::create_document(
-        pool,
-        runner,
-        "articles",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new()).build(),
-        None,
-        false,
     )
     .unwrap();
 
@@ -958,16 +957,15 @@ fn service_create_draft_creates_draft_version() {
     let runner = &ts.runner;
 
     let data: HashMap<String, String> = [("title".into(), "Draft Post".into())].into();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(pool)
+        .runner(runner)
+        .build();
     let (doc, _) = service::create_document(
-        pool,
-        runner,
-        "articles",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new())
             .draft(true)
             .build(),
-        None,
-        false,
     )
     .unwrap();
 
@@ -993,30 +991,24 @@ fn service_update_draft_is_version_only() {
         ("body".into(), "Original Body".into()),
     ]
     .into();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(pool)
+        .runner(runner)
+        .build();
     let (doc, _) = service::create_document(
-        pool,
-        runner,
-        "articles",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new()).build(),
-        None,
-        false,
     )
     .unwrap();
 
     // Draft update — should NOT change the main table
     let update_data: HashMap<String, String> = [("title".into(), "Draft Title".into())].into();
     let (result, _) = service::update_document(
-        pool,
-        runner,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         service::WriteInput::builder(update_data, &HashMap::new())
             .draft(true)
             .build(),
-        None,
-        false,
     )
     .unwrap();
 
@@ -1052,30 +1044,24 @@ fn service_update_publish_updates_main_table() {
     let runner = &ts.runner;
 
     let data: HashMap<String, String> = [("title".into(), "Before Publish".into())].into();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(pool)
+        .runner(runner)
+        .build();
     let (doc, _) = service::create_document(
-        pool,
-        runner,
-        "articles",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new())
             .draft(true)
             .build(), // create as draft
-        None,
-        false,
     )
     .unwrap();
 
     // Publish update (draft=false)
     let update_data: HashMap<String, String> = [("title".into(), "Published Title".into())].into();
     let (published, _) = service::update_document(
-        pool,
-        runner,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         service::WriteInput::builder(update_data, &HashMap::new()).build(),
-        None,
-        false,
     )
     .unwrap();
 
@@ -1094,14 +1080,13 @@ fn service_nonversioned_create_no_version_created() {
     let runner = &ts.runner;
 
     let data: HashMap<String, String> = [("title".into(), "Note".into())].into();
+    let ctx = service::ServiceContext::collection("notes", &def)
+        .pool(pool)
+        .runner(runner)
+        .build();
     let (_doc, _) = service::create_document(
-        pool,
-        runner,
-        "notes",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new()).build(),
-        None,
-        false,
     )
     .unwrap();
 
@@ -1138,16 +1123,13 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
             {"_block_type": "text", "body": "Initial block"}
         ]),
     );
-    let (doc, _) = service::create_document(
-        pool,
-        runner,
-        "articles",
-        &def,
-        service::WriteInput::builder(data, &join_data).build(),
-        None,
-        false,
-    )
-    .unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(pool)
+        .runner(runner)
+        .build();
+    let (doc, _) =
+        service::create_document(&ctx, service::WriteInput::builder(data, &join_data).build())
+            .unwrap();
 
     // Draft update with different block data
     let update_data: HashMap<String, String> =
@@ -1161,16 +1143,11 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
         ]),
     );
     service::update_document(
-        pool,
-        runner,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         service::WriteInput::builder(update_data, &draft_join_data)
             .draft(true)
             .build(),
-        None,
-        false,
     )
     .unwrap();
 

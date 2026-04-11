@@ -6,21 +6,24 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, Document},
-    db::{DbConnection, query},
-    service::{PersistOptions, versions},
+    core::Document,
+    db::query,
+    service::{PersistOptions, ServiceContext, versions},
 };
 
 /// Persist the DB write phase of a create operation.
 /// Performs: insert -> join data -> password -> version snapshot.
 pub fn persist_create(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+    ctx: &ServiceContext,
     final_data: &HashMap<String, String>,
     hook_data: &HashMap<String, Value>,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+    let slug = ctx.slug;
+
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
     let status = if opts.is_draft { "draft" } else { "published" };
 

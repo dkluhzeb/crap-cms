@@ -66,17 +66,12 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     }
 
     let result = task::spawn_blocking(move || {
-        service::delete_document(
-            &pool,
-            &runner,
-            &slug_owned,
-            &id_owned,
-            &def_clone,
-            user_doc.as_ref(),
-            Some(&*storage),
-            Some(&locale_config),
-            false,
-        )
+        let ctx = service::ServiceContext::collection(&slug_owned, &def_clone)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc.as_ref())
+            .build();
+        service::delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
     })
     .await;
 

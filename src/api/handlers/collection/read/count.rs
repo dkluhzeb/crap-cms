@@ -10,7 +10,9 @@ use crate::{
         handlers::{ContentService, collection::filter_builder::FilterBuilder},
     },
     db::{AccessResult, LocaleContext},
-    service::{RunnerReadHooks, ServiceError, count_documents},
+    service::{
+        CountDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, count_documents,
+    },
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -59,18 +61,19 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let read_hooks = RunnerReadHooks::new(&runner, &conn);
 
-            count_documents(
-                &conn,
-                &read_hooks,
-                &collection,
-                &def_owned,
-                &filters,
-                locale_ctx.as_ref(),
-                search.as_deref(),
-                false,
-                user_doc,
-            )
-            .map_err(Status::from)
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .conn(&conn)
+                .read_hooks(&read_hooks)
+                .user(user_doc)
+                .build();
+
+            let input = CountDocumentsInput::builder(&filters)
+                .locale_ctx(locale_ctx.as_ref())
+                .search(search.as_deref())
+                .build();
+
+            count_documents(&ctx, &input).map_err(Status::from)
         })
         .await
         .inspect_err(|e| error!("Task error: {}", e))

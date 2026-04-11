@@ -44,7 +44,7 @@ impl ContentService {
         let locale_config = self.locale_config.clone();
 
         let auth_user = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool
+            let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
@@ -53,18 +53,13 @@ impl ContentService {
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
-            service::delete_document_with_conn(
-                &mut conn,
-                &runner,
-                &collection,
-                &id,
-                &def_clone,
-                user_doc.as_ref(),
-                Some(&*storage),
-                Some(&locale_config),
-                false,
-            )
-            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
+            let ctx = service::ServiceContext::collection(&collection, &def_clone)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+            service::delete_document(&ctx, &id, Some(&*storage), Some(&locale_config))
+                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(auth_user)
         })

@@ -24,9 +24,11 @@ pub(crate) fn save_draft_version(
     final_ctx_data: &HashMap<String, Value>,
 ) -> Result<()> {
     let mut snapshot_fields = existing_doc.fields.clone();
+
     for (k, v) in final_ctx_data {
         snapshot_fields.insert(k.clone(), v.clone());
     }
+
     let snapshot_doc = Document::builder(parent_id)
         .fields(snapshot_fields)
         .created_at(existing_doc.created_at.as_deref())
@@ -38,8 +40,11 @@ pub(crate) fn save_draft_version(
     if let Some(obj) = snapshot.as_object_mut() {
         merge_join_data_into_snapshot(obj, fields, final_ctx_data);
     }
+
     query::create_version(conn, table, parent_id, "draft", &snapshot)?;
+
     prune_versions(conn, table, parent_id, versions)?;
+
     Ok(())
 }
 

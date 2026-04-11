@@ -20,8 +20,8 @@ use crate::{
         CollectionDefinition, Document,
         auth::{AuthUser, Claims},
     },
-    db::{ops, query, query::LocaleContext},
-    service::{RunnerReadHooks, list_versions},
+    db::{ops, query::LocaleContext, query::PaginationResult},
+    service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
 };
 
 /// Fetch the document title and paginated version list.
@@ -32,7 +32,7 @@ fn fetch_version_data(
     id: &str,
     pg: &Pagination,
     user: Option<&Document>,
-) -> Result<(String, Vec<Value>, i64), Box<Response>> {
+) -> Result<(String, Vec<Value>, PaginationResult), Box<Response>> {
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale).unwrap_or(None);
 
     let document = match ops::find_document_by_id(&state.pool, slug, def, id, locale_ctx.as_ref()) {
@@ -61,21 +61,22 @@ fn fetch_version_data(
     };
 
     let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
-    let (version_snapshots, total) = list_versions(
-        &conn,
-        &hooks,
-        slug,
-        id,
-        def.access.read.as_deref(),
-        user,
-        Some(pg.per_page),
-        Some(pg.offset),
-    )
-    .unwrap_or_default();
+    let ctx = ServiceContext::collection(slug, def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user)
+        .build();
 
-    let versions: Vec<Value> = version_snapshots.into_iter().map(version_to_json).collect();
+    let input = ListVersionsInput::builder(id)
+        .limit(Some(pg.per_page))
+        .offset(Some(pg.offset))
+        .build();
 
-    Ok((doc_title, versions, total))
+    let result = list_versions(&ctx, &input).unwrap_or_default();
+
+    let versions: Vec<Value> = result.docs.into_iter().map(version_to_json).collect();
+
+    Ok((doc_title, versions, result.pagination))
 }
 
 /// GET /admin/collections/{slug}/{id}/versions — dedicated version history page
@@ -101,7 +102,7 @@ pub async fn list_versions_page(
     let pg = params.resolve(&state.config.pagination);
     let user_doc = get_user_doc(&auth_user);
 
-    let (doc_title, versions, total) =
+    let (doc_title, versions, pagination) =
         match fetch_version_data(&state, &slug, &def, &id, &pg, user_doc) {
             Ok(data) => data,
             Err(resp) => return *resp,
@@ -124,8 +125,7 @@ pub async fn list_versions_page(
             json!(format!("/admin/collections/{}/{}", slug, id)),
         )
         .with_pagination(
-            &query::PaginationResult::builder(&[] as &[Document], total, pg.per_page)
-                .page(pg.page, pg.offset),
+            &pagination,
             format!(
                 "/admin/collections/{}/{}/versions?page={}",
                 slug,

@@ -6,7 +6,7 @@ use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use crate::{
     core::SharedRegistry,
     hooks::lifecycle::crud::{get_tx_conn, helpers::*},
-    service::document_info,
+    service::{ServiceContext, document_info},
 };
 
 /// Core logic for `crap.collections.ref_count`.
@@ -20,10 +20,12 @@ fn ref_count_inner(
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
 
-    // Validate collection exists
-    let _def = resolve_collection(reg, &collection)?;
+    let def = resolve_collection(reg, &collection)?;
 
-    document_info::get_ref_count(conn, &collection, &id).map_err(|e| RuntimeError(format!("{e}")))
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .build();
+    document_info::get_ref_count(&ctx, &id).map_err(|e| RuntimeError(format!("{e}")))
 }
 
 /// Register `crap.collections.ref_count(collection, id)`.

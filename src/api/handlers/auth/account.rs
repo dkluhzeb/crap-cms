@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    service::{self, ServiceError},
+    service::{self, ServiceContext, ServiceError},
 };
 
 /// Shared logic for all account action RPCs.
@@ -57,7 +57,8 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            service::auth::lock_user(&conn, &collection, &id)
+            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            service::auth::lock_user(&ctx, &id)
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(())
@@ -100,7 +101,8 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            service::auth::unlock_user(&conn, &collection, &id)
+            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            service::auth::unlock_user(&ctx, &id)
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(())
@@ -143,7 +145,8 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            service::auth::mark_verified(&conn, &collection, &id)
+            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            service::auth::mark_verified(&ctx, &id)
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(())
@@ -186,7 +189,8 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            service::auth::mark_unverified(&conn, &collection, &id)
+            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            service::auth::mark_unverified(&ctx, &id)
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(())

@@ -12,7 +12,7 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
-    service::{WriteInput, update_document},
+    service::{ServiceContext, WriteInput, update_document},
 };
 
 /// Execute `update` — update an existing document.
@@ -48,17 +48,18 @@ pub(in crate::mcp::tools) fn exec_update(
 
     let (data, join_data) = extract_data_from_args(args, &["id", "password"]);
 
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+
     let (doc, _ctx) = update_document(
-        pool,
-        runner,
-        slug,
+        &ctx,
         id,
-        def,
         WriteInput::builder(data, &join_data)
             .password(password.as_deref())
             .build(),
-        None,
-        true,
     )?;
 
     info!("MCP update {}: {}", slug, id);

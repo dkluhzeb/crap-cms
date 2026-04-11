@@ -5,10 +5,10 @@ use tracing::error;
 
 use crate::{
     core::{Document, FieldDefinition, Registry, document::VersionSnapshot},
-    db::{BoxedConnection, DbPool},
-    hooks::HookRunner,
+    db::DbConnection,
     service::{
-        RunnerReadHooks, document_info::find_missing_relations, find_version_by_id, list_versions,
+        ListVersionsInput, ServiceContext, document_info::find_missing_relations,
+        find_version_by_id, list_versions,
     },
 };
 
@@ -25,31 +25,13 @@ pub fn version_to_json(v: VersionSnapshot) -> Value {
 
 /// Fetch the last N versions + total count for sidebar display.
 /// Returns `(versions_json, total_count)`.
-pub fn fetch_version_sidebar_data(
-    pool: &DbPool,
-    runner: &HookRunner,
-    table_name: &str,
-    parent_id: &str,
-) -> (Vec<Value>, i64) {
-    let Ok(conn) = pool.get() else {
-        return (vec![], 0);
-    };
+pub fn fetch_version_sidebar_data(ctx: &ServiceContext, parent_id: &str) -> (Vec<Value>, i64) {
+    let input = ListVersionsInput::builder(parent_id).limit(Some(3)).build();
 
-    // Access already checked by the parent page — pass None to skip re-checking.
-    let hooks = RunnerReadHooks::new(runner, &conn);
-    match list_versions(
-        &conn,
-        &hooks,
-        table_name,
-        parent_id,
-        None,
-        None,
-        Some(3),
-        None,
-    ) {
-        Ok((versions, total)) => {
-            let vers = versions.into_iter().map(version_to_json).collect();
-            (vers, total)
+    match list_versions(ctx, &input) {
+        Ok(result) => {
+            let vers = result.docs.into_iter().map(version_to_json).collect();
+            (vers, result.total)
         }
         Err(_) => (vec![], 0),
     }
@@ -58,13 +40,13 @@ pub fn fetch_version_sidebar_data(
 /// Look up a version snapshot and find any missing relation targets.
 /// Shared by collection and global restore confirm handlers.
 pub fn load_version_with_missing_relations(
-    conn: &BoxedConnection,
+    ctx: &ServiceContext,
+    conn: &dyn DbConnection,
     registry: &Registry,
-    table: &str,
     version_id: &str,
     fields: &[FieldDefinition],
 ) -> Result<(VersionSnapshot, Vec<crate::db::query::MissingRelation>), &'static str> {
-    let version = match find_version_by_id(conn, table, version_id) {
+    let version = match find_version_by_id(ctx, version_id) {
         Ok(Some(v)) => v,
         Ok(None) => return Err("Version not found"),
         Err(e) => {

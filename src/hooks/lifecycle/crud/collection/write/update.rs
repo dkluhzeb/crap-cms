@@ -16,7 +16,7 @@ use crate::{
         converters::*,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, WriteInput, update_document_core},
+    service::{LuaWriteHooks, ServiceContext, WriteInput, update_document_core},
 };
 
 /// Execute the `crap.collections.update` operation.
@@ -99,16 +99,15 @@ fn update_document(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let (doc, _ctx) = update_document_core(
-        conn,
-        &write_hooks,
-        &collection,
-        &id,
-        &def,
-        write_input,
-        user.as_ref(),
-    )
-    .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let (doc, _ctx) = update_document_core(&ctx, &id, write_input)
+        .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
 
     // Hydration and read-denied field stripping are handled inside
     // update_document_core via WriteHooks.

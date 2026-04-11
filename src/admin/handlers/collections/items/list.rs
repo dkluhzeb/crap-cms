@@ -29,7 +29,10 @@ use crate::{
         auth::{AuthUser, Claims},
     },
     db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
-    service::{ReadOptions, RunnerReadHooks, find_documents, user_settings::get_user_settings},
+    service::{
+        FindDocumentsInput, PaginatedResult, RunnerReadHooks, ServiceContext, find_documents,
+        user_settings::get_user_settings,
+    },
 };
 
 /// Fetch documents via the shared service layer read lifecycle.
@@ -40,23 +43,28 @@ fn fetch_list_documents(
     find_query: &FindQuery,
     locale_ctx: Option<&query::LocaleContext>,
     auth_user: &Option<Extension<AuthUser>>,
-) -> anyhow::Result<(Vec<Document>, i64)> {
+    cursor_enabled: bool,
+) -> anyhow::Result<PaginatedResult<Document>> {
     let conn = state.pool.get().context("Failed to get DB connection")?;
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
-    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
     let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
-    let opts = ReadOptions::builder()
-        .hydrate(false)
-        .locale_ctx(locale_ctx)
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(&state.pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
         .user(user_doc.as_ref())
-        .ui_locale(user_ui_locale.as_deref())
         .build();
 
-    let result =
-        find_documents(&conn, &hooks, slug, def, find_query, &opts).map_err(|e| e.into_anyhow())?;
+    let input = FindDocumentsInput::builder(find_query)
+        .hydrate(false)
+        .locale_ctx(locale_ctx)
+        .cursor_enabled(cursor_enabled)
+        .build();
 
-    Ok((result.docs, result.total))
+    let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
+
+    Ok(result)
 }
 
 /// Compute title column sort URL and sort direction indicators.
@@ -93,42 +101,14 @@ struct ListPagination {
     next_url: String,
 }
 
-/// Cursor state for pagination — whether cursor mode is active, the current
-/// request has a cursor, and whether overfetch detected more rows.
-struct CursorState {
-    enabled: bool,
-    has_cursor: bool,
-    has_more: bool,
-}
-
-/// Build the PaginationResult and prev/next URLs for cursor or page mode.
+/// Build prev/next URLs from the PaginationResult for cursor or page mode.
 fn build_list_pagination(
-    documents: &[Document],
-    total: i64,
+    pr: &query::PaginationResult,
     pagination: &query::FindPagination,
-    def: &CollectionDefinition,
-    cursor: &CursorState,
-    order_by: Option<&str>,
+    cursor_enabled: bool,
     url_ctx: &ListUrlContext,
 ) -> ListPagination {
-    let pr = if cursor.enabled {
-        query::PaginationResult::builder(documents, total, pagination.limit).cursor(
-            order_by,
-            def.timestamps,
-            pagination.before_cursor.is_some(),
-            pagination.has_cursor(),
-            if cursor.has_cursor {
-                Some(cursor.has_more)
-            } else {
-                None
-            },
-        )
-    } else {
-        query::PaginationResult::builder(documents, total, pagination.limit)
-            .page(pagination.page, pagination.offset)
-    };
-
-    let (prev_url, next_url) = if cursor.enabled {
+    let (prev_url, next_url) = if cursor_enabled {
         let prev = if pr.has_prev_page {
             pr.start_cursor
                 .as_deref()
@@ -156,7 +136,7 @@ fn build_list_pagination(
     };
 
     ListPagination {
-        result: pr,
+        result: pr.clone(),
         prev_url,
         next_url,
     }
@@ -192,11 +172,7 @@ fn build_find_query(
     fq.filters = filters;
     fq.order_by = order_by;
     fq.include_deleted = is_trash;
-    fq.limit = Some(if has_cursor {
-        pagination.limit + 1
-    } else {
-        pagination.limit
-    });
+    fq.limit = Some(pagination.limit);
     fq.offset = if has_cursor {
         None
     } else {
@@ -228,25 +204,9 @@ fn load_user_columns(
     )
 }
 
-/// Strip denied fields from documents and trim cursor overfetch.
-fn prepare_documents(
-    mut documents: Vec<Document>,
-    pagination: &query::FindPagination,
-    has_cursor: bool,
-    denied_fields: &[String],
-) -> (Vec<Document>, bool) {
-    let cursor_has_more = if has_cursor && documents.len() as i64 > pagination.limit {
-        if pagination.before_cursor.is_some() {
-            documents.remove(0);
-        } else {
-            documents.pop();
-        }
-        true
-    } else {
-        false
-    };
-
-    let documents = documents
+/// Strip denied fields from documents.
+fn prepare_documents(documents: Vec<Document>, denied_fields: &[String]) -> Vec<Document> {
+    documents
         .into_iter()
         .map(|mut doc| {
             for field_name in denied_fields {
@@ -254,9 +214,7 @@ fn prepare_documents(
             }
             doc
         })
-        .collect();
-
-    (documents, cursor_has_more)
+        .collect()
 }
 
 /// GET /admin/collections/{slug} — list items in a collection
@@ -320,7 +278,6 @@ pub async fn list_items(
         sort.clone().or_else(|| def.admin.default_sort.clone())
     };
 
-    let has_cursor = pagination.has_cursor();
     let find_query = build_find_query(
         &pagination,
         &access_result,
@@ -348,11 +305,12 @@ pub async fn list_items(
             &find_query,
             locale_ctx.as_ref(),
             &auth_user_clone,
+            cursor_enabled,
         )
     })
     .await;
 
-    let (documents, total) = match read_result {
+    let result = match read_result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             error!("Collection list query error: {}", e);
@@ -371,8 +329,8 @@ pub async fn list_items(
         Err(resp) => return *resp,
     };
 
-    let (documents, cursor_has_more) =
-        prepare_documents(documents, &pagination, has_cursor, &denied_fields);
+    let pagination_result = result.pagination;
+    let documents = prepare_documents(result.docs, &denied_fields);
 
     let user_columns = load_user_columns(&state, &auth_user, &slug);
 
@@ -420,21 +378,7 @@ pub async fn list_items(
         .collection_def(&def)
         .docs(items);
 
-    let cursor_state = CursorState {
-        enabled: cursor_enabled,
-        has_cursor,
-        has_more: cursor_has_more,
-    };
-
-    let lp = build_list_pagination(
-        &documents,
-        total,
-        &pagination,
-        &def,
-        &cursor_state,
-        order_by.as_deref(),
-        &url_ctx,
-    );
+    let lp = build_list_pagination(&pagination_result, &pagination, cursor_enabled, &url_ctx);
 
     let ctx = ctx.with_pagination(&lp.result, lp.prev_url, lp.next_url);
 

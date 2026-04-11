@@ -10,7 +10,7 @@ use crate::{
         handlers::{ContentService, convert::document_to_proto},
     },
     core::{CollectionDefinition, event::EventOperation},
-    service::{self, ServiceError},
+    service::{self, ServiceContext, ServiceError},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -43,16 +43,14 @@ impl ContentService {
 
             drop(conn);
 
-            let doc = service::unpublish_document(
-                &pool,
-                &runner,
-                &collection,
-                &id,
-                &def_owned,
-                user_doc.as_ref(),
-                false,
-            )
-            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+
+            let doc = service::unpublish_document(&ctx, &id)
+                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             let proto_doc = document_to_proto(&doc, &collection);
 

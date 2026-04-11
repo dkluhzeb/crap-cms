@@ -7,8 +7,11 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    core::Registry, db::DbPool, hooks::HookRunner, mcp::tools::collection::helpers::doc_to_json,
-    service::unpublish_document,
+    core::Registry,
+    db::DbPool,
+    hooks::HookRunner,
+    mcp::tools::collection::helpers::doc_to_json,
+    service::{ServiceContext, unpublish_document},
 };
 
 /// Execute `unpublish` — set a document to draft status.
@@ -28,7 +31,13 @@ pub(in crate::mcp::tools) fn exec_unpublish(
         .get(slug)
         .context("Collection not found")?;
 
-    let doc = unpublish_document(pool, runner, slug, id, def, None, true)?;
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+
+    let doc = unpublish_document(&ctx, id)?;
 
     info!("MCP unpublish {}: {}", slug, id);
 

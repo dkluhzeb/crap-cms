@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    service,
+    service::{self, ServiceContext},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -45,14 +45,19 @@ impl ContentService {
                 .cloned()
                 .ok_or_else(|| Status::not_found(format!("Job '{}' not found", slug)))?;
 
+            let job_ctx = ServiceContext::slug_only(&slug)
+                .conn(&conn)
+                .runner(&hook_runner)
+                .user(auth_user.as_ref().map(|u| &u.user_doc))
+                .build();
+
             let job_run = service::jobs::queue_job(
-                &conn,
-                &hook_runner,
-                &slug,
-                &job_def,
-                Some(&data_json),
-                "grpc",
-                auth_user.as_ref().map(|u| &u.user_doc),
+                &job_ctx,
+                &service::jobs::QueueJobInput {
+                    job_def: &job_def,
+                    data: Some(&data_json),
+                    scheduled_by: "grpc",
+                },
             )
             .map_err(Status::from)?;
 

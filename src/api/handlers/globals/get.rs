@@ -2,18 +2,15 @@
 
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
         content,
-        handlers::{
-            ContentService, collection::helpers::strip_denied_proto_fields,
-            convert::document_to_proto,
-        },
+        handlers::{ContentService, convert::document_to_proto},
     },
     db::LocaleContext,
-    service::{RunnerReadHooks, get_global_document},
+    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -36,12 +33,11 @@ impl ContentService {
         let runner = self.hook_runner.clone();
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
-        let def_fields = def.fields.clone();
         let slug = req.slug.clone();
         let def_owned = def;
 
         let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| {
+            let conn = pool.get().map_err(|e| {
                 error!("GetGlobal pool error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -53,29 +49,18 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let read_hooks = RunnerReadHooks::new(&runner, &conn);
 
-            let doc = get_global_document(
-                &conn,
-                &read_hooks,
-                &slug,
-                &def_owned,
-                locale_ctx.as_ref(),
-                user_doc,
-                None,
-            )
-            .map_err(Status::from)?;
+            let ctx = ServiceContext::global(&slug, &def_owned)
+                .pool(&pool)
+                .conn(&conn)
+                .read_hooks(&read_hooks)
+                .user(user_doc)
+                .build();
 
-            let mut proto_doc = document_to_proto(&doc, &slug);
+            let input = GetGlobalInput::new(locale_ctx.as_ref(), None);
 
-            // Proto-level field stripping (defense in depth — service already stripped at JSON level)
-            let tx = conn.transaction().map_err(|e| {
-                error!("Field access check tx error: {}", e);
-                Status::internal("Internal error")
-            })?;
-            let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
-            if let Err(e) = tx.commit() {
-                warn!("tx commit failed: {e}");
-            }
-            strip_denied_proto_fields(&mut proto_doc, &denied);
+            let doc = get_global_document(&ctx, &input).map_err(Status::from)?;
+
+            let proto_doc = document_to_proto(&doc, &slug);
 
             Ok(proto_doc)
         })

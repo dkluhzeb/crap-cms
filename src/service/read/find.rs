@@ -1,62 +1,99 @@
 //! Paginated find query with the full read lifecycle.
 
 use crate::{
-    core::{CollectionDefinition, Document},
-    db::{AccessResult, DbConnection, FindQuery, query},
-    service::{ServiceError, hooks::ReadHooks},
+    core::Document,
+    db::{AccessResult, query},
+    service::{FindDocumentsInput, PaginatedResult, ServiceContext, ServiceError, helpers},
 };
 
-use super::{ReadOptions, post_process::post_process_docs};
+use super::post_process::post_process_docs;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Result of a find operation.
-pub struct FindResult {
-    pub docs: Vec<Document>,
-    pub total: i64,
-}
-
 /// Execute a paginated find query with the full read lifecycle.
 ///
-/// Steps: before_read -> find + count -> hydrate -> populate -> upload sizes ->
-/// select strip -> field-level read strip -> after_read.
-///
-/// Access control (constraint filters) must be pre-applied by the caller
-/// into `find_query.filters`.
+/// Steps: access check -> before_read -> find + count -> post-process -> build pagination.
+/// Returns `PaginatedResult<Document>` with docs, total, and computed pagination metadata.
 pub fn find_documents(
-    conn: &dyn DbConnection,
-    hooks: &dyn ReadHooks,
-    slug: &str,
-    def: &CollectionDefinition,
-    find_query: &FindQuery,
-    opts: &ReadOptions,
-) -> Result<FindResult> {
-    // Collection-level access check -- short-circuit if denied
-    let access = hooks.check_access(def.access.read.as_deref(), opts.user, None, None)?;
+    ctx: &ServiceContext,
+    input: &FindDocumentsInput,
+) -> Result<PaginatedResult<Document>> {
+    let resolved = ctx.resolve_conn()?;
+    let conn = resolved.as_ref();
+    let hooks = ctx.read_hooks()?;
+    let def = ctx.collection_def();
+
+    let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
+
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
-    // Merge access constraints into filters
-    let mut fq = find_query.clone();
+    let mut fq = input.query.clone();
+
     if let AccessResult::Constrained(extra) = access {
         fq.filters.extend(extra);
     }
 
-    hooks.before_read(&def.hooks, slug, "find")?;
+    hooks.before_read(&def.hooks, ctx.slug, "find")?;
 
-    let mut docs = query::find(conn, slug, def, &fq, opts.locale_ctx)?;
+    let had_cursor = fq.after_cursor.is_some() || fq.before_cursor.is_some();
+    let overfetch = input.cursor_enabled && had_cursor;
+
+    if overfetch {
+        fq.limit = fq.limit.map(|l| l + 1);
+    }
+
+    let mut docs = query::find(conn, ctx.slug, def, &fq, input.locale_ctx)?;
+
     let total = query::count_with_search(
         conn,
-        slug,
+        ctx.slug,
         def,
         &fq.filters,
-        opts.locale_ctx,
+        input.locale_ctx,
         fq.search.as_deref(),
         fq.include_deleted,
     )?;
 
-    post_process_docs(conn, hooks, slug, def, &mut docs, opts, "find");
+    // Restore original limit for pagination calculation.
+    if overfetch {
+        fq.limit = fq.limit.map(|l| l - 1);
+    }
 
-    Ok(FindResult { docs, total })
+    let limit = fq.limit.unwrap_or(total);
+
+    // Detect whether more pages exist via overfetch, then trim the extra doc.
+    let cursor_has_more = if overfetch {
+        if (docs.len() as i64) > limit {
+            if fq.before_cursor.is_some() {
+                docs.remove(0);
+            } else {
+                docs.pop();
+            }
+            Some(true)
+        } else {
+            Some(false)
+        }
+    } else {
+        None
+    };
+
+    post_process_docs(ctx, conn, &mut docs, input);
+
+    let pagination = helpers::build_pagination(
+        &docs,
+        total,
+        &fq,
+        input.cursor_enabled,
+        def.timestamps,
+        had_cursor,
+        cursor_has_more,
+    );
+
+    Ok(PaginatedResult {
+        docs,
+        total,
+        pagination,
+    })
 }

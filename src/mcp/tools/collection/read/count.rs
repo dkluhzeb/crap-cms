@@ -10,7 +10,7 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::parse_where_filters,
-    service::{RunnerReadHooks, count_documents},
+    service::{CountDocumentsInput, RunnerReadHooks, ServiceContext, count_documents},
 };
 
 /// Execute `count` — count documents matching filters.
@@ -31,19 +31,18 @@ pub(in crate::mcp::tools) fn exec_count(
     let include_deleted = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let hooks = RunnerReadHooks::new(runner, &conn);
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .override_access(true)
+        .build();
 
-    let count = count_documents(
-        &conn,
-        &hooks,
-        slug,
-        def,
-        &filters,
-        None,
-        None,
-        include_deleted,
-        None,
-    )
-    .map_err(|e| e.into_anyhow())?;
+    let input = CountDocumentsInput::builder(&filters)
+        .include_deleted(include_deleted)
+        .build();
+
+    let count = count_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
 
     Ok(json!({ "count": count }).to_string())
 }

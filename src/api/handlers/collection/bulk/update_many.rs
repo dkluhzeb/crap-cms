@@ -3,16 +3,15 @@
 use anyhow::Context as _;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
-use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
+use super::helpers::{build_bulk_filters, check_per_doc_access, find_matching_docs};
 
 use crate::{
     api::{
         content,
         handlers::{
             ContentService,
-            collection::filter_builder::FilterBuilder,
             convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
@@ -93,10 +92,8 @@ impl ContentService {
                     return Err(Status::permission_denied("Read access denied"));
                 }
 
-                let filters = FilterBuilder::new(&def_owned.fields, &read_access)
-                    .where_json(req_where.as_deref())
-                    .draft_filter(def_owned.has_drafts(), !draft)
-                    .build()?;
+                let filters =
+                    build_bulk_filters(&def_owned, &read_access, req_where.as_deref(), !draft)?;
 
                 let tx = conn
                     .transaction_immediate()
@@ -127,6 +124,12 @@ impl ContentService {
                     .with_hooks_enabled(run_hooks)
                     .with_conn(&tx);
 
+                let ctx = service::ServiceContext::collection(&collection, &def_owned)
+                    .conn(&tx)
+                    .write_hooks(&wh)
+                    .user(user_doc)
+                    .build();
+
                 let mut count = 0i64;
                 let mut ids = Vec::new();
 
@@ -136,17 +139,8 @@ impl ContentService {
                         .draft(draft)
                         .build();
 
-                    service::update_many_single_core(
-                        &tx,
-                        &wh,
-                        &collection,
-                        &doc.id,
-                        &def_owned,
-                        input,
-                        user_doc,
-                        &locale_config,
-                    )
-                    .map_err(|e| e.reclassify(&db_kind))?;
+                    service::update_many_single_core(&ctx, &doc.id, input, &locale_config)
+                        .map_err(|e| e.reclassify(&db_kind))?;
 
                     ids.push(doc.id.to_string());
                     count += 1;
@@ -162,11 +156,7 @@ impl ContentService {
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
-        }
-
-        publish_bulk_events(self, &req.collection, &updated_ids, EventOperation::Update);
+        self.publish_bulk_mutation_events(&req.collection, &updated_ids, EventOperation::Update);
 
         Ok(Response::new(content::UpdateManyResponse { modified }))
     }

@@ -6,10 +6,9 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document},
-    db::{AccessResult, DbConnection, LocaleContext, query},
+    db::{AccessResult, LocaleContext, query},
     hooks::{HookContext, HookEvent},
-    service::hooks::WriteHooks,
+    service::ServiceContext,
 };
 
 use super::ServiceError;
@@ -30,27 +29,31 @@ pub struct DeleteResult {
 /// Does NOT manage transactions — caller must open/commit.
 /// Upload file cleanup is returned as `upload_doc_fields` for the caller to handle after commit.
 pub fn delete_document_core(
-    conn: &dyn DbConnection,
-    write_hooks: &dyn WriteHooks,
-    slug: &str,
+    ctx: &ServiceContext,
     id: &str,
-    def: &CollectionDefinition,
-    user: Option<&Document>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<DeleteResult> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let write_hooks = ctx.write_hooks()?;
+    let def = ctx.collection_def();
+
     // Collection-level access check — use trash access for soft delete, delete for hard
     let access_ref = if def.soft_delete {
         def.access.resolve_trash()
     } else {
         def.access.delete.as_deref()
     };
-    let access = write_hooks.check_access(access_ref, user, Some(id), None)?;
+
+    let access = write_hooks.check_access(access_ref, ctx.user, Some(id), None)?;
+
     if matches!(access, AccessResult::Denied) {
         let msg = if def.soft_delete {
             "Trash access denied"
         } else {
             "Delete access denied"
         };
+
         return Err(ServiceError::AccessDenied(msg.into()));
     }
 
@@ -58,7 +61,8 @@ pub fn delete_document_core(
     let upload_doc_fields = if def.is_upload_collection() {
         let lc = locale_config.cloned().unwrap_or_default();
         let locale_ctx = LocaleContext::from_locale_string(None, &lc)?;
-        query::find_by_id(conn, slug, def, id, locale_ctx.as_ref())
+
+        query::find_by_id(conn, ctx.slug, def, id, locale_ctx.as_ref())
             .ok()
             .flatten()
             .map(|d| d.fields.clone())
@@ -67,11 +71,9 @@ pub fn delete_document_core(
     };
 
     // Ref count protection (hard delete only).
-    // Uses get_ref_count_locked to acquire a FOR UPDATE row lock on Postgres,
-    // preventing a concurrent create from incrementing the ref count between
-    // this check and the actual DELETE.
     if !def.soft_delete {
-        let ref_count = query::ref_count::get_ref_count_locked(conn, slug, id)?.unwrap_or(0);
+        let ref_count = query::ref_count::get_ref_count_locked(conn, ctx.slug, id)?.unwrap_or(0);
+
         if ref_count > 0 {
             return Err(ServiceError::Referenced {
                 id: id.to_string(),
@@ -83,54 +85,62 @@ pub fn delete_document_core(
     // Before-delete hooks
     let mut hook_data: HashMap<String, Value> =
         [("id".to_string(), Value::String(id.to_string()))].into();
+
     if def.soft_delete {
         hook_data.insert("soft_delete".to_string(), Value::Bool(true));
     }
 
-    let hook_ctx = HookContext::builder(slug, "delete")
+    let hook_ctx = HookContext::builder(ctx.slug, "delete")
         .data(hook_data.clone())
-        .user(user)
+        .user(ctx.user)
         .build();
+
     let final_ctx =
         write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, conn)?;
 
     // Decrement ref counts before hard delete
     if !def.soft_delete {
         let locale_cfg = locale_config.cloned().unwrap_or_default();
-        query::ref_count::before_hard_delete(conn, slug, id, &def.fields, &locale_cfg)?;
+
+        query::ref_count::before_hard_delete(conn, ctx.slug, id, &def.fields, &locale_cfg)?;
     }
 
     // Execute delete
     if def.soft_delete {
-        let deleted = query::soft_delete(conn, slug, id)?;
+        let deleted = query::soft_delete(conn, ctx.slug, id)?;
+
         if !deleted {
             return Err(ServiceError::NotFound(format!(
-                "Document '{id}' not found in '{slug}' (or already deleted)"
+                "Document '{id}' not found in '{}' (or already deleted)",
+                ctx.slug
             )));
         }
     } else {
-        let deleted = query::delete(conn, slug, id)?;
+        let deleted = query::delete(conn, ctx.slug, id)?;
+
         if !deleted {
             return Err(ServiceError::NotFound(format!(
-                "Document '{id}' not found in '{slug}'"
+                "Document '{id}' not found in '{}'",
+                ctx.slug
             )));
         }
     }
 
     // Cleanup
     if conn.supports_fts() {
-        query::fts::fts_delete(conn, slug, id)?;
+        query::fts::fts_delete(conn, ctx.slug, id)?;
     }
     if def.is_upload_collection() {
-        let _ = query::images::delete_entries_for_document(conn, slug, id);
+        let _ = query::images::delete_entries_for_document(conn, ctx.slug, id);
     }
 
     // After-delete hooks
-    let after_ctx = HookContext::builder(slug, "delete")
+    let after_ctx = HookContext::builder(ctx.slug, "delete")
         .data(hook_data)
         .context(final_ctx.context)
-        .user(user)
+        .user(ctx.user)
         .build();
+
     let after_result =
         write_hooks.run_hooks_with_conn(&def.hooks, HookEvent::AfterDelete, after_ctx, conn)?;
 

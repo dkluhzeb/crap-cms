@@ -19,7 +19,7 @@ use crate::{
     config::EmailConfig,
     core::{CollectionDefinition, email, email::EmailRenderer},
     db::DbPool,
-    service::auth::generate_reset_token,
+    service::{ServiceContext, auth::generate_reset_token},
 };
 
 /// Everything needed to look up a user and send the password-reset email.
@@ -64,13 +64,11 @@ fn send_reset_email(params: ResetEmailParams) {
         }
     };
 
-    let token_result = match generate_reset_token(
-        &conn,
-        &params.slug,
-        &params.def,
-        &params.user_email,
-        params.reset_expiry,
-    ) {
+    let ctx = ServiceContext::collection(&params.slug, &params.def)
+        .conn(&conn)
+        .build();
+
+    let token_result = match generate_reset_token(&ctx, &params.user_email, params.reset_expiry) {
         Ok(Some(r)) => r,
         Ok(None) => return,
         Err(e) => {

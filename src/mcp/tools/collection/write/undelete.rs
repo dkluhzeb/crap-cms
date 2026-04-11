@@ -6,7 +6,12 @@ use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::{core::Registry, db::DbPool, hooks::HookRunner, service::undelete_document};
+use crate::{
+    core::Registry,
+    db::DbPool,
+    hooks::HookRunner,
+    service::{ServiceContext, undelete_document},
+};
 
 /// Execute `undelete` — restore a soft-deleted document.
 pub(in crate::mcp::tools) fn exec_undelete(
@@ -25,7 +30,13 @@ pub(in crate::mcp::tools) fn exec_undelete(
         .get(slug)
         .context("Collection not found")?;
 
-    undelete_document(pool, runner, slug, id, def, None, true)?;
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+
+    undelete_document(&ctx, id)?;
 
     info!("MCP undelete {}: {}", slug, id);
 

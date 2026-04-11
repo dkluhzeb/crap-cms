@@ -9,11 +9,10 @@ use chrono::Utc;
 use nanoid::nanoid;
 
 use crate::{
-    core::{CollectionDefinition, Document, DocumentId, auth::PasswordProvider},
-    db::{DbConnection, query},
+    core::{Document, DocumentId, auth::PasswordProvider},
+    db::query,
+    service::{ServiceContext, ServiceError},
 };
-
-use super::ServiceError;
 
 /// Result of a successful local authentication.
 pub struct AuthResult {
@@ -34,15 +33,17 @@ pub struct ResetTokenResult {
 /// Does NOT handle rate limiting, MFA, auth strategies, or token creation — those
 /// are surface concerns.
 pub fn authenticate_local(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+    ctx: &ServiceContext,
     email: &str,
     password: &str,
     password_provider: &dyn PasswordProvider,
     require_verified: bool,
 ) -> Result<AuthResult, ServiceError> {
-    let user = match query::find_by_email(conn, slug, def, email)? {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
+    let user = match query::find_by_email(conn, ctx.slug, def, email)? {
         Some(u) => u,
         None => {
             password_provider.dummy_verify();
@@ -50,7 +51,7 @@ pub fn authenticate_local(
         }
     };
 
-    let verified = match query::get_password_hash(conn, slug, &user.id)? {
+    let verified = match query::get_password_hash(conn, ctx.slug, &user.id)? {
         Some(hash) => password_provider.verify_password(password, hash.as_ref())?,
         None => false,
     };
@@ -59,15 +60,15 @@ pub fn authenticate_local(
         return Err(ServiceError::InvalidCredentials);
     }
 
-    if query::is_locked(conn, slug, &user.id)? {
+    if query::is_locked(conn, ctx.slug, &user.id)? {
         return Err(ServiceError::AccountLocked);
     }
 
-    if require_verified && !query::is_verified(conn, slug, &user.id)? {
+    if require_verified && !query::is_verified(conn, ctx.slug, &user.id)? {
         return Err(ServiceError::EmailNotVerified);
     }
 
-    let session_version = query::get_session_version(conn, slug, &user.id)?;
+    let session_version = query::get_session_version(conn, ctx.slug, &user.id)?;
 
     Ok(AuthResult {
         user,
@@ -80,13 +81,15 @@ pub fn authenticate_local(
 /// Returns `Ok(None)` if the user is not found — callers should still show "success"
 /// to prevent email enumeration.
 pub fn generate_reset_token(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+    ctx: &ServiceContext,
     email: &str,
     expiry_secs: u64,
 ) -> Result<Option<ResetTokenResult>, ServiceError> {
-    let user = match query::find_by_email(conn, slug, def, email)? {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
+    let user = match query::find_by_email(conn, ctx.slug, def, email)? {
         Some(u) => u,
         None => return Ok(None),
     };
@@ -94,7 +97,7 @@ pub fn generate_reset_token(
     let token = nanoid!();
     let exp = Utc::now().timestamp() + expiry_secs as i64;
 
-    query::set_reset_token(conn, slug, &user.id, &token, exp)?;
+    query::set_reset_token(conn, ctx.slug, &user.id, &token, exp)?;
 
     Ok(Some(ResetTokenResult {
         user_id: user.id,
@@ -106,20 +109,23 @@ pub fn generate_reset_token(
 ///
 /// Clears the token on success or if it's expired/locked. Caller manages the transaction.
 pub fn consume_reset_token(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+    ctx: &ServiceContext,
     token: &str,
     new_password: &str,
 ) -> Result<(), ServiceError> {
-    let (user, exp) =
-        query::find_by_reset_token(conn, slug, def, token)?.ok_or(ServiceError::InvalidToken {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
+    let (user, exp) = query::find_by_reset_token(conn, ctx.slug, def, token)?.ok_or(
+        ServiceError::InvalidToken {
             kind: "reset",
             reason: "not found",
-        })?;
+        },
+    )?;
 
-    if query::is_locked(conn, slug, &user.id)? {
-        query::clear_reset_token(conn, slug, &user.id)?;
+    if query::is_locked(conn, ctx.slug, &user.id)? {
+        query::clear_reset_token(conn, ctx.slug, &user.id)?;
         return Err(ServiceError::InvalidToken {
             kind: "reset",
             reason: "not found",
@@ -127,15 +133,15 @@ pub fn consume_reset_token(
     }
 
     if Utc::now().timestamp() >= exp {
-        query::clear_reset_token(conn, slug, &user.id)?;
+        query::clear_reset_token(conn, ctx.slug, &user.id)?;
         return Err(ServiceError::InvalidToken {
             kind: "reset",
             reason: "expired",
         });
     }
 
-    query::update_password(conn, slug, &user.id, new_password)?;
-    query::clear_reset_token(conn, slug, &user.id)?;
+    query::update_password(conn, ctx.slug, &user.id, new_password)?;
+    query::clear_reset_token(conn, ctx.slug, &user.id)?;
 
     Ok(())
 }
@@ -145,28 +151,27 @@ pub fn consume_reset_token(
 /// Returns `true` if the token was valid and the user was marked verified.
 /// Returns `false` if the token was not found or expired (caller shows generic message).
 /// Clears expired tokens. Caller manages the transaction.
-pub fn consume_verification_token(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    token: &str,
-) -> Result<bool, ServiceError> {
-    let (user, exp) = match query::find_by_verification_token(conn, slug, def, token)? {
+pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<bool, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
+    let (user, exp) = match query::find_by_verification_token(conn, ctx.slug, def, token)? {
         Some(pair) => pair,
         None => return Ok(false),
     };
 
     if Utc::now().timestamp() >= exp {
-        let _ = query::clear_verification_token(conn, slug, &user.id);
+        let _ = query::clear_verification_token(conn, ctx.slug, &user.id);
         return Ok(false);
     }
 
-    if query::is_locked(conn, slug, &user.id)? {
-        let _ = query::clear_verification_token(conn, slug, &user.id);
+    if query::is_locked(conn, ctx.slug, &user.id)? {
+        let _ = query::clear_verification_token(conn, ctx.slug, &user.id);
         return Ok(false);
     }
 
-    query::mark_verified(conn, slug, &user.id)?;
+    query::mark_verified(conn, ctx.slug, &user.id)?;
 
     Ok(true)
 }
@@ -174,83 +179,87 @@ pub fn consume_verification_token(
 // ── Account status operations ───────────────────────────────────────
 
 /// Lock a user account, preventing login.
-pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
-    query::lock_user(conn, slug, id)?;
+pub fn lock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    query::lock_user(conn.as_ref(), ctx.slug, id)?;
+
     Ok(())
 }
 
 /// Unlock a user account.
-pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
-    query::unlock_user(conn, slug, id)?;
+pub fn unlock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    query::unlock_user(conn.as_ref(), ctx.slug, id)?;
+
     Ok(())
 }
 
 /// Mark a user's email as verified.
-pub fn mark_verified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
-    query::mark_verified(conn, slug, id)?;
+pub fn mark_verified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    query::mark_verified(conn.as_ref(), ctx.slug, id)?;
+
     Ok(())
 }
 
 /// Mark a user's email as unverified.
-pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<(), ServiceError> {
-    query::mark_unverified(conn, slug, id)?;
+pub fn mark_unverified(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    query::mark_unverified(conn.as_ref(), ctx.slug, id)?;
+
     Ok(())
 }
 
 /// Check whether a user account is locked.
-pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool, ServiceError> {
-    Ok(query::is_locked(conn, slug, id)?)
+pub fn is_locked(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    Ok(query::is_locked(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Check whether a user's email is verified.
-pub fn is_verified(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool, ServiceError> {
-    Ok(query::is_verified(conn, slug, id)?)
+pub fn is_verified(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    Ok(query::is_verified(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Get the current session version for a user (for JWT invalidation).
-pub fn get_session_version(
-    conn: &dyn DbConnection,
-    slug: &str,
-    id: &str,
-) -> Result<u64, ServiceError> {
-    Ok(query::get_session_version(conn, slug, id)?)
+pub fn get_session_version(ctx: &ServiceContext, id: &str) -> Result<u64, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    Ok(query::get_session_version(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Check whether a user document exists.
-pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool, ServiceError> {
-    Ok(query::user_exists(conn, slug, id)?)
+pub fn user_exists(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    Ok(query::user_exists(conn.as_ref(), ctx.slug, id)?)
 }
 
 /// Validate a password reset token without consuming it (for rendering the reset page).
-pub fn find_by_reset_token(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    token: &str,
-) -> Result<bool, ServiceError> {
-    Ok(query::find_by_reset_token(conn, slug, def, token)?.is_some())
+pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
+    Ok(query::find_by_reset_token(conn, ctx.slug, def, token)?.is_some())
 }
 
 /// Store an MFA code for a user.
 pub fn set_mfa_code(
-    conn: &dyn DbConnection,
-    slug: &str,
+    ctx: &ServiceContext,
     id: &str,
     code: &str,
     expiry: i64,
 ) -> Result<(), ServiceError> {
-    query::set_mfa_code(conn, slug, id, code, expiry)?;
+    let conn = ctx.resolve_conn()?;
+    query::set_mfa_code(conn.as_ref(), ctx.slug, id, code, expiry)?;
+
     Ok(())
 }
 
 /// Verify an MFA code. Returns true if valid and not expired.
-pub fn verify_mfa_code(
-    conn: &dyn DbConnection,
-    slug: &str,
-    id: &str,
-    code: &str,
-) -> Result<bool, ServiceError> {
-    Ok(query::verify_mfa_code(conn, slug, id, code)?)
+pub fn verify_mfa_code(ctx: &ServiceContext, id: &str, code: &str) -> Result<bool, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    Ok(query::verify_mfa_code(conn.as_ref(), ctx.slug, id, code)?)
 }
 
 #[cfg(test)]
@@ -259,11 +268,14 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use crate::core::{
-        CollectionDefinition, FieldDefinition,
-        auth::{Argon2PasswordProvider, PasswordProvider},
-        collection::Auth,
-        field::FieldType,
+    use crate::{
+        core::{
+            CollectionDefinition, FieldDefinition,
+            auth::{Argon2PasswordProvider, PasswordProvider},
+            collection::Auth,
+            field::FieldType,
+        },
+        service::ServiceContext,
     };
 
     use super::*;
@@ -320,15 +332,10 @@ mod tests {
     #[test]
     fn authenticate_local_success() {
         let (conn, def, provider) = setup();
-        let result = authenticate_local(
-            &conn,
-            "users",
-            &def,
-            "test@example.com",
-            "secret123",
-            &*provider,
-            true,
-        );
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = authenticate_local(&ctx, "test@example.com", "secret123", &*provider, true);
         assert!(result.is_ok());
         let auth = result.unwrap();
         assert_eq!(auth.user.id, "u1");
@@ -338,30 +345,20 @@ mod tests {
     #[test]
     fn authenticate_local_wrong_password() {
         let (conn, def, provider) = setup();
-        let result = authenticate_local(
-            &conn,
-            "users",
-            &def,
-            "test@example.com",
-            "wrong",
-            &*provider,
-            true,
-        );
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = authenticate_local(&ctx, "test@example.com", "wrong", &*provider, true);
         assert!(matches!(result, Err(ServiceError::InvalidCredentials)));
     }
 
     #[test]
     fn authenticate_local_user_not_found() {
         let (conn, def, provider) = setup();
-        let result = authenticate_local(
-            &conn,
-            "users",
-            &def,
-            "nobody@example.com",
-            "secret123",
-            &*provider,
-            true,
-        );
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = authenticate_local(&ctx, "nobody@example.com", "secret123", &*provider, true);
         assert!(matches!(result, Err(ServiceError::InvalidCredentials)));
     }
 
@@ -370,15 +367,10 @@ mod tests {
         let (conn, def, provider) = setup();
         conn.execute("UPDATE users SET _locked = 1 WHERE id = 'u1'", [])
             .unwrap();
-        let result = authenticate_local(
-            &conn,
-            "users",
-            &def,
-            "test@example.com",
-            "secret123",
-            &*provider,
-            true,
-        );
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = authenticate_local(&ctx, "test@example.com", "secret123", &*provider, true);
         assert!(matches!(result, Err(ServiceError::AccountLocked)));
     }
 
@@ -387,15 +379,10 @@ mod tests {
         let (conn, def, provider) = setup();
         conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
             .unwrap();
-        let result = authenticate_local(
-            &conn,
-            "users",
-            &def,
-            "test@example.com",
-            "secret123",
-            &*provider,
-            true,
-        );
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = authenticate_local(&ctx, "test@example.com", "secret123", &*provider, true);
         assert!(matches!(result, Err(ServiceError::EmailNotVerified)));
     }
 
@@ -404,22 +391,20 @@ mod tests {
         let (conn, def, provider) = setup();
         conn.execute("UPDATE users SET _verified = 0 WHERE id = 'u1'", [])
             .unwrap();
-        let result = authenticate_local(
-            &conn,
-            "users",
-            &def,
-            "test@example.com",
-            "secret123",
-            &*provider,
-            false,
-        );
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = authenticate_local(&ctx, "test@example.com", "secret123", &*provider, false);
         assert!(result.is_ok());
     }
 
     #[test]
     fn generate_reset_token_success() {
         let (conn, def, _) = setup();
-        let result = generate_reset_token(&conn, "users", &def, "test@example.com", 3600).unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = generate_reset_token(&ctx, "test@example.com", 3600).unwrap();
         assert!(result.is_some());
         let r = result.unwrap();
         assert_eq!(r.user_id, "u1");
@@ -429,8 +414,10 @@ mod tests {
     #[test]
     fn generate_reset_token_user_not_found() {
         let (conn, def, _) = setup();
-        let result =
-            generate_reset_token(&conn, "users", &def, "nobody@example.com", 3600).unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = generate_reset_token(&ctx, "nobody@example.com", 3600).unwrap();
         assert!(result.is_none());
     }
 
@@ -444,14 +431,20 @@ mod tests {
         )
         .unwrap();
 
-        let result = consume_reset_token(&conn, "users", &def, "tok123", "newpass123");
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_reset_token(&ctx, "tok123", "newpass123");
         assert!(result.is_ok());
     }
 
     #[test]
     fn consume_reset_token_not_found() {
         let (conn, def, _) = setup();
-        let result = consume_reset_token(&conn, "users", &def, "invalid", "newpass123");
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_reset_token(&ctx, "invalid", "newpass123");
         assert!(matches!(
             result,
             Err(ServiceError::InvalidToken {
@@ -471,7 +464,10 @@ mod tests {
         )
         .unwrap();
 
-        let result = consume_reset_token(&conn, "users", &def, "tok123", "newpass123");
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_reset_token(&ctx, "tok123", "newpass123");
         assert!(matches!(
             result,
             Err(ServiceError::InvalidToken {
@@ -490,7 +486,10 @@ mod tests {
             [exp],
         ).unwrap();
 
-        let result = consume_reset_token(&conn, "users", &def, "tok123", "newpass123");
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_reset_token(&ctx, "tok123", "newpass123");
         assert!(matches!(
             result,
             Err(ServiceError::InvalidToken { kind: "reset", .. })
@@ -506,14 +505,20 @@ mod tests {
             [exp],
         ).unwrap();
 
-        let result = consume_verification_token(&conn, "users", &def, "vtok").unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(result);
     }
 
     #[test]
     fn consume_verification_token_not_found() {
         let (conn, def, _) = setup();
-        let result = consume_verification_token(&conn, "users", &def, "invalid").unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_verification_token(&ctx, "invalid").unwrap();
         assert!(!result);
     }
 
@@ -526,7 +531,10 @@ mod tests {
             [exp],
         ).unwrap();
 
-        let result = consume_verification_token(&conn, "users", &def, "vtok").unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(!result);
     }
 
@@ -539,7 +547,10 @@ mod tests {
             [exp],
         ).unwrap();
 
-        let result = consume_verification_token(&conn, "users", &def, "vtok").unwrap();
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+        let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(!result);
     }
 }

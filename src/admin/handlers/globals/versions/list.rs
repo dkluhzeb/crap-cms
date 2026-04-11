@@ -15,42 +15,23 @@ use crate::{
             redirect_response, render_or_error, server_error, version_to_json,
         },
     },
-    core::{
-        Document,
-        auth::{AuthUser, Claims},
-    },
-    db::{
-        BoxedConnection,
-        query::{self, helpers::global_table},
-    },
-    service::{RunnerReadHooks, list_versions},
+    core::auth::{AuthUser, Claims},
+    db::query::PaginationResult,
+    service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
 };
 
 /// Fetch paginated version list for a global.
-fn fetch_version_data(
-    state: &AdminState,
-    conn: &BoxedConnection,
-    global_table: &str,
-    access_ref: Option<&str>,
-    user: Option<&Document>,
-    pg: &Pagination,
-) -> (Vec<Value>, i64) {
-    let hooks = RunnerReadHooks::new(&state.hook_runner, conn);
-    let (snapshots, total) = list_versions(
-        conn,
-        &hooks,
-        global_table,
-        "default",
-        access_ref,
-        user,
-        Some(pg.per_page),
-        Some(pg.offset),
-    )
-    .unwrap_or_default();
+fn fetch_version_data(ctx: &ServiceContext, pg: &Pagination) -> (Vec<Value>, PaginationResult) {
+    let input = ListVersionsInput::builder("default")
+        .limit(Some(pg.per_page))
+        .offset(Some(pg.offset))
+        .build();
 
-    let versions = snapshots.into_iter().map(version_to_json).collect();
+    let result = list_versions(ctx, &input).unwrap_or_default();
 
-    (versions, total)
+    let versions = result.docs.into_iter().map(version_to_json).collect();
+
+    (versions, result.pagination)
 }
 
 /// GET /admin/globals/{slug}/versions — dedicated version history page
@@ -77,16 +58,16 @@ pub async fn list_versions_page(
     };
 
     let user_doc = get_user_doc(&auth_user);
-    let global_table = global_table(&slug);
     let pg = params.resolve(&state.config.pagination);
-    let (versions, total) = fetch_version_data(
-        &state,
-        &conn,
-        &global_table,
-        def.access.read.as_deref(),
-        user_doc,
-        &pg,
-    );
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+
+    let ctx = ServiceContext::global(&slug, &def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user_doc)
+        .build();
+
+    let (versions, pagination) = fetch_version_data(&ctx, &pg);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -103,8 +84,7 @@ pub async fn list_versions_page(
             json!(format!("/admin/globals/{}", slug)),
         )
         .with_pagination(
-            &query::PaginationResult::builder(&[] as &[Document], total, pg.per_page)
-                .page(pg.page, pg.offset),
+            &pagination,
             format!(
                 "/admin/globals/{}/versions?page={}",
                 slug,

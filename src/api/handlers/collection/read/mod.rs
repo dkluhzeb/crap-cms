@@ -3,4 +3,3 @@
 mod count;
 mod find;
 mod find_by_id;
-pub(super) mod helpers;

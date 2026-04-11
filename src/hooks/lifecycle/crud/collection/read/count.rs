@@ -14,7 +14,7 @@ use crate::{
         converters::lua_table_to_find_query,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaReadHooks, count_documents},
+    service::{CountDocumentsInput, LuaReadHooks, ServiceContext, count_documents},
 };
 
 /// Core logic for `crap.collections.count`.
@@ -52,18 +52,19 @@ fn count_inner(
         .override_access(override_access)
         .build();
 
-    count_documents(
-        conn,
-        &hooks,
-        &collection,
-        &def,
-        &filters,
-        locale_ctx.as_ref(),
-        search.as_deref(),
-        false,
-        user.as_ref(),
-    )
-    .map_err(|e| RuntimeError(format!("{e}")))
+    let ctx = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .read_hooks(&hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
+    let input = CountDocumentsInput::builder(&filters)
+        .locale_ctx(locale_ctx.as_ref())
+        .search(search.as_deref())
+        .build();
+
+    count_documents(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))
 }
 
 /// Register `crap.collections.count(collection, query?)`.

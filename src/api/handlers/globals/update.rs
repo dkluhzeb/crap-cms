@@ -2,7 +2,7 @@
 
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
@@ -12,10 +12,9 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    core::event::{EventOperation, EventTarget},
+    core::event::EventOperation,
     db::LocaleContext,
-    hooks::lifecycle::PublishEventInput,
-    service::{self, WriteInput},
+    service::{self, ServiceContext, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -68,17 +67,18 @@ impl ContentService {
             let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             drop(conn);
 
+            let ctx = ServiceContext::global(&slug, &def_owned)
+                .pool(&pool)
+                .runner(&runner)
+                .user(user_doc.as_ref())
+                .build();
+
             let (doc, _req_context) = service::update_global_document(
-                &pool,
-                &runner,
-                &slug,
-                &def_owned,
+                &ctx,
                 WriteInput::builder(data, &join_data)
                     .locale_ctx(locale_ctx.as_ref())
                     .ui_locale(ui_locale)
                     .build(),
-                user_doc.as_ref(),
-                false,
             )
             .map_err(|e| {
                 error!("UpdateGlobal error: {}", e);
@@ -93,28 +93,12 @@ impl ContentService {
         .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
 
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
-        }
-
-        {
-            let def = self.get_global_def(&req.slug);
-            let (hooks, live) = match &def {
-                Ok(d) => (d.hooks.clone(), d.live.clone()),
-                Err(_) => (Default::default(), None),
-            };
-
-            self.hook_runner.publish_event(
-                &self.event_bus,
-                &hooks,
-                live.as_ref(),
-                PublishEventInput::builder(EventTarget::Global, EventOperation::Update)
-                    .collection(req.slug.clone())
-                    .document_id(proto_doc.id.clone())
-                    .edited_by(Self::event_user_from(&auth_user))
-                    .build(),
-            );
-        }
+        self.publish_global_mutation_event(
+            &req.slug,
+            &proto_doc.id,
+            EventOperation::Update,
+            &auth_user,
+        );
 
         Ok(Response::new(content::UpdateGlobalResponse {
             document: Some(proto_doc),

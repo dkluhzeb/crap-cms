@@ -7,7 +7,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    service::{ServiceError, auth::consume_reset_token},
+    service::{ServiceContext, ServiceError, auth::consume_reset_token},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -58,7 +58,11 @@ impl ContentService {
             let mut conn = pool.get().context("DB connection")?;
             let tx = conn.transaction().context("Start transaction")?;
 
-            consume_reset_token(&tx, &slug, &def_owned, &token, &password)?;
+            let ctx = ServiceContext::collection(&slug, &def_owned)
+                .conn(&tx)
+                .build();
+
+            consume_reset_token(&ctx, &token, &password)?;
             tx.commit().context("Commit transaction")?;
 
             Ok::<(), ServiceError>(())

@@ -24,13 +24,15 @@ pub mod write;
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    PersistOptions, PersistOptionsBuilder, WriteInput, WriteInputBuilder, WriteResult,
+    CountDocumentsInput, CountDocumentsInputBuilder, FindByIdInput, FindByIdInputBuilder,
+    FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput, ListVersionsInput,
+    PaginatedResult, PersistOptions, PersistOptionsBuilder, SearchDocumentsInput, ServiceContext,
+    ServiceContextBuilder, WriteInput, WriteInputBuilder, WriteResult,
 };
 
 pub use collection::{
-    create_document, create_document_with_conn, delete_document, delete_document_with_conn,
-    undelete_document, undelete_document_core, unpublish_document, unpublish_document_core,
-    update_document, update_document_with_conn,
+    create_document, delete_document, undelete_document, undelete_document_core,
+    unpublish_document, unpublish_document_core, update_document,
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};
@@ -43,8 +45,8 @@ pub use persist::{
     persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
 };
 pub use read::{
-    FindResult, ReadOptions, ReadOptionsBuilder, SearchOptions, count_documents,
-    find_document_by_id, find_documents, get_global_document, search_documents,
+    ReadOptions, ReadOptionsBuilder, count_documents, find_document_by_id, find_documents,
+    get_global_document, search_documents,
 };
 pub(crate) use versions::restore_collection_version_core;
 pub use versions::unpublish_with_snapshot;
@@ -93,15 +95,11 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Hello".to_string());
 
-        let doc = persist_create(
-            &conn,
-            "posts",
-            &def,
-            &data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .build();
+
+        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
         assert!(!doc.id.is_empty());
         assert_eq!(doc.get_str("title"), Some("Hello"));
     }
@@ -113,25 +111,19 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Original".to_string());
 
-        let doc = persist_create(
-            &conn,
-            "posts",
-            &def,
-            &data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .build();
+
+        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
         let id = doc.id.clone();
 
         let mut update_data = HashMap::new();
         update_data.insert("title".to_string(), "Updated".to_string());
 
         let updated = persist_update(
-            &conn,
-            "posts",
+            &ctx,
             &id,
-            &def,
             &update_data,
             &HashMap::new(),
             &PersistOptions::default(),
@@ -206,15 +198,11 @@ mod tests {
             "/uploads/media/abc123_test.jpg".to_string(),
         );
 
-        let doc = persist_create(
-            &conn,
-            "media",
-            &def,
-            &data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let ctx = ServiceContext::collection("media", &def)
+            .conn(&conn)
+            .build();
+
+        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
 
         assert_eq!(doc.get_str("filename"), Some("abc123_test.jpg"));
         assert_eq!(

@@ -15,7 +15,7 @@ use crate::{
     },
     core::auth::Claims,
     db::{DbPool, query::is_valid_identifier},
-    service,
+    service::{self, ServiceContext},
 };
 
 /// Verify that the user still exists, is not locked, and return the current session version.
@@ -27,17 +27,18 @@ fn check_session_status(pool: &DbPool, slug: &str, user_id: &str) -> anyhow::Res
     }
 
     let conn = pool.get()?;
+    let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
 
     // Verify user still exists — is_locked and get_session_version both
     // return defaults (false/0) for missing rows, so a deleted user would
     // silently pass all checks and refresh their session indefinitely.
-    if !service::auth::user_exists(&conn, slug, user_id).map_err(|e| e.into_anyhow())? {
+    if !service::auth::user_exists(&ctx, user_id).map_err(|e| e.into_anyhow())? {
         bail!("User no longer exists");
     }
 
-    let locked = service::auth::is_locked(&conn, slug, user_id).map_err(|e| e.into_anyhow())?;
+    let locked = service::auth::is_locked(&ctx, user_id).map_err(|e| e.into_anyhow())?;
     let session_version =
-        service::auth::get_session_version(&conn, slug, user_id).map_err(|e| e.into_anyhow())?;
+        service::auth::get_session_version(&ctx, user_id).map_err(|e| e.into_anyhow())?;
 
     Ok((locked, session_version))
 }

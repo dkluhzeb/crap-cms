@@ -18,6 +18,7 @@ use crate::{
     },
     core::auth::{AuthUser, Claims},
     db::query::AccessResult,
+    service,
 };
 
 /// GET /admin/collections/{slug}/{id}/versions/{version_id}/restore — confirmation page
@@ -58,10 +59,14 @@ pub async fn restore_confirm(
         Err(_) => return server_error(&state, "Database error"),
     };
 
+    let version_ctx = service::ServiceContext::collection(&slug, &def)
+        .conn(&conn)
+        .build();
+
     let (version, missing) = match load_version_with_missing_relations(
+        &version_ctx,
         &conn,
         &state.registry,
-        &slug,
         &version_id,
         &def.fields,
     ) {

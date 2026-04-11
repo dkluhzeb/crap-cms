@@ -436,6 +436,30 @@ pub fn count_running_per_slug(conn: &dyn DbConnection) -> Result<HashMap<String,
     Ok(map)
 }
 
+/// Count job runs with optional filters (same WHERE clause as [`list_job_runs`]).
+pub fn count_job_runs(
+    conn: &dyn DbConnection,
+    slug: Option<&str>,
+    status: Option<&str>,
+) -> Result<i64> {
+    let mut sql = String::from("SELECT COUNT(*) FROM _crap_jobs WHERE 1=1");
+    let mut params: Vec<DbValue> = Vec::new();
+
+    if let Some(s) = slug {
+        params.push(DbValue::Text(s.to_string()));
+        sql.push_str(&format!(" AND slug = {}", conn.placeholder(params.len())));
+    }
+
+    if let Some(st) = status {
+        params.push(DbValue::Text(st.to_string()));
+        sql.push_str(&format!(" AND status = {}", conn.placeholder(params.len())));
+    }
+
+    let row = conn.query_one(&sql, &params)?;
+
+    Ok(extract_count(row.as_ref()))
+}
+
 /// List job runs with optional filters.
 pub fn list_job_runs(
     conn: &dyn DbConnection,

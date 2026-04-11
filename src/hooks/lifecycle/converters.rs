@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use crate::{
     core::{Document, FieldDefinition, FieldType},
     db::{
-        Filter, FilterClause, FilterOp, FindQuery, query::cursor::CursorData,
-        query::helpers::prefixed_name,
+        Filter, FilterClause, FilterOp, FindQuery,
+        query::{PaginationResult, cursor::CursorData, helpers::prefixed_name},
     },
     hooks::api,
 };
@@ -294,6 +294,39 @@ pub(crate) fn flatten_lua_groups(
     }
 
     Ok(())
+}
+
+/// Convert a [`PaginationResult`] into an mlua table.
+pub(crate) fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> LuaResult<Table> {
+    let t = lua.create_table()?;
+    t.set("totalDocs", pr.total_docs)?;
+    t.set("limit", pr.limit)?;
+    t.set("hasNextPage", pr.has_next_page)?;
+    t.set("hasPrevPage", pr.has_prev_page)?;
+
+    if let Some(v) = pr.total_pages {
+        t.set("totalPages", v)?;
+    }
+    if let Some(v) = pr.page {
+        t.set("page", v)?;
+    }
+    if let Some(v) = pr.page_start {
+        t.set("pageStart", v)?;
+    }
+    if let Some(v) = pr.prev_page {
+        t.set("prevPage", v)?;
+    }
+    if let Some(v) = pr.next_page {
+        t.set("nextPage", v)?;
+    }
+    if let Some(ref v) = pr.start_cursor {
+        t.set("startCursor", v.clone())?;
+    }
+    if let Some(ref v) = pr.end_cursor {
+        t.set("endCursor", v.clone())?;
+    }
+
+    Ok(t)
 }
 
 /// Convert a Document to a Lua table.

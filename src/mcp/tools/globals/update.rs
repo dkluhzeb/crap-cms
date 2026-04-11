@@ -11,7 +11,7 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
-    service::{WriteInput, update_global_document},
+    service::{ServiceContext, WriteInput, update_global_document},
 };
 
 /// Execute `update_global` — update a global document.
@@ -26,15 +26,13 @@ pub(in crate::mcp::tools) fn exec_update_global(
 
     let (data, join_data) = extract_data_from_args(args, &[]);
 
-    let (doc, _ctx) = update_global_document(
-        pool,
-        runner,
-        slug,
-        def,
-        WriteInput::builder(data, &join_data).build(),
-        None,
-        true,
-    )?;
+    let ctx = ServiceContext::global(slug, def)
+        .pool(pool)
+        .runner(runner)
+        .override_access(true)
+        .build();
+
+    let (doc, _ctx) = update_global_document(&ctx, WriteInput::builder(data, &join_data).build())?;
 
     info!("MCP update global: {}", slug);
 

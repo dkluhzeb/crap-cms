@@ -27,12 +27,9 @@ use crate::{
         auth::{AuthUser, Claims},
         collection::GlobalDefinition,
     },
-    db::{
-        DbPool,
-        query::{AccessResult, helpers::global_table},
-    },
+    db::{DbPool, query::AccessResult},
     hooks::HookRunner,
-    service::{RunnerReadHooks, get_global_document},
+    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
 };
 
 /// Parameters for the blocking global-read task.
@@ -51,17 +48,16 @@ fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
     let conn = params.pool.get()?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
+    let ctx = ServiceContext::global(&params.slug, &params.def)
+        .pool(&params.pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(params.user_doc.as_ref())
+        .build();
 
-    get_global_document(
-        &conn,
-        &hooks,
-        &params.slug,
-        &params.def,
-        params.locale_ctx.as_ref(),
-        params.user_doc.as_ref(),
-        params.user_ui_locale.as_deref(),
-    )
-    .map_err(|e| e.into_anyhow())
+    let input = GetGlobalInput::new(params.locale_ctx.as_ref(), params.user_ui_locale.as_deref());
+
+    get_global_document(&ctx, &input).map_err(|e| e.into_anyhow())
 }
 
 /// Build, enrich, and split the field contexts for the global edit form.
@@ -166,9 +162,17 @@ pub async fn edit_form(
     let has_drafts = def.has_drafts();
     let doc_status = extract_doc_status(&document, has_drafts);
 
-    let gtable = global_table(&slug);
     let (versions, total_versions) = if has_versions {
-        fetch_version_sidebar_data(&state.pool, &state.hook_runner, &gtable, "default")
+        if let Ok(vc) = state.pool.get() {
+            let vh = RunnerReadHooks::new(&state.hook_runner, &vc);
+            let version_ctx = ServiceContext::global(&slug, &def)
+                .conn(&vc)
+                .read_hooks(&vh)
+                .build();
+            fetch_version_sidebar_data(&version_ctx, "default")
+        } else {
+            (vec![], 0)
+        }
     } else {
         (vec![], 0)
     };

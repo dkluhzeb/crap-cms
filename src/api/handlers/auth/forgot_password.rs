@@ -8,7 +8,7 @@ use tracing::error;
 use crate::{
     api::{content, handlers::ContentService},
     core::email,
-    service::auth::generate_reset_token,
+    service::{ServiceContext, auth::generate_reset_token},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -100,15 +100,18 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
         }
     };
 
-    let token_result =
-        match generate_reset_token(&conn, ctx.slug, ctx.def, ctx.user_email, ctx.reset_expiry) {
-            Ok(Some(r)) => r,
-            Ok(None) => return,
-            Err(e) => {
-                error!("Forgot password error: {}", e);
-                return;
-            }
-        };
+    let svc_ctx = ServiceContext::collection(ctx.slug, ctx.def)
+        .conn(&conn)
+        .build();
+
+    let token_result = match generate_reset_token(&svc_ctx, ctx.user_email, ctx.reset_expiry) {
+        Ok(Some(r)) => r,
+        Ok(None) => return,
+        Err(e) => {
+            error!("Forgot password error: {}", e);
+            return;
+        }
+    };
     let token = &token_result.token;
 
     let base_url = ctx.server_config.public_url.clone().unwrap_or_else(|| {

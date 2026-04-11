@@ -11,7 +11,7 @@ use crate::{
     db::{DbPool, FindQuery, LocaleContext, query},
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, parse_where_filters},
-    service::{ReadOptions, RunnerReadHooks, find_documents},
+    service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, find_documents},
 };
 
 /// Execute `find` — paginated query with filters, search, and population.
@@ -79,39 +79,26 @@ pub(in crate::mcp::tools) fn exec_find(
 
     let fq = fq.build();
     let hooks = RunnerReadHooks::new(runner, &conn);
-    let opts = ReadOptions::builder()
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .override_access(true)
+        .build();
+
+    let input = FindDocumentsInput::builder(&fq)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(registry.as_ref()))
+        .cursor_enabled(config.pagination.is_cursor())
         .build();
 
-    let result =
-        find_documents(&conn, &hooks, slug, def, &fq, &opts).map_err(|e| e.into_anyhow())?;
-
-    let cursor_has_more =
-        if pagination.has_cursor() && (result.docs.len() as i64) < pagination.limit {
-            Some(false)
-        } else {
-            None
-        };
-
-    let pr = if config.pagination.is_cursor() {
-        query::PaginationResult::builder(&result.docs, result.total, pagination.limit).cursor(
-            order_by.as_deref(),
-            def.timestamps,
-            pagination.before_cursor.is_some(),
-            pagination.has_cursor(),
-            cursor_has_more,
-        )
-    } else {
-        query::PaginationResult::builder(&result.docs, result.total, pagination.limit)
-            .page(pagination.page, pagination.offset)
-    };
+    let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
 
     let doc_values: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
     let output = json!({
         "docs": doc_values,
-        "pagination": to_value(&pr)?,
+        "pagination": to_value(&result.pagination)?,
     });
     Ok(to_string_pretty(&output)?)
 }

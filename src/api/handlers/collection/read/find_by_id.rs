@@ -1,7 +1,5 @@
 //! FindByID handler — fetch a single document by ID.
 
-use std::slice;
-
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -9,13 +7,10 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{
-            ContentService, collection::helpers::strip_read_denied_proto_fields,
-            convert::document_to_proto,
-        },
+        handlers::{ContentService, convert::document_to_proto},
     },
     db::LocaleContext,
-    service::{ReadOptions, RunnerReadHooks, ServiceError, find_document_by_id},
+    service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -56,47 +51,41 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
-        let def_fields = def.fields.clone();
         let pop_cache = self.cache.clone();
         let def_owned = def;
 
         let result = task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool
+            let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            // Access check is handled by service::find_document_by_id
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let read_hooks = RunnerReadHooks::new(&runner, &conn);
-            let read_opts = ReadOptions::builder()
+
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .conn(&conn)
+                .read_hooks(&read_hooks)
+                .user(user_doc)
+                .build();
+
+            let input = FindByIdInput::builder(&id)
                 .depth(depth)
                 .select(select.as_deref())
                 .locale_ctx(locale_ctx.as_ref())
                 .registry(Some(&registry))
-                .user(user_doc)
                 .use_draft(use_draft_version)
                 .cache(Some(&*pop_cache))
                 .build();
 
-            let doc =
-                find_document_by_id(&conn, &read_hooks, &collection, &def_owned, &id, &read_opts)
-                    .map_err(Status::from)?;
+            let doc = find_document_by_id(&ctx, &input).map_err(Status::from)?;
 
             match doc {
                 Some(d) => {
-                    let mut proto_doc = document_to_proto(&d, &collection);
-
-                    strip_read_denied_proto_fields(
-                        slice::from_mut(&mut proto_doc),
-                        &mut conn,
-                        &runner,
-                        &def_fields,
-                        user_doc,
-                    );
-
+                    let proto_doc = document_to_proto(&d, &collection);
                     Ok(Some(proto_doc))
                 }
                 None => Err(Status::not_found(format!(

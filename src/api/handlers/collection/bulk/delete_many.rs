@@ -3,17 +3,16 @@
 use anyhow::Context as _;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
     core::{event::EventOperation, upload},
     db::AccessResult,
-    service::{RunnerWriteHooks, ServiceError, delete_document_core},
+    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core},
 };
 
-use super::helpers::{check_per_doc_access, find_matching_docs, publish_bulk_events};
-use crate::api::handlers::collection::filter_builder::FilterBuilder;
+use super::helpers::{build_bulk_filters, check_per_doc_access, find_matching_docs};
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -79,10 +78,8 @@ impl ContentService {
                     return Err(Status::permission_denied("Read access denied"));
                 }
 
-                let filters = FilterBuilder::new(&def_owned.fields, &read_access)
-                    .where_json(req_where.as_deref())
-                    .draft_filter(def_owned.has_drafts(), true)
-                    .build()?;
+                let filters =
+                    build_bulk_filters(&def_owned, &read_access, req_where.as_deref(), true)?;
 
                 let tx = conn
                     .transaction_immediate()
@@ -107,6 +104,12 @@ impl ContentService {
                     .with_hooks_enabled(run_hooks)
                     .with_conn(&tx);
 
+                let ctx = ServiceContext::collection(&collection, &def_owned)
+                    .conn(&tx)
+                    .write_hooks(&wh)
+                    .user(user_doc)
+                    .build();
+
                 let mut hard_count = 0i64;
                 let mut soft_count = 0i64;
                 let mut skipped_count = 0i64;
@@ -114,15 +117,7 @@ impl ContentService {
                 let mut deleted_ids = Vec::new();
 
                 for doc in &docs {
-                    match delete_document_core(
-                        &tx,
-                        &wh,
-                        &collection,
-                        &doc.id,
-                        &def_owned,
-                        user_doc,
-                        Some(&locale_cfg),
-                    ) {
+                    match delete_document_core(&ctx, &doc.id, Some(&locale_cfg)) {
                         Ok(result) => {
                             if def_owned.soft_delete {
                                 soft_count += 1;
@@ -155,11 +150,7 @@ impl ContentService {
             .inspect_err(|e| error!("Task error: {}", e))
             .map_err(|_| Status::internal("Internal error"))??;
 
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
-        }
-
-        publish_bulk_events(self, &req.collection, &deleted_ids, EventOperation::Delete);
+        self.publish_bulk_mutation_events(&req.collection, &deleted_ids, EventOperation::Delete);
 
         Ok(Response::new(content::DeleteManyResponse {
             deleted: hard_count,

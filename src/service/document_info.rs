@@ -12,6 +12,7 @@ use crate::{
         DbConnection,
         query::{self, BackReference, MissingRelation},
     },
+    service::ServiceContext,
 };
 
 use super::ServiceError;
@@ -19,21 +20,22 @@ use super::ServiceError;
 /// Get the incoming reference count for a document.
 ///
 /// Returns 0 if the `_ref_count` column is NULL or the document doesn't exist.
-pub fn get_ref_count(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<i64, ServiceError> {
-    let count = query::ref_count::get_ref_count(conn, slug, id)?.unwrap_or(0);
+pub fn get_ref_count(ctx: &ServiceContext, id: &str) -> Result<i64, ServiceError> {
+    let conn = ctx.resolve_conn()?;
+    let count = query::ref_count::get_ref_count(conn.as_ref(), ctx.slug, id)?.unwrap_or(0);
     Ok(count)
 }
 
 /// Find all documents that reference a given document via relationship fields.
 pub fn find_back_references(
-    conn: &dyn DbConnection,
+    ctx: &ServiceContext,
     registry: &Registry,
-    target_collection: &str,
     target_id: &str,
     locale_config: &LocaleConfig,
 ) -> Result<Vec<BackReference>, ServiceError> {
+    let conn = ctx.resolve_conn()?;
     let refs =
-        query::find_back_references(conn, registry, target_collection, target_id, locale_config)?;
+        query::find_back_references(conn.as_ref(), registry, ctx.slug, target_id, locale_config)?;
     Ok(refs)
 }
 

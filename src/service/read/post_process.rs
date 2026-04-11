@@ -3,48 +3,64 @@
 
 use std::{collections::HashSet, mem};
 
+use tracing::warn;
+
 use crate::{
-    core::{CollectionDefinition, Document, upload},
-    db::{DbConnection, query},
+    core::{Document, Registry, cache::CacheBackend, upload},
+    db::{DbConnection, LocaleContext, query},
     hooks::lifecycle::AfterReadCtx,
-    service::hooks::ReadHooks,
+    service::{ServiceContext, helpers},
 };
 
-use super::ReadOptions;
+/// Fields needed by post-processing. Implemented by all read input structs.
+pub(crate) trait PostProcessOpts {
+    fn depth(&self) -> i32;
+    fn hydrate(&self) -> bool;
+    fn select(&self) -> Option<&[String]>;
+    fn locale_ctx(&self) -> Option<&LocaleContext>;
+    fn registry(&self) -> Option<&Registry>;
+    fn ui_locale(&self) -> Option<&str>;
+    fn cache(&self) -> Option<&dyn CacheBackend>;
+}
 
 /// Post-process a single document (skip hydration -- used by find_by_id where
 /// `ops::find_by_id_full` already handled hydration).
-pub(super) fn post_process_single(
+pub(crate) fn post_process_single(
+    ctx: &ServiceContext,
     conn: &dyn DbConnection,
-    hooks: &dyn ReadHooks,
-    slug: &str,
-    def: &CollectionDefinition,
     doc: &mut Document,
-    opts: &ReadOptions,
+    opts: &impl PostProcessOpts,
     operation: &str,
 ) {
-    // Populate relationships
-    if opts.depth > 0
-        && let Some(registry) = opts.registry
+    let hooks = match ctx.read_hooks {
+        Some(h) => h,
+        None => return,
+    };
+    let def = ctx.collection_def();
+    let slug = ctx.slug;
+    let user = ctx.user;
+
+    if opts.depth() > 0
+        && let Some(registry) = opts.registry()
     {
         let mut visited = HashSet::new();
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
-        let mut pop_opts = query::PopulateOpts::new(opts.depth);
-        if let Some(s) = opts.select {
+        let mut pop_opts = query::PopulateOpts::new(opts.depth());
+        if let Some(s) = opts.select() {
             pop_opts = pop_opts.select(s);
         }
-        if let Some(lc) = opts.locale_ctx {
+        if let Some(lc) = opts.locale_ctx() {
             pop_opts = pop_opts.locale_ctx(lc);
         }
 
-        let pop_result = if let Some(cache) = opts.cache {
+        let pop_result = if let Some(cache) = opts.cache() {
             query::populate_relationships_cached(&pop_ctx, doc, &mut visited, &pop_opts, cache)
         } else {
             query::populate_relationships(&pop_ctx, doc, &mut visited, &pop_opts)
         };
 
         if let Err(e) = pop_result {
-            tracing::warn!("populate error for {slug}/{}: {e:#}", doc.id);
+            warn!("populate error for {slug}/{}: {e:#}", doc.id);
         }
     }
 
@@ -54,22 +70,22 @@ pub(super) fn post_process_single(
         upload::assemble_sizes_object(doc, upload_config);
     }
 
-    if let Some(sel) = opts.select {
+    if let Some(sel) = opts.select() {
         query::apply_select_to_document(doc, sel);
     }
 
-    let denied = hooks.field_read_denied(&def.fields, opts.user);
-    for name in &denied {
-        doc.fields.remove(name);
-    }
+    let mut denied = hooks.field_read_denied(&def.fields, user);
+    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+
+    doc.strip_fields(&denied);
 
     let ar_ctx = AfterReadCtx {
         hooks: &def.hooks,
         fields: &def.fields,
         collection: slug,
         operation,
-        user: opts.user,
-        ui_locale: opts.ui_locale,
+        user,
+        ui_locale: opts.ui_locale(),
     };
 
     // Swap in a placeholder, run hooks, swap back
@@ -80,45 +96,57 @@ pub(super) fn post_process_single(
 
 /// Shared post-processing for find: hydrate, populate, upload sizes,
 /// select stripping, field-level access stripping, and after_read hooks.
-pub(super) fn post_process_docs(
+pub(crate) fn post_process_docs(
+    ctx: &ServiceContext,
     conn: &dyn DbConnection,
-    hooks: &dyn ReadHooks,
-    slug: &str,
-    def: &CollectionDefinition,
     docs: &mut Vec<Document>,
-    opts: &ReadOptions,
-    operation: &str,
+    opts: &impl PostProcessOpts,
 ) {
-    if opts.hydrate {
+    let hooks = match ctx.read_hooks {
+        Some(h) => h,
+        None => return,
+    };
+    let def = ctx.collection_def();
+    let slug = ctx.slug;
+    let user = ctx.user;
+
+    if opts.hydrate() {
         for doc in docs.iter_mut() {
-            if let Err(e) =
-                query::hydrate_document(conn, slug, &def.fields, doc, opts.select, opts.locale_ctx)
-            {
-                tracing::warn!("hydrate error for {slug}/{}: {e:#}", doc.id);
+            if let Err(e) = query::hydrate_document(
+                conn,
+                slug,
+                &def.fields,
+                doc,
+                opts.select(),
+                opts.locale_ctx(),
+            ) {
+                warn!("hydrate error for {slug}/{}: {e:#}", doc.id);
             }
         }
     }
 
-    if opts.depth > 0
-        && let Some(registry) = opts.registry
+    if opts.depth() > 0
+        && let Some(registry) = opts.registry()
     {
         let pop_ctx = query::PopulateContext::new(conn, registry, slug, def);
-        let mut pop_opts = query::PopulateOpts::new(opts.depth);
-        if let Some(s) = opts.select {
+        let mut pop_opts = query::PopulateOpts::new(opts.depth());
+
+        if let Some(s) = opts.select() {
             pop_opts = pop_opts.select(s);
         }
-        if let Some(lc) = opts.locale_ctx {
+
+        if let Some(lc) = opts.locale_ctx() {
             pop_opts = pop_opts.locale_ctx(lc);
         }
 
-        let pop_result = if let Some(cache) = opts.cache {
+        let pop_result = if let Some(cache) = opts.cache() {
             query::populate_relationships_batch_cached(&pop_ctx, docs, &pop_opts, cache)
         } else {
             query::populate_relationships_batch(&pop_ctx, docs, &pop_opts)
         };
 
         if let Err(e) = pop_result {
-            tracing::warn!("populate error for {slug}: {e:#}");
+            warn!("populate error for {slug}: {e:#}");
         }
     }
 
@@ -130,18 +158,18 @@ pub(super) fn post_process_docs(
         }
     }
 
-    if let Some(sel) = opts.select {
+    if let Some(sel) = opts.select() {
         for doc in docs.iter_mut() {
             query::apply_select_to_document(doc, sel);
         }
     }
 
-    let denied = hooks.field_read_denied(&def.fields, opts.user);
+    let mut denied = hooks.field_read_denied(&def.fields, user);
+    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+
     if !denied.is_empty() {
         for doc in docs.iter_mut() {
-            for name in &denied {
-                doc.fields.remove(name);
-            }
+            doc.strip_fields(&denied);
         }
     }
 
@@ -149,9 +177,9 @@ pub(super) fn post_process_docs(
         hooks: &def.hooks,
         fields: &def.fields,
         collection: slug,
-        operation,
-        user: opts.user,
-        ui_locale: opts.ui_locale,
+        operation: "find",
+        user,
+        ui_locale: opts.ui_locale(),
     };
 
     let processed = hooks.after_read_many(&ar_ctx, mem::take(docs));

@@ -15,7 +15,7 @@ use crate::{
         converters::lua_table_to_find_query,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, ServiceError, delete_document_core},
+    service::{LuaWriteHooks, ServiceContext, ServiceError, delete_document_core},
 };
 
 /// Context for bulk delete operations.
@@ -129,19 +129,18 @@ fn delete_many_documents(
         service_def.soft_delete = false;
     }
 
+    let ctx = ServiceContext::collection(collection, &service_def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access)
+        .build();
+
     let mut deleted = 0i64;
     let mut skipped = 0i64;
 
     for doc in &docs {
-        match delete_document_core(
-            conn,
-            &write_hooks,
-            collection,
-            &doc.id,
-            &service_def,
-            user.as_ref(),
-            Some(lc),
-        ) {
+        match delete_document_core(&ctx, &doc.id, Some(lc)) {
             Ok(result) => {
                 // Clean up upload files for hard deletes
                 if !service_def.soft_delete

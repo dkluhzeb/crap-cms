@@ -5,8 +5,9 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
+    api::handlers::convert::pagination_result_to_proto,
     api::{content, handlers::ContentService},
-    service::{RunnerReadHooks, list_versions},
+    service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -35,9 +36,8 @@ impl ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let limit = req.limit;
-        let access_read = def.access.read.clone();
 
-        let versions = task::spawn_blocking(move || -> Result<_, Status> {
+        let result = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
                 error!("ListVersions pool error: {}", e);
                 Status::internal("Internal error")
@@ -49,25 +49,24 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let hooks = RunnerReadHooks::new(&runner, &conn);
 
-            let (versions, _total) = list_versions(
-                &conn,
-                &hooks,
-                &collection,
-                &id,
-                access_read.as_deref(),
-                user_doc,
-                limit,
-                None,
-            )
-            .map_err(Status::from)?;
+            let ctx = ServiceContext::collection(&collection, &def)
+                .conn(&conn)
+                .read_hooks(&hooks)
+                .user(user_doc)
+                .build();
 
-            Ok(versions)
+            let input = ListVersionsInput::builder(&id).limit(limit).build();
+
+            let result = list_versions(&ctx, &input).map_err(Status::from)?;
+
+            Ok(result)
         })
         .await
         .inspect_err(|e| error!("ListVersions task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
 
-        let proto_versions: Vec<content::VersionInfo> = versions
+        let proto_versions: Vec<content::VersionInfo> = result
+            .docs
             .iter()
             .map(|v| content::VersionInfo {
                 id: v.id.clone(),
@@ -80,6 +79,7 @@ impl ContentService {
 
         Ok(Response::new(content::ListVersionsResponse {
             versions: proto_versions,
+            pagination: Some(pagination_result_to_proto(&result.pagination)),
         }))
     }
 }
