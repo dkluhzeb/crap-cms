@@ -1,0 +1,42 @@
+--- {{label}} job handler.
+local M = {}
+
+-- Type the data shape passed via crap.jobs.queue():
+-- ---@class {{pascal}}Data
+-- ---@field my_field string
+
+---@param context crap.JobHandlerContext
+---@return table?
+function M.run(context)
+    -- context.data = input data from queue() or {} for cron
+    -- context.job  = { slug, attempt, max_attempts }
+    -- Full CRUD access: crap.collections.find(), .create(), etc.
+
+    -- ---@type {{pascal}}Data
+    -- local data = context.data
+
+    -- Example:
+    -- local docs = crap.collections.find("posts", { limit = 10 })
+    -- crap.log.info("Processing " .. #docs .. " documents")
+
+    return nil
+end
+
+crap.jobs.define("{{slug}}", {
+    handler = "jobs.{{slug}}.run",
+{{#if schedule}}
+    schedule = "{{schedule}}",
+{{/if}}
+{{#if queue}}
+    queue = "{{queue}}",
+{{/if}}
+{{#if retries}}
+    retries = {{retries}},
+{{/if}}
+{{#if timeout}}
+    timeout = {{timeout}},
+{{/if}}
+    labels = { singular = "{{label}}" },
+})
+
+return M

@@ -1,8 +1,10 @@
 //! Admin UI: Axum server, Handlebars templates, and HTMX-powered handlers.
 
+mod auth_middleware;
 pub mod context;
 pub mod context_builder;
 pub mod handlers;
+mod mcp_handler;
 pub mod server;
 pub mod server_builder;
 pub mod templates;
@@ -24,7 +26,13 @@ use serde_json::Value;
 use crate::{
     config::CrapConfig,
     core::{
-        JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+        JwtSecret, Registry,
+        auth::{SharedPasswordProvider, SharedTokenProvider},
+        email::EmailRenderer,
+        email::SharedEmailProvider,
+        event::EventBus,
+        rate_limit::LoginRateLimiter,
+        upload::SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,
@@ -50,6 +58,8 @@ pub struct AdminState {
     pub jwt_secret: JwtSecret,
     /// The renderer for email notifications.
     pub email_renderer: Arc<EmailRenderer>,
+    /// The email provider for sending emails.
+    pub email_provider: SharedEmailProvider,
     /// The event bus for asynchronous event handling, if enabled.
     pub event_bus: Option<EventBus>,
     /// The rate limiter for login attempts (per-email).
@@ -72,6 +82,12 @@ pub struct AdminState {
     pub max_sse_connections: usize,
     /// Pre-computed Content-Security-Policy header value. None = CSP disabled.
     pub csp_header: Option<String>,
+    /// The storage backend for uploaded files.
+    pub storage: SharedStorage,
+    /// The token provider for JWT creation and validation.
+    pub token_provider: SharedTokenProvider,
+    /// The password provider for hashing and verification.
+    pub password_provider: SharedPasswordProvider,
 }
 
 impl AdminState {

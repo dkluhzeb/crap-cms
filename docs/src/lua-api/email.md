@@ -1,11 +1,12 @@
 # crap.email
 
-Send emails via SMTP. Requires the `[email]` section in `crap.toml` to be configured.
+Send emails via the configured email provider. Supports SMTP, webhooks (SendGrid, Mailgun, etc.), and custom Lua providers.
 
 ## Configuration
 
 ```toml
 [email]
+provider = "smtp"        # "smtp" (default), "webhook", "log", or "custom"
 smtp_host = "smtp.example.com"
 smtp_port = 587
 smtp_user = "noreply@example.com"
@@ -13,15 +14,19 @@ smtp_pass = "your-smtp-password"
 smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit), "none" (plain/test)
 from_address = "noreply@example.com"
 from_name = "My App"
+
+# Queue settings for crap.email.queue()
+queue_retries = 3        # retry count (default: 3)
+queue_name = "email"     # job queue name (default: "email")
+queue_timeout = 30       # per-attempt timeout in seconds (default: 30)
+queue_concurrency = 5    # max concurrent queued emails (default: 5)
 ```
 
-If `smtp_host` is empty (default), all `crap.email.send()` calls log a warning and return `true` (no-op). The system remains fully functional without SMTP.
+If `smtp_host` is empty with the default `smtp` provider, emails are logged instead of sent (equivalent to `provider = "log"`).
 
 ## crap.email.send(opts)
 
-Send an email.
-
-**Parameters:**
+Send an email immediately (blocking). Use when you need to know if the send succeeded.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -32,8 +37,6 @@ Send an email.
 
 **Returns:** `true` on success.
 
-**Example:**
-
 ```lua
 crap.email.send({
     to = "user@example.com",
@@ -43,35 +46,83 @@ crap.email.send({
 })
 ```
 
-### Use in Hooks
+## crap.email.queue(opts)
 
-`crap.email.send()` is blocking (uses SMTP transport), which is correct because Lua hooks run inside `spawn_blocking`. Safe to call from any hook.
+Queue an email for async delivery with automatic retries. Returns immediately — the email is processed by the scheduler with exponential backoff on failure (5s, 10s, 20s, ..., max 300s).
+
+Requires a transaction context (available in `before_change`, `before_delete`, and other hooks with CRUD access).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `to` | string | yes | Recipient email address |
+| `subject` | string | yes | Email subject line |
+| `html` | string | yes | HTML email body |
+| `text` | string | no | Plain text fallback body |
+| `retries` | integer | no | Override retry count from config (default: `email.queue_retries`) |
+
+**Returns:** Job run ID (string).
 
 ```lua
--- hooks/notifications.lua
-local M = {}
+local job_id = crap.email.queue({
+    to = "user@example.com",
+    subject = "Your report is ready",
+    html = "<p>Download your report at ...</p>",
+    retries = 5,  -- try up to 5 times
+})
+```
 
-function M.notify_on_create(ctx)
-    local admin_email = crap.env.get("CRAP_ADMIN_EMAIL")
-    if admin_email then
-        crap.email.send({
-            to = admin_email,
-            subject = "New " .. ctx.collection .. " created",
-            html = "<p>A new document was created in <b>" .. ctx.collection .. "</b>.</p>",
+> **When to use `send` vs `queue`:**
+> - Use `send` when the email result matters for the current operation (e.g., inline error handling).
+> - Use `queue` for everything else — password resets, notifications, reports. The queue handles retries automatically, and failures don't block the request.
+
+## crap.email.register(handler)
+
+Register a custom email provider. Only used when `[email] provider = "custom"` in `crap.toml`. Call in `init.lua`.
+
+```lua
+crap.email.register({
+    send = function(opts)
+        crap.http.request({
+            method = "POST",
+            url = "https://api.sendgrid.com/v3/mail/send",
+            headers = {
+                Authorization = "Bearer " .. crap.env.get("SENDGRID_KEY"),
+                ["Content-Type"] = "application/json",
+            },
+            body = crap.json.encode({
+                personalizations = {{ to = {{ email = opts.to }} }},
+                from = { email = "noreply@example.com" },
+                subject = opts.subject,
+                content = {{ type = "text/html", value = opts.html }},
+            }),
+        })
+    end,
+})
+```
+
+## Providers
+
+| Provider | Config | Description |
+|----------|--------|-------------|
+| `smtp` | `smtp_host`, `smtp_port`, etc. | Default. Standard SMTP via `lettre`. |
+| `webhook` | `webhook_url`, `webhook_headers` | HTTP POST with JSON body. Works with SendGrid, Mailgun, Resend. |
+| `log` | (none) | Logs emails to tracing. For development/testing. |
+| `custom` | (none) | Delegates to Lua via `crap.email.register()`. |
+
+## Use in Hooks
+
+Both `send` and `queue` are safe to call from hooks. `send` is blocking (runs within `spawn_blocking`). `queue` inserts a job row and returns immediately.
+
+```lua
+-- hooks/welcome.lua — queue a welcome email on user creation
+return function(ctx)
+    if ctx.operation == "create" and ctx.data.email then
+        crap.email.queue({
+            to = ctx.data.email,
+            subject = "Welcome!",
+            html = "<p>Thanks for signing up.</p>",
         })
     end
     return ctx
 end
-
-return M
-```
-
-```lua
--- collections/posts.lua
-crap.collections.define("posts", {
-    hooks = {
-        after_change = { "hooks.notifications.notify_on_create" },
-    },
-    fields = { ... },
-})
 ```

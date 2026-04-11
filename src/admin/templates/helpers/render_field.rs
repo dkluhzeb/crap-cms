@@ -1,5 +1,6 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use serde_json::Value;
+use tracing::warn;
 
 /// Handlebars helper that renders the appropriate field partial.
 /// Usage: {{render_field field_context}}
@@ -40,10 +41,9 @@ impl HelperDef for RenderFieldHelper {
         };
 
         let rendered = r.render(&template_name, &render_data).unwrap_or_else(|e| {
-            tracing::warn!(
+            warn!(
                 "Failed to render template '{}': {}, falling back to fields/text",
-                template_name,
-                e
+                template_name, e
             );
             r.render("fields/text", &render_data).unwrap_or_default()
         });
@@ -56,16 +56,7 @@ impl HelperDef for RenderFieldHelper {
 mod tests {
     use serde_json::json;
 
-    use super::*;
-
-    fn test_hbs() -> Handlebars<'static> {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let translations =
-            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
-        let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
-            .expect("create_handlebars");
-        (*hbs).clone()
-    }
+    use crate::admin::templates::helpers::test_helpers::test_hbs;
 
     #[test]
     fn renders_text_field() {

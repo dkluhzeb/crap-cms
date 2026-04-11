@@ -3,14 +3,15 @@ use std::collections::HashSet;
 use rusqlite::Connection;
 use serde_json::json;
 
+use crate::core::cache::NoneCache;
 use crate::core::{
     Document, FieldDefinition, Registry,
     field::{BlockDefinition, FieldTab, FieldType, RelationshipConfig},
 };
 use crate::db::DbConnection;
 use crate::db::query::populate::{
-    PopulateCache, PopulateContext, PopulateOpts, populate_relationships,
-    populate_relationships_cached, test_helpers::*,
+    PopulateContext, PopulateOpts, populate_relationships, populate_relationships_cached,
+    test_helpers::*,
 };
 
 // ── populate_relationships (depth / basic hydration) ──────────────────────
@@ -42,7 +43,7 @@ fn populate_depth_zero_noop() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -81,7 +82,7 @@ fn populate_depth_one_hydrates() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -170,7 +171,7 @@ fn populate_circular_ref_stops() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     );
 
     assert!(
@@ -235,7 +236,7 @@ fn populate_field_level_max_depth_caps() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -290,7 +291,7 @@ fn populate_select_filters_fields() {
             select: Some(&select),
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -331,7 +332,7 @@ fn populate_has_one_empty_string_skipped() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -345,7 +346,7 @@ fn populate_has_one_empty_string_skipped() {
 
 #[test]
 fn populate_relationships_wrapper_creates_fresh_cache() {
-    // The wrapper creates a fresh PopulateCache per call — verify it works
+    // The wrapper creates a fresh NoneCache per call — verify it works
     // by calling it twice and confirming it doesn't error (each call is independent)
     let conn = setup_populate_db();
     let registry = make_registry_with_posts_and_authors();
@@ -482,7 +483,7 @@ fn populate_upload_inside_blocks() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -552,7 +553,7 @@ fn populate_relationship_inside_tabs() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -606,7 +607,7 @@ fn populate_relationship_inside_group() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -666,7 +667,7 @@ fn populate_relationship_inside_array() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 

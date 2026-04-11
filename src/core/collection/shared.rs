@@ -54,6 +54,22 @@ pub enum LiveSetting {
     Function(String),
 }
 
+/// Controls what data events carry for a collection or global.
+///
+/// - `Metadata` (default): events carry only sequence, timestamp, target, operation,
+///   collection, document_id, edited_by. No document data, no after_read hooks.
+///   Client re-fetches via FindByID if needed. Safe, fast, zero hook overhead.
+/// - `Full`: events carry full document data through after_read hooks + field-level
+///   stripping. Opt-in per collection for real-time data delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LiveMode {
+    /// Metadata only — no document data, no after_read hooks (default).
+    #[default]
+    Metadata,
+    /// Full data — runs after_read hooks, includes document data with field stripping.
+    Full,
+}
+
 /// Lua function references for access control (read/create/update/delete).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Access {

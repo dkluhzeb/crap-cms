@@ -37,8 +37,8 @@ GRPC_ADDR="${GRPC_ADDR:-localhost:50051}"
 DURATION="${DURATION:-10}"
 CONCURRENCY_LEVELS="1 10 50"
 SCENARIOS=""
-EMAIL="${EMAIL:-admin@example.com}"
-PASSWORD="${PASSWORD:-secret123}"
+EMAIL="${EMAIL:-admin@crap.studio}"
+PASSWORD="${PASSWORD:-admin123}"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             echo "Usage: $0 [--duration SEC] [--concurrency N,N,...] [--scenarios NAME,...] [--email E] [--password P]"
             echo ""
-            echo "Scenarios: describe, count, find, find_where, find_by_id, find_deep, create, update"
+            echo "Scenarios: describe, count, find, find_where, find_by_id, find_deep, find_deep5, create, update"
             echo "Defaults:  duration=10, concurrency=1,10,50, all scenarios"
             exit 0
             ;;
@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Order: light reads first, heavy/write scenarios last (to avoid poisoning measurements)
-ALL_SCENARIOS="describe count find find_where find_by_id find_deep create update"
+ALL_SCENARIOS="describe count find find_where find_by_id find_deep find_deep5 create update"
 if [[ -z "$SCENARIOS" ]]; then
     SCENARIOS="$ALL_SCENARIOS"
 fi
@@ -312,6 +312,14 @@ scenario_find_deep() {
     done
 }
 
+scenario_find_deep5() {
+    header "Scenario: gRPC Find deep (depth=5)"
+    local data='{"collection":"posts","depth":"5"}'
+    for c in $CONCURRENCY_LEVELS; do
+        run_ghz "find_deep5" "$c" "Find" "$data" "$JWT_TOKEN"
+    done
+}
+
 scenario_find_by_id() {
     if [[ -z "${POST_ID:-}" ]]; then
         warn "Skipping find_by_id — no posts in DB"
@@ -355,11 +363,13 @@ scenario_create() {
     # Cleanup: delete all loadtest posts
     info "  Cleaning up loadtest posts..."
     local deleted
-    deleted=$(grpcurl -plaintext -H "authorization: Bearer ${JWT_TOKEN}" -d '{
+    local result
+    result=$(grpcurl -plaintext -H "authorization: Bearer ${JWT_TOKEN}" -d '{
         "collection": "posts",
-        "where": "{\"slug\":{\"like\":\"loadtest-ghz-%\"}}"
-    }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null \
-        | jq -r '.deleted // 0')
+        "where": "{\"slug\":{\"like\":\"loadtest-ghz-%\"}}",
+        "forceHardDelete": true
+    }' "$GRPC_ADDR" crap.ContentAPI/DeleteMany 2>/dev/null)
+    deleted=$(echo "$result" | jq -r '((.deleted // "0") | tonumber) + ((.softDeleted // "0") | tonumber)')
     ok "Cleaned up ${deleted} loadtest posts"
 }
 
@@ -394,6 +404,7 @@ for scenario in $SCENARIOS; do
     case "$scenario" in
         find)         scenario_find ;;
         find_deep)    scenario_find_deep ;;
+        find_deep5)   scenario_find_deep5 ;;
         find_by_id)   scenario_find_by_id ;;
         find_where)   scenario_find_where ;;
         count)        scenario_count ;;

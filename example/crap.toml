@@ -2,10 +2,14 @@
 admin_port = 3000
 grpc_port = 50051
 host = "0.0.0.0"
+compression = "gzip"
+grpc_reflection = true
 
 [database]
 path = "data/crap.db"
-# pool_max_size = 32
+# pool_max_size = 64
+# backend = "postgres"
+# url = "host=localhost port=5432 user=crap password=crap dbname=crap_cms"
 
 [admin]
 dev_mode = false
@@ -17,10 +21,22 @@ token_expiry = 7200
 
 [depth]
 default_depth = 1
-max_depth = 10
+max_depth = 5
+
+[cache]
+backend = "memory"
+max_age_secs = 60
 
 [upload]
 max_file_size = "50MB"
+# storage = "s3"         # uncomment for S3-compatible storage
+# [upload.s3]
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = "http://localhost:9000"
+# access_key = "minioadmin"
+# secret_key = "minioadmin"
+# path_style = true
 
 [email]
 smtp_host = "${CRAP_SMTP_HOST:-}"
@@ -40,7 +56,7 @@ locales = ["en", "de"]
 fallback = true
 
 [jobs]
-poll_interval = 5
+poll_interval = 1
 
 [pagination]
 # default_limit = 20
@@ -54,7 +70,7 @@ allowed_headers = ["Content-Type", "Authorization"]
 max_age = "1h"
 
 [access]
-# default_deny = false
+# default_deny = true
 
 [logging]
 file = true
@@ -64,4 +80,4 @@ file = true
 
 [hooks]
 on_init = ["hooks.on_init"]
-vm_pool_size = 16
+# vm_pool_size = 16  # default: number of CPU cores

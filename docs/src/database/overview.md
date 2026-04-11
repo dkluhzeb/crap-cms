@@ -1,15 +1,20 @@
 # Database
 
-Crap CMS uses SQLite as its database, accessed via rusqlite with an r2d2 connection pool.
+Crap CMS uses SQLite as its database — zero configuration, single file, no server to manage.
 
 ## Configuration
 
 ```toml
 [database]
-path = "data/crap.db"   # relative to config dir, or absolute
+path = "data/crap.db"       # relative to config dir, or absolute
+pool_max_size = 64           # connection pool size
+cache_size = -16384          # page cache in KB (16MB)
+mmap_size = 268435456        # memory-mapped I/O (256MB)
 ```
 
-## WAL Mode
+> For [multi-server deployments](../deployment/multi-server.md), a PostgreSQL backend is available via `--features postgres`.
+
+## WAL Mode (SQLite)
 
 The database runs in WAL (Write-Ahead Logging) mode for better concurrent read performance. This is set automatically when the connection pool is created.
 

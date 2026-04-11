@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use mlua::Value;
 use serde_json::Value as JsonValue;
+use tracing::{debug, warn};
 
 use crate::{
     core::{
@@ -21,8 +22,6 @@ use crate::{
     },
 };
 
-use super::publish_event_input_builder::PublishEventInputBuilder;
-
 /// Bundled parameters for a mutation event to publish.
 pub struct PublishEventInput {
     pub target: EventTarget,
@@ -37,6 +36,60 @@ impl PublishEventInput {
     /// Create a builder with the required target and operation.
     pub fn builder(target: EventTarget, operation: EventOperation) -> PublishEventInputBuilder {
         PublishEventInputBuilder::new(target, operation)
+    }
+}
+
+/// Builder for [`PublishEventInput`].
+pub struct PublishEventInputBuilder {
+    target: EventTarget,
+    operation: EventOperation,
+    collection: Option<Slug>,
+    document_id: Option<DocumentId>,
+    data: HashMap<String, JsonValue>,
+    edited_by: Option<EventUser>,
+}
+
+impl PublishEventInputBuilder {
+    pub(crate) fn new(target: EventTarget, operation: EventOperation) -> Self {
+        Self {
+            target,
+            operation,
+            collection: None,
+            document_id: None,
+            data: HashMap::new(),
+            edited_by: None,
+        }
+    }
+
+    pub fn collection(mut self, collection: impl Into<Slug>) -> Self {
+        self.collection = Some(collection.into());
+        self
+    }
+
+    pub fn document_id(mut self, document_id: impl Into<DocumentId>) -> Self {
+        self.document_id = Some(document_id.into());
+        self
+    }
+
+    pub fn data(mut self, data: HashMap<String, JsonValue>) -> Self {
+        self.data = data;
+        self
+    }
+
+    pub fn edited_by(mut self, edited_by: Option<EventUser>) -> Self {
+        self.edited_by = edited_by;
+        self
+    }
+
+    pub fn build(self) -> PublishEventInput {
+        PublishEventInput {
+            target: self.target,
+            operation: self.operation,
+            collection: self.collection.expect("collection is required"),
+            document_id: self.document_id.expect("document_id is required"),
+            data: self.data,
+            edited_by: self.edited_by,
+        }
     }
 }
 
@@ -58,29 +111,27 @@ impl HookRunner {
             return Ok(Some(data));
         }
 
-        let ctx = HookContext::builder(collection, operation)
+        let mut ctx = HookContext::builder(collection, operation)
             .data(data)
             .build();
 
         let lua = self.pool.acquire()?;
 
-        let mut context = ctx;
-
         // Run collection-level hook refs first
         for hook_ref in hook_refs {
-            tracing::debug!(
+            debug!(
                 "Running before_broadcast hook: {} for {}",
-                hook_ref,
-                context.collection
+                hook_ref, ctx.collection
             );
-            match call_before_broadcast_hook(&lua, hook_ref, context.clone())? {
-                Some(new_ctx) => context = new_ctx,
+
+            match call_before_broadcast_hook(&lua, hook_ref, ctx.clone())? {
+                Some(new_ctx) => ctx = new_ctx,
                 None => return Ok(None), // suppressed
             }
         }
 
         // Run global registered hooks
-        match call_registered_before_broadcast(&lua, context)? {
+        match call_registered_before_broadcast(&lua, ctx)? {
             Some(ctx) => Ok(Some(ctx.data)),
             None => Ok(None),
         }
@@ -139,58 +190,65 @@ impl HookRunner {
             None => return,
         };
 
-        let runner = self.clone();
-        let hooks = hooks.clone();
-        let live = live_setting.cloned();
-        let op_str = match &input.operation {
-            EventOperation::Create => "create",
-            EventOperation::Update => "update",
-            EventOperation::Delete => "delete",
-        }
-        .to_string();
-
-        let PublishEventInput {
-            target,
-            operation,
-            collection,
-            document_id,
-            data,
-            edited_by,
-        } = input;
-
-        tokio::task::spawn_blocking(move || {
-            // 1. Check live setting
-            match runner.check_live_setting(live.as_ref(), &collection, &op_str, &data) {
-                Ok(false) => return,
-                Err(e) => {
-                    tracing::warn!("live setting check error for {}: {}", collection, e);
-
-                    return;
-                }
-                Ok(true) => {}
-            }
-
-            // 2. Run before_broadcast hooks
-            let broadcast_data =
-                match runner.run_before_broadcast(&hooks, &collection, &op_str, data) {
-                    Ok(Some(d)) => d,
-                    Ok(None) => return, // suppressed
-                    Err(e) => {
-                        tracing::warn!("before_broadcast hook error for {}: {}", collection, e);
-
-                        return;
-                    }
-                };
-
-            // 3. Publish to EventBus
-            bus.publish(
-                target,
-                operation,
-                collection,
-                document_id,
-                broadcast_data,
-                edited_by,
-            );
+        tokio::task::spawn_blocking({
+            let runner = self.clone();
+            let hooks = hooks.clone();
+            let live = live_setting.cloned();
+            move || publish_event_blocking(runner, bus, hooks, live, input)
         });
     }
+}
+
+/// Background worker for [`HookRunner::publish_event`]:
+/// check live setting → run before_broadcast hooks → EventBus.publish().
+fn publish_event_blocking(
+    runner: HookRunner,
+    bus: EventBus,
+    hooks: Hooks,
+    live: Option<LiveSetting>,
+    input: PublishEventInput,
+) {
+    let op_str = match &input.operation {
+        EventOperation::Create => "create",
+        EventOperation::Update => "update",
+        EventOperation::Delete => "delete",
+    };
+
+    match runner.check_live_setting(live.as_ref(), &input.collection, op_str, &input.data) {
+        Ok(false) => return,
+        Err(e) => {
+            warn!("live setting check error for {}: {e}", input.collection);
+
+            return;
+        }
+        Ok(true) => {}
+    }
+
+    let PublishEventInput {
+        target,
+        operation,
+        collection,
+        document_id,
+        data,
+        edited_by,
+    } = input;
+
+    let broadcast_data = match runner.run_before_broadcast(&hooks, &collection, op_str, data) {
+        Ok(Some(d)) => d,
+        Ok(None) => return,
+        Err(e) => {
+            warn!("before_broadcast hook error for {collection}: {e}");
+
+            return;
+        }
+    };
+
+    bus.publish(
+        target,
+        operation,
+        collection,
+        document_id,
+        broadcast_data,
+        edited_by,
+    );
 }

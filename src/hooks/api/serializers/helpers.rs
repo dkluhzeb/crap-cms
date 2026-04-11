@@ -401,10 +401,9 @@ mod tests {
         assert_eq!(back["empty"], json!(null));
     }
 
-    /// Regression: JSON numbers that cannot be represented as i64 or f64
-    /// must produce an error, not silently become Nil.
+    /// Edge-case numbers (i64::MAX, f64::MAX) must survive conversion without error.
     #[test]
-    fn json_to_lua_unrepresentable_number_errors() {
+    fn json_to_lua_extreme_numbers_succeed() {
         let lua = Lua::new();
 
         // Construct a JSON number from raw that can't be i64 or f64.

@@ -2,7 +2,7 @@
 
 use mlua::{Table, Value};
 
-use crate::core::collection::{Auth, AuthStrategy};
+use crate::core::collection::{Auth, AuthStrategy, MfaMode};
 
 use super::helpers::*;
 
@@ -18,11 +18,17 @@ pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
             let forgot_password = get_bool(&tbl, "forgot_password", true);
             let strategies = parse_auth_strategies(&tbl);
             let mut auth = Auth::new(true);
+
             auth.token_expiry = token_expiry;
             auth.strategies = strategies;
             auth.disable_local = disable_local;
             auth.verify_email = verify_email;
             auth.forgot_password = forgot_password;
+            auth.mfa = match tbl.get::<String>("mfa").ok().as_deref() {
+                Some("email") => MfaMode::Email,
+                _ => MfaMode::Off,
+            };
+
             Some(auth)
         }
         _ => None,
@@ -34,7 +40,9 @@ fn parse_auth_strategies(tbl: &Table) -> Vec<AuthStrategy> {
         Ok(t) => t,
         Err(_) => return Vec::new(),
     };
+
     let mut strategies = Vec::new();
+
     for strat_tbl in strategies_tbl.sequence_values::<Table>().flatten() {
         if let (Some(name), Some(authenticate)) = (
             get_string(&strat_tbl, "name"),
@@ -43,6 +51,7 @@ fn parse_auth_strategies(tbl: &Table) -> Vec<AuthStrategy> {
             strategies.push(AuthStrategy::new(name, authenticate));
         }
     }
+
     strategies
 }
 

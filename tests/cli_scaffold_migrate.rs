@@ -666,7 +666,16 @@ fn blueprint_save_writes_manifest() {
 #[test]
 fn make_job_creates_lua_file() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "cleanup", None, None, None, None, false).unwrap();
+    scaffold::make_job(&scaffold::MakeJobOptions {
+        config_dir: tmp.path(),
+        slug: "cleanup",
+        schedule: None,
+        queue: None,
+        retries: None,
+        timeout: None,
+        force: false,
+    })
+    .unwrap();
 
     let path = tmp.path().join("jobs/cleanup.lua");
     assert!(path.exists());
@@ -679,15 +688,15 @@ fn make_job_creates_lua_file() {
 #[test]
 fn make_job_with_schedule() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(
-        tmp.path(),
-        "nightly",
-        Some("0 3 * * *"),
-        None,
-        None,
-        None,
-        false,
-    )
+    scaffold::make_job(&scaffold::MakeJobOptions {
+        config_dir: tmp.path(),
+        slug: "nightly",
+        schedule: Some("0 3 * * *"),
+        queue: None,
+        retries: None,
+        timeout: None,
+        force: false,
+    })
     .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/nightly.lua")).unwrap();
@@ -697,15 +706,15 @@ fn make_job_with_schedule() {
 #[test]
 fn make_job_with_options() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(
-        tmp.path(),
-        "heavy",
-        None,
-        Some("background"),
-        Some(3),
-        Some(300),
-        false,
-    )
+    scaffold::make_job(&scaffold::MakeJobOptions {
+        config_dir: tmp.path(),
+        slug: "heavy",
+        schedule: None,
+        queue: Some("background"),
+        retries: Some(3),
+        timeout: Some(300),
+        force: false,
+    })
     .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/heavy.lua")).unwrap();
@@ -717,8 +726,19 @@ fn make_job_with_options() {
 #[test]
 fn make_job_existing_errors() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "test_job", None, None, None, None, false).unwrap();
-    let result = scaffold::make_job(tmp.path(), "test_job", None, None, None, None, false);
+    let mk = |force| {
+        scaffold::make_job(&scaffold::MakeJobOptions {
+            config_dir: tmp.path(),
+            slug: "test_job",
+            schedule: None,
+            queue: None,
+            retries: None,
+            timeout: None,
+            force,
+        })
+    };
+    mk(false).unwrap();
+    let result = mk(false);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("--force"));
 }
@@ -726,22 +746,33 @@ fn make_job_existing_errors() {
 #[test]
 fn make_job_force_overwrites() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "test_job", None, None, None, None, false).unwrap();
-    assert!(scaffold::make_job(tmp.path(), "test_job", None, None, None, None, true).is_ok());
+    let mk = |force| {
+        scaffold::make_job(&scaffold::MakeJobOptions {
+            config_dir: tmp.path(),
+            slug: "test_job",
+            schedule: None,
+            queue: None,
+            retries: None,
+            timeout: None,
+            force,
+        })
+    };
+    mk(false).unwrap();
+    assert!(mk(true).is_ok());
 }
 
 #[test]
 fn make_job_default_queue_omitted() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(
-        tmp.path(),
-        "simple",
-        None,
-        Some("default"),
-        None,
-        None,
-        false,
-    )
+    scaffold::make_job(&scaffold::MakeJobOptions {
+        config_dir: tmp.path(),
+        slug: "simple",
+        schedule: None,
+        queue: Some("default"),
+        retries: None,
+        timeout: None,
+        force: false,
+    })
     .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/simple.lua")).unwrap();
@@ -752,7 +783,16 @@ fn make_job_default_queue_omitted() {
 #[test]
 fn make_job_default_timeout_omitted() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "basic", None, None, None, Some(60), false).unwrap();
+    scaffold::make_job(&scaffold::MakeJobOptions {
+        config_dir: tmp.path(),
+        slug: "basic",
+        schedule: None,
+        queue: None,
+        retries: None,
+        timeout: Some(60),
+        force: false,
+    })
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/basic.lua")).unwrap();
     // default timeout=60 should not generate an explicit config line
@@ -762,7 +802,16 @@ fn make_job_default_timeout_omitted() {
 #[test]
 fn make_job_zero_retries_omitted() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "noretry", None, None, Some(0), None, false).unwrap();
+    scaffold::make_job(&scaffold::MakeJobOptions {
+        config_dir: tmp.path(),
+        slug: "noretry",
+        schedule: None,
+        queue: None,
+        retries: Some(0),
+        timeout: None,
+        force: false,
+    })
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/noretry.lua")).unwrap();
     assert!(!content.contains("retries ="));
@@ -1699,7 +1748,7 @@ fn init_with_locales_and_nested_localized_crud() {
     assert!(title_field.localized, "title field should be localized");
 
     // Create a document with localized column names (pass locale context)
-    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale);
+    let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale).unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();

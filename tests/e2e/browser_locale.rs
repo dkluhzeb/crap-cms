@@ -8,7 +8,7 @@ use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 
 fn make_locale_config() -> CrapConfig {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;

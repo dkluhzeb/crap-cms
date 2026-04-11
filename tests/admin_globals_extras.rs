@@ -80,7 +80,7 @@ struct TestApp {
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
@@ -135,6 +135,10 @@ fn setup_app_with_config(
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
         email_renderer,
+        email_provider: crap_cms::core::email::create_email_provider(
+            &crap_cms::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             5, 300,
@@ -154,6 +158,15 @@ fn setup_app_with_config(
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crap_cms::core::upload::create_storage(
+            tmp.path(),
+            &crap_cms::config::UploadConfig::default(),
+        )
+        .unwrap(),
+        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
     };
 
     let router = build_router(state);
@@ -260,7 +273,7 @@ fn tiny_png() -> Vec<u8> {
 
 #[tokio::test]
 async fn global_update_with_locale() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -820,7 +833,7 @@ async fn global_restore_nonversioned_redirects() {
 
 #[tokio::test]
 async fn global_edit_with_locale() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -1067,7 +1080,7 @@ async fn cors_disabled_by_default() {
 
 #[tokio::test]
 async fn cors_preflight_returns_headers() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["http://localhost:8080".to_string()];
@@ -1099,7 +1112,7 @@ async fn cors_preflight_returns_headers() {
 
 #[tokio::test]
 async fn cors_wildcard_returns_star() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["*".to_string()];
@@ -1128,7 +1141,7 @@ async fn cors_wildcard_returns_star() {
 
 #[tokio::test]
 async fn cors_non_matching_origin_not_reflected() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["http://allowed.com".to_string()];
@@ -1156,7 +1169,7 @@ async fn cors_non_matching_origin_not_reflected() {
 
 #[tokio::test]
 async fn require_auth_blocks_when_no_auth_collection() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = true;
@@ -1181,7 +1194,7 @@ async fn require_auth_blocks_when_no_auth_collection() {
 
 #[tokio::test]
 async fn require_auth_false_allows_open_admin() {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;

@@ -71,4 +71,84 @@ impl FindQuery {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Create a builder for constructing a `FindQuery` with named parameters.
+    pub fn builder() -> FindQueryBuilder {
+        FindQueryBuilder::default()
+    }
+}
+
+/// Builder for [`FindQuery`]. Created via [`FindQuery::builder()`].
+#[derive(Default)]
+pub struct FindQueryBuilder {
+    filters: Vec<FilterClause>,
+    order_by: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    select: Option<Vec<String>>,
+    after_cursor: Option<cursor::CursorData>,
+    before_cursor: Option<cursor::CursorData>,
+    search: Option<String>,
+    include_deleted: bool,
+}
+
+impl FindQueryBuilder {
+    pub fn filters(mut self, filters: Vec<FilterClause>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    pub fn order_by(mut self, order_by: impl Into<String>) -> Self {
+        self.order_by = Some(order_by.into());
+        self
+    }
+
+    pub fn limit(mut self, limit: i64) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn offset(mut self, offset: i64) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    pub fn select(mut self, select: Vec<String>) -> Self {
+        self.select = Some(select);
+        self
+    }
+
+    pub fn after_cursor(mut self, cursor: cursor::CursorData) -> Self {
+        self.after_cursor = Some(cursor);
+        self
+    }
+
+    pub fn before_cursor(mut self, cursor: cursor::CursorData) -> Self {
+        self.before_cursor = Some(cursor);
+        self
+    }
+
+    pub fn search(mut self, search: impl Into<String>) -> Self {
+        self.search = Some(search.into());
+        self
+    }
+
+    pub fn include_deleted(mut self, include: bool) -> Self {
+        self.include_deleted = include;
+        self
+    }
+
+    pub fn build(self) -> FindQuery {
+        FindQuery {
+            filters: self.filters,
+            order_by: self.order_by,
+            limit: self.limit,
+            offset: self.offset,
+            select: self.select,
+            after_cursor: self.after_cursor,
+            before_cursor: self.before_cursor,
+            search: self.search,
+            include_deleted: self.include_deleted,
+        }
+    }
 }

@@ -49,6 +49,7 @@ fn find_config_in_ancestors() -> Result<PathBuf> {
     })?;
 
     let mut dir = cwd.as_path();
+
     loop {
         if dir.join("crap.toml").exists() {
             return Ok(dir.to_path_buf());
@@ -71,7 +72,7 @@ fn find_config_in_ancestors() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{env, fs, sync::Mutex};
 
     use super::*;
 
@@ -83,7 +84,7 @@ mod tests {
     #[test]
     fn explicit_path_used_directly() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
 
         let result = resolve_config_dir(Some(tmp.path().to_path_buf()));
         assert!(result.is_ok());
@@ -111,15 +112,15 @@ mod tests {
         let _guard = CWD_LOCK.lock().unwrap();
 
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
         let subdir = tmp.path().join("collections").join("deep");
-        std::fs::create_dir_all(&subdir).unwrap();
+        fs::create_dir_all(&subdir).unwrap();
 
-        let original_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&subdir).unwrap();
+        let original_cwd = env::current_dir().unwrap();
+        env::set_current_dir(&subdir).unwrap();
 
         let result = find_config_in_ancestors();
-        std::env::set_current_dir(&original_cwd).unwrap();
+        env::set_current_dir(&original_cwd).unwrap();
 
         assert!(result.is_ok());
         let resolved = result.unwrap();
@@ -132,13 +133,13 @@ mod tests {
         let _guard = CWD_LOCK.lock().unwrap();
 
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
 
-        let original_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let original_cwd = env::current_dir().unwrap();
+        env::set_current_dir(tmp.path()).unwrap();
 
         let result = find_config_in_ancestors();
-        std::env::set_current_dir(&original_cwd).unwrap();
+        env::set_current_dir(&original_cwd).unwrap();
 
         assert!(result.is_ok());
         let resolved = result.unwrap();
@@ -151,13 +152,13 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let deep = tmp.path().join("a").join("b").join("c");
-        std::fs::create_dir_all(&deep).unwrap();
+        fs::create_dir_all(&deep).unwrap();
 
-        let original_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&deep).unwrap();
+        let original_cwd = env::current_dir().unwrap();
+        env::set_current_dir(&deep).unwrap();
 
         let result = find_config_in_ancestors();
-        std::env::set_current_dir(&original_cwd).unwrap();
+        env::set_current_dir(&original_cwd).unwrap();
 
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();

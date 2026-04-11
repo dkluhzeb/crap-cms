@@ -18,11 +18,11 @@ fn setup() -> (
     HookRunner,
 ) {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
 
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
-    let mut pool_config = CrapConfig::default();
+    let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
     let db_pool = pool::create_pool(tmp.path(), &pool_config).expect("Failed to create pool");
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("Failed to sync schema");

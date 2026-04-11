@@ -6,17 +6,19 @@ use axum::Extension;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    admin::AdminState,
+    admin::{
+        AdminState,
+        context::{Breadcrumb, PageType, build_collection_context, build_global_context},
+        handlers::shared::has_read_access,
+    },
     config::LocaleConfig,
     core::{
         Document,
         auth::{AuthUser, Claims},
         collection::{CollectionDefinition, GlobalDefinition},
     },
-    db::query::{AccessResult, PaginationResult},
+    db::query::PaginationResult,
 };
-
-use crate::admin::context::{Breadcrumb, PageType, build_collection_context, build_global_context};
 
 /// Centralized builder for admin template contexts.
 pub struct ContextBuilder {
@@ -65,6 +67,7 @@ impl ContextBuilder {
             "_locale".into(),
             Value::String(state.config.locale.default_locale.clone()),
         );
+
         data.insert(
             "available_locales".into(),
             json!(state.translations.available_locales()),
@@ -76,6 +79,7 @@ impl ContextBuilder {
     /// Create a minimal builder for auth pages (no nav, no user).
     pub fn auth(state: &AdminState) -> Self {
         let mut data = Map::new();
+
         data.insert(
             "crap".into(),
             json!({
@@ -85,15 +89,18 @@ impl ContextBuilder {
                 "auth_enabled": true,
             }),
         );
+
         // locale defaults for auth pages
         data.insert(
             "_locale".into(),
             Value::String(state.config.locale.default_locale.clone()),
         );
+
         data.insert(
             "available_locales".into(),
             json!(state.translations.available_locales()),
         );
+
         Self { data }
     }
 
@@ -101,6 +108,7 @@ impl ContextBuilder {
     pub fn locale(mut self, locale: &str) -> Self {
         self.data
             .insert("_locale".into(), Value::String(locale.to_string()));
+
         self
     }
 
@@ -131,7 +139,7 @@ impl ContextBuilder {
                         .get(slug)
                         .and_then(|d| d.access.read.as_deref());
 
-                    has_nav_read_access(state, access_ref, user_doc)
+                    has_read_access(state, access_ref, user_doc)
                 });
             }
 
@@ -144,7 +152,7 @@ impl ContextBuilder {
                         .get(slug)
                         .and_then(|d| d.access.read.as_deref());
 
-                    has_nav_read_access(state, access_ref, user_doc)
+                    has_read_access(state, access_ref, user_doc)
                 });
             }
         }
@@ -155,14 +163,18 @@ impl ContextBuilder {
     /// Set page metadata (type and title).
     pub fn page(mut self, page_type: PageType, title: impl Into<String>) -> Self {
         let title_str = title.into();
+
         // Top-level `title` for layout/base backward compat during transition
         self.data
             .insert("title".into(), Value::String(title_str.clone()));
+
         let page = self.data.entry("page").or_insert_with(|| json!({}));
+
         if let Some(obj) = page.as_object_mut() {
             obj.insert("title".into(), Value::String(title_str));
             obj.insert("type".into(), Value::String(page_type.as_str().to_string()));
         }
+
         self
     }
 
@@ -172,24 +184,32 @@ impl ContextBuilder {
             .into_iter()
             .map(|c| {
                 let mut m = Map::new();
+
                 m.insert("label".into(), Value::String(c.label));
+
                 if let Some(url) = c.url {
                     m.insert("url".into(), Value::String(url));
                 }
+
                 if let Some(name) = c.label_name {
                     m.insert("label_name".into(), Value::String(name));
                 }
+
                 Value::Object(m)
             })
             .collect();
+
         // Set on page.breadcrumbs
         let page = self.data.entry("page").or_insert_with(|| json!({}));
+
         if let Some(obj) = page.as_object_mut() {
             obj.insert("breadcrumbs".into(), Value::Array(crumbs_json.clone()));
         }
+
         // Also top-level for backward compat with breadcrumb partial
         self.data
             .insert("breadcrumbs".into(), Value::Array(crumbs_json));
+
         self
     }
 
@@ -197,18 +217,21 @@ impl ContextBuilder {
     pub fn collection_def(mut self, def: &CollectionDefinition) -> Self {
         self.data
             .insert("collection".into(), build_collection_context(def));
+
         self
     }
 
     /// Set the global definition context.
     pub fn global_def(mut self, def: &GlobalDefinition) -> Self {
         self.data.insert("global".into(), build_global_context(def));
+
         self
     }
 
     /// Set a minimal document context (e.g., for error re-renders with just ID).
     pub fn document_stub(mut self, id: &str) -> Self {
         self.data.insert("document".into(), json!({ "id": id }));
+
         self
     }
 
@@ -220,20 +243,25 @@ impl ContextBuilder {
             "updated_at": doc.updated_at,
             "status": status,
         });
+
         doc_json["data"] = json!(doc.fields);
+
         self.data.insert("document".into(), doc_json);
+
         self
     }
 
     /// Set the document list (for collection list pages).
     pub fn docs(mut self, docs: Vec<Value>) -> Self {
         self.data.insert("docs".into(), Value::Array(docs));
+
         self
     }
 
     /// Set the processed fields array (for edit/create forms).
     pub fn fields(mut self, fields: Vec<Value>) -> Self {
         self.data.insert("fields".into(), Value::Array(fields));
+
         self
     }
 
@@ -256,27 +284,32 @@ impl ContextBuilder {
             "prev_url": prev_url,
             "next_url": next_url,
         });
+
         if let Some(page) = pr.page {
             pg["page"] = json!(page);
             pg["total_pages"] = json!(pr.total_pages.unwrap_or(0));
         }
 
         self.data.insert("pagination".into(), pg);
+
         self
     }
 
     /// Set interpolation param for page title translation.
     pub fn page_title_name(mut self, name: impl Into<String>) -> Self {
         let page = self.data.entry("page").or_insert_with(|| json!({}));
+
         if let Some(obj) = page.as_object_mut() {
             obj.insert("title_name".into(), Value::String(name.into()));
         }
+
         self
     }
 
     /// Set an arbitrary key-value pair.
     pub fn set(mut self, key: impl Into<String>, value: Value) -> Self {
         self.data.insert(key.into(), value);
+
         self
     }
 
@@ -285,7 +318,9 @@ impl ContextBuilder {
         if !config.is_enabled() {
             return self;
         }
+
         let current = editor_locale.unwrap_or(&config.default_locale);
+
         let locales: Vec<Value> = config
             .locales
             .iter()
@@ -297,10 +332,14 @@ impl ContextBuilder {
                 })
             })
             .collect();
+
         self.data.insert("has_editor_locales".into(), json!(true));
+
         self.data
             .insert("editor_locale".into(), Value::String(current.to_string()));
+
         self.data.insert("editor_locales".into(), json!(locales));
+
         self
     }
 
@@ -311,6 +350,7 @@ impl ContextBuilder {
                 self.data.insert(k.clone(), v.clone());
             }
         }
+
         self
     }
 
@@ -336,7 +376,9 @@ fn build_nav_collections(state: &AdminState) -> Value {
             })
         })
         .collect();
+
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
+
     Value::Array(collections)
 }
 
@@ -352,42 +394,10 @@ fn build_nav_globals(state: &AdminState) -> Value {
             })
         })
         .collect();
+
     globals.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
+
     Value::Array(globals)
-}
-
-/// Quick read-access check for sidebar nav visibility.
-fn has_nav_read_access(
-    state: &AdminState,
-    access_ref: Option<&str>,
-    user_doc: Option<&Document>,
-) -> bool {
-    if access_ref.is_none() {
-        return !state.config.access.default_deny;
-    }
-
-    let mut conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let tx = match conn.transaction() {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, None, None, &tx);
-
-    if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
-    }
-
-    matches!(
-        result,
-        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
-    )
 }
 
 fn has_auth_collections(state: &AdminState) -> bool {

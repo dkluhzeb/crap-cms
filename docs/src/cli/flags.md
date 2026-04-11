@@ -79,6 +79,45 @@ crap-cms serve --only admin --no-scheduler
 crap-cms serve -d --only api      # detached, API only
 ```
 
+### `work` — Run a standalone job worker
+
+```bash
+crap-cms work [--detach] [--stop] [--restart] [--status] [--queues <list>] [--concurrency <n>] [--no-cron]
+```
+
+Runs a dedicated job worker without HTTP/gRPC servers. For multi-server deployments where app servers run `serve --no-scheduler` and dedicated workers process jobs.
+
+| Flag | Description |
+|------|-------------|
+| `-d`, `--detach` | Run in the background |
+| `--stop` | Stop a running detached worker |
+| `--restart` | Restart a running detached worker |
+| `--status` | Show whether a detached worker is running |
+| `--queues <list>` | Comma-separated queue names to process (default: all) |
+| `--concurrency <n>` | Override `jobs.max_concurrent` for this worker |
+| `--no-cron` | Skip cron scheduling (let another worker handle it) |
+
+```bash
+crap-cms work                           # process all queues
+crap-cms work --queues email            # email queue only
+crap-cms work --queues heavy --concurrency 2  # heavy jobs, limited concurrency
+crap-cms work --no-cron                 # skip cron, just process queued jobs
+crap-cms work -d                        # detached
+crap-cms work --status                  # check if running
+crap-cms work --stop                    # stop detached worker
+```
+
+**Multi-server deployment:**
+```bash
+# App servers (no job processing)
+crap-cms serve --no-scheduler
+
+# Dedicated workers
+crap-cms work -d                        # general worker
+crap-cms work -d --queues email         # email-only worker
+crap-cms work -d --queues heavy --concurrency 2  # heavy processing
+```
+
 ### `status` — Show project status
 
 ```bash

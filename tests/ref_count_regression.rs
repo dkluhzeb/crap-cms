@@ -11,7 +11,7 @@ use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
-use crap_cms::api::service::{ContentService, ContentServiceDeps};
+use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
@@ -44,7 +44,7 @@ struct TestSetup {
 
 fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -76,6 +76,13 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
         .jwt_secret(config.auth.secret.clone())
         .config(config.clone())
         .config_dir(tmp.path().to_path_buf())
+        .storage(
+            crap_cms::core::upload::create_storage(
+                tmp.path(),
+                &crap_cms::config::UploadConfig::default(),
+            )
+            .unwrap(),
+        )
         .email_renderer(email_renderer)
         .login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             5, 300,
@@ -88,7 +95,14 @@ fn setup(collections: Vec<CollectionDefinition>) -> TestSetup {
         )))
         .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             20, 900,
-        )));
+        )))
+        .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+        .token_provider(std::sync::Arc::new(
+            crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+        ))
+        .password_provider(std::sync::Arc::new(
+            crap_cms::core::auth::Argon2PasswordProvider,
+        ));
 
     let service = ContentService::new(deps.build());
 

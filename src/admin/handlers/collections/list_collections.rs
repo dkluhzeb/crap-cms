@@ -5,10 +5,9 @@ use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
-        handlers::shared::{extract_editor_locale, get_user_doc, render_or_error},
+        handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_or_error},
     },
     core::auth::{AuthUser, Claims},
-    db::query::AccessResult,
 };
 
 /// GET /admin/collections — list all registered collections
@@ -23,7 +22,7 @@ pub async fn list_collections(
 
     for (slug, def) in &state.registry.collections {
         // Skip collections the user cannot read
-        if !has_list_read_access(&state, def.access.read.as_deref(), user_doc) {
+        if !has_read_access(&state, def.access.read.as_deref(), user_doc) {
             continue;
         }
 
@@ -49,38 +48,4 @@ pub async fn list_collections(
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/list", &data)
-}
-
-/// Quick read-access check for list visibility.
-fn has_list_read_access(
-    state: &AdminState,
-    access_ref: Option<&str>,
-    user_doc: Option<&crate::core::Document>,
-) -> bool {
-    if access_ref.is_none() {
-        return !state.config.access.default_deny;
-    }
-
-    let mut conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let tx = match conn.transaction() {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-
-    let result = state
-        .hook_runner
-        .check_access(access_ref, user_doc, None, None, &tx);
-
-    if let Err(e) = tx.commit() {
-        tracing::warn!("tx commit failed: {e}");
-    }
-
-    matches!(
-        result,
-        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
-    )
 }

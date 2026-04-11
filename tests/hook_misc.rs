@@ -26,11 +26,11 @@ fn setup() -> (
     HookRunner,
 ) {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
 
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
-    let mut pool_config = CrapConfig::default();
+    let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
     let db_pool = pool::create_pool(tmp.path(), &pool_config).expect("Failed to create pool");
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("Failed to sync schema");
@@ -675,7 +675,7 @@ fn before_render_registered_hook_adds_marker() {
     )
     .unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -714,7 +714,7 @@ fn before_render_hook_returning_nil_preserves_context() {
     )
     .unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -742,10 +742,10 @@ fn run_migration_up_standalone() {
     ).unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
-    let mut pool_config = CrapConfig::default();
+    let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
@@ -824,10 +824,10 @@ fn run_job_handler_with_return_value() {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
-    let mut pool_config = CrapConfig::default();
+    let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
@@ -892,10 +892,10 @@ fn run_job_handler_nil_return() {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
 
-    let mut pool_config = CrapConfig::default();
+    let mut pool_config = CrapConfig::test_default();
     pool_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
 
@@ -940,7 +940,7 @@ fn call_row_label_standalone_hook() {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -978,7 +978,7 @@ fn call_display_condition_standalone_bool() {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -1027,7 +1027,7 @@ fn call_display_condition_standalone_table() {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())

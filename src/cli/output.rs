@@ -65,6 +65,7 @@ pub fn kv_status(key: &str, value: &str, good: bool) {
     } else {
         style(value.to_string()).red()
     };
+
     println!("{:<12} {}", style(format!("{key}:")).bold(), colored);
 }
 

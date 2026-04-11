@@ -1,4 +1,8 @@
-//! FTS5 index synchronization, upsert, and delete operations.
+//! FTS index synchronization, upsert, and delete operations.
+//!
+//! Supports SQLite (FTS5 virtual tables) and PostgreSQL (tsvector + GIN index).
+
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -17,30 +21,61 @@ use super::{
 /// Get column names from the FTS table (excludes `id`).
 ///
 /// Returns `None` if the FTS table doesn't exist or has no columns.
+/// For PostgreSQL, the FTS table has a single `tsv` column — this returns `None`
+/// so that callers use the Postgres-specific upsert path instead.
 fn get_fts_table_columns(conn: &dyn DbConnection, fts_table: &str) -> Option<Vec<String>> {
     if !table_exists(conn, fts_table) {
         return None;
     }
 
-    // Use PRAGMA table_info (not table_xinfo) — table_xinfo includes hidden
-    // virtual columns like the table name and rank which aren't real data columns.
-    let rows = conn
-        .query_all(&format!("PRAGMA table_info({})", fts_table), &[])
-        .ok()?;
+    match conn.kind() {
+        "postgres" => {
+            let p1 = conn.placeholder(1);
+            let sql = format!(
+                "SELECT column_name FROM information_schema.columns \
+                 WHERE table_schema='public' AND table_name={} AND column_name != 'id'",
+                p1
+            );
 
-    let cols: Vec<String> = rows
-        .into_iter()
-        .filter_map(|row| {
-            if let Some(DbValue::Text(name)) = row.get_value(1)
-                && name != "id"
-            {
-                return Some(name.clone());
-            }
-            None
-        })
-        .collect();
+            let rows = conn
+                .query_all(&sql, &[DbValue::Text(fts_table.to_string())])
+                .ok()?;
 
-    if cols.is_empty() { None } else { Some(cols) }
+            let cols: Vec<String> = rows
+                .into_iter()
+                .filter_map(|row| {
+                    if let Some(DbValue::Text(name)) = row.get_value(0) {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if cols.is_empty() { None } else { Some(cols) }
+        }
+        _ => {
+            // Use PRAGMA table_info (not table_xinfo) — table_xinfo includes hidden
+            // virtual columns like the table name and rank which aren't real data columns.
+            let rows = conn
+                .query_all(&format!("PRAGMA table_info({})", fts_table), &[])
+                .ok()?;
+
+            let cols: Vec<String> = rows
+                .into_iter()
+                .filter_map(|row| {
+                    if let Some(DbValue::Text(name)) = row.get_value(1)
+                        && name != "id"
+                    {
+                        return Some(name.clone());
+                    }
+                    None
+                })
+                .collect();
+
+            if cols.is_empty() { None } else { Some(cols) }
+        }
+    }
 }
 
 /// Drop and recreate the FTS5 virtual table, then bulk-populate from the main table.
@@ -68,21 +103,43 @@ pub fn sync_fts_table(
     }
 
     // Always drop existing FTS table first
-    conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", fts_table))
+    conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS {}", fts_table))
         .with_context(|| format!("Failed to drop FTS table {}", fts_table))?;
 
     if fts_fields.is_empty() {
         return Ok(());
     }
 
-    // Create FTS5 virtual table
     let field_list = fts_fields.join(", ");
-    let create_sql = format!(
-        "CREATE VIRTUAL TABLE {} USING fts5(id UNINDEXED, {})",
-        fts_table, field_list
-    );
-    conn.execute_batch(&create_sql)
-        .with_context(|| format!("Failed to create FTS table {}", fts_table))?;
+
+    match conn.kind() {
+        "postgres" => {
+            // Create regular table with a single tsvector column
+            let create_sql = format!(
+                "CREATE TABLE {} (id TEXT PRIMARY KEY, tsv TSVECTOR)",
+                fts_table
+            );
+            conn.execute_batch_ddl(&create_sql)
+                .with_context(|| format!("Failed to create FTS table {}", fts_table))?;
+
+            // Create GIN index for fast tsvector lookups
+            let index_sql = format!(
+                "CREATE INDEX IF NOT EXISTS idx_{}_tsv ON {} USING GIN(tsv)",
+                fts_table, fts_table
+            );
+            conn.execute_batch_ddl(&index_sql)
+                .with_context(|| format!("Failed to create GIN index on {}", fts_table))?;
+        }
+        _ => {
+            // Create FTS5 virtual table
+            let create_sql = format!(
+                "CREATE VIRTUAL TABLE {} USING fts5(id UNINDEXED, {})",
+                fts_table, field_list
+            );
+            conn.execute_batch_ddl(&create_sql)
+                .with_context(|| format!("Failed to create FTS table {}", fts_table))?;
+        }
+    }
 
     // Bulk populate from main table
     let json_rt_cols = json_richtext_columns(def);
@@ -109,19 +166,34 @@ fn bulk_populate_fast(
     fts_fields: &[String],
     field_list: &str,
 ) -> Result<()> {
-    let select_fields: Vec<String> = fts_fields
+    let coalesce_fields: Vec<String> = fts_fields
         .iter()
         .map(|f| format!("COALESCE({}, '')", f))
         .collect();
-    let insert_sql = format!(
-        "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
-        fts_table,
-        field_list,
-        select_fields.join(", "),
-        slug
-    );
+
+    let insert_sql = match conn.kind() {
+        "postgres" => {
+            let tsvector_expr = format!(
+                "to_tsvector('simple', {})",
+                coalesce_fields.join(" || ' ' || ")
+            );
+            format!(
+                "INSERT INTO {}(id, tsv) SELECT id, {} FROM \"{}\"",
+                fts_table, tsvector_expr, slug
+            )
+        }
+        _ => format!(
+            "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
+            fts_table,
+            field_list,
+            coalesce_fields.join(", "),
+            slug
+        ),
+    };
+
     conn.execute_batch(&insert_sql)
         .with_context(|| format!("Failed to populate FTS table {}", fts_table))?;
+
     Ok(())
 }
 
@@ -132,7 +204,7 @@ fn bulk_populate_slow(
     fts_table: &str,
     fts_fields: &[String],
     field_list: &str,
-    json_rt_cols: &std::collections::HashSet<String>,
+    json_rt_cols: &HashSet<String>,
 ) -> Result<()> {
     let select_fields: Vec<String> = fts_fields
         .iter()
@@ -144,15 +216,25 @@ fn bulk_populate_slow(
         .query_all(&select_sql, &[])
         .with_context(|| format!("Failed to query {} for FTS population", slug))?;
 
-    let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
-        .map(|i| conn.placeholder(i))
-        .collect();
-    let insert_sql = format!(
-        "INSERT INTO {}(id, {}) VALUES ({})",
-        fts_table,
-        field_list,
-        placeholders.join(", ")
-    );
+    let is_postgres = conn.kind() == "postgres";
+
+    let insert_sql = if is_postgres {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        format!(
+            "INSERT INTO {}(id, tsv) VALUES ({}, to_tsvector('simple', {}))",
+            fts_table, p1, p2
+        )
+    } else {
+        let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
+            .map(|i| conn.placeholder(i))
+            .collect();
+        format!(
+            "INSERT INTO {}(id, {}) VALUES ({})",
+            fts_table,
+            field_list,
+            placeholders.join(", ")
+        )
+    };
 
     for row in db_rows {
         let id = match row.get_value(0) {
@@ -160,30 +242,45 @@ fn bulk_populate_slow(
             _ => continue,
         };
 
-        let mut params: Vec<DbValue> = vec![DbValue::Text(id)];
+        let mut field_texts: Vec<String> = Vec::with_capacity(fts_fields.len());
 
         for (i, col_name) in fts_fields.iter().enumerate() {
             let raw = match row.get_value(i + 1) {
                 Some(DbValue::Text(s)) => s.clone(),
                 _ => String::new(),
             };
+
             let is_json_rt = json_rt_cols.contains(col_name)
                 || col_name
                     .split("__")
                     .next()
                     .map(|base| json_rt_cols.contains(base))
                     .unwrap_or(false);
+
             let text = if is_json_rt && !raw.is_empty() {
                 extract_prosemirror_text(&raw)
             } else {
                 raw
             };
-            params.push(DbValue::Text(text));
+            field_texts.push(text);
         }
 
-        conn.execute(&insert_sql, &params)
-            .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
+        if is_postgres {
+            // Concatenate all field texts into a single string for the tsvector
+            let combined = field_texts.join(" ");
+            let params = vec![DbValue::Text(id), DbValue::Text(combined)];
+            conn.execute(&insert_sql, &params)
+                .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
+        } else {
+            let mut params: Vec<DbValue> = vec![DbValue::Text(id)];
+            for text in field_texts {
+                params.push(DbValue::Text(text));
+            }
+            conn.execute(&insert_sql, &params)
+                .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
+        }
     }
+
     Ok(())
 }
 
@@ -220,11 +317,97 @@ pub fn fts_upsert_with_registry(
     };
 
     let json_rt_cols = def.map(json_richtext_columns).unwrap_or_default();
-
-    // Build searchable attrs map for custom richtext nodes
     let node_searchable = build_node_searchable_map(def, registry);
+    let is_postgres = conn.kind() == "postgres";
 
-    // Delete existing row
+    let logical_cols = resolve_logical_columns(doc, &fts_cols, is_postgres);
+    let field_texts = extract_field_texts(doc, &logical_cols, &json_rt_cols, &node_searchable);
+
+    if is_postgres {
+        upsert_postgres(conn, &fts_table, doc, field_texts)?;
+    } else {
+        upsert_sqlite(conn, &fts_table, doc, &fts_cols, field_texts)?;
+    }
+
+    Ok(())
+}
+
+/// Determine which columns to index: Postgres uses all string fields, SQLite uses FTS columns.
+fn resolve_logical_columns(doc: &Document, fts_cols: &[String], is_postgres: bool) -> Vec<String> {
+    if is_postgres {
+        doc.fields
+            .iter()
+            .filter(|(_, v)| v.is_string())
+            .map(|(k, _)| k.clone())
+            .collect()
+    } else {
+        fts_cols.to_vec()
+    }
+}
+
+/// Extract text values for each logical column, handling richtext JSON extraction.
+fn extract_field_texts(
+    doc: &Document,
+    logical_cols: &[String],
+    json_rt_cols: &HashSet<String>,
+    node_searchable: &HashMap<&str, Vec<&str>>,
+) -> Vec<String> {
+    logical_cols
+        .iter()
+        .map(|col_name| {
+            let raw = doc
+                .fields
+                .get(col_name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let is_json_rt = json_rt_cols.contains(col_name)
+                || col_name
+                    .split("__")
+                    .next()
+                    .is_some_and(|base| json_rt_cols.contains(base));
+
+            if is_json_rt && !raw.is_empty() {
+                extract_prosemirror_text_with_nodes(raw, node_searchable)
+            } else {
+                raw.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Upsert into Postgres FTS (single tsvector column, ON CONFLICT).
+fn upsert_postgres(
+    conn: &dyn DbConnection,
+    fts_table: &str,
+    doc: &Document,
+    field_texts: Vec<String>,
+) -> Result<()> {
+    let combined = field_texts.join(" ");
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    let sql = format!(
+        "INSERT INTO {}(id, tsv) VALUES ({}, to_tsvector('simple', {})) \
+         ON CONFLICT (id) DO UPDATE SET tsv = EXCLUDED.tsv",
+        fts_table, p1, p2
+    );
+
+    conn.execute(
+        &sql,
+        &[DbValue::Text(doc.id.to_string()), DbValue::Text(combined)],
+    )
+    .with_context(|| format!("FTS upsert in {}", fts_table))?;
+
+    Ok(())
+}
+
+/// Upsert into SQLite FTS5 (delete + insert, no ON CONFLICT support).
+fn upsert_sqlite(
+    conn: &dyn DbConnection,
+    fts_table: &str,
+    doc: &Document,
+    fts_cols: &[String],
+    field_texts: Vec<String>,
+) -> Result<()> {
     conn.execute(
         &format!(
             "DELETE FROM {} WHERE id = {}",
@@ -235,43 +418,17 @@ pub fn fts_upsert_with_registry(
     )
     .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
 
-    // Insert new row
     let mut values: Vec<DbValue> = vec![DbValue::Text(doc.id.to_string())];
 
-    for col_name in &fts_cols {
-        let raw = doc
-            .fields
-            .get(col_name)
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        // Check if this column is a JSON-format richtext field
-        // (either exact match or the base name before "__locale" suffix)
-        let is_json_rt = json_rt_cols.contains(col_name)
-            || col_name
-                .split("__")
-                .next()
-                .map(|base| json_rt_cols.contains(base))
-                .unwrap_or(false);
-
-        let text = if is_json_rt && !raw.is_empty() {
-            if node_searchable.is_empty() {
-                extract_prosemirror_text(raw)
-            } else {
-                extract_prosemirror_text_with_nodes(raw, &node_searchable)
-            }
-        } else {
-            raw.to_string()
-        };
+    for text in field_texts {
         values.push(DbValue::Text(text));
     }
 
     let placeholders: Vec<String> = (1..=values.len()).map(|i| conn.placeholder(i)).collect();
-    let field_list: String = fts_cols.join(", ");
     let sql = format!(
         "INSERT INTO {}(id, {}) VALUES ({})",
         fts_table,
-        field_list,
+        fts_cols.join(", "),
         placeholders.join(", ")
     );
 

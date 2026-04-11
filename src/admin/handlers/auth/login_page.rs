@@ -3,11 +3,14 @@ use axum::{
     response::Html,
 };
 use serde_json::json;
+use tracing::error;
 
-use super::{LoginPageQuery, all_disable_local, get_auth_collections, show_forgot_password};
 use crate::admin::{
     AdminState,
     context::{ContextBuilder, PageType},
+    handlers::auth::{
+        LoginPageQuery, all_disable_local, get_auth_collections, show_forgot_password,
+    },
 };
 
 /// GET /admin/login — render the login page.
@@ -41,7 +44,8 @@ pub async fn login_page(
     match state.render("auth/login", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
         }
     }

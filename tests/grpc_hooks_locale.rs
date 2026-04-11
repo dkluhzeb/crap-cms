@@ -11,7 +11,7 @@ use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
-use crap_cms::api::service::{ContentService, ContentServiceDeps};
+use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
@@ -99,7 +99,7 @@ fn setup_service(
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -135,6 +135,13 @@ fn setup_service(
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -147,6 +154,13 @@ fn setup_service(
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -164,7 +178,7 @@ fn setup_service_with_locale(
     locales: Vec<&str>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
@@ -203,6 +217,13 @@ fn setup_service_with_locale(
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -215,6 +236,13 @@ fn setup_service_with_locale(
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -882,6 +910,140 @@ async fn delete_many_with_where() {
         .unwrap()
         .into_inner();
     assert_eq!(count_resp.count, 2, "2 published posts should remain");
+}
+
+// ── Group 10b: Invalid Locale Validation (gRPC) ─────────────────────
+
+#[tokio::test]
+async fn find_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            locale: Some("zz".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn count_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            locale: Some("zz".to_string()),
+            r#where: None,
+            draft: None,
+            search: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn create_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            locale: Some("zz".to_string()),
+            draft: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn update_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    // Create a valid document first
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Hello")])),
+            locale: Some("en".to_string()),
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let err = ts
+        .service
+        .update(Request::new(content::UpdateRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: Some(make_struct(&[("title", "Updated")])),
+            locale: Some("zz".to_string()),
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn find_by_id_with_invalid_locale_returns_invalid_argument() {
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
+
+    let err = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: "nonexistent".to_string(),
+            locale: Some("zz".to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("Invalid locale"),
+        "Expected 'Invalid locale' in error message, got: {}",
+        err.message()
+    );
 }
 
 // ── Group 11: Versions (gRPC) ────────────────────────────────────────────

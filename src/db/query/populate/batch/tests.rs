@@ -1,12 +1,13 @@
 use rusqlite::Connection;
 use serde_json::json;
 
+use crate::core::cache::NoneCache;
 use crate::core::{
     Document, Registry,
     field::{FieldType, RelationshipConfig},
 };
 use crate::db::query::populate::{
-    PopulateCache, PopulateContext, PopulateOpts, populate_relationships_batch,
+    PopulateContext, PopulateOpts, populate_relationships_batch,
     populate_relationships_batch_cached, test_helpers::*,
 };
 
@@ -32,7 +33,7 @@ fn batch_depth_zero_noop() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
     // Empty docs + depth 0 → no-op, no error
@@ -58,7 +59,7 @@ fn batch_empty_docs_noop() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 }
@@ -112,7 +113,7 @@ fn batch_select_filters_fields() {
             select: Some(&select),
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -159,7 +160,7 @@ fn batch_max_depth_zero_stays_as_id() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -200,7 +201,7 @@ fn batch_missing_related_docs_stay_as_ids() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 
@@ -238,7 +239,7 @@ fn batch_with_join_field() {
             select: None,
             locale_ctx: None,
         },
-        &PopulateCache::new(),
+        &NoneCache,
     )
     .unwrap();
 

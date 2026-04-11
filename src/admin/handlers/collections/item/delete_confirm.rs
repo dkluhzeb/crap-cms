@@ -1,26 +1,55 @@
+use axum::{
+    Extension,
+    extract::{Path, State},
+    http::HeaderMap,
+    response::Response,
+};
+use serde_json::json;
+use tracing::warn;
+
 use crate::{
     admin::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden, not_found, render_or_error,
+            check_access_or_forbid, extract_editor_locale, forbidden, lookup_ref_count, not_found,
+            render_or_error,
         },
     },
-    core::auth::{AuthUser, Claims},
-    db::{
-        ops::find_document_by_id,
-        query::{self, AccessResult},
+    core::{
+        CollectionDefinition,
+        auth::{AuthUser, Claims},
     },
+    db::{ops::find_document_by_id, query::AccessResult},
 };
 
-use axum::{
-    Extension, Json,
-    extract::{Path, State},
-    http::HeaderMap,
-    response::{IntoResponse, Response},
-};
-use serde_json::json;
-use tracing::warn;
+/// Fetch the document title for display in the delete confirmation page.
+///
+/// Returns `Ok(Some(title))` or `Ok(None)` if the title can't be determined.
+/// Returns `Err` if the document itself doesn't exist (caller should 404).
+fn fetch_delete_title(
+    state: &AdminState,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+) -> Result<Option<String>, ()> {
+    match find_document_by_id(&state.pool, slug, def, id, None) {
+        Ok(Some(doc)) => Ok(def
+            .title_field()
+            .and_then(|f| doc.get_str(f))
+            .map(|s| s.to_string())),
+        Ok(None) => Err(()),
+        Err(e) => {
+            // Schema mismatch or other query error — still allow deletion.
+            // The DELETE query only needs the ID, not column definitions.
+            warn!(
+                "Could not load document for delete confirmation ({}), proceeding anyway: {}",
+                id, e
+            );
+            Ok(None)
+        }
+    }
+}
 
 /// GET /admin/collections/{slug}/{id}/delete — delete confirmation page
 pub async fn delete_confirm(
@@ -53,34 +82,12 @@ pub async fn delete_confirm(
         _ => {}
     }
 
-    let title_value = match find_document_by_id(&state.pool, &slug, &def, &id, None) {
-        Ok(Some(doc)) => def
-            .title_field()
-            .and_then(|f| doc.get_str(f))
-            .map(|s| s.to_string()),
-        Ok(None) => {
-            return not_found(&state, &format!("Document '{}' not found", id));
-        }
-        Err(e) => {
-            // Schema mismatch or other query error — still allow deletion.
-            // The DELETE query only needs the ID, not column definitions.
-            warn!(
-                "Could not load document for delete confirmation ({}), proceeding anyway: {}",
-                id, e
-            );
-
-            None
-        }
+    let title_value = match fetch_delete_title(&state, &slug, &def, &id) {
+        Ok(title) => title,
+        Err(()) => return not_found(&state, &format!("Document '{}' not found", id)),
     };
 
-    // Fast O(1) ref count check instead of full back-reference scan
-    let ref_count = state
-        .pool
-        .get()
-        .ok()
-        .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
-        .flatten()
-        .unwrap_or(0);
+    let ref_count = lookup_ref_count(&state.pool, &slug, &id);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -104,40 +111,4 @@ pub async fn delete_confirm(
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/delete", &data)
-}
-
-/// GET /admin/collections/{slug}/{id}/back-references — lazy-load detailed back-references
-pub async fn back_references(
-    State(state): State<AdminState>,
-    Path((slug, id)): Path<(String, String)>,
-    auth_user: Option<Extension<AuthUser>>,
-) -> Response {
-    // Check read access on the collection
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return Json(json!({ "error": "Collection not found" })).into_response(),
-    };
-    match check_access_or_forbid(
-        &state,
-        def.access.read.as_deref(),
-        &auth_user,
-        Some(&id),
-        None,
-    ) {
-        Ok(AccessResult::Denied) => {
-            return Json(json!({ "error": "Access denied" })).into_response();
-        }
-        Err(_) => return Json(json!({ "error": "Access denied" })).into_response(),
-        _ => {}
-    }
-
-    let conn = match state.pool.get() {
-        Ok(c) => c,
-        Err(_) => return Json(json!({ "error": "DB connection error" })).into_response(),
-    };
-
-    let back_refs =
-        query::find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale);
-
-    Json(json!(back_refs)).into_response()
 }

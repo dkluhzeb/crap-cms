@@ -2,6 +2,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// MFA (Multi-Factor Authentication) mode for an auth collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MfaMode {
+    /// MFA disabled (default).
+    #[default]
+    #[serde(alias = "false")]
+    Off,
+    /// Email-based MFA: send a 6-digit code to the user's email after password verification.
+    Email,
+}
+
 /// A custom authentication strategy (name + Lua function reference).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStrategy {
@@ -41,6 +53,9 @@ pub struct Auth {
     /// Enable forgot password flow. Default: true (when auth enabled).
     #[serde(default = "default_true_auth")]
     pub forgot_password: bool,
+    /// Multi-factor authentication mode. Default: off.
+    #[serde(default)]
+    pub mfa: MfaMode,
 }
 
 fn default_true_auth() -> bool {
@@ -70,6 +85,7 @@ impl Default for Auth {
             disable_local: false,
             verify_email: false,
             forgot_password: true,
+            mfa: MfaMode::Off,
         }
     }
 }

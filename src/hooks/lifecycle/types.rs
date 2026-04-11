@@ -117,9 +117,8 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 /// Maximum Lua instructions per hook invocation. Stored in app_data.
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
-/// Config directory path, stored in Lua `app_data` so CRUD functions
-/// can find upload files for cleanup on delete.
-pub(crate) struct ConfigDir(pub(crate) std::path::PathBuf);
+/// Storage backend, stored in Lua `app_data` for upload file cleanup in CRUD hooks.
+pub(crate) struct LuaStorage(pub(crate) crate::core::upload::SharedStorage);
 
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
@@ -233,15 +232,19 @@ mod tests {
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);
     }
 
-    /// Regression: ConfigDir must be retrievable from Lua app_data so that
+    /// Regression: LuaStorage must be retrievable from Lua app_data so that
     /// delete/delete_many CRUD functions can clean up upload files.
     #[test]
-    fn config_dir_stored_and_retrieved() {
-        let lua = Lua::new();
-        let path = std::path::PathBuf::from("/tmp/test-config");
-        lua.set_app_data(ConfigDir(path.clone()));
+    fn lua_storage_stored_and_retrieved() {
+        use crate::core::upload::storage::LocalStorage;
+        use std::sync::Arc;
 
-        let retrieved = lua.app_data_ref::<ConfigDir>().unwrap();
-        assert_eq!(retrieved.0, path);
+        let lua = Lua::new();
+        let storage: crate::core::upload::SharedStorage =
+            Arc::new(LocalStorage::new("/tmp/test-uploads"));
+        lua.set_app_data(LuaStorage(storage));
+
+        let retrieved = lua.app_data_ref::<LuaStorage>().unwrap();
+        assert_eq!(retrieved.0.kind(), "local");
     }
 }

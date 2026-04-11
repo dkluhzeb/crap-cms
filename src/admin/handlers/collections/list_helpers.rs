@@ -5,7 +5,7 @@
 
 use crate::{
     admin::handlers::shared::{
-        auto_label_from_name, build_list_url, is_column_eligible, url_decode,
+        ListUrlContext, auto_label_from_name, is_column_eligible, url_decode,
     },
     core::{
         collection::CollectionDefinition,
@@ -30,10 +30,7 @@ pub(super) fn field_label(field: &FieldDefinition) -> String {
 pub(super) fn resolve_columns(
     def: &CollectionDefinition,
     user_cols: Option<&[String]>,
-    sort: Option<&str>,
-    base_url: &str,
-    raw_where: &str,
-    search: Option<&str>,
+    url_ctx: &ListUrlContext,
 ) -> Vec<Value> {
     let mut keys: Vec<String> = if let Some(cols) = user_cols {
         cols.iter()
@@ -50,9 +47,11 @@ pub(super) fn resolve_columns(
             .collect()
     } else {
         let mut defaults = Vec::new();
+
         if def.has_drafts() {
             defaults.push("_status".to_string());
         }
+
         defaults.push("created_at".to_string());
         defaults
     };
@@ -60,8 +59,8 @@ pub(super) fn resolve_columns(
         keys.retain(|k| k != title);
     }
 
-    let sort_field = sort.map(|s| s.strip_prefix('-').unwrap_or(s));
-    let sort_desc = sort.map(|s| s.starts_with('-')).unwrap_or(false);
+    let sort_field = url_ctx.sort.map(|s| s.strip_prefix('-').unwrap_or(s));
+    let sort_desc = url_ctx.sort.map(|s| s.starts_with('-')).unwrap_or(false);
 
     keys.iter()
         .map(|key| {
@@ -84,7 +83,7 @@ pub(super) fn resolve_columns(
             } else {
                 key.clone()
             };
-            let sort_url = build_list_url(base_url, 1, None, search, Some(&next_sort), raw_where);
+            let sort_url = url_ctx.sort_url(&next_sort);
 
             json!({
                 "key": key,
@@ -205,11 +204,13 @@ pub(super) fn build_column_options(
             "selected": selected_keys.contains(&"_status".to_string()),
         }));
     }
+
     options.push(json!({
         "key": "created_at",
         "label": "created",
         "selected": selected_keys.contains(&"created_at".to_string()),
     }));
+
     options.push(json!({
         "key": "updated_at",
         "label": "updated",
@@ -222,6 +223,7 @@ pub(super) fn build_column_options(
         if Some(f.name.as_str()) == title_field {
             continue;
         }
+
         if is_column_eligible(&f.field_type) {
             options.push(json!({
                 "key": f.name,
@@ -426,10 +428,19 @@ mod tests {
         assert_eq!(field_label(&f), "My Field");
     }
 
+    fn test_url_ctx(sort: Option<&str>) -> ListUrlContext<'_> {
+        ListUrlContext {
+            base_url: "/admin/collections/posts",
+            search: None,
+            sort,
+            where_params: "",
+        }
+    }
+
     #[test]
     fn resolve_columns_defaults() {
         let def = test_collection();
-        let cols = resolve_columns(&def, None, None, "/admin/collections/posts", "", None);
+        let cols = resolve_columns(&def, None, &test_url_ctx(None));
         assert_eq!(cols.len(), 1);
         assert_eq!(cols[0]["key"], "created_at");
     }
@@ -438,14 +449,7 @@ mod tests {
     fn resolve_columns_user_cols() {
         let def = test_collection();
         let user_cols = vec!["status".to_string(), "views".to_string()];
-        let cols = resolve_columns(
-            &def,
-            Some(&user_cols),
-            None,
-            "/admin/collections/posts",
-            "",
-            None,
-        );
+        let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(None));
         assert_eq!(cols.len(), 2);
         assert_eq!(cols[0]["key"], "status");
         assert_eq!(cols[1]["key"], "views");
@@ -455,14 +459,7 @@ mod tests {
     fn resolve_columns_filters_invalid() {
         let def = test_collection();
         let user_cols = vec!["title".to_string(), "body".to_string(), "views".to_string()];
-        let cols = resolve_columns(
-            &def,
-            Some(&user_cols),
-            None,
-            "/admin/collections/posts",
-            "",
-            None,
-        );
+        let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(None));
         assert_eq!(cols.len(), 1);
         assert_eq!(cols[0]["key"], "views");
     }
@@ -471,14 +468,7 @@ mod tests {
     fn resolve_columns_sort_state() {
         let def = test_collection();
         let user_cols = vec!["views".to_string()];
-        let cols = resolve_columns(
-            &def,
-            Some(&user_cols),
-            Some("views"),
-            "/admin/collections/posts",
-            "",
-            None,
-        );
+        let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(Some("views")));
         assert_eq!(cols[0]["is_sorted_asc"], true);
         assert_eq!(cols[0]["is_sorted_desc"], false);
     }
@@ -487,14 +477,7 @@ mod tests {
     fn resolve_columns_sort_desc_state() {
         let def = test_collection();
         let user_cols = vec!["views".to_string()];
-        let cols = resolve_columns(
-            &def,
-            Some(&user_cols),
-            Some("-views"),
-            "/admin/collections/posts",
-            "",
-            None,
-        );
+        let cols = resolve_columns(&def, Some(&user_cols), &test_url_ctx(Some("-views")));
         assert_eq!(cols[0]["is_sorted_asc"], false);
         assert_eq!(cols[0]["is_sorted_desc"], true);
     }

@@ -6,13 +6,77 @@ use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
 use crate::db::query::populate::{
-    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-    locale_cache_key, parse_poly_ref,
+    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key, parse_poly_ref,
+    populate_cache_key,
 };
 use crate::{
     core::{Document, upload},
     db::query::read::{find_by_id, find_by_ids},
 };
+
+use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
+
+/// Resolve a single polymorphic ref string to its populated value.
+/// Returns the original string if resolution fails (missing collection, visited, etc.).
+fn resolve_poly_item(
+    ctx: &PopulateCtx<'_>,
+    item: &str,
+    fetched_map: &mut HashMap<String, HashMap<String, Document>>,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<Value> {
+    let (col, id) = match parse_poly_ref(item) {
+        Some(pair) => pair,
+        None => return Ok(Value::String(item.to_string())),
+    };
+
+    if visited.contains(&(col.clone(), id.clone())) {
+        return Ok(Value::String(item.to_string()));
+    }
+
+    let col_map = match fetched_map.get_mut(&col) {
+        Some(m) => m,
+        None => return Ok(Value::String(item.to_string())),
+    };
+
+    let item_def = match ctx.registry.get_collection(&col) {
+        Some(d) => d.clone(),
+        None => return Ok(Value::String(item.to_string())),
+    };
+
+    let mut rd = match col_map.remove(&id) {
+        Some(d) => d,
+        None => return Ok(Value::String(item.to_string())),
+    };
+
+    if let Some(ref uc) = item_def.upload
+        && uc.enabled
+    {
+        upload::assemble_sizes_object(&mut rd, uc);
+    }
+
+    populate_relationships_cached(
+        &PopulateContext {
+            conn: ctx.conn,
+            registry: ctx.registry,
+            collection_slug: &col,
+            def: &item_def,
+        },
+        &mut rd,
+        visited,
+        &PopulateOpts {
+            depth: ctx.effective_depth - 1,
+            select: None,
+            locale_ctx: ctx.locale_ctx,
+        },
+        ctx.cache,
+    )?;
+
+    let locale_key = locale_cache_key(ctx.locale_ctx);
+    let key = populate_cache_key(&col, rd.id.as_ref(), locale_key.as_deref());
+    let _ = cache_set_doc(ctx.cache, &key, &rd);
+
+    Ok(document_to_json(&rd, &col))
+}
 
 /// Populate a polymorphic has-many field.
 pub(super) fn populate_poly_has_many(
@@ -54,54 +118,10 @@ pub(super) fn populate_poly_has_many(
     // Reassemble in original order
     let mut populated = Vec::new();
     for item in &items {
-        if let Some((col, id)) = parse_poly_ref(item) {
-            if visited.contains(&(col.clone(), id.clone())) {
-                populated.push(Value::String(item.clone()));
-                continue;
-            }
-            if let Some(col_map) = fetched_map.get_mut(&col) {
-                if let Some(item_def) = ctx.registry.get_collection(&col) {
-                    let item_def = item_def.clone();
-
-                    if let Some(mut rd) = col_map.remove(&id) {
-                        if let Some(ref uc) = item_def.upload
-                            && uc.enabled
-                        {
-                            upload::assemble_sizes_object(&mut rd, uc);
-                        }
-                        populate_relationships_cached(
-                            &PopulateContext {
-                                conn: ctx.conn,
-                                registry: ctx.registry,
-                                collection_slug: &col,
-                                def: &item_def,
-                            },
-                            &mut rd,
-                            visited,
-                            &PopulateOpts {
-                                depth: ctx.effective_depth - 1,
-                                select: None,
-                                locale_ctx: ctx.locale_ctx,
-                            },
-                            ctx.cache,
-                        )?;
-                        let locale_key = locale_cache_key(ctx.locale_ctx);
-                        ctx.cache
-                            .insert((col.clone(), rd.id.to_string(), locale_key), rd.clone());
-                        populated.push(document_to_json(&rd, &col));
-                    } else {
-                        populated.push(Value::String(item.clone()));
-                    }
-                } else {
-                    populated.push(Value::String(item.clone()));
-                }
-            } else {
-                populated.push(Value::String(item.clone()));
-            }
-        } else {
-            populated.push(Value::String(item.clone()));
-        }
+        let resolved = resolve_poly_item(ctx, item, &mut fetched_map, visited)?;
+        populated.push(resolved);
     }
+
     doc.fields
         .insert(field_name.to_string(), Value::Array(populated));
     Ok(())
@@ -119,51 +139,59 @@ pub(super) fn populate_poly_has_one(
         _ => return Ok(()),
     };
 
-    if let Some((col, id)) = parse_poly_ref(&raw) {
-        if visited.contains(&(col.clone(), id.clone())) {
-            return Ok(());
-        }
-        if let Some(item_def) = ctx.registry.get_collection(&col) {
-            let item_def = item_def.clone();
-            let locale_key = locale_cache_key(ctx.locale_ctx);
-            let poly_cache_key = (col.clone(), id.clone(), locale_key);
+    let Some((col, id)) = parse_poly_ref(&raw) else {
+        return Ok(());
+    };
 
-            if let Some(cached) = ctx.cache.get(&poly_cache_key) {
-                doc.fields.insert(
-                    field_name.to_string(),
-                    document_to_json(cached.value(), &col),
-                );
-            } else if let Some(mut rd) = find_by_id(ctx.conn, &col, &item_def, &id, ctx.locale_ctx)?
-            {
-                if let Some(ref uc) = item_def.upload
-                    && uc.enabled
-                {
-                    upload::assemble_sizes_object(&mut rd, uc);
-                }
-                populate_relationships_cached(
-                    &PopulateContext {
-                        conn: ctx.conn,
-                        registry: ctx.registry,
-                        collection_slug: &col,
-                        def: &item_def,
-                    },
-                    &mut rd,
-                    visited,
-                    &PopulateOpts {
-                        depth: ctx.effective_depth - 1,
-                        select: None,
-                        locale_ctx: ctx.locale_ctx,
-                    },
-                    ctx.cache,
-                )?;
-                if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-                    ctx.cache.insert(poly_cache_key, rd.clone());
-                }
-                doc.fields
-                    .insert(field_name.to_string(), document_to_json(&rd, &col));
-            }
-        }
+    if visited.contains(&(col.clone(), id.clone())) {
+        return Ok(());
     }
+
+    let Some(item_def) = ctx.registry.get_collection(&col) else {
+        return Ok(());
+    };
+
+    let item_def = item_def.clone();
+    let locale_key = locale_cache_key(ctx.locale_ctx);
+    let key = populate_cache_key(&col, &id, locale_key.as_deref());
+
+    if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
+        doc.fields
+            .insert(field_name.to_string(), document_to_json(&cached, &col));
+        return Ok(());
+    }
+
+    let Some(mut rd) = find_by_id(ctx.conn, &col, &item_def, &id, ctx.locale_ctx)? else {
+        return Ok(());
+    };
+
+    if let Some(ref uc) = item_def.upload
+        && uc.enabled
+    {
+        upload::assemble_sizes_object(&mut rd, uc);
+    }
+
+    populate_relationships_cached(
+        &PopulateContext {
+            conn: ctx.conn,
+            registry: ctx.registry,
+            collection_slug: &col,
+            def: &item_def,
+        },
+        &mut rd,
+        visited,
+        &PopulateOpts {
+            depth: ctx.effective_depth - 1,
+            select: None,
+            locale_ctx: ctx.locale_ctx,
+        },
+        ctx.cache,
+    )?;
+
+    let _ = cache_set_doc(ctx.cache, &key, &rd);
+    doc.fields
+        .insert(field_name.to_string(), document_to_json(&rd, &col));
+
     Ok(())
 }
 
@@ -172,8 +200,9 @@ mod tests {
     use serde_json::json;
 
     use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
+    use super::super::super::{PopulateContext, PopulateOpts, populate_cache_key};
     use super::populate_relationships_cached;
+    use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::{Document, Registry, field::*};
     use crate::db::{DbConnection, query::join};
     use std::collections::HashSet;
@@ -210,7 +239,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -257,7 +286,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -315,7 +344,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -368,7 +397,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -392,15 +421,17 @@ mod tests {
         registry.register_collection(pages_def);
 
         // Pre-populate the cache with the article document
-        let cache = PopulateCache::new();
+        let cache = MemoryCache::new(10_000);
         let mut cached_article = Document::new("a1".to_string());
         cached_article
             .fields
             .insert("title".to_string(), json!("Cached Article"));
-        cache.insert(
-            ("articles".to_string(), "a1".to_string(), None),
-            cached_article,
-        );
+        cache
+            .set(
+                &populate_cache_key("articles", "a1", None),
+                &serde_json::to_vec(&cached_article).unwrap(),
+            )
+            .unwrap();
 
         let mut doc = Document::new("e1".to_string());
         doc.fields
@@ -454,7 +485,7 @@ mod tests {
         let mut visited = HashSet::new();
         visited.insert(("articles".to_string(), "a1".to_string()));
 
-        let cache = PopulateCache::new();
+        let cache = NoneCache;
         populate_relationships_cached(
             &PopulateContext {
                 conn: &conn,
@@ -501,7 +532,7 @@ mod tests {
         );
 
         let mut visited = HashSet::new();
-        let cache = PopulateCache::new();
+        let cache = NoneCache;
         populate_relationships_cached(
             &PopulateContext {
                 conn: &conn,
@@ -552,7 +583,7 @@ mod tests {
         let mut visited = HashSet::new();
         visited.insert(("articles".to_string(), "a1".to_string()));
 
-        let cache = PopulateCache::new();
+        let cache = NoneCache;
         populate_relationships_cached(
             &PopulateContext {
                 conn: &conn,
@@ -601,7 +632,7 @@ mod tests {
         );
 
         let mut visited = HashSet::new();
-        let cache = PopulateCache::new();
+        let cache = NoneCache;
         populate_relationships_cached(
             &PopulateContext {
                 conn: &conn,

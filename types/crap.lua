@@ -423,6 +423,7 @@ function crap.fields.join(config) end
 --- @field disable_local?    boolean             Disable local password login (default: false). When true, only custom strategies can authenticate.
 --- @field verify_email?     boolean             Require email verification before login (default: false). Sends a verification email on user create.
 --- @field forgot_password?  boolean             Enable forgot password flow (default: true). Sends a reset email when requested.
+--- @field mfa?              "email"|false        Multi-factor authentication mode (default: false). "email" sends a 6-digit code after password verification.
 
 --- @alias crap.ImageFit "cover" | "contain" | "inside" | "fill"
 

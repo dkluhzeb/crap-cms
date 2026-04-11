@@ -22,45 +22,40 @@ pub(crate) fn check_required(
         return;
     }
 
+    if is_value_present(field, value, is_empty) {
+        return;
+    }
+
+    errors.push(FieldError::with_key(
+        data_key.to_owned(),
+        format!("{} is required", field.name),
+        "validation.required",
+        HashMap::from([("field".to_string(), field.name.clone())]),
+    ));
+}
+
+/// Check if a field value is "present" for required validation purposes.
+fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bool) -> bool {
     if !field.has_parent_column() {
-        let has_items = match value {
+        // Array/Blocks/Relationship: check for non-empty array or string
+        return match value {
             Some(Value::Array(arr)) => !arr.is_empty(),
             Some(Value::String(s)) => !s.is_empty(),
             _ => false,
         };
+    }
 
-        if !has_items {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} is required", field.name),
-                "validation.required",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
-        }
-    } else if field.has_many {
-        let has_items = match value {
+    if field.has_many {
+        // has_many with parent column: value is a JSON array string
+        return match value {
             Some(Value::String(s)) => serde_json::from_str::<Vec<Value>>(s)
                 .map(|arr| !arr.is_empty())
                 .unwrap_or(!s.is_empty()),
             _ => false,
         };
-
-        if !has_items {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} is required", field.name),
-                "validation.required",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
-        }
-    } else if is_empty {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} is required", field.name),
-            "validation.required",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
     }
+
+    !is_empty
 }
 
 #[cfg(test)]

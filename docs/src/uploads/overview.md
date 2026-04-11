@@ -63,7 +63,7 @@ For each image size, additional fields are injected:
 
 ## File Storage
 
-Files are stored at `<config_dir>/uploads/<collection_slug>/`:
+By default, files are stored on the local filesystem at `<config_dir>/uploads/<collection_slug>/`:
 
 ```
 uploads/
@@ -78,6 +78,92 @@ uploads/
 ```
 
 Filenames are sanitized (lowercase, characters that are not alphanumeric, hyphens, or underscores are replaced with hyphens) and prefixed with a random 10-character nanoid.
+
+### Storage Backends
+
+The storage backend is configurable via `[upload] storage` in `crap.toml`. Local filesystem is the default and recommended for most deployments.
+
+#### Local (default)
+
+```toml
+[upload]
+storage = "local"  # or omit — local is the default
+```
+
+No additional configuration needed. Files stored at `{config_dir}/uploads/`.
+
+#### S3-Compatible (optional)
+
+For multi-server deployments where multiple instances need to share uploaded files. Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, and DigitalOcean Spaces. Requires `--features s3-storage` at build time.
+
+```toml
+[upload]
+storage = "s3"
+
+[upload.s3]
+bucket = "my-uploads"
+region = "us-east-1"
+endpoint = "https://s3.amazonaws.com"    # or MinIO/R2 URL
+access_key = "${AWS_ACCESS_KEY}"
+secret_key = "${AWS_SECRET_KEY}"
+prefix = ""                              # optional key prefix
+public_url_base = ""                     # CDN URL (empty = S3 URLs)
+path_style = false                       # true for MinIO
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `bucket` | Yes | S3 bucket name |
+| `region` | No | AWS region (default: `us-east-1`) |
+| `endpoint` | No | Custom endpoint for non-AWS providers |
+| `access_key` | Yes | AWS access key ID |
+| `secret_key` | Yes | AWS secret access key |
+| `prefix` | No | Key prefix prepended to all storage keys |
+| `public_url_base` | No | Base URL for public file links (e.g., CDN) |
+| `path_style` | No | Use path-style URLs (required for MinIO) |
+
+Files are served through the CMS via `/uploads/...` (proxied from S3) so access control and content negotiation work identically to local storage.
+
+> **Tip:** Use `queue: true` on image format options (WebP, AVIF) when using S3. Deferred processing avoids upload latency from the extra S3 round trips.
+
+#### Custom (Lua)
+
+For exotic storage providers, register custom functions in `init.lua`:
+
+```lua
+crap.storage.register({
+  put = function(key, data, content_type)
+    crap.http.request({
+      method = "PUT",
+      url = "https://storage.example.com/" .. key,
+      body = data,
+      headers = { ["Content-Type"] = content_type },
+    })
+  end,
+  get = function(key)
+    local resp = crap.http.request({
+      url = "https://storage.example.com/" .. key,
+    })
+    return resp.body
+  end,
+  delete = function(key)
+    crap.http.request({
+      method = "DELETE",
+      url = "https://storage.example.com/" .. key,
+    })
+  end,
+  url = function(key)
+    return "https://cdn.example.com/" .. key
+  end,
+})
+```
+
+```toml
+[upload]
+storage = "custom"
+```
+
+Binary data is passed natively between Rust and Lua (no base64 encoding). The `crap.http.request` function handles binary request/response bodies.
 
 ## URL Structure
 

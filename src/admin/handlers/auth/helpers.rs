@@ -1,19 +1,25 @@
 //! Shared helper functions for auth handlers.
 
-use std::net::SocketAddr;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+};
 
 use axum::{
     http::HeaderMap,
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
 };
+use chrono::Utc;
 use serde_json::{Value, json};
+use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
+        handlers::auth::{append_cookies, session_cookies},
     },
-    core::email,
+    core::{Document, Registry, Slug, auth::ClaimsBuilder, email},
 };
 
 /// Extract client IP from the request.
@@ -36,10 +42,11 @@ pub(in crate::admin::handlers) fn client_ip(
         // Unparseable XFF falls back to socket address — not the raw string,
         // which an attacker could vary per-request to bypass rate limiting.
         return first
-            .parse::<std::net::IpAddr>()
+            .parse::<IpAddr>()
             .map(|ip| ip.to_string())
             .unwrap_or_else(|_| addr.ip().to_string());
     }
+
     addr.ip().to_string()
 }
 
@@ -65,7 +72,8 @@ pub(in crate::admin::handlers) fn login_error(
     match state.render("auth/login", &data) {
         Ok(html) => Html(html).into_response(),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
         }
         .into_response(),
@@ -137,10 +145,90 @@ pub(in crate::admin::handlers) fn render_forgot_success(
     match state.render("auth/forgot_password", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-            tracing::error!("Template render error: {}", e);
+            error!("Template render error: {}", e);
+
             Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
         }
     }
+}
+
+/// Convert axum `HeaderMap` to a simple `HashMap<String, String>`.
+pub(in crate::admin::handlers) fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
+        .collect()
+}
+
+/// Find the slug of the first auth collection in the registry.
+pub(in crate::admin::handlers) fn find_auth_collection(registry: &Registry) -> Option<String> {
+    registry
+        .collections
+        .iter()
+        .find(|(_, d)| d.is_auth_collection())
+        .map(|(slug, _)| slug.to_string())
+}
+
+/// Extract the email field from a user document, defaulting to empty string.
+pub(in crate::admin::handlers) fn extract_user_email(user: &Document) -> String {
+    user.fields
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Result of creating a session token.
+pub(in crate::admin::handlers) struct SessionToken {
+    pub token: String,
+    pub expiry: u64,
+    pub exp: u64,
+}
+
+/// Build a JWT session token for a user, resolving expiry from collection config or global default.
+pub(in crate::admin::handlers) fn create_session_token(
+    state: &AdminState,
+    user_id: String,
+    collection: &str,
+    email: String,
+    session_version: u64,
+) -> Result<SessionToken, String> {
+    let expiry = state
+        .registry
+        .get_collection(collection)
+        .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
+        .unwrap_or(state.config.auth.token_expiry);
+
+    let claims = ClaimsBuilder::new(user_id, Slug::new(collection))
+        .email(email)
+        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
+        .session_version(session_version)
+        .build()
+        .map_err(|e| format!("Claims build error: {}", e))?;
+
+    let token = state
+        .token_provider
+        .create_token(&claims)
+        .map_err(|e| format!("Token creation error: {}", e))?;
+
+    Ok(SessionToken {
+        token,
+        expiry,
+        exp: claims.exp,
+    })
+}
+
+/// Build a redirect-to-/admin response with session cookies set.
+pub(in crate::admin::handlers) fn session_redirect(
+    session: &SessionToken,
+    dev_mode: bool,
+) -> Response {
+    let cookies = session_cookies(&session.token, session.expiry, session.exp, dev_mode);
+    let mut response = Redirect::to("/admin").into_response();
+
+    append_cookies(&mut response, &cookies);
+
+    response
 }
 
 #[cfg(test)]

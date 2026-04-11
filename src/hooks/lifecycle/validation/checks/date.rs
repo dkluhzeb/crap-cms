@@ -17,46 +17,48 @@ pub(crate) fn check_date_field(
     if field.field_type != FieldType::Date || is_empty {
         return;
     }
-    if let Some(Value::String(s)) = value {
-        if !is_valid_date_format(s) {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} is not a valid date format", field.name),
-                "validation.invalid_date",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
-        }
-        // Date bounds validation (ISO dates sort lexicographically)
-        if let Some(ref min_date) = field.min_date {
-            let date_part = s.get(..10).unwrap_or(s.as_str());
 
-            if date_part < min_date.as_str() {
-                errors.push(FieldError::with_key(
-                    data_key.to_owned(),
-                    format!("{} must be on or after {}", field.name, min_date),
-                    "validation.date_min",
-                    HashMap::from([
-                        ("field".to_string(), field.name.clone()),
-                        ("min".to_string(), min_date.clone()),
-                    ]),
-                ));
-            }
-        }
-        if let Some(ref max_date) = field.max_date {
-            let date_part = s.get(..10).unwrap_or(s.as_str());
+    let Some(Value::String(s)) = value else {
+        return;
+    };
 
-            if date_part > max_date.as_str() {
-                errors.push(FieldError::with_key(
-                    data_key.to_owned(),
-                    format!("{} must be on or before {}", field.name, max_date),
-                    "validation.date_max",
-                    HashMap::from([
-                        ("field".to_string(), field.name.clone()),
-                        ("max".to_string(), max_date.clone()),
-                    ]),
-                ));
-            }
-        }
+    if !is_valid_date_format(s) {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} is not a valid date format", field.name),
+            "validation.invalid_date",
+            HashMap::from([("field".to_string(), field.name.clone())]),
+        ));
+    }
+
+    let date_part = s.get(..10).unwrap_or(s.as_str());
+
+    if let Some(ref min_date) = field.min_date
+        && date_part < min_date.as_str()
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} must be on or after {}", field.name, min_date),
+            "validation.date_min",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("min".to_string(), min_date.clone()),
+            ]),
+        ));
+    }
+
+    if let Some(ref max_date) = field.max_date
+        && date_part > max_date.as_str()
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} must be on or before {}", field.name, max_date),
+            "validation.date_max",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("max".to_string(), max_date.clone()),
+            ]),
+        ));
     }
 }
 

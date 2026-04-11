@@ -1,9 +1,11 @@
 //! Feature configuration: email, depth, pagination, uploads, locale, jobs, live, hooks, access, MCP.
 
+use std::{collections::HashMap, thread};
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{
+use crate::config::{
     McpApiKey, SmtpPassword,
     parsing::{serde_duration, serde_duration_option, serde_filesize},
 };
@@ -26,7 +28,10 @@ pub enum SmtpTls {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EmailConfig {
-    /// SMTP server hostname. Empty = email disabled.
+    /// Email provider: `"smtp"` (default), `"webhook"`, `"log"`, or `"custom"`.
+    #[serde(default = "default_email_provider")]
+    pub provider: String,
+    /// SMTP server hostname. Empty = email disabled (falls back to log provider).
     pub smtp_host: String,
     /// SMTP server port (default 587).
     pub smtp_port: u16,
@@ -43,6 +48,44 @@ pub struct EmailConfig {
     /// SMTP connection/send timeout in seconds (default 30).
     #[serde(default = "default_smtp_timeout", with = "serde_duration")]
     pub smtp_timeout: u64,
+    /// Webhook URL for the webhook email provider.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Extra HTTP headers for webhook requests (e.g., Authorization).
+    #[serde(default)]
+    pub webhook_headers: HashMap<String, String>,
+    /// Retry count for queued emails via `crap.email.queue()`. Default: 3.
+    #[serde(default = "default_queue_retries")]
+    pub queue_retries: u32,
+    /// Job queue name for queued emails. Default: "email".
+    #[serde(default = "default_queue_name")]
+    pub queue_name: String,
+    /// Per-attempt timeout for queued email jobs in seconds. Default: 30.
+    #[serde(default = "default_queue_timeout")]
+    pub queue_timeout: u64,
+    /// Max concurrent queued email jobs. Default: 5.
+    #[serde(default = "default_queue_concurrency")]
+    pub queue_concurrency: u32,
+}
+
+fn default_queue_retries() -> u32 {
+    3
+}
+
+fn default_queue_name() -> String {
+    "email".to_string()
+}
+
+fn default_queue_timeout() -> u64 {
+    30
+}
+
+fn default_queue_concurrency() -> u32 {
+    5
+}
+
+fn default_email_provider() -> String {
+    "smtp".to_string()
 }
 
 fn default_smtp_timeout() -> u64 {
@@ -52,6 +95,7 @@ fn default_smtp_timeout() -> u64 {
 impl Default for EmailConfig {
     fn default() -> Self {
         Self {
+            provider: default_email_provider(),
             smtp_host: String::new(),
             smtp_port: 587,
             smtp_user: String::new(),
@@ -60,6 +104,12 @@ impl Default for EmailConfig {
             from_name: "Crap CMS".to_string(),
             smtp_tls: SmtpTls::default(),
             smtp_timeout: 30,
+            webhook_url: None,
+            webhook_headers: HashMap::new(),
+            queue_retries: default_queue_retries(),
+            queue_name: default_queue_name(),
+            queue_timeout: default_queue_timeout(),
+            queue_concurrency: default_queue_concurrency(),
         }
     }
 }
@@ -73,18 +123,6 @@ pub struct DepthConfig {
     pub default_depth: i32,
     /// Maximum allowed depth application-wide. Prevents abuse.
     pub max_depth: i32,
-    /// Enable cross-request populate cache for relationship population.
-    /// Caches populated documents across requests, cleared on any write
-    /// through the API. Opt-in because external DB mutations can cause
-    /// stale reads. Default: false.
-    #[serde(default)]
-    pub populate_cache: bool,
-    /// Max age in seconds for the populate cache (periodic full clear).
-    /// 0 = no periodic clearing (only write-through invalidation).
-    /// Set > 0 to handle external DB mutations. Only used when
-    /// `populate_cache` is true.
-    #[serde(default)]
-    pub populate_cache_max_age_secs: u64,
 }
 
 impl Default for DepthConfig {
@@ -92,8 +130,69 @@ impl Default for DepthConfig {
         Self {
             default_depth: 1,
             max_depth: 10,
-            populate_cache: false,
-            populate_cache_max_age_secs: 0,
+        }
+    }
+}
+
+/// Cache backend configuration.
+///
+/// Configures the cross-request cache used for relationship population and
+/// other cacheable data. The cache is cleared on any write operation.
+///
+/// ```toml
+/// [cache]
+/// backend = "memory"      # "memory" (default), "redis", "none", "custom"
+/// max_entries = 10000      # soft cap for memory backend
+/// max_age_secs = 0         # periodic full clear (0 = disabled)
+/// redis_url = "redis://127.0.0.1:6379"
+/// prefix = "crap:"         # key prefix for Redis
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CacheConfig {
+    /// Cache backend: `"memory"` (default), `"redis"`, `"none"`, or `"custom"`.
+    #[serde(default = "default_cache_backend")]
+    pub backend: String,
+    /// Soft cap on the number of entries for the memory backend.
+    /// Once reached, new insertions are skipped until a clear. Default: 10,000.
+    #[serde(default = "default_cache_max_entries")]
+    pub max_entries: usize,
+    /// Periodic full clear interval in seconds. 0 = disabled (only
+    /// write-through invalidation). Set > 0 to handle external DB mutations.
+    #[serde(default)]
+    pub max_age_secs: u64,
+    /// Redis connection URL. Only used when `backend = "redis"`.
+    #[serde(default = "default_redis_url")]
+    pub redis_url: String,
+    /// Key prefix for the Redis backend. All keys are stored as `{prefix}{key}`.
+    #[serde(default = "default_cache_prefix")]
+    pub prefix: String,
+}
+
+fn default_cache_backend() -> String {
+    "memory".to_string()
+}
+
+fn default_cache_max_entries() -> usize {
+    10_000
+}
+
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379".to_string()
+}
+
+fn default_cache_prefix() -> String {
+    "crap:".to_string()
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_cache_backend(),
+            max_entries: default_cache_max_entries(),
+            max_age_secs: 0,
+            redis_url: default_redis_url(),
+            prefix: default_cache_prefix(),
         }
     }
 }
@@ -161,16 +260,62 @@ pub struct McpConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UploadConfig {
+    /// Storage backend: `"local"` (default), `"s3"`, or `"custom"`.
+    #[serde(default = "default_upload_storage")]
+    pub storage: String,
     /// Global max file size in bytes. Default: 50MB.
     /// Accepts integer bytes or human-readable string ("50MB", "1GB").
     #[serde(with = "serde_filesize")]
     pub max_file_size: u64,
+    /// S3-compatible storage configuration. Only used when `storage = "s3"`.
+    #[serde(default)]
+    pub s3: S3Config,
+}
+
+/// S3-compatible storage configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct S3Config {
+    /// S3 bucket name.
+    #[serde(default)]
+    pub bucket: String,
+    /// AWS region (e.g., `"us-east-1"`). Default: `"us-east-1"`.
+    #[serde(default = "default_s3_region")]
+    pub region: String,
+    /// S3 endpoint URL. Default: AWS. Set for MinIO, R2, etc.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Access key ID.
+    #[serde(default)]
+    pub access_key: String,
+    /// Secret access key.
+    #[serde(default)]
+    pub secret_key: String,
+    /// Optional key prefix prepended to all storage keys.
+    #[serde(default)]
+    pub prefix: String,
+    /// Base URL for public file URLs (e.g., CDN URL).
+    /// If empty, generates S3 URLs.
+    #[serde(default)]
+    pub public_url_base: String,
+    /// Use path-style addressing (required for MinIO and some providers).
+    #[serde(default)]
+    pub path_style: bool,
+}
+
+fn default_s3_region() -> String {
+    "us-east-1".to_string()
+}
+
+fn default_upload_storage() -> String {
+    "local".to_string()
 }
 
 impl Default for UploadConfig {
     fn default() -> Self {
         Self {
+            storage: default_upload_storage(),
             max_file_size: 52_428_800, // 50MB
+            s3: S3Config::default(),
         }
     }
 }
@@ -208,9 +353,11 @@ impl LocaleConfig {
     /// interpolated into DDL during migrations.
     pub fn validate(&self) -> Result<()> {
         Self::validate_locale_code(&self.default_locale)?;
+
         for locale in &self.locales {
             Self::validate_locale_code(locale)?;
         }
+
         // When locales are enabled, the default locale must be in the list
         if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
             bail!(
@@ -219,6 +366,7 @@ impl LocaleConfig {
                 self.locales
             );
         }
+
         Ok(())
     }
 
@@ -226,6 +374,7 @@ impl LocaleConfig {
         if code.is_empty() {
             bail!("Locale code must not be empty");
         }
+
         if !code
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -235,6 +384,7 @@ impl LocaleConfig {
                 code
             );
         }
+
         Ok(())
     }
 }
@@ -283,6 +433,9 @@ impl Default for JobsConfig {
 pub struct LiveConfig {
     /// Enable live event streaming (SSE + gRPC Subscribe). Default: true.
     pub enabled: bool,
+    /// Default event delivery mode for collections/globals that don't specify one.
+    /// `"metadata"` (default) = id/operation only, `"full"` = after_read hooks + data.
+    pub default_mode: String,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
     /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
@@ -295,6 +448,7 @@ impl Default for LiveConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            default_mode: "metadata".to_string(),
             channel_capacity: 1024,
             max_sse_connections: 1000,
             max_subscribe_connections: 1000,
@@ -335,9 +489,9 @@ impl Default for HooksConfig {
         Self {
             on_init: Vec::new(),
             max_depth: 3,
-            vm_pool_size: std::thread::available_parallelism()
-                .map(|n| n.get().clamp(4, 32))
-                .unwrap_or(8),
+            vm_pool_size: thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
             max_instructions: 10_000_000,
             max_memory: 52_428_800, // 50 MB
             allow_private_networks: false,
@@ -348,13 +502,19 @@ impl Default for HooksConfig {
 
 /// Access control defaults.
 /// When `default_deny` is true, collections/globals without explicit access functions
-/// deny all operations instead of allowing them. Default: false (backward compatible).
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+/// deny all operations instead of allowing them. Default: true (secure by default).
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AccessConfig {
-    /// When true, operations on collections/globals without an explicit access function
-    /// are denied by default. When false (default), missing access functions allow all.
+    /// When true (default), operations on collections/globals without an explicit access
+    /// function are denied. When false, missing access functions allow all.
     pub default_deny: bool,
+}
+
+impl Default for AccessConfig {
+    fn default() -> Self {
+        Self { default_deny: true }
+    }
 }
 
 /// Log rotation strategy for file-based logging.
@@ -427,6 +587,53 @@ mod tests {
     }
 
     #[test]
+    fn cache_config_defaults() {
+        let cache = CacheConfig::default();
+        assert_eq!(cache.backend, "memory");
+        assert_eq!(cache.max_entries, 10_000);
+        assert_eq!(cache.max_age_secs, 0);
+        assert_eq!(cache.redis_url, "redis://127.0.0.1:6379");
+        assert_eq!(cache.prefix, "crap:");
+    }
+
+    #[test]
+    fn cache_config_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[cache]\nbackend = \"none\"\nmax_entries = 5000\nmax_age_secs = 60\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.cache.backend, "none");
+        assert_eq!(config.cache.max_entries, 5000);
+        assert_eq!(config.cache.max_age_secs, 60);
+    }
+
+    #[test]
+    fn cache_config_partial_toml_uses_defaults() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[cache]\nbackend = \"redis\"\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.cache.backend, "redis");
+        assert_eq!(config.cache.max_entries, 10_000);
+        assert_eq!(config.cache.redis_url, "redis://127.0.0.1:6379");
+        assert_eq!(config.cache.prefix, "crap:");
+    }
+
+    #[test]
+    fn cache_max_entries_zero_warns_but_passes() {
+        let mut config = crate::config::CrapConfig::default();
+        config.cache.max_entries = 0;
+        // Should warn but not error
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn auto_purge_default_config() {
         let cfg = JobsConfig::default();
         assert_eq!(cfg.auto_purge, Some(7 * 86400));
@@ -475,7 +682,7 @@ mod tests {
         let hooks = HooksConfig::default();
         assert!(hooks.on_init.is_empty());
         assert_eq!(hooks.max_depth, 3);
-        assert!(hooks.vm_pool_size >= 4 && hooks.vm_pool_size <= 32);
+        assert!(hooks.vm_pool_size >= 1);
         assert_eq!(hooks.max_instructions, 10_000_000);
         assert_eq!(hooks.max_memory, 52_428_800);
         assert!(!hooks.allow_private_networks);
@@ -575,9 +782,9 @@ mod tests {
     }
 
     #[test]
-    fn access_config_default_deny_false_by_default() {
+    fn access_config_default_deny_true_by_default() {
         let config = crate::config::CrapConfig::default();
-        assert!(!config.access.default_deny);
+        assert!(config.access.default_deny);
     }
 
     #[test]

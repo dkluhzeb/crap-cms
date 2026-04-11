@@ -1,6 +1,7 @@
 //! Core types: collections, fields, documents, registry, auth, uploads, jobs, and validation.
 
 pub mod auth;
+pub mod cache;
 pub mod collection;
 pub mod document;
 pub mod document_id;

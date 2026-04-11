@@ -62,7 +62,7 @@ Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across re
 
 ```toml
 [hooks]
-vm_pool_size = 8  # default: max(available_parallelism, 4), capped at 32
+vm_pool_size = 8  # default: number of CPU cores
 ```
 
 Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.

@@ -1,19 +1,21 @@
 //! Top-level `CrapConfig` struct and its loading/validation logic.
 
-use anyhow::{Context as _, Result, bail};
-use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
-use super::{
+use anyhow::{Context as _, Result, bail};
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
+
+use crate::config::{
     auth::AuthConfig,
     cors::CorsConfig,
     env::substitute_in_value,
     features::{
-        AccessConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig, LocaleConfig,
-        LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
+        AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
+        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
@@ -54,6 +56,8 @@ pub struct CrapConfig {
     pub pagination: PaginationConfig,
     /// MCP (Model Context Protocol) settings.
     pub mcp: McpConfig,
+    /// Cache backend settings.
+    pub cache: CacheConfig,
     /// File-based logging settings.
     pub logging: LoggingConfig,
 }
@@ -75,20 +79,36 @@ impl CrapConfig {
             // This avoids errors from `${VAR}` patterns in comments.
             let mut value: toml::Value = toml::from_str(&contents)
                 .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+
             substitute_in_value(&mut value)?;
+
             let config: CrapConfig = value
                 .try_into()
                 .with_context(|| format!("Failed to deserialize {}", config_path.display()))?;
+
             config
                 .locale
                 .validate()
                 .context("Invalid locale configuration")?;
+
             config.validate().context("Invalid configuration")?;
+
             Ok(config)
         } else {
-            tracing::info!("No crap.toml found, using defaults");
+            info!("No crap.toml found, using defaults");
+
             Ok(CrapConfig::default())
         }
+    }
+
+    /// Create a configuration with permissive defaults for testing.
+    ///
+    /// Same as `Default` but with `access.default_deny = false` so tests that don't
+    /// configure access functions aren't blocked.
+    pub fn test_default() -> Self {
+        let mut config = Self::default();
+        config.access.default_deny = false;
+        config
     }
 
     /// Validate configuration for common misconfigurations.
@@ -96,55 +116,69 @@ impl CrapConfig {
     /// Returns errors for fatal issues (e.g., pool_max_size = 0) and logs
     /// warnings for non-fatal but suspicious settings.
     pub fn validate(&self) -> Result<()> {
-        // Fatal: database pool with no connections
+        self.validate_database()?;
+        self.validate_server()?;
+        self.validate_pagination()?;
+        self.validate_depth()?;
+        self.validate_jobs()?;
+        self.validate_auth()?;
+        self.validate_email()?;
+        self.validate_logging()?;
+        self.validate_mcp()?;
+        self.validate_live()?;
+        self.validate_cache()?;
+
+        Ok(())
+    }
+
+    /// Validate database pool settings.
+    fn validate_database(&self) -> Result<()> {
         if self.database.pool_max_size == 0 {
             bail!("database.pool_max_size must be > 0");
         }
 
-        // Fatal: instant connection timeout
         if self.database.connection_timeout == 0 {
             bail!("database.connection_timeout must be > 0");
         }
 
-        // Fatal: Lua VM pool with no VMs
-        if self.hooks.vm_pool_size == 0 {
-            bail!("hooks.vm_pool_size must be > 0");
-        }
+        Ok(())
+    }
 
-        // Warning: no jobs will execute
-        if self.jobs.max_concurrent == 0 {
-            tracing::warn!("jobs.max_concurrent = 0 — no jobs will be executed");
-        }
-
-        // Warning: weak JWT signing key (when explicitly set)
-        if !self.auth.secret.is_empty() && self.auth.secret.len() < 32 {
-            tracing::warn!(
-                "auth.secret is shorter than 32 characters — consider using a stronger key"
-            );
-        }
-
-        // Fatal: port 0 is not a valid listen port
+    /// Validate server ports, timeouts, and rate limiting.
+    fn validate_server(&self) -> Result<()> {
         if self.server.admin_port == 0 || self.server.grpc_port == 0 {
             bail!("Server ports must be > 0");
         }
 
-        // Fatal: ports must be distinct
         if self.server.admin_port == self.server.grpc_port {
             bail!("admin_port and grpc_port must be different");
         }
 
-        // Fatal: broadcast channel capacity must be > 0 (tokio panics on 0)
-        if self.live.enabled && self.live.channel_capacity == 0 {
-            bail!("live.channel_capacity must be > 0 when live events are enabled");
+        if self.server.request_timeout == Some(0) {
+            bail!("server.request_timeout must be > 0 (or omitted to disable)");
         }
 
-        // Fatal: pagination limits must be positive
+        if self.server.grpc_timeout == Some(0) {
+            bail!("server.grpc_timeout must be > 0 (or omitted to disable)");
+        }
+
+        if self.server.grpc_rate_limit_requests > 0 && self.server.grpc_rate_limit_window == 0 {
+            bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
+        }
+
+        Ok(())
+    }
+
+    /// Validate pagination limits.
+    fn validate_pagination(&self) -> Result<()> {
         if self.pagination.default_limit <= 0 {
             bail!("pagination.default_limit must be > 0");
         }
+
         if self.pagination.max_limit <= 0 {
             bail!("pagination.max_limit must be > 0");
         }
+
         if self.pagination.default_limit > self.pagination.max_limit {
             bail!(
                 "pagination.default_limit ({}) must be <= pagination.max_limit ({})",
@@ -153,29 +187,99 @@ impl CrapConfig {
             );
         }
 
-        // Fatal: negative depth values make no sense
+        Ok(())
+    }
+
+    /// Validate depth/population limits.
+    fn validate_depth(&self) -> Result<()> {
         if self.depth.default_depth < 0 {
             bail!("depth.default_depth must be >= 0");
         }
+
         if self.depth.max_depth < 0 {
             bail!("depth.max_depth must be >= 0");
         }
 
-        // Warning: max_depth = 0 means no population will ever work
         if self.depth.max_depth == 0 {
-            tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
+            warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
         }
 
-        // Warning: default_depth exceeds max_depth
         if self.depth.default_depth > self.depth.max_depth {
-            tracing::warn!(
+            warn!(
                 "depth.default_depth ({}) exceeds depth.max_depth ({}) — requests will be capped",
-                self.depth.default_depth,
-                self.depth.max_depth
+                self.depth.default_depth, self.depth.max_depth
             );
         }
 
-        // Fatal: MCP HTTP without API key is unauthenticated full CRUD access
+        Ok(())
+    }
+
+    /// Validate job scheduler settings.
+    fn validate_jobs(&self) -> Result<()> {
+        if self.hooks.vm_pool_size == 0 {
+            bail!("hooks.vm_pool_size must be > 0");
+        }
+
+        if self.jobs.max_concurrent == 0 {
+            warn!("jobs.max_concurrent = 0 — no jobs will be executed");
+        }
+
+        if self.jobs.poll_interval == 0 {
+            bail!("jobs.poll_interval must be > 0");
+        }
+
+        if self.jobs.cron_interval == 0 {
+            bail!("jobs.cron_interval must be > 0");
+        }
+
+        if self.jobs.heartbeat_interval == 0 {
+            bail!("jobs.heartbeat_interval must be > 0");
+        }
+
+        Ok(())
+    }
+
+    /// Validate auth and password policy settings.
+    fn validate_auth(&self) -> Result<()> {
+        if !self.auth.secret.is_empty() && self.auth.secret.len() < 32 {
+            warn!("auth.secret is shorter than 32 characters — consider using a stronger key");
+        }
+
+        if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
+            bail!(
+                "auth.password.min_length ({}) must be <= auth.password.max_length ({})",
+                self.auth.password_policy.min_length,
+                self.auth.password_policy.max_length
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Validate email/SMTP settings.
+    fn validate_email(&self) -> Result<()> {
+        if !self.email.smtp_host.is_empty() && self.email.smtp_port == 0 {
+            bail!("email.smtp_port must be > 0 when smtp_host is configured");
+        }
+
+        Ok(())
+    }
+
+    /// Validate logging settings.
+    fn validate_logging(&self) -> Result<()> {
+        if self.logging.file && self.logging.path.is_empty() {
+            bail!("logging.path must not be empty when file logging is enabled");
+        }
+
+        if self.logging.file && self.logging.max_files == 0 {
+            warn!("logging.max_files = 0 — all rotated log files will be deleted on startup");
+        }
+
+        Ok(())
+    }
+
+    /// Validate MCP settings.
+    fn validate_mcp(&self) -> Result<()> {
         if self.mcp.enabled && self.mcp.http && self.mcp.api_key.is_empty() {
             bail!(
                 "mcp.http is enabled without an API key — \
@@ -183,53 +287,23 @@ impl CrapConfig {
             );
         }
 
-        // Fatal: SMTP port 0 when host is configured
-        if !self.email.smtp_host.is_empty() && self.email.smtp_port == 0 {
-            bail!("email.smtp_port must be > 0 when smtp_host is configured");
+        Ok(())
+    }
+
+    /// Validate live event streaming settings.
+    fn validate_live(&self) -> Result<()> {
+        if self.live.enabled && self.live.channel_capacity == 0 {
+            bail!("live.channel_capacity must be > 0 when live events are enabled");
         }
 
-        // Fatal: zero timeouts are nonsensical
-        if self.server.request_timeout == Some(0) {
-            bail!("server.request_timeout must be > 0 (or omitted to disable)");
-        }
-        if self.server.grpc_timeout == Some(0) {
-            bail!("server.grpc_timeout must be > 0 (or omitted to disable)");
-        }
+        Ok(())
+    }
 
-        // Fatal: rate limit window must be positive when rate limiting is enabled
-        if self.server.grpc_rate_limit_requests > 0 && self.server.grpc_rate_limit_window == 0 {
-            bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
-        }
-
-        // Fatal: empty log path
-        if self.logging.file && self.logging.path.is_empty() {
-            bail!("logging.path must not be empty when file logging is enabled");
-        }
-
-        // Warning: max_files = 0 means all old logs are deleted on every startup
-        if self.logging.file && self.logging.max_files == 0 {
-            tracing::warn!(
-                "logging.max_files = 0 — all rotated log files will be deleted on startup"
-            );
-        }
-
-        // Fatal: zero scheduler intervals cause busy loops
-        if self.jobs.poll_interval == 0 {
-            bail!("jobs.poll_interval must be > 0");
-        }
-        if self.jobs.cron_interval == 0 {
-            bail!("jobs.cron_interval must be > 0");
-        }
-        if self.jobs.heartbeat_interval == 0 {
-            bail!("jobs.heartbeat_interval must be > 0");
-        }
-
-        // Fatal: password min_length > max_length
-        if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
-            bail!(
-                "auth.password.min_length ({}) must be <= auth.password.max_length ({})",
-                self.auth.password_policy.min_length,
-                self.auth.password_policy.max_length
+    /// Validate cache settings.
+    fn validate_cache(&self) -> Result<()> {
+        if self.cache.backend == "memory" && self.cache.max_entries == 0 {
+            warn!(
+                "cache.max_entries = 0 with memory backend — cache will never store entries (equivalent to backend = \"none\")"
             );
         }
 
@@ -311,12 +385,12 @@ mod tests {
         assert_eq!(config.server.grpc_port, 50051);
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.database.path, "data/crap.db");
-        assert_eq!(config.database.pool_max_size, 32);
+        assert_eq!(config.database.pool_max_size, 64);
         assert_eq!(config.database.busy_timeout, 30000);
         assert!(!config.admin.dev_mode);
         assert!(config.admin.require_auth);
         assert!(config.admin.access.is_none());
-        assert!(!config.access.default_deny);
+        assert!(config.access.default_deny);
         assert_eq!(config.pagination.default_limit, 20);
         assert_eq!(config.pagination.max_limit, 1000);
         assert_eq!(config.pagination.mode, PaginationMode::Page);

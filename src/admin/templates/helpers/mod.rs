@@ -75,6 +75,20 @@ pub(super) fn as_f64(val: &Value) -> Option<f64> {
 }
 
 #[cfg(test)]
+mod test_helpers {
+    use std::sync::Arc;
+
+    use crate::admin::{templates::create_handlebars, translations::Translations};
+
+    pub fn test_hbs() -> handlebars::Handlebars<'static> {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        (*hbs).clone()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 

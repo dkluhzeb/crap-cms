@@ -8,7 +8,7 @@ fn default_true() -> bool {
 }
 
 /// Admin UI display hints for a field (placeholder, description, visibility, width).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldAdmin {
     /// Localized display label for the field.
     #[serde(default)]

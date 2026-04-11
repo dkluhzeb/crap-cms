@@ -2,7 +2,7 @@
 
 use crate::core::{
     FieldDefinition, Slug,
-    collection::{Access, Hooks, Labels, LiveSetting, McpConfig, VersionsConfig},
+    collection::{Access, Hooks, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig},
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,9 @@ pub struct GlobalDefinition {
     /// Real-time update settings for this global.
     #[serde(default)]
     pub live: Option<LiveSetting>,
+    /// Controls what data events carry (metadata-only or full with after_read hooks).
+    #[serde(default)]
+    pub live_mode: LiveMode,
     /// Versioning and draft configuration.
     #[serde(default)]
     pub versions: Option<VersionsConfig>,
@@ -44,6 +47,7 @@ impl Default for GlobalDefinition {
             access: Access::default(),
             mcp: McpConfig::default(),
             live: None,
+            live_mode: LiveMode::default(),
             versions: None,
         }
     }

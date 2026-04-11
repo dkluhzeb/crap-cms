@@ -17,10 +17,12 @@ pub(super) fn resolve_join_locale(
     if !field.localized || !ctx.config.is_enabled() {
         return None;
     }
+
     let locale = match &ctx.mode {
         LocaleMode::Single(l) => l.as_str(),
         _ => ctx.config.default_locale.as_str(),
     };
+
     Some(locale.to_string())
 }
 
@@ -35,6 +37,7 @@ pub(super) fn resolve_join_fallback_locale(
     if !field.localized || !ctx.config.is_enabled() || !ctx.config.fallback {
         return None;
     }
+
     match &ctx.mode {
         LocaleMode::Single(l) if l != &ctx.config.default_locale => {
             Some(ctx.config.default_locale.clone())

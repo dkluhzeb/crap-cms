@@ -119,7 +119,11 @@ impl EventBus {
 
         match self.sender.send(event.clone()) {
             Ok(_) => Some(event),
-            Err(_) => None, // no active receivers
+            Err(_) => {
+                // No active receivers, or channel full. This is normal when
+                // no SSE/Subscribe clients are connected.
+                None
+            }
         }
     }
 
@@ -135,16 +139,18 @@ impl EventBus {
 mod tests {
     use super::*;
 
+    const TEST_CAPACITY: usize = 16;
+
     #[test]
     fn new_creates_bus() {
-        let bus = EventBus::new(16);
+        let bus = EventBus::new(TEST_CAPACITY);
         // Just verify it doesn't panic
         let _rx = bus.subscribe();
     }
 
     #[test]
     fn publish_with_no_subscribers_returns_none() {
-        let bus = EventBus::new(16);
+        let bus = EventBus::new(TEST_CAPACITY);
         // No subscribe() called, so no receivers
         let result = bus.publish(
             EventTarget::Collection,
@@ -159,7 +165,7 @@ mod tests {
 
     #[test]
     fn publish_with_subscriber_returns_event() {
-        let bus = EventBus::new(16);
+        let bus = EventBus::new(TEST_CAPACITY);
         let _rx = bus.subscribe(); // create a receiver
         let result = bus.publish(
             EventTarget::Collection,
@@ -184,7 +190,7 @@ mod tests {
 
     #[test]
     fn sequence_increments() {
-        let bus = EventBus::new(16);
+        let bus = EventBus::new(TEST_CAPACITY);
         let _rx = bus.subscribe();
         let e1 = bus
             .publish(
@@ -247,7 +253,7 @@ mod tests {
 
     #[test]
     fn subscriber_receives_event() {
-        let bus = EventBus::new(16);
+        let bus = EventBus::new(TEST_CAPACITY);
         let mut rx = bus.subscribe();
         bus.publish(
             EventTarget::Global,

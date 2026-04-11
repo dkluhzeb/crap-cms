@@ -14,6 +14,7 @@ pub(crate) fn check_email_format(
     if field.field_type != FieldType::Email || is_empty {
         return;
     }
+
     if let Some(Value::String(s)) = value
         && !is_valid_email_format(s)
     {

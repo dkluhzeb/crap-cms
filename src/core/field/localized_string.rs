@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 /// Plain: `"Title"` — works like before.
 /// Localized: `{ en = "Title", de = "Titel" }` — resolved at render time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LocalizedString {
     /// A simple, non-localized string.

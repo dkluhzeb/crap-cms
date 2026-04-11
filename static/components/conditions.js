@@ -92,6 +92,7 @@ class CrapConditions extends HTMLElement {
 
     if (serverFields.length > 0) {
       const slug = this.getAttribute('collection') || form.dataset.collectionSlug || '';
+      const prefix = this.getAttribute('type') === 'global' ? '/admin/globals/' : '/admin/collections/';
 
       const runServer = () => {
         const data = this._collectFormData(form);
@@ -113,7 +114,7 @@ class CrapConditions extends HTMLElement {
         if (this._serverAbort) this._serverAbort.abort();
         this._serverAbort = new AbortController();
 
-        fetch('/admin/collections/' + slug + '/evaluate-conditions', {
+        fetch(prefix + slug + '/evaluate-conditions', {
           method: 'POST',
           headers,
           body: JSON.stringify({ form_data: data, conditions: refs }),

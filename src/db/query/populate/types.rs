@@ -1,20 +1,18 @@
 //! Type definitions for the populate subsystem.
 
-use dashmap::DashMap;
-
-use crate::core::{CollectionDefinition, Document, Registry};
+use crate::core::cache::CacheBackend;
+use crate::core::{CollectionDefinition, Registry};
 use crate::db::{DbConnection, LocaleContext, LocaleMode};
 
-/// Soft cap on the number of entries in the populate cache. Once exceeded,
-/// new insertions are skipped until the periodic or write-triggered cache clear.
-/// Prevents unbounded memory growth during read-heavy workloads.
-pub const MAX_POPULATE_CACHE_SIZE: usize = 10_000;
-
-/// Shared cache for populated documents.
-/// Key is (collection_slug, document_id, locale_key) where locale_key distinguishes
-/// between different locale modes to prevent cross-locale data leakage.
-/// Uses DashMap for concurrent cross-request sharing with interior mutability.
-pub type PopulateCache = DashMap<(String, String, Option<String>), Document>;
+/// Build a cache key for a populated document.
+///
+/// Format: `populate:{collection}:{id}` or `populate:{collection}:{id}:{locale}`
+pub fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
+    match locale {
+        Some(l) => format!("populate:{}:{}:{}", collection, id, l),
+        None => format!("populate:{}:{}", collection, id),
+    }
+}
 
 /// Derive the locale portion of the cache key from an optional `LocaleContext`.
 ///
@@ -41,7 +39,7 @@ pub(crate) struct PopulateCtx<'a> {
     pub registry: &'a Registry,
     pub effective_depth: i32,
     pub locale_ctx: Option<&'a LocaleContext>,
-    pub cache: &'a PopulateCache,
+    pub cache: &'a dyn CacheBackend,
 }
 
 /// Collection and registry context for population.
@@ -98,37 +96,18 @@ impl<'a> PopulateOpts<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
-    use serde_json::json;
-
-    use crate::core::DocumentId;
-
-    fn make_doc(id: &str) -> Document {
-        Document {
-            id: DocumentId::new(id),
-            fields: HashMap::from([("title".to_string(), json!("test"))]),
-            created_at: None,
-            updated_at: None,
-        }
+    #[test]
+    fn populate_cache_key_no_locale() {
+        assert_eq!(populate_cache_key("posts", "p1", None), "populate:posts:p1");
     }
 
     #[test]
-    fn cache_cap_is_respected() {
-        // Use a tiny cap for testing — verify the constant exists and the pattern works
-        let cache = PopulateCache::new();
-        let cap = 5;
-
-        for i in 0..cap + 3 {
-            if cache.len() < cap {
-                cache.insert(
-                    ("col".to_string(), format!("d{}", i), None),
-                    make_doc(&format!("d{}", i)),
-                );
-            }
-        }
-
-        assert_eq!(cache.len(), cap);
+    fn populate_cache_key_with_locale() {
+        assert_eq!(
+            populate_cache_key("posts", "p1", Some("de")),
+            "populate:posts:p1:de"
+        );
     }
 
     #[test]
@@ -176,53 +155,5 @@ mod tests {
             config,
         };
         assert_eq!(locale_cache_key(Some(&ctx)), Some("_all_".to_string()));
-    }
-
-    #[test]
-    fn cache_key_different_locales_are_distinct() {
-        let cache = PopulateCache::new();
-        let doc_en = make_doc("d1");
-        let mut doc_de = make_doc("d1");
-        doc_de.fields.insert("title".to_string(), json!("test_de"));
-
-        cache.insert(
-            ("col".to_string(), "d1".to_string(), Some("en".to_string())),
-            doc_en,
-        );
-        cache.insert(
-            ("col".to_string(), "d1".to_string(), Some("de".to_string())),
-            doc_de,
-        );
-
-        assert_eq!(
-            cache.len(),
-            2,
-            "same doc with different locales should be separate cache entries"
-        );
-
-        let en_entry = cache.get(&("col".to_string(), "d1".to_string(), Some("en".to_string())));
-        assert_eq!(
-            en_entry
-                .unwrap()
-                .fields
-                .get("title")
-                .and_then(|v| v.as_str()),
-            Some("test")
-        );
-
-        let de_entry = cache.get(&("col".to_string(), "d1".to_string(), Some("de".to_string())));
-        assert_eq!(
-            de_entry
-                .unwrap()
-                .fields
-                .get("title")
-                .and_then(|v| v.as_str()),
-            Some("test_de")
-        );
-    }
-
-    #[test]
-    fn max_populate_cache_size_is_reasonable() {
-        assert_eq!(MAX_POPULATE_CACHE_SIZE, 10_000);
     }
 }

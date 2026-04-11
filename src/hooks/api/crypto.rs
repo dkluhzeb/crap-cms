@@ -2,103 +2,140 @@
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use anyhow::Result;
-use base64::Engine;
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use rand::RngCore;
 use ring::{digest, hmac};
 
 /// Register `crap.crypto` — sha256, hmac, base64, AES-GCM encrypt/decrypt, random_bytes.
 pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Result<()> {
-    let crypto_table = lua.create_table()?;
+    let t = lua.create_table()?;
 
-    let sha256_fn = lua.create_function(|_, data: String| -> LuaResult<String> {
-        let hash = digest::digest(&digest::SHA256, data.as_bytes());
-        Ok(hex_encode(hash.as_ref()))
-    })?;
-    crypto_table.set("sha256", sha256_fn)?;
-
-    let hmac_sha256_fn =
-        lua.create_function(|_, (data, key): (String, String)| -> LuaResult<String> {
-            let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
-            let tag = hmac::sign(&k, data.as_bytes());
-            Ok(hex_encode(tag.as_ref()))
-        })?;
-    crypto_table.set("hmac_sha256", hmac_sha256_fn)?;
-
-    let b64_encode_fn = lua.create_function(|_, data: String| -> LuaResult<String> {
-        Ok(base64::engine::general_purpose::STANDARD.encode(data.as_bytes()))
-    })?;
-    crypto_table.set("base64_encode", b64_encode_fn)?;
-
-    let b64_decode_fn = lua.create_function(|_, data: String| -> LuaResult<String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data.as_bytes())
-            .map_err(|e| RuntimeError(format!("base64 decode error: {:#}", e)))?;
-        String::from_utf8(bytes)
-            .map_err(|e| RuntimeError(format!("base64 decode utf8 error: {:#}", e)))
-    })?;
-    crypto_table.set("base64_decode", b64_decode_fn)?;
+    t.set(
+        "sha256",
+        lua.create_function(|_, data: String| sha256(&data))?,
+    )?;
+    t.set(
+        "hmac_sha256",
+        lua.create_function(|_, (data, key): (String, String)| hmac_sha256(&data, &key))?,
+    )?;
+    t.set(
+        "base64_encode",
+        lua.create_function(|_, data: String| b64_encode(&data))?,
+    )?;
+    t.set(
+        "base64_decode",
+        lua.create_function(|_, data: String| b64_decode(&data))?,
+    )?;
+    t.set(
+        "random_bytes",
+        lua.create_function(|_, n: usize| random_bytes(n))?,
+    )?;
 
     let secret = auth_secret.to_string();
-    let encrypt_fn = lua.create_function(move |_, plaintext: String| -> LuaResult<String> {
-        let key_hash = digest::digest(&digest::SHA256, secret.as_bytes());
-        let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
-            .map_err(|e| RuntimeError(format!("cipher init: {:#}", e)))?;
+    t.set(
+        "encrypt",
+        lua.create_function(move |_, plaintext: String| encrypt(&secret, &plaintext))?,
+    )?;
 
-        let mut nonce_bytes = [0u8; 12];
-        rand::rng().fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+    let secret = auth_secret.to_string();
+    t.set(
+        "decrypt",
+        lua.create_function(move |_, encoded: String| decrypt(&secret, &encoded))?,
+    )?;
 
-        let ciphertext = cipher
-            .encrypt(nonce, plaintext.as_bytes())
-            .map_err(|e| RuntimeError(format!("encrypt error: {:#}", e)))?;
+    crap.set("crypto", t)?;
 
-        let mut combined = nonce_bytes.to_vec();
-        combined.extend_from_slice(&ciphertext);
-        Ok(base64::engine::general_purpose::STANDARD.encode(&combined))
-    })?;
-    crypto_table.set("encrypt", encrypt_fn)?;
-
-    let secret2 = auth_secret.to_string();
-    let decrypt_fn = lua.create_function(move |_, encoded: String| -> LuaResult<String> {
-        let combined = base64::engine::general_purpose::STANDARD
-            .decode(encoded.as_bytes())
-            .map_err(|e| RuntimeError(format!("base64 decode: {:#}", e)))?;
-
-        if combined.len() < 12 {
-            return Err(RuntimeError("ciphertext too short".into()));
-        }
-        let (nonce_bytes, ciphertext) = combined.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
-
-        let key_hash = digest::digest(&digest::SHA256, secret2.as_bytes());
-        let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
-            .map_err(|e| RuntimeError(format!("cipher init: {:#}", e)))?;
-
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| RuntimeError(format!("decrypt error: {:#}", e)))?;
-
-        String::from_utf8(plaintext).map_err(|e| RuntimeError(format!("decrypt utf8: {:#}", e)))
-    })?;
-    crypto_table.set("decrypt", decrypt_fn)?;
-
-    let random_bytes_fn = lua.create_function(|_, n: usize| -> LuaResult<String> {
-        const MAX_RANDOM_BYTES: usize = 1024 * 1024; // 1 MB
-        if n > MAX_RANDOM_BYTES {
-            return Err(RuntimeError(format!(
-                "random_bytes: requested {} bytes exceeds maximum of {}",
-                n, MAX_RANDOM_BYTES
-            )));
-        }
-        let mut buf = vec![0u8; n];
-        rand::rng().fill_bytes(&mut buf);
-        Ok(hex_encode(&buf))
-    })?;
-    crypto_table.set("random_bytes", random_bytes_fn)?;
-
-    crap.set("crypto", crypto_table)?;
     Ok(())
+}
+
+/// SHA-256 hash of a string, returned as hex.
+fn sha256(data: &str) -> LuaResult<String> {
+    Ok(hex_encode(
+        digest::digest(&digest::SHA256, data.as_bytes()).as_ref(),
+    ))
+}
+
+/// HMAC-SHA256 of data with key, returned as hex.
+fn hmac_sha256(data: &str, key: &str) -> LuaResult<String> {
+    let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
+
+    Ok(hex_encode(hmac::sign(&k, data.as_bytes()).as_ref()))
+}
+
+/// Base64-encode a string.
+fn b64_encode(data: &str) -> LuaResult<String> {
+    Ok(B64.encode(data.as_bytes()))
+}
+
+/// Base64-decode a string.
+fn b64_decode(data: &str) -> LuaResult<String> {
+    let bytes = B64
+        .decode(data.as_bytes())
+        .map_err(|e| RuntimeError(format!("base64 decode error: {e:#}")))?;
+    String::from_utf8(bytes).map_err(|e| RuntimeError(format!("base64 decode utf8 error: {e:#}")))
+}
+
+/// Generate `n` random bytes, returned as hex.
+fn random_bytes(n: usize) -> LuaResult<String> {
+    const MAX: usize = 1024 * 1024;
+
+    if n > MAX {
+        return Err(RuntimeError(format!(
+            "random_bytes: requested {n} bytes exceeds maximum of {MAX}"
+        )));
+    }
+
+    let mut buf = vec![0u8; n];
+
+    rand::rng().fill_bytes(&mut buf);
+
+    Ok(hex_encode(&buf))
+}
+
+/// AES-256-GCM encrypt: returns base64(nonce || ciphertext).
+fn encrypt(secret: &str, plaintext: &str) -> LuaResult<String> {
+    let key_hash = digest::digest(&digest::SHA256, secret.as_bytes());
+    let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
+        .map_err(|e| RuntimeError(format!("cipher init: {e:#}")))?;
+
+    let mut nonce_bytes = [0u8; 12];
+
+    rand::rng().fill_bytes(&mut nonce_bytes);
+
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| RuntimeError(format!("encrypt error: {e:#}")))?;
+
+    let mut combined = nonce_bytes.to_vec();
+
+    combined.extend_from_slice(&ciphertext);
+
+    Ok(B64.encode(&combined))
+}
+
+/// AES-256-GCM decrypt: expects base64(nonce || ciphertext).
+fn decrypt(secret: &str, encoded: &str) -> LuaResult<String> {
+    let combined = B64
+        .decode(encoded.as_bytes())
+        .map_err(|e| RuntimeError(format!("base64 decode: {e:#}")))?;
+
+    if combined.len() < 12 {
+        return Err(RuntimeError("ciphertext too short".into()));
+    }
+
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let key_hash = digest::digest(&digest::SHA256, secret.as_bytes());
+    let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
+        .map_err(|e| RuntimeError(format!("cipher init: {e:#}")))?;
+
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+        .map_err(|e| RuntimeError(format!("decrypt error: {e:#}")))?;
+
+    String::from_utf8(plaintext).map_err(|e| RuntimeError(format!("decrypt utf8: {e:#}")))
 }
 
 /// Encode bytes as lowercase hex string.

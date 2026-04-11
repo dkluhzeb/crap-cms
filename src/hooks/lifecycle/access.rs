@@ -1,13 +1,15 @@
 //! Access control checks executed within the Lua VM.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use mlua::{Lua, Value};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use tracing::warn;
 
 use crate::{
     core::{Document, FieldDefinition, FieldType},
-    db::{AccessResult, Filter, FilterClause, FilterOp},
+    db::{AccessResult, Filter, FilterClause, FilterOp, query::helpers::prefixed_name},
     hooks::{
         api,
         lifecycle::{
@@ -52,16 +54,21 @@ pub(crate) fn check_access_with_lua(
 
     if let Some(user_doc) = user {
         let user_table = document_to_lua_table(lua, user_doc)?;
+
         ctx_table.set("user", user_table)?;
     }
+
     if let Some(doc_id) = id {
         ctx_table.set("id", doc_id)?;
     }
+
     if let Some(doc_data) = data {
         let data_table = lua.create_table()?;
+
         for (k, v) in doc_data {
             data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
         }
+
         ctx_table.set("data", data_table)?;
     }
 
@@ -70,66 +77,76 @@ pub(crate) fn check_access_with_lua(
     match result {
         Value::Boolean(true) => Ok(AccessResult::Allowed),
         Value::Boolean(false) | Value::Nil => Ok(AccessResult::Denied),
-        Value::Table(tbl) => {
-            let mut clauses = Vec::new();
-            for pair in tbl.pairs::<String, Value>() {
-                let (field, value) = pair?;
-                match value {
-                    Value::String(s) => {
-                        clauses.push(FilterClause::Single(Filter {
-                            field,
-                            op: FilterOp::Equals(s.to_str()?.to_string()),
-                        }));
-                    }
-                    Value::Integer(i) => {
-                        clauses.push(FilterClause::Single(Filter {
-                            field,
-                            op: FilterOp::Equals(i.to_string()),
-                        }));
-                    }
-                    Value::Number(n) => {
-                        clauses.push(FilterClause::Single(Filter {
-                            field,
-                            op: FilterOp::Equals(n.to_string()),
-                        }));
-                    }
-                    Value::Table(op_tbl) => {
-                        for op_pair in op_tbl.pairs::<String, Value>() {
-                            let (op_name, op_val) = op_pair?;
-                            let op = lua_parse_filter_op(&op_name, &op_val)?;
-                            clauses.push(FilterClause::Single(Filter {
-                                field: field.clone(),
-                                op,
-                            }));
-                        }
-                    }
-                    Value::Boolean(b) => {
-                        let val = if b { "1" } else { "0" };
-                        clauses.push(FilterClause::Single(Filter {
-                            field,
-                            op: FilterOp::Equals(val.to_string()),
-                        }));
-                    }
-                    _ => {
-                        tracing::warn!(
-                            "Access constraint for field '{}': unsupported value type, denying",
-                            field
-                        );
-                        return Ok(AccessResult::Denied);
-                    }
-                }
-            }
-            Ok(AccessResult::Constrained(clauses))
-        }
+        Value::Table(tbl) => parse_access_constraints(&tbl),
         other => {
-            tracing::warn!(
+            warn!(
                 "Access function '{}' returned unexpected type '{}', denying access",
                 func_ref,
                 other.type_name()
             );
+
             Ok(AccessResult::Denied)
         }
     }
+}
+
+/// Parse an access constraint table into filter clauses.
+fn parse_access_constraints(tbl: &mlua::Table) -> Result<AccessResult> {
+    let mut clauses = Vec::new();
+
+    for pair in tbl.pairs::<String, Value>() {
+        let (field, value) = pair?;
+
+        match value {
+            Value::String(s) => {
+                clauses.push(FilterClause::Single(Filter {
+                    field,
+                    op: FilterOp::Equals(s.to_str()?.to_string()),
+                }));
+            }
+            Value::Integer(i) => {
+                clauses.push(FilterClause::Single(Filter {
+                    field,
+                    op: FilterOp::Equals(i.to_string()),
+                }));
+            }
+            Value::Number(n) => {
+                clauses.push(FilterClause::Single(Filter {
+                    field,
+                    op: FilterOp::Equals(n.to_string()),
+                }));
+            }
+            Value::Table(op_tbl) => {
+                for op_pair in op_tbl.pairs::<String, Value>() {
+                    let (op_name, op_val) = op_pair?;
+                    let op = lua_parse_filter_op(&op_name, &op_val)?;
+
+                    clauses.push(FilterClause::Single(Filter {
+                        field: field.clone(),
+                        op,
+                    }));
+                }
+            }
+            Value::Boolean(b) => {
+                let val = if b { "1" } else { "0" };
+
+                clauses.push(FilterClause::Single(Filter {
+                    field,
+                    op: FilterOp::Equals(val.to_string()),
+                }));
+            }
+            _ => {
+                warn!(
+                    "Access constraint for field '{}': unsupported value type, denying",
+                    field
+                );
+
+                return Ok(AccessResult::Denied);
+            }
+        }
+    }
+
+    Ok(AccessResult::Constrained(clauses))
 }
 
 /// Check field-level read access using an already-held `&Lua` reference.
@@ -157,6 +174,7 @@ pub(crate) fn check_field_write_access_with_lua(
         "update" => extract_update_access,
         _ => return Vec::new(),
     };
+
     collect_field_access_denied(lua, fields, user, extractor, "")
 }
 
@@ -200,6 +218,7 @@ pub(crate) fn has_any_field_access(
             _ => continue, // Array/Blocks — separate join tables
         }
     }
+
     false
 }
 
@@ -216,27 +235,26 @@ fn collect_field_access_denied(
     prefix: &str,
 ) -> Vec<String> {
     let mut denied = Vec::new();
+
     for field in fields {
-        let full_name = if prefix.is_empty() {
-            field.name.clone()
-        } else {
-            format!("{}__{}", prefix, field.name)
-        };
+        let full_name = prefixed_name(prefix, &field.name);
 
         if let Some(ref_str) = extractor(field) {
             match check_access_with_lua(lua, Some(ref_str), user, None, None) {
                 Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
                 Ok(AccessResult::Denied) => {
                     denied.push(full_name.clone());
+
                     continue; // Parent denied → skip sub-fields
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    warn!(
                         "Field access function '{}' error (treating as denied): {}",
-                        ref_str,
-                        e
+                        ref_str, e
                     );
+
                     denied.push(full_name.clone());
+
                     continue;
                 }
             }
@@ -276,6 +294,7 @@ fn collect_field_access_denied(
             _ => {} // Array/Blocks don't need column-level stripping
         }
     }
+
     denied
 }
 

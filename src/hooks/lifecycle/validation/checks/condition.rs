@@ -1,4 +1,5 @@
 use serde_json::Value;
+use tracing::warn;
 
 /// Evaluate a condition table (JSON) against form data.
 /// A single condition object has `{ field, equals|not_equals|in|not_in|is_truthy|is_falsy }`.
@@ -10,9 +11,8 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
             let field_name = match obj.get("field").and_then(|v| v.as_str()) {
                 Some(f) if !f.is_empty() => f,
                 _ => {
-                    tracing::warn!(
-                        "Display condition missing or empty 'field' key — defaulting to show"
-                    );
+                    warn!("Display condition missing or empty 'field' key — defaulting to show");
+
                     return true;
                 }
             };
@@ -21,15 +21,19 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
             if let Some(eq) = obj.get("equals") {
                 return field_val == eq;
             }
+
             if let Some(neq) = obj.get("not_equals") {
                 return field_val != neq;
             }
+
             if let Some(Value::Array(list)) = obj.get("in") {
                 return list.contains(field_val);
             }
+
             if let Some(Value::Array(list)) = obj.get("not_in") {
                 return !list.contains(field_val);
             }
+
             if obj
                 .get("is_truthy")
                 .and_then(|v| v.as_bool())
@@ -37,6 +41,7 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
             {
                 return condition_is_truthy(field_val);
             }
+
             if obj
                 .get("is_falsy")
                 .and_then(|v| v.as_bool())
@@ -44,10 +49,12 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
             {
                 return !condition_is_truthy(field_val);
             }
-            tracing::warn!(
+
+            warn!(
                 "Unknown display condition operator for field '{}' — defaulting to show",
                 field_name
             );
+
             true
         }
         _ => true,

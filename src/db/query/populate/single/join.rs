@@ -5,7 +5,8 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 use super::populate_relationships_cached;
-use crate::db::query::populate::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
+use crate::core::cache::CacheBackend;
+use crate::db::query::populate::{PopulateContext, PopulateOpts, document_to_json};
 use crate::{
     core::{Document, FieldType, upload},
     db::{
@@ -20,78 +21,98 @@ pub(super) fn populate_join_fields(
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,
-    cache: &PopulateCache,
+    cache: &dyn CacheBackend,
 ) -> Result<()> {
-    let conn = ctx.conn;
-    let registry = ctx.registry;
-    let depth = opts.depth;
-    let select = opts.select;
-    let locale_ctx = opts.locale_ctx;
-
     for field in &ctx.def.fields {
         if field.field_type != FieldType::Join {
             continue;
         }
-        if let Some(sel) = select
+
+        if let Some(sel) = opts.select
             && !sel.iter().any(|s| s == &field.name)
         {
             continue;
         }
+
         let jc = match &field.join {
             Some(jc) => jc,
             None => continue,
         };
-        let target_def = match registry.get_collection(&jc.collection) {
+
+        let target_def = match ctx.registry.get_collection(&jc.collection) {
             Some(d) => d.clone(),
             None => continue,
         };
-        let mut fq = FindQuery::new();
-        fq.filters = vec![FilterClause::Single(Filter {
-            field: jc.on.clone(),
-            op: FilterOp::Equals(doc.id.to_string()),
-        })];
-        let fq = fq;
 
-        if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
-            let mut populated = Vec::new();
-            for mut matched_doc in matched_docs {
-                hydrate_document(
-                    conn,
-                    &jc.collection,
-                    &target_def.fields,
-                    &mut matched_doc,
-                    None,
-                    locale_ctx,
-                )?;
-
-                if let Some(ref uc) = target_def.upload
-                    && uc.enabled
-                {
-                    upload::assemble_sizes_object(&mut matched_doc, uc);
-                }
-                populate_relationships_cached(
-                    &PopulateContext {
-                        conn,
-                        registry,
-                        collection_slug: &jc.collection,
-                        def: &target_def,
-                    },
-                    &mut matched_doc,
-                    visited,
-                    &PopulateOpts {
-                        depth: depth - 1,
-                        select: None,
-                        locale_ctx,
-                    },
-                    cache,
-                )?;
-                populated.push(document_to_json(&matched_doc, &jc.collection));
-            }
-            doc.fields
-                .insert(field.name.clone(), Value::Array(populated));
-        }
+        let populated = populate_join_docs(ctx, doc, jc, &target_def, visited, opts, cache)?;
+        doc.fields
+            .insert(field.name.clone(), Value::Array(populated));
     }
+
     Ok(())
+}
+
+/// Find, hydrate, and recursively populate matching documents for a join field.
+fn populate_join_docs(
+    ctx: &PopulateContext<'_>,
+    doc: &Document,
+    jc: &crate::core::field::JoinConfig,
+    target_def: &crate::core::CollectionDefinition,
+    visited: &mut HashSet<(String, String)>,
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+) -> Result<Vec<Value>> {
+    let mut fq = FindQuery::new();
+
+    fq.filters = vec![FilterClause::Single(Filter {
+        field: jc.on.clone(),
+        op: FilterOp::Equals(doc.id.to_string()),
+    })];
+
+    let matched_docs = match find(ctx.conn, &jc.collection, target_def, &fq, opts.locale_ctx) {
+        Ok(docs) => docs,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let mut populated = Vec::new();
+
+    for mut matched_doc in matched_docs {
+        hydrate_document(
+            ctx.conn,
+            &jc.collection,
+            &target_def.fields,
+            &mut matched_doc,
+            None,
+            opts.locale_ctx,
+        )?;
+
+        if let Some(ref uc) = target_def.upload
+            && uc.enabled
+        {
+            upload::assemble_sizes_object(&mut matched_doc, uc);
+        }
+
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: ctx.conn,
+                registry: ctx.registry,
+                collection_slug: &jc.collection,
+                def: target_def,
+            },
+            &mut matched_doc,
+            visited,
+            &PopulateOpts {
+                depth: opts.depth - 1,
+                select: None,
+                locale_ctx: opts.locale_ctx,
+            },
+            cache,
+        )?;
+
+        populated.push(document_to_json(&matched_doc, &jc.collection));
+    }
+
+    Ok(populated)
 }
 
 #[cfg(test)]
@@ -99,8 +120,9 @@ mod tests {
     use serde_json::json;
 
     use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
+    use super::super::super::{PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
+    use crate::core::cache::NoneCache;
     use crate::core::{Document, Registry};
     use std::collections::HashSet;
 
@@ -131,7 +153,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -177,7 +199,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -216,7 +238,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -260,7 +282,7 @@ mod tests {
                 select: Some(&select),
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 

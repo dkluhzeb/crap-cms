@@ -1,12 +1,35 @@
 //! Version CRUD operations and document status management.
 
 use anyhow::{Context as _, Result};
+use nanoid::nanoid;
 use serde_json::Value;
 
 use crate::{
     core::document::VersionSnapshot,
-    db::{DbConnection, DbValue},
+    db::{DbConnection, DbRow, DbValue},
 };
+
+/// Build the quoted version table name for a collection slug.
+fn version_table(slug: &str) -> String {
+    format!("\"_versions_{slug}\"")
+}
+
+/// Map a database row to a `VersionSnapshot`.
+fn row_to_version(row: &DbRow) -> Result<VersionSnapshot> {
+    let snapshot_str = row.get_string("snapshot")?;
+
+    Ok(
+        VersionSnapshot::builder(row.get_string("id")?, row.get_string("_parent")?)
+            .version(row.get_i64("_version")?)
+            .status(row.get_string("_status")?)
+            .latest(row.get_bool("_latest")?)
+            .snapshot(
+                serde_json::from_str(&snapshot_str)
+                    .context("Failed to parse version snapshot JSON")?,
+            )
+            .build(),
+    )
+}
 
 /// Create a new version entry. Clears previous `_latest` flag, inserts new version.
 pub fn create_version(
@@ -16,35 +39,26 @@ pub fn create_version(
     status: &str,
     snapshot: &Value,
 ) -> Result<VersionSnapshot> {
-    let table = format!("\"_versions_{}\"", slug);
-    let id = nanoid::nanoid!();
+    let table = version_table(slug);
+    let id = nanoid!();
 
-    // Get the next version number
     let p1 = conn.placeholder(1);
     let next_version: i64 = conn
         .query_one(
-            &format!(
-                "SELECT COALESCE(MAX(_version), 0) + 1 AS next_ver FROM {} WHERE _parent = {p1}",
-                table
-            ),
+            &format!("SELECT COALESCE(MAX(_version), 0) + 1 AS next_ver FROM {table} WHERE _parent = {p1}"),
             &[DbValue::Text(parent_id.to_string())],
         )?
         .map(|row| row.get_i64("next_ver"))
         .transpose()?
         .unwrap_or(1);
 
-    // Clear previous _latest flag
     let p1 = conn.placeholder(1);
     conn.execute(
-        &format!(
-            "UPDATE {} SET _latest = 0 WHERE _parent = {p1} AND _latest = 1",
-            table
-        ),
+        &format!("UPDATE {table} SET _latest = 0 WHERE _parent = {p1} AND _latest = 1"),
         &[DbValue::Text(parent_id.to_string())],
     )
     .context("Failed to clear previous latest flag")?;
 
-    // Insert new version
     let snapshot_str = serde_json::to_string(snapshot).context("Failed to serialize snapshot")?;
     let (p1, p2, p3, p4, p5) = (
         conn.placeholder(1),
@@ -54,10 +68,7 @@ pub fn create_version(
         conn.placeholder(5),
     );
     conn.execute(
-        &format!(
-            "INSERT INTO {} (id, _parent, _version, _status, _latest, snapshot) VALUES ({p1}, {p2}, {p3}, {p4}, 1, {p5})",
-            table
-        ),
+        &format!("INSERT INTO {table} (id, _parent, _version, _status, _latest, snapshot) VALUES ({p1}, {p2}, {p3}, {p4}, 1, {p5})"),
         &[
             DbValue::Text(id.clone()),
             DbValue::Text(parent_id.to_string()),
@@ -82,45 +93,27 @@ pub fn find_latest_version(
     slug: &str,
     parent_id: &str,
 ) -> Result<Option<VersionSnapshot>> {
-    let table = format!("\"_versions_{}\"", slug);
+    let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE _parent = {p1} AND _latest = 1 LIMIT 1",
-        table
+        "SELECT id, _parent, _version, _status, _latest, snapshot \
+         FROM {table} WHERE _parent = {p1} AND _latest = 1 LIMIT 1"
     );
 
-    match conn.query_one(&sql, &[DbValue::Text(parent_id.to_string())])? {
-        Some(row) => {
-            let snapshot_str = row.get_string("snapshot")?;
-            let id = row.get_string("id")?;
-            let parent = row.get_string("_parent")?;
-            let version = row.get_i64("_version")?;
-            let status = row.get_string("_status")?;
-            let latest = row.get_bool("_latest")?;
-            Ok(Some(
-                VersionSnapshot::builder(id, parent)
-                    .version(version)
-                    .status(status)
-                    .latest(latest)
-                    .snapshot(
-                        serde_json::from_str(&snapshot_str)
-                            .context("Failed to parse version snapshot JSON")?,
-                    )
-                    .build(),
-            ))
-        }
-        None => Ok(None),
-    }
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(parent_id.to_string())])? else {
+        return Ok(None);
+    };
+
+    Ok(Some(row_to_version(&row)?))
 }
 
 /// Count total versions for a parent document.
 pub fn count_versions(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> Result<i64> {
-    let table = format!("\"_versions_{}\"", slug);
+    let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let row = conn
         .query_one(
-            &format!("SELECT COUNT(*) AS cnt FROM {} WHERE _parent = {p1}", table),
+            &format!("SELECT COUNT(*) AS cnt FROM {table} WHERE _parent = {p1}"),
             &[DbValue::Text(parent_id.to_string())],
         )?
         .context("Failed to count versions")?;
@@ -135,7 +128,7 @@ pub fn list_versions(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<VersionSnapshot>> {
-    let table = format!("\"_versions_{}\"", slug);
+    let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let mut params: Vec<DbValue> = vec![DbValue::Text(parent_id.to_string())];
     let mut idx = 2;
@@ -149,6 +142,7 @@ pub fn list_versions(
         }
         None => String::new(),
     };
+
     let offset_clause = match offset {
         Some(o) => {
             let p = conn.placeholder(idx);
@@ -159,33 +153,14 @@ pub fn list_versions(
     };
 
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE _parent = {p1} ORDER BY _version DESC{}{}",
-        table, limit_clause, offset_clause
+        "SELECT id, _parent, _version, _status, _latest, snapshot \
+         FROM {table} WHERE _parent = {p1} ORDER BY _version DESC{limit_clause}{offset_clause}"
     );
 
-    let rows = conn.query_all(&sql, &params)?;
-    let mut versions = Vec::new();
-    for row in rows {
-        let snapshot_str = row.get_string("snapshot")?;
-        let id = row.get_string("id")?;
-        let parent = row.get_string("_parent")?;
-        let version = row.get_i64("_version")?;
-        let status = row.get_string("_status")?;
-        let latest = row.get_bool("_latest")?;
-        versions.push(
-            VersionSnapshot::builder(id, parent)
-                .version(version)
-                .status(status)
-                .latest(latest)
-                .snapshot(
-                    serde_json::from_str(&snapshot_str)
-                        .context("Failed to parse version snapshot JSON")?,
-                )
-                .build(),
-        );
-    }
-    Ok(versions)
+    conn.query_all(&sql, &params)?
+        .iter()
+        .map(row_to_version)
+        .collect()
 }
 
 /// Find a specific version by its ID.
@@ -194,36 +169,18 @@ pub fn find_version_by_id(
     slug: &str,
     version_id: &str,
 ) -> Result<Option<VersionSnapshot>> {
-    let table = format!("\"_versions_{}\"", slug);
+    let table = version_table(slug);
     let p1 = conn.placeholder(1);
     let sql = format!(
-        "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE id = {p1} LIMIT 1",
-        table
+        "SELECT id, _parent, _version, _status, _latest, snapshot \
+         FROM {table} WHERE id = {p1} LIMIT 1"
     );
 
-    match conn.query_one(&sql, &[DbValue::Text(version_id.to_string())])? {
-        Some(row) => {
-            let snapshot_str = row.get_string("snapshot")?;
-            let id = row.get_string("id")?;
-            let parent = row.get_string("_parent")?;
-            let version = row.get_i64("_version")?;
-            let status = row.get_string("_status")?;
-            let latest = row.get_bool("_latest")?;
-            Ok(Some(
-                VersionSnapshot::builder(id, parent)
-                    .version(version)
-                    .status(status)
-                    .latest(latest)
-                    .snapshot(
-                        serde_json::from_str(&snapshot_str)
-                            .context("Failed to parse version snapshot JSON")?,
-                    )
-                    .build(),
-            ))
-        }
-        None => Ok(None),
-    }
+    let Some(row) = conn.query_one(&sql, &[DbValue::Text(version_id.to_string())])? else {
+        return Ok(None);
+    };
+
+    Ok(Some(row_to_version(&row)?))
 }
 
 /// Delete oldest versions beyond the max_versions cap for a document.
@@ -236,15 +193,14 @@ pub fn prune_versions(
     if max_versions == 0 {
         return Ok(()); // unlimited
     }
-    let table = format!("\"_versions_{}\"", slug);
-    // Delete all versions beyond the cap, keeping the newest ones
+
+    let table = version_table(slug);
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
         &format!(
-            "DELETE FROM {} WHERE _parent = {p1} AND id NOT IN (\
-                SELECT id FROM {} WHERE _parent = {p1} ORDER BY _version DESC LIMIT {p2}\
-            )",
-            table, table
+            "DELETE FROM {table} WHERE _parent = {p1} AND id NOT IN (\
+                SELECT id FROM {table} WHERE _parent = {p1} ORDER BY _version DESC LIMIT {p2}\
+            )"
         ),
         &[
             DbValue::Text(parent_id.to_string()),
@@ -285,13 +241,15 @@ pub fn get_document_status(
     id: &str,
 ) -> Result<Option<String>> {
     let p1 = conn.placeholder(1);
-    match conn.query_one(
-        &format!("SELECT _status FROM \"{}\" WHERE id = {p1}", slug),
+    let Some(row) = conn.query_one(
+        &format!("SELECT _status FROM \"{slug}\" WHERE id = {p1}"),
         &[DbValue::Text(id.to_string())],
-    )? {
-        Some(row) => Ok(row.get_opt_string("_status")?),
-        None => Ok(None),
-    }
+    )?
+    else {
+        return Ok(None);
+    };
+
+    row.get_opt_string("_status")
 }
 
 #[cfg(test)]

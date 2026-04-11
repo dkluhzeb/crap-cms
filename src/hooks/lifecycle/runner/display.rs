@@ -2,8 +2,9 @@
 
 use std::collections::HashMap;
 
-use mlua::Value;
+use mlua::{Lua, Table, Value};
 use serde_json::Value as JsonValue;
+use tracing::warn;
 
 use crate::hooks::{
     HookRunner, api,
@@ -21,6 +22,7 @@ impl HookRunner {
         let lua = self.pool.acquire().ok()?;
         let func = resolve_hook_function(&lua, func_ref).ok()?;
         let row_lua = api::json_to_lua(&lua, row_data).ok()?;
+
         match func.call::<Value>(row_lua) {
             Ok(Value::String(s)) => s.to_str().ok().map(|s| s.to_string()),
             _ => None,
@@ -54,11 +56,13 @@ impl HookRunner {
             Err(_) => return HashMap::new(),
         };
         let mut results = HashMap::new();
+
         for &(func_ref, form_data) in conditions {
             if let Some(result) = call_display_condition_with_lua(&lua, func_ref, form_data) {
                 results.insert(func_ref.to_string(), result);
             }
         }
+
         results
     }
 
@@ -66,8 +70,7 @@ impl HookRunner {
     /// Global registered `before_render` hooks receive the full template context as a
     /// Lua table and return the (potentially modified) context. No CRUD access.
     /// On error: logs warning, returns original context unmodified.
-    pub fn run_before_render(&self, mut context: JsonValue) -> JsonValue {
-        // Skip VM acquisition entirely when no before_render hooks are registered
+    pub fn run_before_render(&self, context: JsonValue) -> JsonValue {
         if !self.has_registered_hooks_for("before_render") {
             return context;
         }
@@ -75,7 +78,7 @@ impl HookRunner {
         let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
-                tracing::warn!("VM pool error in run_before_render: {}", e);
+                warn!("VM pool error in run_before_render: {e}");
 
                 return context;
             }
@@ -85,55 +88,53 @@ impl HookRunner {
             return context;
         }
 
-        // Get the registered hooks table
-        let hooks_table: mlua::Table = match lua
-            .named_registry_value::<mlua::Table>("_crap_event_hooks")
-            .and_then(|t| t.get::<mlua::Table>("before_render"))
-        {
-            Ok(t) => t,
-            Err(_) => return context,
+        execute_render_hooks(&lua, context)
+    }
+}
+
+/// Execute all registered `before_render` hooks, piping context through each.
+fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
+    let hooks_table: Table = match lua
+        .named_registry_value::<Table>("_crap_event_hooks")
+        .and_then(|t| t.get::<Table>("before_render"))
+    {
+        Ok(t) => t,
+        Err(_) => return context,
+    };
+
+    let len = hooks_table.raw_len();
+
+    for i in 1..=len {
+        let func: mlua::Function = match hooks_table.raw_get(i) {
+            Ok(f) => f,
+            Err(_) => continue,
         };
 
-        let len = hooks_table.raw_len();
-        for i in 1..=len {
-            let func: mlua::Function = match hooks_table.raw_get(i) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
+        let ctx_lua = match api::json_to_lua(lua, &context) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("before_render: failed to convert context to Lua: {e}");
 
-            let ctx_lua = match api::json_to_lua(&lua, &context) {
-                Ok(v) => v,
+                return context;
+            }
+        };
+
+        match func.call::<Value>(ctx_lua) {
+            Ok(Value::Table(tbl)) => match api::lua_to_json(lua, &Value::Table(tbl)) {
+                Ok(new_ctx) => context = new_ctx,
                 Err(e) => {
-                    tracing::warn!("before_render: failed to convert context to Lua: {}", e);
-
-                    return context;
+                    warn!("before_render: failed to convert Lua result to JSON: {e}");
                 }
-            };
-
-            match func.call::<Value>(ctx_lua) {
-                Ok(Value::Table(tbl)) => match api::lua_to_json(&lua, &Value::Table(tbl)) {
-                    Ok(new_ctx) => context = new_ctx,
-                    Err(e) => {
-                        tracing::warn!(
-                            "before_render: failed to convert Lua result to JSON: {}",
-                            e
-                        );
-                    }
-                },
-                Ok(Value::Nil) => {
-                    // Hook returned nil — keep context unchanged
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        "before_render hook returned non-table, non-nil value; ignoring"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("before_render hook error: {}", e);
-                }
+            },
+            Ok(Value::Nil) => {}
+            Ok(_) => {
+                warn!("before_render hook returned non-table, non-nil value; ignoring");
+            }
+            Err(e) => {
+                warn!("before_render hook error: {e}");
             }
         }
-
-        context
     }
+
+    context
 }

@@ -1,4 +1,6 @@
-//! FTS5 search: sanitize queries, build WHERE clauses, run searches.
+//! FTS search: sanitize queries, build WHERE clauses, run searches.
+//!
+//! Supports SQLite (FTS5 MATCH) and PostgreSQL (tsvector @@ tsquery).
 
 use anyhow::{Context as _, Result};
 
@@ -14,26 +16,50 @@ pub(super) fn table_exists(conn: &dyn DbConnection, name: &str) -> bool {
     conn.table_exists(name).unwrap_or(false)
 }
 
-/// Sanitize a user search query for FTS5 with prefix matching.
+/// Sanitize a user search query for FTS with prefix matching.
 ///
-/// Each whitespace-separated token is wrapped in double quotes (to escape special
-/// chars like `'`, `:`, etc.) and suffixed with `*` for prefix matching. This means
-/// typing "Con" matches "Conference", "Concept", etc. Tokens are joined with spaces
-/// (implicit AND in FTS5).
+/// **SQLite (FTS5):** Each token is wrapped in double quotes and suffixed with `*`
+/// for prefix matching. Tokens are joined with spaces (implicit AND in FTS5).
+///
+/// **PostgreSQL:** Each token is lowercased, sanitized (alphanumeric only), suffixed
+/// with `:*` for prefix matching, and joined with ` & ` (AND).
 ///
 /// Empty/whitespace-only input returns an empty string.
-pub fn sanitize_fts_query(input: &str) -> String {
-    let tokens: Vec<String> = input
-        .split_whitespace()
-        .filter(|t| !t.is_empty())
-        .map(|t| {
-            // Escape any double quotes inside the token
-            let escaped = t.replace('"', "\"\"");
-            // Quoted prefix query: "token" * (FTS5 prefix syntax)
-            format!("\"{}\" *", escaped)
-        })
-        .collect();
-    tokens.join(" ")
+pub fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String {
+    let raw_tokens: Vec<&str> = input.split_whitespace().filter(|t| !t.is_empty()).collect();
+
+    if raw_tokens.is_empty() {
+        return String::new();
+    }
+
+    match conn.kind() {
+        "postgres" => {
+            let tokens: Vec<String> = raw_tokens
+                .into_iter()
+                .map(|t| {
+                    // Strip non-alphanumeric chars (except underscore) to prevent
+                    // tsquery injection, then append :* for prefix matching
+                    let clean: String = t
+                        .chars()
+                        .filter(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    format!("{}:*", clean)
+                })
+                .filter(|t| t != ":*")
+                .collect();
+            tokens.join(" & ")
+        }
+        _ => {
+            let tokens: Vec<String> = raw_tokens
+                .into_iter()
+                .map(|t| {
+                    let escaped = t.replace('"', "\"\"");
+                    format!("\"{}\" *", escaped)
+                })
+                .collect();
+            tokens.join(" ")
+        }
+    }
 }
 
 /// Search the FTS5 index and return matching document IDs, ordered by relevance.
@@ -46,7 +72,7 @@ pub fn fts_search(
     query: &str,
     limit: i64,
 ) -> Result<Vec<String>> {
-    let sanitized = sanitize_fts_query(query);
+    let sanitized = sanitize_fts_query(conn, query);
 
     if sanitized.is_empty() {
         return Ok(Vec::new());
@@ -60,10 +86,21 @@ pub fn fts_search(
     }
 
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-    let sql = format!(
-        "SELECT id FROM {} WHERE {} MATCH {} ORDER BY rank LIMIT {}",
-        fts_table, fts_table, p1, p2
-    );
+
+    let sql = match conn.kind() {
+        "postgres" => {
+            let p1_copy = conn.placeholder(1);
+            format!(
+                "SELECT id FROM {} WHERE tsv @@ to_tsquery('simple', {}) \
+                 ORDER BY ts_rank(tsv, to_tsquery('simple', {})) DESC LIMIT {}",
+                fts_table, p1, p1_copy, p2
+            )
+        }
+        _ => format!(
+            "SELECT id FROM {} WHERE {} MATCH {} ORDER BY rank LIMIT {}",
+            fts_table, fts_table, p1, p2
+        ),
+    };
 
     let rows = conn
         .query_all(&sql, &[DbValue::Text(sanitized), DbValue::Integer(limit)])
@@ -93,7 +130,7 @@ pub fn fts_where_clause(
     search: &str,
     param_index: usize,
 ) -> Option<(String, String)> {
-    let sanitized = sanitize_fts_query(search);
+    let sanitized = sanitize_fts_query(conn, search);
 
     if sanitized.is_empty() {
         return None;
@@ -107,10 +144,18 @@ pub fn fts_where_clause(
     }
 
     let placeholder = conn.placeholder(param_index);
-    let clause = format!(
-        "id IN (SELECT id FROM {} WHERE {} MATCH {})",
-        fts_table, fts_table, placeholder
-    );
+
+    let clause = match conn.kind() {
+        "postgres" => format!(
+            "id IN (SELECT id FROM {} WHERE tsv @@ to_tsquery('simple', {}))",
+            fts_table, placeholder
+        ),
+        _ => format!(
+            "id IN (SELECT id FROM {} WHERE {} MATCH {})",
+            fts_table, fts_table, placeholder
+        ),
+    };
+
     Some((clause, sanitized))
 }
 
@@ -118,15 +163,12 @@ pub fn fts_where_clause(
 mod tests {
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
-    use crate::core::collection::*;
-    use crate::core::field::*;
+    use crate::core::collection::CollectionDefinition;
+    use crate::core::field::FieldDefinition;
+    use crate::db::migrate::collection::test_helpers::text_field;
     use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::{BoxedConnection, DbValue, pool};
     use tempfile::TempDir;
-
-    fn text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).build()
-    }
 
     fn simple_def(fields: Vec<FieldDefinition>) -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -168,31 +210,42 @@ mod tests {
 
     #[test]
     fn sanitize_basic() {
-        assert_eq!(sanitize_fts_query("hello world"), "\"hello\" * \"world\" *");
+        let (_dir, conn) = setup_db();
+        assert_eq!(
+            sanitize_fts_query(&conn, "hello world"),
+            "\"hello\" * \"world\" *"
+        );
     }
 
     #[test]
     fn sanitize_special_chars() {
-        assert_eq!(sanitize_fts_query("foo's bar"), "\"foo's\" * \"bar\" *");
+        let (_dir, conn) = setup_db();
+        assert_eq!(
+            sanitize_fts_query(&conn, "foo's bar"),
+            "\"foo's\" * \"bar\" *"
+        );
     }
 
     #[test]
     fn sanitize_empty() {
-        assert_eq!(sanitize_fts_query(""), "");
-        assert_eq!(sanitize_fts_query("   "), "");
+        let (_dir, conn) = setup_db();
+        assert_eq!(sanitize_fts_query(&conn, ""), "");
+        assert_eq!(sanitize_fts_query(&conn, "   "), "");
     }
 
     #[test]
     fn sanitize_quotes() {
+        let (_dir, conn) = setup_db();
         assert_eq!(
-            sanitize_fts_query("say \"hello\" please"),
+            sanitize_fts_query(&conn, "say \"hello\" please"),
             "\"say\" * \"\"\"hello\"\"\" * \"please\" *"
         );
     }
 
     #[test]
     fn sanitize_single_token() {
-        assert_eq!(sanitize_fts_query("hello"), "\"hello\" *");
+        let (_dir, conn) = setup_db();
+        assert_eq!(sanitize_fts_query(&conn, "hello"), "\"hello\" *");
     }
 
     // ── fts_search ──────────────────────────────────────────────────────

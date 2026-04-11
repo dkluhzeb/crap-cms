@@ -22,6 +22,7 @@ pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Resu
         for lang in typegen::Language::all() {
             let path = typegen::generate_lang(&config_dir, &reg, *lang, output_dir)
                 .with_context(|| format!("Failed to generate {} types", lang.label()))?;
+
             cli::success(&format!("Generated {}", path.display()));
         }
     } else {

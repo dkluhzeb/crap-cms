@@ -35,6 +35,8 @@ pub enum PageType {
     AuthForgot,
     /// The password reset page (via email link).
     AuthReset,
+    /// The MFA code entry page.
+    AuthMfa,
     /// Forbidden error page (403).
     Error403,
     /// Not found error page (404).
@@ -59,6 +61,7 @@ impl PageType {
             PageType::AuthLogin => "auth_login",
             PageType::AuthForgot => "auth_forgot",
             PageType::AuthReset => "auth_reset",
+            PageType::AuthMfa => "auth_mfa",
             PageType::Error403 => "error_403",
             PageType::Error404 => "error_404",
             PageType::Error500 => "error_500",

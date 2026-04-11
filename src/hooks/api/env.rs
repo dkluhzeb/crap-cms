@@ -4,25 +4,22 @@ use anyhow::Result;
 use mlua::{Lua, Result as LuaResult, Table};
 use std::env;
 
+/// Register `crap.env.get` — read-only, restricted to `CRAP_*` and `LUA_*` prefixed vars.
 pub(super) fn register_env(lua: &Lua, crap: &Table) -> Result<()> {
-    let env_table = lua.create_table()?;
-    let env_get_fn = lua.create_function(|_, key: String| -> LuaResult<Option<String>> {
-        // Only allow CRAP_ and LUA_ prefixed environment variables
-        if !key.starts_with("CRAP_") && !key.starts_with("LUA_") {
-            return Ok(None);
-        }
-
-        match env::var(&key) {
-            Ok(val) => Ok(Some(val)),
-            Err(_) => Ok(None),
-        }
-    })?;
-
-    env_table.set("get", env_get_fn)?;
-
-    crap.set("env", env_table)?;
+    let t = lua.create_table()?;
+    t.set("get", lua.create_function(|_, key: String| env_get(&key))?)?;
+    crap.set("env", t)?;
 
     Ok(())
+}
+
+/// Read an environment variable, restricted to `CRAP_*` and `LUA_*` prefixes.
+fn env_get(key: &str) -> LuaResult<Option<String>> {
+    if !key.starts_with("CRAP_") && !key.starts_with("LUA_") {
+        return Ok(None);
+    }
+
+    Ok(env::var(key).ok())
 }
 
 #[cfg(test)]

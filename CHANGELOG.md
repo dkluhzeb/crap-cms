@@ -4,6 +4,592 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.4] — Unreleased
+
+### Changed
+
+- **BREAKING: `default_deny` now defaults to `true`** — Collections and
+  globals without explicit access functions now **deny all operations** by
+  default. This is a secure-by-default change. Previously, missing access
+  functions allowed all operations (`default_deny = false`). To restore
+  the old behavior, set `default_deny = false` in `[access]` in
+  `crap.toml`. Every collection and global in production should have
+  explicit access rules defined.
+
+- **Invalid locale now returns an error** — API requests (gRPC, Lua CRUD)
+  with an invalid locale code now receive `INVALID_ARGUMENT` /
+  `RuntimeError` instead of silently falling back to the default locale.
+  Valid locale codes are those listed in `[locale] locales` in
+  `crap.toml`, plus the special value `"all"`. Passing no locale still
+  defaults to the default locale.
+
+### Added
+
+- **MCP locale support** — `find` and `find_by_id` MCP tools now accept
+  an optional `locale` parameter for querying locale-specific data,
+  matching the gRPC API's locale support.
+
+- **Per-collection ref count backfill** — The `_ref_count` backfill
+  migration now tracks which collections have been backfilled
+  individually. Adding a new collection to the config no longer requires
+  manually resetting the `ref_count_backfilled` flag — the backfill runs
+  automatically for newly added collections on the next startup.
+
+- **Event delivery modes** — per-collection `live` setting now supports a
+  `mode` field (`"metadata"` or `"full"`) that controls what data events
+  carry. `metadata` (default) sends only event metadata (sequence,
+  operation, collection, document_id) with zero hook overhead — clients
+  re-fetch via `FindByID` if needed. `full` mode sends complete document
+  data processed through `after_read` hooks and field-level access
+  stripping, matching the exact same data a `Find` call returns. Configure
+  per collection: `live = { mode = "full" }`. Global default configurable
+  via `[live] default_mode` in `crap.toml`.
+
+- **Event stream access control** — SSE and gRPC Subscribe streams now
+  enforce the same access rules as normal read operations:
+  - Collection-level access (cached at connection time)
+  - Row-level constrained access (in-memory filter evaluation per event,
+    using the same constraint filters as `Find` SQL WHERE clauses)
+  - Field-level read access stripping (in `full` mode, per subscriber)
+  - `after_read` hooks (in `full` mode, per subscriber)
+
+- **SSE events now include `data` field** — SSE mutation events now carry
+  document data (respecting the collection's delivery mode and access
+  control). Previously SSE sent metadata only. This enables custom admin
+  UI themes to use real-time document data without re-fetching.
+
+- **In-memory filter evaluation** — new `matches_constraints()` function
+  evaluates `FilterClause` types against `HashMap<String, Value>` data
+  in-memory. Supports all filter operators (Equals, NotEquals, Contains,
+  Like, GreaterThan/LessThan, In/NotIn, Exists/NotExists, Or groups).
+  Used by event streams for row-level access control without DB queries.
+
+- **BREAKING: "Restore" renamed to "Undelete" for trash operations** —
+  The operation that un-deletes a soft-deleted document is now called
+  "undelete" everywhere to distinguish it from "restore version" (which
+  reverts a document to a previous snapshot). Affected APIs:
+  - gRPC: `rpc Restore` → `rpc Undelete`, `RestoreRequest` → `UndeleteRequest`,
+    `RestoreResponse` → `UndeleteResponse`
+  - Lua: `crap.collections.restore()` → `crap.collections.undelete()`
+  - Admin URL: `/admin/collections/{slug}/{id}/restore` →
+    `/admin/collections/{slug}/{id}/undelete`
+  - Version restore operations (`RestoreVersion`, `restore_collection_version`,
+    etc.) are unchanged.
+
+- **Service layer unification** — all database operation flows now go through
+  a shared service layer (`src/service/`), ensuring consistent access control,
+  field-level permissions, validation, hydration, and error handling across
+  all 4 API surfaces (admin, gRPC, MCP, Lua hooks). Key additions:
+  - `ServiceError` with 12 typed variants replacing string-based error matching
+  - `WriteHooks::check_access` / `field_write_denied` / `field_read_denied`
+    for unified access control inside service operations
+  - `service::auth` module for authentication, password reset, email verification
+  - `service::version_ops` for version restore/list
+  - `service::document_info` for ref counts and back-references
+  - `service::user_settings` for per-user preferences
+  - `service::jobs` for job queue/run operations with access control
+  - `service::upload` for file upload orchestration
+  - Write operations now hydrate + strip read-denied fields before returning
+
+- **ServiceContext API harmonization** — every service function now follows
+  `fn operation(ctx: &ServiceContext, input)` with a unified calling
+  environment. `ServiceContext` carries connection (pool or direct),
+  hooks, user identity, slug, and definition. Eliminates all
+  `#[allow(clippy::too_many_arguments)]` from the service layer, all
+  `_with_conn` variants, and all loose parameter passing. Dedicated input
+  structs (`FindDocumentsInput`, `CountDocumentsInput`, `WriteInput`,
+  `QueueJobInput`, etc.) carry operation-specific data.
+
+- **Unified pagination** — all multi-result service functions now return
+  `PaginatedResult<T>` with docs, total count, and computed pagination
+  metadata (page or cursor mode). Pagination logic is built inside the
+  service layer — callers no longer duplicate `PaginationResult`
+  construction. Affected: `find_documents`, `search_documents`,
+  `list_versions`, `list_job_runs`.
+
+### Fixed
+
+- **BREAKING: `admin.hidden` fields now stripped from API responses** —
+  Fields with `admin.hidden = true` are no longer returned in gRPC, MCP,
+  or Lua API responses. Previously, `hidden` only affected admin form
+  rendering. This aligns with PayloadCMS behavior where hidden fields are
+  excluded from all responses. Upload metadata fields (`url`,
+  `mime_type`, `width`, `height`, `filesize`, `filename`) that were
+  auto-injected as `hidden` are affected — if your frontend relies on
+  these in API responses, remove `admin.hidden` from the field definition
+  or stop marking them hidden in your upload config.
+
+- **Group subfield access stripping** — read-denied fields inside groups
+  (e.g., `address.city` with read access denied) are now correctly
+  stripped from API responses after hydration. Previously, group subfields
+  stored as `address__city` were stripped before hydration but became
+  nested `{"address": {"city": ...}}` after hydration, bypassing the
+  strip. `Document::strip_fields()` now handles `__`-separated paths at
+  any nesting depth.
+
+- **Missing field stripping** — `undelete_document`, `restore_version`
+  (collection and global), `search_documents`, and `find_version_by_id`
+  now strip read-denied and hidden fields before returning. Previously
+  these functions returned unstripped documents.
+
+- **Version snapshot access control** — `find_version_by_id` now checks
+  read access and strips denied fields from the snapshot JSON. Previously
+  version snapshots were returned without access checks.
+
+- **Redundant proto-level stripping removed** — gRPC handlers no longer
+  perform a second pass of field stripping at the protobuf level. The
+  service layer handles all field access control, eliminating redundant
+  Lua VM access checks and unnecessary transaction opens per response.
+
+- **Surface parity** — all API surfaces now expose a consistent set of operations:
+  - MCP: added `undelete`, `count`, `unpublish`, `list_versions`, `restore_version` tools
+  - Lua: added `crap.collections.unpublish()`, `list_versions()`, `restore_version()`,
+    `ref_count()`, `validate()` functions
+  - gRPC: added `Validate`, `LockAccount`, `UnlockAccount`, `VerifyAccount`,
+    `UnverifyAccount` RPCs
+  - Lua access API: `crap.auth.user()`, `crap.access.check()`,
+    `crap.access.field_read_denied()`, `crap.access.field_write_denied()`
+  - Lua `crap.jobs.queue()` now checks job access control
+
+- **Module restructuring** — service layer and all surfaces restructured into
+  consistent subdirectory hierarchy matching domain concerns:
+  - `service/` — 11 subdirectories: types, hooks, read, write, collection,
+    globals, persist, versions, jobs, plus auth, upload, user_settings, document_info
+  - `api/service/` renamed to `api/handlers/` to avoid confusion with service layer
+  - MCP tools split into `collection/{read,write}/`, `globals/`, `schema/`
+  - Lua CRUD split into `collection/{read,write,bulk,versions}/`, `globals/`, `jobs/`
+  - Admin `forms.rs` (912 lines) → `forms/`; `query_utils.rs` (518 lines) → `query/`
+  - gRPC `convert.rs` (881 lines) → `convert/` with document, data, filters, schema
+
+- **Code quality** — namespaced macro calls replaced with top-level imports
+  across service + all surfaces (tracing, anyhow, nanoid). Removed unused
+  `rpassword` dependency.
+
+- **Internal code quality refactoring** — large files split into focused
+  modules following one-handler-per-file and no-logic-in-mod.rs rules.
+  Key restructurings:
+  - `admin/handlers/shared.rs` → `shared/` module (access, document,
+    locale, pagination, response, versions)
+  - `admin/server.rs` → extracted `auth_middleware.rs` and `mcp_handler.rs`
+  - `admin/templates/mod.rs` → extracted `registry.rs`
+  - `api/service/schema_ops.rs` → split into `globals/`, `schema/`,
+    `subscribe.rs`, `collection/versions/`, `jobs/`
+  - `api/service/collection/{read,write,bulk}.rs` → split into module
+    folders with one handler per file
+  - `api/service/auth.rs` → split into per-handler files
+  - `api/upload.rs` → split into `upload/` module with shared helpers
+  - Extracted shared helpers: `evaluate_condition_results`,
+    `extract_doc_status`, `load_version_with_missing_relations`,
+    `publish_mutation_event`, `strip_read_denied_proto_fields`
+  - Eliminated duplicated access check, event publishing, and field
+    stripping patterns across admin and API handlers
+  - Added `FindQueryBuilder` for `FindQuery` (9 fields, was using
+    manual field assignment)
+
+- **Optional PostgreSQL backend** — Crap CMS now supports PostgreSQL as
+  an alternative database backend, available via the `postgres` Cargo
+  feature flag. SQLite remains the default and recommended backend for
+  most deployments.
+
+  **Why SQLite is the default:** Crap CMS is designed for simplicity.
+  SQLite requires zero infrastructure — no database server, no
+  connection strings, no Docker, no backups to configure. The entire
+  database is a single file you can copy, move, or version-control.
+  For the vast majority of CMS deployments (content sites, editorial
+  teams, headless API backends), SQLite handles thousands of concurrent
+  readers and hundreds of writes per second — more than enough.
+
+  **When to consider PostgreSQL:** Multi-server deployments where
+  multiple instances need to share a database, or workloads with 50+
+  simultaneous writers (rare for a CMS). PostgreSQL also provides
+  better read performance under extreme concurrency (50+ concurrent
+  requests) due to MVCC.
+
+  **Build & configure:**
+  ```bash
+  cargo build --features postgres       # both backends
+  cargo build --no-default-features --features postgres  # PG only
+  ```
+  ```toml
+  [database]
+  backend = "postgres"
+  url = "host=localhost user=crap dbname=crap_cms"
+  ```
+
+  The `sqlite` and `postgres` feature flags are independent — both can
+  be compiled in and switched at runtime via `crap.toml`. The `r2d2`
+  dependency is now optional (only pulled with `sqlite`). PostgreSQL
+  uses `deadpool-postgres` with `tokio-postgres` for async-native
+  connection pooling.
+
+  Postgres-specific implementation details:
+  - Full-text search uses `tsvector`/`tsquery` with GIN indexes
+    (SQLite uses FTS5)
+  - Timestamps stored as ISO 8601 TEXT (matching SQLite behavior)
+  - `SET timezone = 'UTC'` enforced on every connection
+  - DDL automatically adjusts `INTEGER` to `BIGINT` via dedicated
+    `execute_ddl`/`execute_batch_ddl` methods
+  - Connection recycling uses `DISCARD ALL` for clean state
+  - `VACUUM INTO` not supported (use `pg_dump` for backups)
+
+- **Storage backend abstraction** — Upload file storage is now pluggable
+  via a `StorageBackend` trait with three implementations:
+
+  - **`local`** (default) — Local filesystem, identical to previous
+    behavior. Zero config, files in `{config_dir}/uploads/`.
+  - **`s3`** (feature-flagged) — S3-compatible storage for multi-server
+    deployments. Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2,
+    DigitalOcean Spaces. Enable with `--features s3-storage`.
+  - **`custom`** — Delegates storage operations to user-provided Lua
+    functions via `crap.storage.register()`. For exotic providers
+    (Azure Blob, GCS, custom APIs) without adding SDK dependencies.
+
+  The entire upload pipeline (upload, serve, resize, delete, deferred
+  image conversion) now goes through the storage trait. File serving
+  uses `tower_http::ServeFile` for local storage (Range, ETag,
+  conditional GET) and streams from the backend for non-local storage.
+
+  ```toml
+  [upload]
+  storage = "s3"
+
+  [upload.s3]
+  bucket = "my-uploads"
+  region = "us-east-1"
+  endpoint = "http://minio.example.com:9000"
+  access_key = "${AWS_ACCESS_KEY}"
+  secret_key = "${AWS_SECRET_KEY}"
+  path_style = true
+  ```
+
+- **Auth redesign: TokenProvider + PasswordProvider + strategy chain** —
+  Authentication infrastructure is now cleanly separated:
+
+  - **`TokenProvider` trait** — JWT token creation/validation.
+    Default: `JwtTokenProvider`. Rarely swapped.
+  - **`PasswordProvider` trait** — Argon2id password hashing/verification.
+    Default: `Argon2PasswordProvider`. Rarely swapped.
+  - **Strategy chain** — `local` (email+password) is the built-in
+    strategy. Per-collection Lua strategies are tried as fallback
+    when local auth fails or is disabled (`disable_local = true`).
+    No monolithic "auth provider" — authentication is orchestration
+    in handlers, not a trait.
+
+  This design supports OAuth2, Cloudflare Access, Active Directory,
+  API keys, and any custom auth via **Lua strategies** — without
+  the binary needing provider-specific code.
+
+- **Built-in email MFA** — Auth collections can enable email-based
+  multi-factor authentication:
+
+  ```lua
+  auth = {
+      mfa = "email",  -- sends 6-digit code after password verification
+  }
+  ```
+
+  After password/strategy authentication succeeds, a 6-digit code is
+  emailed to the user. The admin UI shows a code input form; the user
+  enters the code to complete login. Codes expire after 5 minutes and
+  are single-use.
+
+- **Auth callback route** — New catch-all route
+  `GET/POST /admin/auth/callback/{name}` dispatches to Lua hooks,
+  enabling OAuth2/OIDC callback flows implemented entirely in Lua:
+
+  ```lua
+  -- hooks/auth_callback/google.lua
+  function M.google(ctx)
+      local code = ctx.headers["_query_code"]
+      local tokens = exchange_code(code)
+      local userinfo = get_userinfo(tokens.access_token)
+      local users = crap.find("users", { where = { email = userinfo.email } })
+      if #users > 0 then return users[1] end
+      return crap.create("users", { email = userinfo.email })
+  end
+  ```
+
+- **Multi-server scheduler safety** — Job queue is now safe for
+  multi-server deployments:
+
+  - **Cron dedup** — New `_crap_cron_fired` table prevents cron jobs
+    from double-firing when multiple servers run the scheduler. Uses
+    an atomic upsert to claim each cron window.
+  - **Atomic job claiming (Postgres)** — Uses `FOR UPDATE SKIP LOCKED`
+    for lock-free atomic claiming. Workers skip rows being claimed by
+    other workers. Per-slug concurrency limits are enforced inside the
+    query (not in-memory).
+  - **Atomic job claiming (SQLite)** — Claim operations now run inside
+    an IMMEDIATE transaction, serializing concurrent workers. Per-slug
+    concurrency counts are read from the DB inside the transaction.
+
+- **Rate limit backend abstraction** — Login and gRPC rate limiters now
+  support pluggable backends via a `RateLimitBackend` trait:
+
+  - **`memory`** (default) — In-process sliding window counters. Same
+    behavior as before.
+  - **`redis`** (feature-flagged) — Shared rate limits across servers
+    using Redis sorted sets. Requires `--features redis`.
+  - **`none`** — Rate limiting disabled.
+
+  Multi-server deployments should use `redis` to prevent attackers from
+  bypassing rate limits by hitting different servers.
+
+  ```toml
+  [auth]
+  rate_limit_backend = "redis"
+  # rate_limit_redis_url defaults to cache.redis_url if empty
+  rate_limit_prefix = "crap:rl:"
+  ```
+
+- **Cache backend abstraction** — The cross-request populate cache is now
+  pluggable via a `CacheBackend` trait with four implementations:
+
+  - **`memory`** (default) — In-memory DashMap with configurable soft
+    entry cap. Good for single-server deployments.
+  - **`redis`** (feature-flagged) — Shared Redis cache for multi-server
+    deployments. Enable with `--features redis`. Uses key prefixing for
+    namespace isolation.
+  - **`none`** — No-op cache. Disables cross-request caching entirely.
+  - **`custom`** — Lua-delegated cache backend (planned, not yet
+    implemented — uses `none` as placeholder).
+
+  **Breaking:** The `depth.populate_cache` and
+  `depth.populate_cache_max_age_secs` config options have been replaced
+  by a new `[cache]` section. Migration:
+  - `populate_cache = true` → `[cache] backend = "memory"`
+  - `populate_cache = false` → `[cache] backend = "none"`
+  - `populate_cache_max_age_secs = 60` → `max_age_secs = 60`
+
+  ```toml
+  [cache]
+  backend = "memory"       # "memory", "redis", "none", "custom"
+  max_entries = 10000      # soft cap for memory backend
+  max_age_secs = 60        # periodic full clear (0 = disabled)
+  # redis_url = "redis://127.0.0.1:6379"
+  # prefix = "crap:"
+  ```
+
+- **Email provider abstraction** — Email sending is now pluggable
+  via an `EmailProvider` trait with four implementations:
+
+  - **`smtp`** (default) — SMTP via `lettre`, identical to previous
+    behavior. Falls back to `log` provider if `smtp_host` is empty.
+  - **`webhook`** — HTTP POST to any URL. Works with SendGrid,
+    Mailgun, Resend, or any API that accepts JSON email payloads.
+    Configure with `webhook_url` and `webhook_headers`.
+  - **`log`** — Logs emails to tracing instead of sending. Useful
+    for development and testing.
+  - **`custom`** — Delegates to a Lua function registered via
+    `crap.email.register({ send = function(opts) ... end })`.
+
+  ```toml
+  [email]
+  provider = "webhook"
+  webhook_url = "https://api.sendgrid.com/v3/mail/send"
+  webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
+  from_address = "noreply@example.com"
+  ```
+
+- **`crap-cms work` standalone worker command** — New top-level command
+  that runs a dedicated job worker without HTTP/gRPC servers. Supports
+  `--queues` (filter by queue name), `--concurrency` (override max
+  concurrent jobs), `--no-cron` (skip cron scheduling), and
+  `--detach`/`--stop`/`--restart`/`--status` for background management.
+  Enables multi-server deployments where app servers run
+  `serve --no-scheduler` and dedicated workers process jobs.
+
+- **Queued email delivery with retries** — New `crap.email.queue(opts)`
+  Lua API queues emails as jobs for async delivery with automatic
+  retries on failure. Uses the existing job system with exponential
+  backoff (5s, 10s, 20s, ..., max 300s). Configurable via
+  `queue_retries` (default 3), `queue_name` (default `"email"`), and
+  `queue_timeout` (default 30s) in `[email]` config. System email jobs
+  (`_system_email`) execute directly in Rust without Lua VM overhead.
+  `crap.email.send()` remains available for immediate blocking delivery.
+
+### Fixed
+
+- **Access control bypass in bulk delete and empty trash** — The gRPC
+  `DeleteMany` handler and the admin "empty trash" handler created
+  `RunnerWriteHooks` without `.with_conn(&tx)`, causing all access
+  checks inside `delete_document_core` to short-circuit to `Allowed`.
+  Any authenticated user could bulk-delete or permanently purge trashed
+  documents regardless of configured permissions. Now both paths pass
+  the transaction connection to WriteHooks.
+
+- **Version restore missing access control in service layer** — The
+  `restore_collection_version` and `restore_global_version` service
+  functions did not check update access. The gRPC handler had its own
+  check, but admin and MCP handlers did not, allowing any authenticated
+  admin user to restore any version. Access check now lives in the
+  service layer, enforced for all callers.
+
+- **Ref count race on Postgres** — Under Postgres's `READ COMMITTED`
+  isolation, a concurrent create and delete could race: the delete reads
+  `_ref_count = 0` while the create's increment is still in flight,
+  allowing deletion of a document that is about to be referenced. Fixed
+  by acquiring `SELECT ... FOR UPDATE` row locks on referenced targets
+  **before** any writes (INSERT/UPDATE), and on the document's own row
+  before checking `_ref_count` in the delete path. This serializes
+  concurrent create+delete on the same target row. On SQLite this is a
+  no-op — `BEGIN IMMEDIATE` already serializes all write transactions.
+
+- **Potential panics in CLI commands** — Several CLI code paths used
+  infallible indexing or `.expect()` that could panic on edge cases:
+  `trash.rs` used `HashMap[key]` instead of `.get()` (panics if
+  collection removed between validation and access); `work.rs` used
+  `.unwrap()` on PID conversion (panics if PID > i32::MAX);
+  `user/helpers.rs` used `.expect()` on user selection index. All
+  replaced with proper error propagation.
+
+- **Rate limiter mutex poisoning could crash server** — The in-memory
+  rate limiter used `.expect()` on `Mutex::lock()`, which panics if the
+  mutex is poisoned. Now recovers from poison via `unwrap_or_else`.
+
+- **Broadcast stream lag silently ignored** — SSE and gRPC Subscribe
+  streams logged subscriber lag at `warn` level (or not at all for SSE)
+  with no actionable guidance. Upgraded to `error` with a message
+  recommending `[live] channel_capacity` increase.
+
+- **Timestamp expiry overflow** — JWT token expiry was computed as
+  `timestamp as u64 + expiry` without overflow protection. Now uses
+  `.max(0) as u64` and `saturating_add()` in all 4 production code
+  paths (gRPC login, admin login, MFA pending token, session refresh).
+
+- **Invalid locale silently accepted** — `LocaleContext::from_locale_string`
+  returned `None` for both "localization disabled" and "invalid locale
+  code", making it impossible for callers to distinguish the two cases.
+  Invalid locales now produce an error. Affects all API surfaces (gRPC,
+  Lua hooks). Admin UI form submissions gracefully fall back to the
+  default locale (locales are validated upstream from cookies).
+
+- **Job pagination offset unbounded** — `ListJobRuns` accepted arbitrary
+  `offset` values including negative numbers. Now clamped to `>= 0`.
+
+- **MCP tools missing locale** — MCP `find` and `find_by_id` tools did
+  not support the `locale` parameter, unlike their gRPC counterparts.
+  Claude (via MCP) could not query locale-specific data.
+
+- **Ref count backfill skipped for new collections** — The one-time
+  `_ref_count` backfill was gated by a global flag in `_crap_meta`. If a
+  new collection was added after the initial backfill, its documents'
+  incoming reference counts were never computed. Now tracked
+  per-collection.
+
+- **README field type count** — README stated "14 field types" but the
+  actual count is 20 (text, number, textarea, richtext, select, radio,
+  checkbox, date, email, json, code, relationship, upload, array, group,
+  blocks, row, collapsible, tabs, join).
+
+- **`[live] default_mode` missing from docs** — The `default_mode`
+  configuration option was documented in the live-updates overview but
+  missing from the `crap-toml.md` configuration reference table. Now
+  listed in both the example block and the reference table.
+
+- **Event stream data leak** — gRPC Subscribe previously sent full
+  document data without applying field-level read access checks. Events
+  now respect the same field access rules as `Find` and `FindByID`.
+
+- **Upload API event data ordering** — upload create/update handlers now
+  strip field-level read-denied fields before publishing events, ensuring
+  event data never contains fields the publishing user's access would deny.
+
+- **Upload file deletion broken on localized collections** — The
+  delete cleanup path used `LocaleConfig::default()` (empty) instead
+  of the actual locale config when loading the document for file URL
+  extraction. On collections with localized fields, the SELECT query
+  referenced bare column names (`caption`) instead of locale-suffixed
+  ones (`caption__en`), causing the query to fail. Upload files were
+  silently orphaned on deletion. Now uses the correct locale config.
+
+- **Deferred image conversions not cancelled on document delete** —
+  When an upload document was deleted, pending image queue entries
+  (deferred AVIF/WebP conversions) were not cleaned up. The scheduler
+  would attempt to process them, fail because the source was deleted,
+  and waste retries. Now cancels pending entries in all delete paths:
+  single delete, bulk DeleteMany, Lua delete/delete_many, empty trash,
+  and auto-purge.
+
+- **Bulk DeleteMany missing upload file cleanup for image queue** —
+  The gRPC `DeleteMany` and Lua `delete_many` did not cancel pending
+  image queue entries for deleted documents. Now cleans up alongside
+  the existing upload file deletion.
+
+- **Debug logs shown in production** — The default stdout log filter
+  for `serve` was `crap_cms=debug,info`, flooding production logs with
+  debug output. Now defaults to `crap_cms=info` for production and
+  `crap_cms=debug,info` only when `dev_mode = true`. File logging
+  retains debug level for diagnostics. Override with `RUST_LOG` env
+  var when needed.
+
+- **SHA256 checksums missing from releases** — The release workflow
+  now generates a `SHA256SUMS` file and uploads it alongside the
+  binaries, enabling the install script to verify downloads
+  automatically.
+
+- **gRPC write handlers acquired two pool connections** — The gRPC
+  Create, Update, and Delete handlers acquired a connection for
+  auth/access checks, dropped it, then the service layer acquired a
+  second one. Under high concurrency this caused pool exhaustion and
+  5+ second latencies. Now reuses the same connection via
+  `_with_conn` service variants, halving pool pressure on writes.
+
+- **SQLite performance defaults too conservative** — Added configurable
+  `cache_size` (default 16MB), `mmap_size` (default 256MB),
+  `temp_store = MEMORY`, and `wal_autocheckpoint` to `[database]`
+  config. Previous defaults used SQLite's 2MB cache with no
+  memory-mapping. Pool `max_size` default raised from 32 to 64.
+
+- **Lua VM pool capped at 32 regardless of hardware** — The auto-sized
+  `vm_pool_size` default was clamped to `max(cpus, 4)` with a ceiling
+  of 32, limiting concurrent hook execution on powerful servers.
+  Removed both the floor and ceiling — now auto-sizes to exactly the
+  number of CPU cores (fallback: 4 if detection fails). Override with
+  `hooks.vm_pool_size` in `crap.toml`.
+
+- **SQLite statements re-parsed on every query** — All `query_all`
+  and `query_one` calls used `prepare()` which parses SQL from scratch
+  on every invocation. Switched to `prepare_cached()` which reuses
+  previously parsed statements. Reduces CPU overhead on every database
+  operation, especially for hot paths like `find` and `find_by_id`.
+
+- **Trash pagination navigated away from trash view** — The "Next" and
+  "Previous" buttons in the trash list did not preserve `?trash=1` in
+  the pagination URLs. Clicking next navigated to the regular (non-
+  trash) document list. Now preserves the trash parameter across all
+  pagination links.
+
+- **Load test cleanup failed on soft-delete collections** — The gRPC
+  load test script's cleanup used `DeleteMany` without
+  `forceHardDelete`, so soft-delete collections reported 0 deleted.
+  Now uses `forceHardDelete: true` and sums both `deleted` and
+  `softDeleted` counts.
+
+- **Example cache not enabled** — The example project now
+  enables the relationship populate cache with a 60-second TTL,
+  gRPC compression, and optimized depth/polling settings for better
+  out-of-the-box demo performance.
+
+- **Unpublish returned stale `_status`** — The unpublish operation
+  (both collection and global) returned the document with
+  `_status: "published"` instead of `"draft"` in the response. The
+  database was updated correctly, but the in-memory document handed to
+  after-hooks and returned to the caller still carried the pre-unpublish
+  status. Now correctly sets `_status = "draft"` before after-hooks run.
+
+- **Redundant junction table delete** — `set_polymorphic_related()`
+  executed the same DELETE twice in the non-locale branch: once via the
+  `delete_junction_rows()` helper and once via a manual inline query.
+  Removed the redundant manual delete.
+
+- **Keyboard focus indicators suppressed** — `outline: 0` /
+  `outline: none` on focused form inputs and the search bar removed
+  the keyboard focus indicator, making the admin UI inaccessible for
+  keyboard-only users. Added `focus-visible` outline styles so keyboard
+  users see a visible focus ring while mouse users still get the clean
+  appearance.
+
 ## [0.1.0-alpha.3] — 2026-03-30
 
 ### Added
@@ -16,10 +602,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Empty trash** action. Upload files are preserved until hard purge.
   Configurable retention (`soft_delete_retention = "30d"`) auto-purges
   expired documents. Granular permissions: `access.trash` controls
-  soft-delete and restore (falls back to `access.update`), while
+  soft-delete and undelete (falls back to `access.update`), while
   `access.delete` controls permanent deletion. Available in admin UI,
-  gRPC (`Delete` with `force_hard_delete`, new `Restore` RPC), and Lua
-  (`crap.collections.delete/restore` with `forceHardDelete` option).
+  gRPC (`Delete` with `force_hard_delete`, new `Undelete` RPC), and Lua
+  (`crap.collections.delete/undelete` with `forceHardDelete` option).
 
 - **Delete confirmation dialog** — Replaces the old two-step confirmation
   page with a single modal dialog. For soft-delete collections, shows
@@ -1241,9 +1827,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   correctly documented in the `FindByIDResponse` message comment.
   Fixed the RPC-level comment to match actual behavior.
 
-- **Restore action silently redirected on failure** — The admin restore
+- **Undelete action silently redirected on failure** — The admin undelete
   action logged errors but always redirected to the trash page,
-  regardless of whether the restore succeeded. Users had no indication
+  regardless of whether the undelete succeeded. Users had no indication
   of failure. Now returns an HTTP 500 error response on failure.
 
 - **Proto `FieldInfo.type` listed nonexistent field types** — The
@@ -1364,11 +1950,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   skipped. Now runs both hooks per document, matching the behavior of
   single delete and `DeleteMany`.
 
+- **Windows build broken by Unix-only signal code** — `send_signal`,
+  `is_process_running`, `stop`, `restart`, `status`, and
+  `check_existing_pid` were not gated behind `#[cfg(unix)]`. The
+  Windows CI build failed with unresolved `SIGKILL`/`SIGTERM` errors.
+  All Unix-only functions and their call sites are now properly gated.
+  On Windows, `--stop`/`--restart`/`--status` return a clear
+  "not supported on this platform" error.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua
   CRUD functions (`find`, `find_by_id`, `create`, `update`, `delete`,
-  `count`, `update_many`, `delete_many`, `restore`) now enforce access
+  `count`, `update_many`, `delete_many`, `undelete`) now enforce access
   control by default. Previously they bypassed access checks unless
   explicitly set to `false`. This follows the principle of least
   privilege — hooks that need unrestricted access must explicitly opt in

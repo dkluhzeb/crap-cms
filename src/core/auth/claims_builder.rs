@@ -32,18 +32,21 @@ impl ClaimsBuilder {
     /// Set the user's email address.
     pub fn email(mut self, email: impl Into<String>) -> Self {
         self.email = Some(email.into());
+
         self
     }
 
     /// Set the expiration time (Unix timestamp).
     pub fn exp(mut self, exp: u64) -> Self {
         self.exp = Some(exp);
+
         self
     }
 
     /// Set the session version (incremented on password change).
     pub fn session_version(mut self, version: u64) -> Self {
         self.session_version = version;
+
         self
     }
 

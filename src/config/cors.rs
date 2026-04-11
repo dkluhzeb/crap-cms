@@ -5,8 +5,9 @@ use std::{str::FromStr, time::Duration};
 use axum::http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+use tracing::warn;
 
-use super::parsing::serde_duration;
+use crate::config::parsing::serde_duration;
 
 /// CORS configuration.
 /// Empty `allowed_origins` = CORS layer not added (default, backward compatible).
@@ -62,7 +63,7 @@ impl CorsConfig {
 
         // Validate: wildcard + credentials is invalid per CORS spec
         if is_wildcard && self.allow_credentials {
-            tracing::warn!(
+            warn!(
                 "CORS: allow_credentials is incompatible with wildcard origin '*'. \
                  Ignoring allow_credentials."
             );

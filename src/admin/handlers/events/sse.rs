@@ -1,7 +1,7 @@
 //! SSE endpoint for real-time mutation events in the admin UI.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     future::Future,
     pin::Pin,
@@ -13,19 +13,29 @@ use std::{
     time::Duration,
 };
 
-use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::{Extension, extract::State};
-use serde_json::json;
-use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
+use axum::{
+    Extension,
+    extract::State,
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+};
+use serde_json::{Map, Value, json};
+use tokio_stream::{
+    Stream, StreamExt,
+    wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
+};
 use tokio_util::sync::WaitForCancellationFutureOwned;
+use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser, Slug,
-        event::{EventOperation, EventTarget},
+        AuthUser, Document, Registry, Slug,
+        collection::LiveMode,
+        event::{EventOperation, EventTarget, MutationEvent},
     },
-    db::AccessResult,
+    db::{AccessResult, FilterClause, query::filter::memory},
+    hooks::HookRunner,
 };
 
 /// RAII guard that decrements the SSE connection counter on drop.
@@ -45,7 +55,6 @@ struct CancellableStream {
     inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
     shutdown: Pin<Box<WaitForCancellationFutureOwned>>,
     done: bool,
-    /// RAII guard — decrements SSE connection counter when the stream is dropped.
     _guard: Option<SseConnectionGuard>,
 }
 
@@ -56,21 +65,17 @@ impl Stream for CancellableStream {
         if self.done {
             return Poll::Ready(None);
         }
-        // Check shutdown first
+
         if self.shutdown.as_mut().poll(cx).is_ready() {
             self.done = true;
             return Poll::Ready(None);
         }
+
         self.inner.as_mut().poll_next(cx)
     }
 }
 
 /// Atomically try to acquire an SSE connection slot.
-///
-/// Returns `true` if a slot was acquired (counter incremented), `false` if the
-/// limit has been reached. When `max == 0`, no limit is enforced (always succeeds).
-/// Uses `compare_exchange_weak` in a loop to avoid the TOCTOU race inherent in
-/// `fetch_add` + check + `fetch_sub`.
 fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
     loop {
         let current = counter.load(Ordering::Relaxed);
@@ -88,22 +93,196 @@ fn try_acquire_sse_slot(counter: &AtomicUsize, max: usize) -> bool {
     }
 }
 
+/// Resolved SSE access: allowed slugs, denied fields, row-level constraints, and modes.
+struct SseAccess {
+    collections: HashSet<Slug>,
+    globals: HashSet<Slug>,
+    denied_fields: HashMap<String, Vec<String>>,
+    constraints: HashMap<String, Vec<FilterClause>>,
+    modes: HashMap<String, LiveMode>,
+}
+
+/// Build the set of collection/global slugs the user has read access to,
+/// and cache field-level read-denied fields per collection for stream filtering.
+fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAccess {
+    let mut access = SseAccess {
+        collections: HashSet::new(),
+        globals: HashSet::new(),
+        denied_fields: HashMap::new(),
+        constraints: HashMap::new(),
+        modes: HashMap::new(),
+    };
+
+    let Ok(mut conn) = state.pool.get() else {
+        return access;
+    };
+
+    let Ok(tx) = conn.transaction() else {
+        return access;
+    };
+
+    for (slug, def) in &state.registry.collections {
+        match state
+            .hook_runner
+            .check_access(def.access.read.as_deref(), user_doc, None, None, &tx)
+        {
+            Ok(AccessResult::Allowed) => {
+                access.collections.insert(slug.clone());
+            }
+            Ok(AccessResult::Constrained(filters)) => {
+                access.collections.insert(slug.clone());
+                access.constraints.insert(slug.to_string(), filters);
+            }
+            _ => continue,
+        }
+
+        let denied = state
+            .hook_runner
+            .check_field_read_access(&def.fields, user_doc, &tx);
+
+        if !denied.is_empty() {
+            access.denied_fields.insert(slug.to_string(), denied);
+        }
+
+        access.modes.insert(slug.to_string(), def.live_mode);
+    }
+
+    for (slug, def) in &state.registry.globals {
+        match state
+            .hook_runner
+            .check_access(def.access.read.as_deref(), user_doc, None, None, &tx)
+        {
+            Ok(AccessResult::Allowed) => {
+                access.globals.insert(slug.clone());
+            }
+            Ok(AccessResult::Constrained(filters)) => {
+                access.globals.insert(slug.clone());
+                access.constraints.insert(slug.to_string(), filters);
+            }
+            _ => continue,
+        }
+
+        let denied = state
+            .hook_runner
+            .check_field_read_access(&def.fields, user_doc, &tx);
+
+        if !denied.is_empty() {
+            access.denied_fields.insert(slug.to_string(), denied);
+        }
+
+        access.modes.insert(slug.to_string(), def.live_mode);
+    }
+
+    if let Err(e) = tx.commit() {
+        warn!("tx commit failed: {e}");
+    }
+
+    access
+}
+
+/// Convert a mutation event to an SSE Event, applying access control, after_read hooks,
+/// and field stripping to match normal read operations.
+fn event_to_sse(
+    event: &MutationEvent,
+    access: &SseAccess,
+    hook_runner: &HookRunner,
+    registry: &Registry,
+    user_doc: Option<&Document>,
+) -> Option<Event> {
+    let allowed = match event.target {
+        EventTarget::Collection => access.collections.contains(&event.collection),
+        EventTarget::Global => access.globals.contains(&event.collection),
+    };
+
+    if !allowed {
+        return None;
+    }
+
+    // Row-level constraint check: skip events the subscriber can't access
+    let slug_str: &str = event.collection.as_ref();
+
+    if let Some(filters) = access.constraints.get(slug_str)
+        && !memory::matches_constraints(&event.data, filters)
+    {
+        return None;
+    }
+
+    let target_str = match event.target {
+        EventTarget::Collection => "collection",
+        EventTarget::Global => "global",
+    };
+
+    let op_str = match event.operation {
+        EventOperation::Create => "create",
+        EventOperation::Update => "update",
+        EventOperation::Delete => "delete",
+    };
+
+    // Apply mode: full = after_read hooks + data, metadata = no data
+    let mode = access.modes.get(slug_str).copied().unwrap_or_default();
+
+    let data: Map<String, Value> = if mode == LiveMode::Full {
+        let (hooks, field_defs) = match event.target {
+            EventTarget::Collection => registry
+                .get_collection(slug_str)
+                .map(|d| (d.hooks.clone(), d.fields.clone())),
+            EventTarget::Global => registry
+                .get_global(slug_str)
+                .map(|d| (d.hooks.clone(), d.fields.clone())),
+        }
+        .unwrap_or_default();
+
+        let processed_data = hook_runner.apply_after_read_for_event(
+            slug_str,
+            &hooks,
+            &field_defs,
+            event.document_id.as_ref(),
+            &event.data,
+            user_doc,
+        );
+
+        let denied = access.denied_fields.get(slug_str);
+
+        processed_data
+            .iter()
+            .filter(|(k, _)| denied.is_none_or(|d| !d.iter().any(|name| name == *k)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    } else {
+        Map::new() // metadata mode: no data
+    };
+
+    let payload = json!({
+        "sequence": event.sequence,
+        "timestamp": event.timestamp,
+        "target": target_str,
+        "operation": op_str,
+        "collection": event.collection,
+        "document_id": event.document_id,
+        "edited_by": event.edited_by,
+        "data": data,
+    });
+
+    Some(
+        Event::default()
+            .event("mutation")
+            .id(event.sequence.to_string())
+            .data(payload.to_string()),
+    )
+}
+
 /// SSE handler — streams mutation events to authenticated admin users.
-/// Auth user is injected by the admin middleware.
-///
-/// Excluded from tarpaulin: SSE streaming requires a persistent async connection
-/// that cannot be tested via tower::oneshot (which completes immediately).
 #[cfg_attr(not(tarpaulin_include), allow(dead_code))]
 #[cfg(not(tarpaulin_include))]
 pub async fn sse_handler(
     State(state): State<AdminState>,
     auth_user: Option<Extension<AuthUser>>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, axum::http::StatusCode> {
-    // Enforce connection limit (race-free via compare_exchange)
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
     let max = state.max_sse_connections;
+
     if !try_acquire_sse_slot(&state.sse_connections, max) {
-        tracing::warn!("SSE connection limit reached ({}/{}), rejecting", max, max);
-        return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        warn!("SSE connection limit reached ({}/{}), rejecting", max, max);
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
     let guard = SseConnectionGuard {
@@ -113,112 +292,47 @@ pub async fn sse_handler(
     let event_bus = state.event_bus.clone();
     let shutdown = state.shutdown.clone();
 
-    // Build allowed collections/globals snapshot at subscribe time
-    let mut allowed_collections: HashSet<Slug> = HashSet::new();
-    let mut allowed_globals: HashSet<Slug> = HashSet::new();
-
-    if let Some(ref bus) = event_bus {
-        let _ = bus; // just to verify it exists
-        {
-            let user_doc = auth_user.as_ref().map(|ext| &ext.0.user_doc);
-
-            if let Ok(mut conn) = state.pool.get()
-                && let Ok(tx) = conn.transaction()
-            {
-                for (slug, def) in &state.registry.collections {
-                    match state.hook_runner.check_access(
-                        def.access.read.as_deref(),
-                        user_doc,
-                        None,
-                        None,
-                        &tx,
-                    ) {
-                        Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
-                            allowed_collections.insert(slug.clone());
-                        }
-                        _ => {}
-                    }
-                }
-
-                for (slug, def) in &state.registry.globals {
-                    match state.hook_runner.check_access(
-                        def.access.read.as_deref(),
-                        user_doc,
-                        None,
-                        None,
-                        &tx,
-                    ) {
-                        Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
-                            allowed_globals.insert(slug.clone());
-                        }
-                        _ => {}
-                    }
-                }
-                // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                if let Err(e) = tx.commit() {
-                    tracing::warn!("tx commit failed: {e}");
-                }
-            }
+    let user_doc = auth_user.as_ref().map(|ext| &ext.0.user_doc);
+    let access = if event_bus.is_some() {
+        build_allowed_slugs(&state, user_doc)
+    } else {
+        SseAccess {
+            collections: HashSet::new(),
+            globals: HashSet::new(),
+            denied_fields: HashMap::new(),
+            constraints: HashMap::new(),
+            modes: HashMap::new(),
         }
-    }
+    };
+
+    let hook_runner = state.hook_runner.clone();
+    let registry = state.registry.clone();
+    let subscriber_user_doc = auth_user.as_ref().map(|ext| ext.0.user_doc.clone());
 
     let stream = if let Some(bus) = event_bus {
         let rx = bus.subscribe();
 
-        let filtered = BroadcastStream::new(rx).filter_map(move |result| {
-            match result {
-                Ok(event) => {
-                    let allowed = match event.target {
-                        EventTarget::Collection => allowed_collections.contains(&event.collection),
-                        EventTarget::Global => allowed_globals.contains(&event.collection),
-                    };
-                    if !allowed {
-                        return None;
-                    }
-
-                    let target_str = match event.target {
-                        EventTarget::Collection => "collection",
-                        EventTarget::Global => "global",
-                    };
-
-                    let op_str = match event.operation {
-                        EventOperation::Create => "create",
-                        EventOperation::Update => "update",
-                        EventOperation::Delete => "delete",
-                    };
-
-                    let payload = json!({
-                        "sequence": event.sequence,
-                        "timestamp": event.timestamp,
-                        "target": target_str,
-                        "operation": op_str,
-                        "collection": event.collection,
-                        "document_id": event.document_id,
-                        "edited_by": event.edited_by,
-                    });
-
-                    let sse_event = Event::default()
-                        .event("mutation")
-                        .id(event.sequence.to_string())
-                        .data(payload.to_string());
-
-                    Some(Ok::<_, Infallible>(sse_event))
-                }
-                Err(_) => None, // lagged — skip
+        let filtered = BroadcastStream::new(rx).filter_map(move |result| match result {
+            Ok(event) => event_to_sse(
+                &event,
+                &access,
+                &hook_runner,
+                &registry,
+                subscriber_user_doc.as_ref(),
+            )
+            .map(Ok::<_, Infallible>),
+            Err(BroadcastStreamRecvError::Lagged(n)) => {
+                error!("SSE stream lagged by {} events — client missed updates", n);
+                None
             }
         });
 
         Box::pin(filtered) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
     } else {
-        // No event bus — return an empty stream that never yields
-        let empty = tokio_stream::empty();
-
-        Box::pin(empty) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
+        Box::pin(tokio_stream::empty())
+            as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
     };
 
-    // End the stream when the server is shutting down, so Axum's
-    // graceful shutdown can complete without waiting for SSE clients.
-    // The guard decrements the SSE connection counter when the stream is dropped.
     let stream = CancellableStream {
         inner: stream,
         shutdown: Box::pin(shutdown.cancelled_owned()),

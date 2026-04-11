@@ -1,14 +1,19 @@
 //! Update operation and its helper.
 
-use anyhow::{Context as _, Result, anyhow};
 use std::collections::HashMap;
 
-use crate::core::{CollectionDefinition, Document, FieldDefinition, FieldType};
-use crate::db::{
-    DbConnection, DbValue, LocaleContext,
-    query::{
-        coerce_value, helpers::normalize_date_with_timezone, locale_write_column,
-        read::find_by_id_raw,
+use anyhow::{Context as _, Result, anyhow};
+
+use crate::{
+    core::{CollectionDefinition, Document, FieldDefinition, FieldType},
+    db::{
+        DbConnection, DbValue, LocaleContext,
+        query::{
+            coerce_value,
+            helpers::{coerce_date_value, prefixed_name, tz_column, utc_now, walk_leaf_fields},
+            locale_write_column,
+            read::find_by_id_raw,
+        },
     },
 };
 
@@ -21,39 +26,15 @@ pub fn update(
     data: &HashMap<String, String>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S.000Z")
-        .to_string();
-
-    let mut col = UpdateCollector::new();
-
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "", false)?;
-
-    if def.timestamps {
-        col.set_clauses
-            .push(format!("updated_at = {}", conn.placeholder(col.idx)));
-        col.params.push(DbValue::Text(now));
-        col.idx += 1;
-    }
-
-    if col.set_clauses.is_empty() {
-        return find_by_id_raw(conn, slug, def, id, locale_ctx)?
-            .ok_or_else(|| anyhow!("Document not found"));
-    }
-
-    let sql = format!(
-        "UPDATE \"{}\" SET {} WHERE id = {}",
+    update_inner(
+        conn,
         slug,
-        col.set_clauses.join(", "),
-        conn.placeholder(col.idx)
-    );
-    col.params.push(DbValue::Text(id.to_string()));
-
-    conn.execute(&sql, &col.params)
-        .with_context(|| format!("Failed to update document {} in '{}'", id, slug))?;
-
-    find_by_id_raw(conn, slug, def, id, locale_ctx)?
-        .ok_or_else(|| anyhow!("Document not found after update"))
+        def,
+        id,
+        data,
+        locale_ctx,
+        UpdateCollector::new(),
+    )
 }
 
 /// Partial update: like [`update`] but skips absent checkbox fields instead of
@@ -66,38 +47,50 @@ pub fn update_partial(
     data: &HashMap<String, String>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S.000Z")
-        .to_string();
+    update_inner(
+        conn,
+        slug,
+        def,
+        id,
+        data,
+        locale_ctx,
+        UpdateCollector::new_partial(),
+    )
+}
 
-    let mut col = UpdateCollector::new_partial();
-
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "", false)?;
+/// Shared implementation for full and partial updates.
+fn update_inner(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    data: &HashMap<String, String>,
+    locale_ctx: Option<&LocaleContext>,
+    mut col: UpdateCollector,
+) -> Result<Document> {
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn)?;
 
     if def.timestamps {
-        col.set_clauses
-            .push(format!("updated_at = {}", conn.placeholder(col.idx)));
-        col.params.push(DbValue::Text(now));
-        col.idx += 1;
+        col.push(conn, "updated_at", DbValue::Text(utc_now()));
     }
 
     if col.set_clauses.is_empty() {
-        return find_by_id_raw(conn, slug, def, id, locale_ctx)?
+        return find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
             .ok_or_else(|| anyhow!("Document not found"));
     }
 
     let sql = format!(
-        "UPDATE \"{}\" SET {} WHERE id = {}",
-        slug,
+        "UPDATE \"{slug}\" SET {} WHERE id = {}",
         col.set_clauses.join(", "),
         conn.placeholder(col.idx)
     );
+
     col.params.push(DbValue::Text(id.to_string()));
 
     conn.execute(&sql, &col.params)
-        .with_context(|| format!("Failed to update document {} in '{}'", id, slug))?;
+        .with_context(|| format!("Failed to update document {id} in '{slug}'"))?;
 
-    find_by_id_raw(conn, slug, def, id, locale_ctx)?
+    find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Document not found after update"))
 }
 
@@ -124,18 +117,23 @@ impl UpdateCollector {
     /// Create a collector that skips absent checkboxes (for bulk/partial updates).
     pub fn new_partial() -> Self {
         Self {
-            set_clauses: Vec::new(),
-            params: Vec::new(),
-            idx: 1,
             skip_absent_checkboxes: true,
+            ..Self::new()
         }
+    }
+
+    /// Push a SET clause, its placeholder, and value.
+    pub(in crate::db::query) fn push(&mut self, conn: &dyn DbConnection, col: &str, val: DbValue) {
+        self.set_clauses
+            .push(format!("{col} = {}", conn.placeholder(self.idx)));
+        self.params.push(val);
+        self.idx += 1;
     }
 }
 
-/// Recursively collect SET clauses + params for UPDATE.
-/// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
-pub(in crate::db::query) fn collect_update_params(
-    fields: &[FieldDefinition],
+/// Collect UPDATE params for a single leaf (scalar) field.
+fn collect_leaf_update(
+    field: &FieldDefinition,
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     collector: &mut UpdateCollector,
@@ -143,27 +141,62 @@ pub(in crate::db::query) fn collect_update_params(
     prefix: &str,
     inherited_localized: bool,
 ) -> Result<()> {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_update_params(
-                    &field.fields,
-                    data,
-                    locale_ctx,
-                    collector,
-                    conn,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                )?;
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_update_params(
-                    &field.fields,
+    let data_key = prefixed_name(prefix, &field.name);
+    let col_name = locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
+
+    let Some(value) = data.get(&data_key) else {
+        if field.field_type == FieldType::Checkbox && !collector.skip_absent_checkboxes {
+            collector.push(conn, &col_name, DbValue::Integer(0));
+        }
+        return Ok(());
+    };
+
+    let is_date_tz = field.field_type == FieldType::Date && field.timezone;
+    let tz_key = if is_date_tz {
+        Some(tz_column(&data_key))
+    } else {
+        None
+    };
+
+    let db_val = match tz_key.as_ref() {
+        Some(tk) => coerce_date_value(&field.field_type, value, data.get(tk).map(|s| s.as_str())),
+        None => coerce_value(&field.field_type, value),
+    };
+
+    collector.push(conn, &col_name, db_val);
+
+    if let Some(tk) = tz_key {
+        let tz_col = locale_write_column(&tk, field, locale_ctx, inherited_localized)?;
+        let tz_val = data.get(&tk).map(|s| s.as_str()).unwrap_or("");
+        let db_val = if tz_val.is_empty() {
+            DbValue::Null
+        } else {
+            DbValue::Text(tz_val.to_string())
+        };
+
+        collector.push(conn, &tz_col, db_val);
+    }
+
+    Ok(())
+}
+
+/// Collect SET clauses + params for UPDATE.
+/// Uses `walk_leaf_fields` to handle Group/Row/Collapsible/Tabs recursion.
+pub(in crate::db::query) fn collect_update_params(
+    fields: &[FieldDefinition],
+    data: &HashMap<String, String>,
+    locale_ctx: &Option<&LocaleContext>,
+    collector: &mut UpdateCollector,
+    conn: &dyn DbConnection,
+) -> Result<()> {
+    walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if field.has_parent_column() {
+                collect_leaf_update(
+                    field,
                     data,
                     locale_ctx,
                     collector,
@@ -172,104 +205,19 @@ pub(in crate::db::query) fn collect_update_params(
                     inherited_localized,
                 )?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_update_params(
-                        &tab.fields,
-                        data,
-                        locale_ctx,
-                        collector,
-                        conn,
-                        prefix,
-                        inherited_localized,
-                    )?;
-                }
-            }
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
-                let data_key = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                let col_name =
-                    locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
 
-                if let Some(value) = data.get(&data_key) {
-                    collector.set_clauses.push(format!(
-                        "{} = {}",
-                        col_name,
-                        conn.placeholder(collector.idx)
-                    ));
-
-                    // For Date fields with timezone, use timezone-aware normalization
-                    let db_val = if field.field_type == FieldType::Date && field.timezone {
-                        let tz_key = format!("{}_tz", data_key);
-                        if let Some(tz) = data.get(&tz_key).filter(|s| !s.is_empty()) {
-                            if value.is_empty() {
-                                DbValue::Null
-                            } else {
-                                match normalize_date_with_timezone(value, tz) {
-                                    Ok(normalized) => DbValue::Text(normalized),
-                                    Err(_) => coerce_value(&field.field_type, value),
-                                }
-                            }
-                        } else {
-                            coerce_value(&field.field_type, value)
-                        }
-                    } else {
-                        coerce_value(&field.field_type, value)
-                    };
-
-                    collector.params.push(db_val);
-                    collector.idx += 1;
-
-                    // Timezone companion column for date fields
-                    if field.field_type == FieldType::Date && field.timezone {
-                        let tz_key = format!("{}_tz", data_key);
-                        let tz_col =
-                            locale_write_column(&tz_key, field, locale_ctx, inherited_localized)?;
-                        collector.set_clauses.push(format!(
-                            "{} = {}",
-                            tz_col,
-                            conn.placeholder(collector.idx)
-                        ));
-
-                        let tz_val = data.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
-                        collector.params.push(if tz_val.is_empty() {
-                            DbValue::Null
-                        } else {
-                            DbValue::Text(tz_val.to_string())
-                        });
-                        collector.idx += 1;
-                    }
-                } else if field.field_type == FieldType::Checkbox
-                    && !collector.skip_absent_checkboxes
-                {
-                    collector.set_clauses.push(format!(
-                        "{} = {}",
-                        col_name,
-                        conn.placeholder(collector.idx)
-                    ));
-                    collector.params.push(DbValue::Integer(0));
-                    collector.idx += 1;
-                }
-            }
-        }
-    }
-
-    Ok(())
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::create::create;
     use super::*;
     use crate::config::CrapConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use crate::db::query::write::create;
     use crate::db::{BoxedConnection, pool};
     use tempfile::TempDir;
 

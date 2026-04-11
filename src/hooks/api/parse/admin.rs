@@ -16,6 +16,7 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     } else {
         (None, None)
     };
+
     let mut builder = FieldAdmin::builder()
         .collapsed(get_bool(admin_tbl, "collapsed", true))
         .hidden(get_bool(admin_tbl, "hidden", false))
@@ -25,48 +26,63 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     if let Some(v) = get_localized_string(admin_tbl, "label") {
         builder = builder.label(v);
     }
+
     if let Some(v) = get_localized_string(admin_tbl, "placeholder") {
         builder = builder.placeholder(v);
     }
+
     if let Some(v) = get_localized_string(admin_tbl, "description") {
         builder = builder.description(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "width") {
         builder = builder.width(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "label_field") {
         builder = builder.label_field(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "row_label") {
         builder = builder.row_label(v);
     }
+
     if let Some(v) = labels_singular {
         builder = builder.labels_singular(v);
     }
+
     if let Some(v) = labels_plural {
         builder = builder.labels_plural(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "position") {
         builder = builder.position(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "condition") {
         builder = builder.condition(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "step") {
         builder = builder.step(v);
     }
+
     if let Some(v) = admin_tbl.get::<Option<u32>>("rows").ok().flatten() {
         builder = builder.rows(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "language") {
         builder = builder.language(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "picker") {
         builder = builder.picker(v);
     }
+
     if let Some(v) = get_string(admin_tbl, "format") {
         builder = builder.richtext_format(v);
     }
+
     let features: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "features") {
         tbl.sequence_values::<String>()
             .filter_map(|r| r.ok())
@@ -74,7 +90,9 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     } else {
         Vec::new()
     };
+
     builder = builder.features(features);
+
     let nodes: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "nodes") {
         tbl.sequence_values::<String>()
             .filter_map(|r| r.ok())
@@ -82,7 +100,9 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     } else {
         Vec::new()
     };
+
     builder = builder.nodes(nodes);
+
     Ok(builder.build())
 }
 

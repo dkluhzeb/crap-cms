@@ -1,8 +1,26 @@
 //! Helper functions for the populate subsystem.
 
+use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::core::Document;
+use crate::core::{Document, cache::CacheBackend};
+
+/// Try to get a cached document from the cache backend.
+pub(super) fn cache_get_doc(cache: &dyn CacheBackend, key: &str) -> Result<Option<Document>> {
+    match cache.get(key)? {
+        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// Store a document in the cache backend.
+pub(super) fn cache_set_doc(cache: &dyn CacheBackend, key: &str, doc: &Document) -> Result<()> {
+    let bytes = serde_json::to_vec(doc)?;
+
+    cache.set(key, &bytes)?;
+
+    Ok(())
+}
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
 pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
@@ -11,26 +29,32 @@ pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
     if col.is_empty() || id.is_empty() {
         return None;
     }
+
     Some((col.to_string(), id.to_string()))
 }
 
 /// Convert a Document into a JSON Value for embedding in a parent's fields.
 pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
     let mut map = Map::new();
+
     map.insert("id".to_string(), Value::String(doc.id.to_string()));
     map.insert(
         "collection".to_string(),
         Value::String(collection.to_string()),
     );
+
     for (k, v) in &doc.fields {
         map.insert(k.clone(), v.clone());
     }
+
     if let Some(ref ts) = doc.created_at {
         map.insert("created_at".to_string(), Value::String(ts.clone()));
     }
+
     if let Some(ref ts) = doc.updated_at {
         map.insert("updated_at".to_string(), Value::String(ts.clone()));
     }
+
     Value::Object(map)
 }
 

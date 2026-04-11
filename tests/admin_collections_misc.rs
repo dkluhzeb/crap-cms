@@ -69,7 +69,7 @@ struct TestApp {
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
@@ -124,6 +124,10 @@ fn setup_app_with_config(
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
         email_renderer,
+        email_provider: crap_cms::core::email::create_email_provider(
+            &crap_cms::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             5, 300,
@@ -143,6 +147,15 @@ fn setup_app_with_config(
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crap_cms::core::upload::create_storage(
+            tmp.path(),
+            &crap_cms::config::UploadConfig::default(),
+        )
+        .unwrap(),
+        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
     };
 
     let router = build_router(state);
@@ -240,7 +253,7 @@ fn make_localized_pages_def() -> CollectionDefinition {
 }
 
 fn setup_localized_app() -> TestApp {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
@@ -1056,13 +1069,10 @@ async fn upload_api_create_returns_201_with_document() {
             .unwrap()
             .ends_with("photo.png")
     );
-    assert!(
-        json["document"]["url"]
-            .as_str()
-            .unwrap()
-            .starts_with("/uploads/media/")
-    );
-    assert_eq!(json["document"]["mime_type"], "image/png");
+
+    // Hidden fields (url, mime_type, filesize, width, height) are stripped from API responses
+    assert!(json["document"]["url"].is_null());
+    assert!(json["document"]["mime_type"].is_null());
 }
 
 #[tokio::test]

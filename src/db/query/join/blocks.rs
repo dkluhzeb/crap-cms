@@ -1,9 +1,12 @@
 //! Blocks field join table operations.
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use serde_json::{Map, Value};
 
+use crate::db::query::helpers::join_table;
 use crate::db::{DbConnection, DbValue};
+
+use super::helpers::delete_junction_rows;
 
 /// Set block rows for a blocks field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -16,29 +19,9 @@ pub fn set_block_rows(
     rows: &[Value],
     locale: Option<&str>,
 ) -> Result<()> {
-    let table_name = format!("{}_{}", collection, field_name);
+    let table_name = join_table(collection, field_name);
 
-    if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        conn.execute(
-            &format!(
-                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
-                table_name
-            ),
-            &[
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )
-        .with_context(|| format!("Failed to clear blocks table {}", table_name))?;
-    } else {
-        let p1 = conn.placeholder(1);
-        conn.execute(
-            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
-            &[DbValue::Text(parent_id.to_string())],
-        )
-        .with_context(|| format!("Failed to clear blocks table {}", table_name))?;
-    }
+    delete_junction_rows(conn, &table_name, parent_id, locale)?;
 
     if rows.is_empty() {
         return Ok(());
@@ -137,7 +120,7 @@ pub fn find_block_rows(
     parent_id: &str,
     locale: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let table_name = format!("{}_{}", collection, field_name);
+    let table_name = join_table(collection, field_name);
     let (sql, params) = if let Some(loc) = locale {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         (

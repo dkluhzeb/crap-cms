@@ -6,13 +6,15 @@ use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
 use crate::db::query::populate::{
-    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-    locale_cache_key,
+    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, locale_cache_key,
+    populate_cache_key,
 };
 use crate::{
     core::{CollectionDefinition, Document, upload},
     db::query::read::{find_by_id, find_by_ids},
 };
+
+use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
 
 /// Populate a non-polymorphic has-many field.
 pub(super) fn populate_nonpoly_has_many(
@@ -53,11 +55,12 @@ pub(super) fn populate_nonpoly_has_many(
             populated.push(Value::String(id.clone()));
             continue;
         }
-        let locale_key = locale_cache_key(ctx.locale_ctx);
-        let hm_cache_key = (rel_collection.to_string(), id.clone(), locale_key);
 
-        if let Some(cached) = ctx.cache.get(&hm_cache_key) {
-            populated.push(document_to_json(cached.value(), rel_collection));
+        let locale_key = locale_cache_key(ctx.locale_ctx);
+        let key = populate_cache_key(rel_collection, id, locale_key.as_deref());
+
+        if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
+            populated.push(document_to_json(&cached, rel_collection));
         } else {
             match fetched_map.remove(id) {
                 Some(mut related_doc) => {
@@ -82,9 +85,8 @@ pub(super) fn populate_nonpoly_has_many(
                         },
                         ctx.cache,
                     )?;
-                    if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-                        ctx.cache.insert(hm_cache_key, related_doc.clone());
-                    }
+
+                    let _ = cache_set_doc(ctx.cache, &key, &related_doc);
                     populated.push(document_to_json(&related_doc, rel_collection));
                 }
                 None => {
@@ -93,6 +95,7 @@ pub(super) fn populate_nonpoly_has_many(
             }
         }
     }
+
     doc.fields
         .insert(field_name.to_string(), Value::Array(populated));
     Ok(())
@@ -117,12 +120,12 @@ pub(super) fn populate_nonpoly_has_one(
     }
 
     let locale_key = locale_cache_key(ctx.locale_ctx);
-    let ho_cache_key = (rel_collection.to_string(), id.clone(), locale_key);
+    let key = populate_cache_key(rel_collection, &id, locale_key.as_deref());
 
-    if let Some(cached) = ctx.cache.get(&ho_cache_key) {
+    if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
         doc.fields.insert(
             field_name.to_string(),
-            document_to_json(cached.value(), rel_collection),
+            document_to_json(&cached, rel_collection),
         );
     } else if let Some(mut related_doc) =
         find_by_id(ctx.conn, rel_collection, rel_def, &id, ctx.locale_ctx)?
@@ -148,9 +151,8 @@ pub(super) fn populate_nonpoly_has_one(
             },
             ctx.cache,
         )?;
-        if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
-            ctx.cache.insert(ho_cache_key, related_doc.clone());
-        }
+
+        let _ = cache_set_doc(ctx.cache, &key, &related_doc);
         doc.fields.insert(
             field_name.to_string(),
             document_to_json(&related_doc, rel_collection),
@@ -164,8 +166,9 @@ mod tests {
     use serde_json::json;
 
     use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
+    use super::super::super::{PopulateContext, PopulateOpts, populate_cache_key};
     use super::populate_relationships_cached;
+    use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::{Document, Registry, field::*};
     use rusqlite::Connection;
     use std::collections::HashSet;
@@ -238,7 +241,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -312,7 +315,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -380,7 +383,7 @@ mod tests {
                 select: None,
                 locale_ctx: None,
             },
-            &PopulateCache::new(),
+            &NoneCache,
         )
         .unwrap();
 
@@ -404,7 +407,7 @@ mod tests {
         let mut visited = HashSet::new();
         visited.insert(("authors".to_string(), "a1".to_string()));
 
-        let cache = PopulateCache::new();
+        let cache = NoneCache;
         populate_relationships_cached(
             &PopulateContext {
                 conn: &conn,
@@ -438,15 +441,17 @@ mod tests {
         let posts_def = make_posts_def();
 
         // Pre-populate cache with a different name to distinguish from DB
-        let cache = PopulateCache::new();
+        let cache = MemoryCache::new(10_000);
         let mut cached_author = Document::new("a1".to_string());
         cached_author
             .fields
             .insert("name".to_string(), json!("CachedAlice"));
-        cache.insert(
-            ("authors".to_string(), "a1".to_string(), None),
-            cached_author,
-        );
+        cache
+            .set(
+                &populate_cache_key("authors", "a1", None),
+                &serde_json::to_vec(&cached_author).unwrap(),
+            )
+            .unwrap();
 
         let mut doc = Document::new("p1".to_string());
         doc.fields.insert("author".to_string(), json!("a1"));
@@ -503,15 +508,17 @@ mod tests {
         registry.register_collection(cats_def);
 
         // Pre-populate cache with a different name to distinguish from DB
-        let cache = PopulateCache::new();
+        let cache = MemoryCache::new(10_000);
         let mut cached_cat = Document::new("c1".to_string());
         cached_cat
             .fields
             .insert("name".to_string(), json!("CachedTech"));
-        cache.insert(
-            ("categories".to_string(), "c1".to_string(), None),
-            cached_cat,
-        );
+        cache
+            .set(
+                &populate_cache_key("categories", "c1", None),
+                &serde_json::to_vec(&cached_cat).unwrap(),
+            )
+            .unwrap();
 
         let mut doc = Document::new("p1".to_string());
         doc.fields.insert("tags".to_string(), json!(["c1"]));

@@ -3,6 +3,7 @@
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow, bail};
+use cron::Schedule;
 use mlua::Table;
 
 use crate::core::job::{JobDefinition, JobDefinitionBuilder, JobLabels};
@@ -19,18 +20,14 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
     // Validate cron expression early (the cron crate needs 6-7 fields with seconds;
     // we accept standard 5-field expressions and normalize by prepending "0")
     if let Some(ref expr) = schedule {
-        let normalized = {
-            let fields: Vec<&str> = expr.split_whitespace().collect();
-
-            if fields.len() == 5 {
-                format!("0 {}", expr)
-            } else {
-                expr.clone()
-            }
+        let normalized = if expr.split_whitespace().count() == 5 {
+            format!("0 {expr}")
+        } else {
+            expr.clone()
         };
 
-        if cron::Schedule::from_str(&normalized).is_err() {
-            bail!("Job '{}' has invalid cron expression '{}'", slug, expr);
+        if Schedule::from_str(&normalized).is_err() {
+            bail!("Job '{slug}' has invalid cron expression '{expr}'");
         }
     }
 
@@ -72,9 +69,11 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
     if let Some(s) = schedule {
         builder = builder.schedule(s);
     }
+
     if let Some(a) = access {
         builder = builder.access(a);
     }
+
     Ok(builder.build())
 }
 

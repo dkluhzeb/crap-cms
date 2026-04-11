@@ -11,7 +11,7 @@
 ---@field description? string
 ---@field parent? string
 ---@field color? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.CategoriesSeo
 
 ---@class crap.doc.Categories
 ---@field id string
@@ -20,7 +20,7 @@
 ---@field description? string
 ---@field parent? string
 ---@field color? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.CategoriesSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -32,6 +32,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Categories
 ---@field documents crap.doc.Categories[]
@@ -44,6 +46,8 @@
 ---@field collection "categories"
 ---@field operation string
 ---@field data crap.data.Categories
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Categories
 ---@field id? crap.FilterValue
@@ -81,7 +85,7 @@
 ---@field industry? "technology" | "finance" | "healthcare" | "education" | "retail" | "media" | "nonprofit" | "government"
 ---@field notes? string
 ---@field client_projects? table[]
----@field seo? crap.group.Seo
+---@field seo? crap.group.ClientsSeo
 
 ---@class crap.doc.Clients
 ---@field id string
@@ -95,7 +99,7 @@
 ---@field industry? "technology" | "finance" | "healthcare" | "education" | "retail" | "media" | "nonprofit" | "government"
 ---@field notes? string
 ---@field client_projects? table[]
----@field seo? crap.group.Seo
+---@field seo? crap.group.ClientsSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -107,6 +111,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Clients
 ---@field documents crap.doc.Clients[]
@@ -119,6 +125,8 @@
 ---@field collection "clients"
 ---@field operation string
 ---@field data crap.data.Clients
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Clients
 ---@field id? crap.FilterValue
@@ -164,13 +172,13 @@
 ---@field end_date? string
 ---@field online? boolean
 ---@field event_url? string
----@field location? crap.group.Location
+---@field location? crap.group.EventsLocation
 ---@field speakers? string[]
 ---@field categories? string[]
 ---@field registration_url? string
 ---@field max_attendees? number
 ---@field registration_deadline? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.EventsSeo
 
 ---@class crap.doc.Events
 ---@field id string
@@ -182,13 +190,13 @@
 ---@field end_date? string
 ---@field online? boolean
 ---@field event_url? string
----@field location? crap.group.Location
+---@field location? crap.group.EventsLocation
 ---@field speakers? string[]
 ---@field categories? string[]
 ---@field registration_url? string
 ---@field max_attendees? number
 ---@field registration_deadline? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.EventsSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -200,6 +208,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Events
 ---@field documents crap.doc.Events[]
@@ -212,6 +222,8 @@
 ---@field collection "events"
 ---@field operation string
 ---@field data crap.data.Events
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Events
 ---@field id? crap.FilterValue
@@ -282,6 +294,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Inquiries
 ---@field documents crap.doc.Inquiries[]
@@ -294,6 +308,8 @@
 ---@field collection "inquiries"
 ---@field operation string
 ---@field data crap.data.Inquiries
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Inquiries
 ---@field id? crap.FilterValue
@@ -395,6 +411,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Media
 ---@field documents crap.doc.Media[]
@@ -407,6 +425,8 @@
 ---@field collection "media"
 ---@field operation string
 ---@field data crap.data.Media
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Media
 ---@field id? crap.FilterValue
@@ -480,6 +500,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Pages
 ---@field documents crap.doc.Pages[]
@@ -492,6 +514,8 @@
 ---@field collection "pages"
 ---@field operation string
 ---@field data crap.data.Pages
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Pages
 ---@field id? crap.FilterValue
@@ -534,7 +558,7 @@
 ---@field related_content? string[]
 ---@field featured? boolean
 ---@field pinned? boolean
----@field seo? crap.group.Seo
+---@field seo? crap.group.PostsSeo
 
 ---@class crap.doc.Posts
 ---@field id string
@@ -553,7 +577,7 @@
 ---@field related_content? string[]
 ---@field featured? boolean
 ---@field pinned? boolean
----@field seo? crap.group.Seo
+---@field seo? crap.group.PostsSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -565,6 +589,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Posts
 ---@field documents crap.doc.Posts[]
@@ -577,6 +603,8 @@
 ---@field collection "posts"
 ---@field operation string
 ---@field data crap.data.Posts
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Posts
 ---@field id? crap.FilterValue
@@ -631,11 +659,11 @@
 ---@field categories? string[]
 ---@field tags? string[]
 ---@field budget? number
----@field deliverables? crap.array_row.Deliverables[]
+---@field deliverables? crap.array_row.ProjectsDeliverables[]
 ---@field content? table[]
 ---@field published_at? string
 ---@field external_url? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.ProjectsSeo
 
 ---@class crap.doc.Projects
 ---@field id string
@@ -653,11 +681,11 @@
 ---@field categories? string[]
 ---@field tags? string[]
 ---@field budget? number
----@field deliverables? crap.array_row.Deliverables[]
+---@field deliverables? crap.array_row.ProjectsDeliverables[]
 ---@field content? table[]
 ---@field published_at? string
 ---@field external_url? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.ProjectsSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -669,6 +697,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Projects
 ---@field documents crap.doc.Projects[]
@@ -681,6 +711,8 @@
 ---@field collection "projects"
 ---@field operation string
 ---@field data crap.data.Projects
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Projects
 ---@field id? crap.FilterValue
@@ -733,10 +765,10 @@
 ---@field active? boolean
 ---@field sort_order? number
 ---@field pricing_type "fixed" | "hourly" | "custom"
----@field price_range? crap.group.PriceRange
----@field features? crap.array_row.Features[]
+---@field price_range? crap.group.ServicesPriceRange
+---@field features? crap.array_row.ServicesFeatures[]
 ---@field hero_image? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.ServicesSeo
 
 ---@class crap.doc.Services
 ---@field id string
@@ -747,10 +779,10 @@
 ---@field active? boolean
 ---@field sort_order? number
 ---@field pricing_type "fixed" | "hourly" | "custom"
----@field price_range? crap.group.PriceRange
----@field features? crap.array_row.Features[]
+---@field price_range? crap.group.ServicesPriceRange
+---@field features? crap.array_row.ServicesFeatures[]
 ---@field hero_image? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.ServicesSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -762,6 +794,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Services
 ---@field documents crap.doc.Services[]
@@ -774,6 +808,8 @@
 ---@field collection "services"
 ---@field operation string
 ---@field data crap.data.Services
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Services
 ---@field id? crap.FilterValue
@@ -810,14 +846,14 @@
 ---@field name string
 ---@field slug string
 ---@field tag_type "topic" | "technology" | "industry" | "skill"
----@field seo? crap.group.Seo
+---@field seo? crap.group.TagsSeo
 
 ---@class crap.doc.Tags
 ---@field id string
 ---@field name string
 ---@field slug string
 ---@field tag_type "topic" | "technology" | "industry" | "skill"
----@field seo? crap.group.Seo
+---@field seo? crap.group.TagsSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -829,6 +865,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Tags
 ---@field documents crap.doc.Tags[]
@@ -841,6 +879,8 @@
 ---@field collection "tags"
 ---@field operation string
 ---@field data crap.data.Tags
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Tags
 ---@field id? crap.FilterValue
@@ -892,30 +932,30 @@
 
 ---@class crap.data.TestNesting
 ---@field name string
----@field tabbed_items? crap.array_row.TabbedItems[]
----@field coordinates? crap.array_row.Coordinates[]
----@field faq_items? crap.array_row.FaqItems[]
----@field team_members? crap.array_row.TeamMembers[]
+---@field tabbed_items? crap.array_row.TestNestingTabbedItems[]
+---@field coordinates? crap.array_row.TestNestingCoordinates[]
+---@field faq_items? crap.array_row.TestNestingFaqItems[]
+---@field team_members? crap.array_row.TestNestingTeamMembers[]
 ---@field sections? table[]
 ---@field theme? "light" | "dark"
 ---@field layout? "grid" | "list"
 ---@field custom_config? any
 ---@field custom_css? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.TestNestingSeo
 
 ---@class crap.doc.TestNesting
 ---@field id string
 ---@field name string
----@field tabbed_items? crap.array_row.TabbedItems[]
----@field coordinates? crap.array_row.Coordinates[]
----@field faq_items? crap.array_row.FaqItems[]
----@field team_members? crap.array_row.TeamMembers[]
+---@field tabbed_items? crap.array_row.TestNestingTabbedItems[]
+---@field coordinates? crap.array_row.TestNestingCoordinates[]
+---@field faq_items? crap.array_row.TestNestingFaqItems[]
+---@field team_members? crap.array_row.TestNestingTeamMembers[]
 ---@field sections? table[]
 ---@field theme? "light" | "dark"
 ---@field layout? "grid" | "list"
 ---@field custom_config? any
 ---@field custom_css? string
----@field seo? crap.group.Seo
+---@field seo? crap.group.TestNestingSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -927,6 +967,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.TestNesting
 ---@field documents crap.doc.TestNesting[]
@@ -939,6 +981,8 @@
 ---@field collection "test_nesting"
 ---@field operation string
 ---@field data crap.data.TestNesting
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.TestNesting
 ---@field id? crap.FilterValue
@@ -974,7 +1018,7 @@
 ---@field rating number
 ---@field project? string
 ---@field featured? boolean
----@field seo? crap.group.Seo
+---@field seo? crap.group.TestimonialsSeo
 
 ---@class crap.doc.Testimonials
 ---@field id string
@@ -986,7 +1030,7 @@
 ---@field rating number
 ---@field project? string
 ---@field featured? boolean
----@field seo? crap.group.Seo
+---@field seo? crap.group.TestimonialsSeo
 ---@field created_at? string
 ---@field updated_at? string
 
@@ -998,6 +1042,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Testimonials
 ---@field documents crap.doc.Testimonials[]
@@ -1010,6 +1056,8 @@
 ---@field collection "testimonials"
 ---@field operation string
 ---@field data crap.data.Testimonials
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Testimonials
 ---@field id? crap.FilterValue
@@ -1063,6 +1111,8 @@
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.find_result.Users
 ---@field documents crap.doc.Users[]
@@ -1075,6 +1125,8 @@
 ---@field collection "users"
 ---@field operation string
 ---@field data crap.data.Users
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.where.Users
 ---@field id? crap.FilterValue
@@ -1094,7 +1146,7 @@
 ---@field offset? integer
 ---@field locale? string
 
----@class crap.array_row.PartnerLogos
+---@class crap.array_row.FooterPartnerLogos
 ---@field name string
 ---@field logo? string
 ---@field url? string
@@ -1102,66 +1154,74 @@
 ---@class crap.global_data.Footer
 ---@field copyright_text? string
 ---@field show_social_links? boolean
----@field partner_logos? crap.array_row.PartnerLogos[]
+---@field partner_logos? crap.array_row.FooterPartnerLogos[]
 
 ---@class crap.global_doc.Footer
 ---@field id string
 ---@field copyright_text? string
 ---@field show_social_links? boolean
----@field partner_logos? crap.array_row.PartnerLogos[]
+---@field partner_logos? crap.array_row.FooterPartnerLogos[]
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.hook.global_footer
----@field global "footer"
+---@field collection "footer"
 ---@field operation "update" | "get_global"
 ---@field data crap.global_data.Footer
 ---@field context table<string, any>
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.field_hook.global_footer
 ---@field field_name string
----@field global "footer"
+---@field collection "footer"
 ---@field operation string
 ---@field data crap.global_data.Footer
+---@field user? table
+---@field ui_locale? string
 
----@class crap.array_row.MainNav
+---@class crap.array_row.NavigationMainNav
 ---@field label string
 ---@field url string
 ---@field open_in_new_tab? boolean
----@field children? crap.array_row.Children[]
+---@field children? crap.array_row.NavigationMainNavChildren[]
 
----@class crap.array_row.Children
+---@class crap.array_row.NavigationChildren
 ---@field label string
 ---@field url string
 
 ---@class crap.global_data.Navigation
----@field main_nav? crap.array_row.MainNav[]
+---@field main_nav? crap.array_row.NavigationMainNav[]
 
 ---@class crap.global_doc.Navigation
 ---@field id string
----@field main_nav? crap.array_row.MainNav[]
+---@field main_nav? crap.array_row.NavigationMainNav[]
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.hook.global_navigation
----@field global "navigation"
+---@field collection "navigation"
 ---@field operation "update" | "get_global"
 ---@field data crap.global_data.Navigation
 ---@field context table<string, any>
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.field_hook.global_navigation
 ---@field field_name string
----@field global "navigation"
+---@field collection "navigation"
 ---@field operation string
 ---@field data crap.global_data.Navigation
+---@field user? table
+---@field ui_locale? string
 
----@class crap.group.Social
+---@class crap.group.SiteSettingsSocial
 ---@field github? string
 ---@field twitter? string
 ---@field linkedin? string
@@ -1178,7 +1238,7 @@
 ---@field favicon? string
 ---@field primary_color? string
 ---@field secondary_color? string
----@field social? crap.group.Social
+---@field social? crap.group.SiteSettingsSocial
 
 ---@class crap.global_doc.SiteSettings
 ---@field id string
@@ -1191,24 +1251,28 @@
 ---@field favicon? string
 ---@field primary_color? string
 ---@field secondary_color? string
----@field social? crap.group.Social
+---@field social? crap.group.SiteSettingsSocial
 ---@field created_at? string
 ---@field updated_at? string
 
 ---@class crap.hook.global_site_settings
----@field global "site_settings"
+---@field collection "site_settings"
 ---@field operation "update" | "get_global"
 ---@field data crap.global_data.SiteSettings
 ---@field context table<string, any>
 ---@field hook_depth integer
 ---@field locale? string
 ---@field draft? boolean
+---@field user? table
+---@field ui_locale? string
 
 ---@class crap.field_hook.global_site_settings
 ---@field field_name string
----@field global "site_settings"
+---@field collection "site_settings"
 ---@field operation string
 ---@field data crap.global_data.SiteSettings
+---@field user? table
+---@field ui_locale? string
 
 ---@overload fun(collection: "categories", query?: crap.query.Categories): crap.find_result.Categories
 ---@overload fun(collection: "clients", query?: crap.query.Clients): crap.find_result.Clients

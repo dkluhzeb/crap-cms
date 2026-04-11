@@ -101,66 +101,41 @@ impl PartialEq<String> for Slug {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
-    fn new_and_deref() {
+    fn conversions_and_traits() {
         let slug = Slug::new("posts");
+
+        // Deref, Display, Debug
         assert_eq!(&*slug, "posts");
-    }
-
-    #[test]
-    fn into_inner() {
-        let slug = Slug::new("posts");
-        assert_eq!(slug.into_inner(), "posts".to_string());
-    }
-
-    #[test]
-    fn display() {
-        let slug = Slug::new("posts");
         assert_eq!(format!("{slug}"), "posts");
-    }
-
-    #[test]
-    fn debug() {
-        let slug = Slug::new("posts");
         assert_eq!(format!("{slug:?}"), "\"posts\"");
+
+        // Clone, Ord
+        assert_eq!(slug.clone(), "posts");
+        assert!(Slug::new("alpha") < Slug::new("beta"));
+
+        // Into/From conversions
+        assert_eq!(slug.into_inner(), "posts");
+        assert_eq!(<Slug as From<&str>>::from("x"), "x");
+        assert_eq!(<Slug as From<String>>::from("y".into()), "y");
+        assert_eq!(String::from(Slug::new("z")), "z");
     }
 
     #[test]
-    fn from_string() {
-        let slug: Slug = "posts".to_string().into();
-        assert_eq!(slug, "posts");
-    }
-
-    #[test]
-    fn from_str() {
-        let slug: Slug = "posts".into();
-        assert_eq!(slug, "posts");
-    }
-
-    #[test]
-    fn into_string() {
+    fn partial_eq_variants() {
         let slug = Slug::new("posts");
-        let s: String = slug.into();
-        assert_eq!(s, "posts");
-    }
 
-    #[test]
-    fn partial_eq_str() {
-        let slug = Slug::new("posts");
         assert!(slug == "posts");
         assert!(slug != "pages");
-    }
 
-    #[test]
-    fn partial_eq_string() {
-        let slug = Slug::new("posts");
-        assert!(slug == "posts");
+        let owned = "posts".to_string();
+        assert!(slug == owned);
     }
 
     #[test]
     fn hash_map_borrow_lookup() {
-        use std::collections::HashMap;
         let mut map = HashMap::new();
         map.insert(Slug::new("posts"), 1);
         assert_eq!(map.get("posts"), Some(&1));
@@ -171,6 +146,7 @@ mod tests {
         let slug = Slug::new("posts");
         let json = serde_json::to_string(&slug).unwrap();
         assert_eq!(json, "\"posts\"");
+
         let deserialized: Slug = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, slug);
     }
@@ -178,22 +154,9 @@ mod tests {
     #[test]
     fn str_methods_via_deref() {
         let slug = Slug::new("my_posts");
+
         assert!(slug.starts_with("my"));
         assert_eq!(slug.len(), 8);
         assert!(slug.contains("post"));
-    }
-
-    #[test]
-    fn clone() {
-        let slug = Slug::new("posts");
-        let cloned = slug.clone();
-        assert_eq!(slug, cloned);
-    }
-
-    #[test]
-    fn ord() {
-        let a = Slug::new("alpha");
-        let b = Slug::new("beta");
-        assert!(a < b);
     }
 }

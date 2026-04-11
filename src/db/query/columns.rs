@@ -2,10 +2,15 @@
 
 use std::collections::HashSet;
 
+use anyhow::Result;
+
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldDefinition, FieldType},
-    db::LocaleContext,
+    db::{
+        LocaleContext,
+        query::helpers::{locale_column, prefixed_name, tz_column, walk_leaf_fields},
+    },
 };
 
 /// Get column names for a collection (id + field columns + timestamps).
@@ -16,56 +21,33 @@ pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     if def.has_drafts() {
         names.push("_status".to_string());
     }
+
     if def.soft_delete {
         names.push("_deleted_at".to_string());
     }
+
     if def.timestamps {
         names.push("created_at".to_string());
         names.push("updated_at".to_string());
     }
+
     names
 }
 
 /// Recursively collect column names from a field tree.
 pub fn collect_column_names(fields: &[FieldDefinition], names: &mut Vec<String>) {
-    collect_column_names_inner(fields, names, "");
-}
+    // inherited_localized not needed here — just walk and collect
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if field.has_parent_column() {
+            let col = prefixed_name(prefix, &field.name);
+            names.push(col.clone());
 
-fn collect_column_names_inner(fields: &[FieldDefinition], names: &mut Vec<String>, prefix: &str) {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_column_names_inner(&field.fields, names, &new_prefix);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_column_names_inner(&field.fields, names, prefix);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_column_names_inner(&tab.fields, names, prefix);
-                }
-            }
-            _ => {
-                if field.has_parent_column() {
-                    let col = if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    };
-                    names.push(col.clone());
-
-                    if field.field_type == FieldType::Date && field.timezone {
-                        names.push(format!("{}_tz", col));
-                    }
-                }
+            if field.field_type == FieldType::Date && field.timezone {
+                names.push(tz_column(&col));
             }
         }
-    }
+        Ok(())
+    });
 }
 
 /// Get expected column names including locale suffixes for localized fields.
@@ -73,116 +55,68 @@ fn collect_column_names_inner(fields: &[FieldDefinition], names: &mut Vec<String
 pub fn get_expected_column_names(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
-) -> HashSet<String> {
+) -> Result<HashSet<String>> {
     if !locale_config.is_enabled() {
-        return get_column_names(def).into_iter().collect();
+        return Ok(get_column_names(def).into_iter().collect());
     }
 
     let mut expected = HashSet::new();
+
     expected.insert("id".to_string());
-    collect_expected_with_locale(&def.fields, &mut expected, "", locale_config);
+
+    collect_expected_locale_inner(&def.fields, &mut expected, locale_config)?;
 
     if def.has_drafts() {
         expected.insert("_status".to_string());
     }
+
     if def.soft_delete {
         expected.insert("_deleted_at".to_string());
     }
+
     if def.timestamps {
         expected.insert("created_at".to_string());
         expected.insert("updated_at".to_string());
     }
-    expected
-}
 
-fn collect_expected_with_locale(
-    fields: &[FieldDefinition],
-    names: &mut HashSet<String>,
-    prefix: &str,
-    locale_config: &LocaleConfig,
-) {
-    collect_expected_locale_inner(fields, names, prefix, locale_config, false);
+    Ok(expected)
 }
 
 fn collect_expected_locale_inner(
     fields: &[FieldDefinition],
     names: &mut HashSet<String>,
-    prefix: &str,
     locale_config: &LocaleConfig,
-    parent_localized: bool,
-) {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                // Group propagates its localized flag to children
-                collect_expected_locale_inner(
-                    &field.fields,
-                    names,
-                    &new_prefix,
-                    locale_config,
-                    parent_localized || field.localized,
-                );
+) -> Result<()> {
+    walk_leaf_fields(fields, "", false, &mut |field, prefix, inherited_loc| {
+        if !field.has_parent_column() {
+            return Ok(());
+        }
+
+        let base = prefixed_name(prefix, &field.name);
+        let is_localized = field.localized || inherited_loc;
+
+        if is_localized {
+            for locale in &locale_config.locales {
+                names.insert(locale_column(&base, locale)?);
             }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_expected_locale_inner(
-                    &field.fields,
-                    names,
-                    prefix,
-                    locale_config,
-                    parent_localized,
-                );
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_expected_locale_inner(
-                        &tab.fields,
-                        names,
-                        prefix,
-                        locale_config,
-                        parent_localized,
-                    );
+        } else {
+            names.insert(base.clone());
+        }
+
+        if field.field_type == FieldType::Date && field.timezone {
+            let tz_base = tz_column(&base);
+
+            if is_localized {
+                for locale in &locale_config.locales {
+                    names.insert(locale_column(&tz_base, locale)?);
                 }
-            }
-            _ => {
-                if field.has_parent_column() {
-                    let base = if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    };
-
-                    if field.localized || parent_localized {
-                        for locale in &locale_config.locales {
-                            names.insert(format!("{}__{}", base, locale));
-                        }
-                    } else {
-                        names.insert(base.clone());
-                    }
-
-                    if field.field_type == FieldType::Date && field.timezone {
-                        let tz_base = if prefix.is_empty() {
-                            format!("{}_tz", field.name)
-                        } else {
-                            format!("{}__{}_tz", prefix, field.name)
-                        };
-
-                        if field.localized || parent_localized {
-                            for locale in &locale_config.locales {
-                                names.insert(format!("{}__{}", tz_base, locale));
-                            }
-                        } else {
-                            names.insert(tz_base);
-                        }
-                    }
-                }
+            } else {
+                names.insert(tz_base);
             }
         }
-    }
+
+        Ok(())
+    })
 }
 
 /// Get the set of valid filter column names, accounting for locale.
@@ -191,58 +125,36 @@ pub(crate) fn get_valid_filter_columns(
     locale_ctx: Option<&LocaleContext>,
 ) -> HashSet<String> {
     let mut valid = HashSet::new();
+
     valid.insert("id".to_string());
-    collect_valid_filter_names(&def.fields, &mut valid, "");
+
+    collect_valid_filter_names(&def.fields, &mut valid);
 
     if def.has_drafts() {
         valid.insert("_status".to_string());
     }
+
     if def.timestamps {
         valid.insert("created_at".to_string());
         valid.insert("updated_at".to_string());
     }
+
     if def.soft_delete {
         valid.insert("_deleted_at".to_string());
     }
+
     let _ = locale_ctx; // filter validation uses undecorated field names
+
     valid
 }
 
-fn collect_valid_filter_names(
-    fields: &[FieldDefinition],
-    valid: &mut HashSet<String>,
-    prefix: &str,
-) {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_valid_filter_names(&field.fields, valid, &new_prefix);
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_valid_filter_names(&field.fields, valid, prefix);
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_valid_filter_names(&tab.fields, valid, prefix);
-                }
-            }
-            _ => {
-                if field.has_parent_column() {
-                    let col = if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    };
-                    valid.insert(col);
-                }
-            }
+fn collect_valid_filter_names(fields: &[FieldDefinition], valid: &mut HashSet<String>) {
+    let _ = walk_leaf_fields(fields, "", false, &mut |field, prefix, _| {
+        if field.has_parent_column() {
+            valid.insert(prefixed_name(prefix, &field.name));
         }
-    }
+        Ok(())
+    });
 }
 
 #[cfg(test)]
@@ -665,7 +577,7 @@ mod tests {
             ],
             true,
         );
-        let expected = get_expected_column_names(&def, &no_locale());
+        let expected = get_expected_column_names(&def, &no_locale()).unwrap();
         let names: HashSet<String> = get_column_names(&def).into_iter().collect();
         assert_eq!(expected, names);
     }
@@ -679,7 +591,7 @@ mod tests {
             vec![title, make_field("slug", FieldType::Text)],
             true,
         );
-        let expected = get_expected_column_names(&def, &locale_en_de());
+        let expected = get_expected_column_names(&def, &locale_en_de()).unwrap();
 
         assert!(expected.contains("title__en"));
         assert!(expected.contains("title__de"));
@@ -701,7 +613,7 @@ mod tests {
             )],
             false,
         );
-        let expected = get_expected_column_names(&def, &locale_en_de());
+        let expected = get_expected_column_names(&def, &locale_en_de()).unwrap();
 
         assert!(expected.contains("seo__desc__en"));
         assert!(expected.contains("seo__desc__de"));
@@ -728,7 +640,7 @@ mod tests {
             )],
             false,
         );
-        let expected = get_expected_column_names(&def, &no_locale());
+        let expected = get_expected_column_names(&def, &no_locale()).unwrap();
         assert!(expected.contains("meta__title"));
         assert!(expected.contains("body"));
     }
@@ -788,7 +700,7 @@ mod tests {
         let mut date_field = make_date_tz_field("event_date");
         date_field.localized = true;
         let def = make_collection_def("events", vec![date_field], false);
-        let expected = get_expected_column_names(&def, &locale_en_de());
+        let expected = get_expected_column_names(&def, &locale_en_de()).unwrap();
 
         // Date value columns should be locale-expanded
         assert!(expected.contains("event_date__en"));
@@ -817,7 +729,7 @@ mod tests {
     #[test]
     fn expected_columns_date_tz_no_locale() {
         let def = make_collection_def("events", vec![make_date_tz_field("start")], false);
-        let expected = get_expected_column_names(&def, &no_locale());
+        let expected = get_expected_column_names(&def, &no_locale()).unwrap();
         assert!(expected.contains("start"));
         assert!(expected.contains("start_tz"));
     }

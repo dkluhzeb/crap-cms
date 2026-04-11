@@ -108,9 +108,12 @@ host = "0.0.0.0"        # Bind address
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
-pool_max_size = 32       # Max connections in the pool
+pool_max_size = 64       # Max connections in the pool
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
 connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
+mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
+wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
 
 [admin]
 dev_mode = false         # Reload templates per-request (enable in development)
@@ -149,8 +152,13 @@ max_length = 128            # Maximum password length (DoS protection)
 [depth]
 default_depth = 1        # Default population depth for FindByID (Find always defaults to 0)
 max_depth = 10           # Hard cap on population depth (prevents abuse)
-# populate_cache = false           # Cross-request populate cache (opt-in)
-# populate_cache_max_age_secs = 0  # Periodic cache clear for external DB mutations
+
+[cache]
+backend = "memory"       # Cache backend: "memory" (default), "redis", "none", "custom"
+# max_entries = 10000    # Soft cap for memory backend (default: 10000)
+# max_age_secs = 0       # Periodic full clear interval (0 = disabled)
+# redis_url = "redis://127.0.0.1:6379"  # Redis connection URL
+# prefix = "crap:"       # Key prefix for Redis backend
 
 [pagination]
 default_limit = 20      # Default limit for Find queries (when none is specified)
@@ -158,10 +166,22 @@ max_limit = 1000         # Hard cap on limit — requests above this are clamped
 # mode = "page"          # "page" (offset) or "cursor" (keyset)
 
 [upload]
+storage = "local"        # Storage backend: "local" (default), "s3", or "custom"
 max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
 
+# [upload.s3]            # S3-compatible storage (requires --features s3-storage)
+# bucket = "my-uploads"
+# region = "us-east-1"
+# endpoint = ""          # custom endpoint for MinIO, R2, etc.
+# access_key = "${AWS_ACCESS_KEY}"
+# secret_key = "${AWS_SECRET_KEY}"
+# prefix = ""            # optional key prefix
+# public_url_base = ""   # CDN URL base (empty = S3 URLs)
+# path_style = false     # true for MinIO
+
 [email]
-smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+provider = "smtp"        # "smtp" (default), "webhook", "log", or "custom"
+smtp_host = ""           # SMTP server hostname. Empty = falls back to log provider
 smtp_port = 587          # SMTP port (587 for STARTTLS, 465 for TLS, 25/1025 for plain)
 smtp_user = ""           # SMTP username
 smtp_pass = ""           # SMTP password
@@ -169,12 +189,14 @@ smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit TLS), "none" (p
 from_address = "noreply@example.com"  # Sender email address
 from_name = "Crap CMS"  # Sender display name
 # smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")
+# webhook_url = ""      # URL for webhook provider (POST JSON)
+# webhook_headers = { Authorization = "Bearer ${API_KEY}" }  # Extra headers for webhook
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 # max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
-                         # Default: max(available_parallelism, 4), capped at 32
+                         # Default: number of CPU cores (fallback: 4)
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
 max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
 allow_private_networks = false  # Block HTTP requests to private/loopback IPs
@@ -182,6 +204,7 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
+default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
@@ -200,7 +223,7 @@ auto_purge = "7d"            # Auto-purge completed/failed runs older than this
 image_queue_batch_size = 10  # Pending image conversions to process per poll
 
 [access]
-default_deny = false     # When true, deny all operations without explicit access functions
+default_deny = true      # When true (default), deny all operations without explicit access functions
 
 [cors]
 allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (default)
@@ -245,7 +268,10 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `path` | string | `"data/crap.db"` | SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is. |
-| `pool_max_size` | integer | `32` | Maximum number of connections in the SQLite connection pool. |
+| `pool_max_size` | integer | `64` | Maximum number of connections in the SQLite connection pool. |
+| `cache_size` | integer | `-16384` | SQLite page cache size. Negative = KB, positive = pages. Default 16MB. |
+| `mmap_size` | integer | `268435456` | SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable. |
+| `wal_autocheckpoint` | integer | `1000` | WAL auto-checkpoint threshold in pages. |
 | `busy_timeout` | duration | `30000` (`"30s"`) | SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (`"30s"`, `"1m"`). |
 | `connection_timeout` | duration | `5` | Pool checkout timeout in seconds. How long `pool.get()` waits for a free connection before returning an error. |
 
@@ -312,6 +338,9 @@ Password strength requirements applied to all password-setting paths (create, up
 | `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
 | `require_digit` | boolean | `false` | Require at least one digit (0-9). |
 | `require_special` | boolean | `false` | Require at least one special (non-alphanumeric) character. |
+| `rate_limit_backend` | string | `"memory"` | Rate limit storage backend: `"memory"` (default, per-server), `"redis"` (shared across servers, requires `--features redis`), `"none"` (disabled). |
+| `rate_limit_redis_url` | string | `""` | Redis URL for rate limit backend. Falls back to `cache.redis_url` if empty. |
+| `rate_limit_prefix` | string | `"crap:rl:"` | Key prefix for Redis rate limit backend. |
 
 ### `[depth]`
 
@@ -319,8 +348,16 @@ Password strength requirements applied to all password-setting paths (create, up
 |-------|------|---------|-------------|
 | `default_depth` | integer | `1` | Default population depth for `FindByID`. `Find` always defaults to `0`. |
 | `max_depth` | integer | `10` | Maximum allowed depth for any request. Hard cap to prevent excessive queries. |
-| `populate_cache` | boolean | `false` | Enable cross-request populate cache. Caches populated documents in memory, cleared on any write through the API. Improves read performance for repeated deep population. **Opt-in** because external DB modifications can cause stale reads. |
-| `populate_cache_max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. Only used when `populate_cache = true`. |
+
+### `[cache]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backend` | string | `"memory"` | Cache backend: `"memory"` (in-memory DashMap), `"redis"` (shared, requires `--features redis`), `"none"` (disabled), or `"custom"` (Lua-delegated, planned). |
+| `max_entries` | integer | `10000` | Soft cap on entries for the memory backend. Once reached, new insertions are skipped until a clear. |
+| `max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. |
+| `redis_url` | string | `"redis://127.0.0.1:6379"` | Redis connection URL. Only used when `backend = "redis"`. |
+| `prefix` | string | `"crap:"` | Key prefix for the Redis backend. All keys are stored as `{prefix}{key}`. |
 
 ### `[pagination]`
 
@@ -334,13 +371,30 @@ Password strength requirements applied to all password-setting paths (create, up
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `storage` | string | `"local"` | Storage backend: `"local"` (filesystem), `"s3"` (S3-compatible, requires `--features s3-storage`), or `"custom"` (Lua-delegated). |
 | `max_file_size` | integer/string | `52428800` (`"50MB"`) | Global maximum file size. Accepts bytes (integer) or human-readable (`"50MB"`, `"1GB"`). Per-collection `max_file_size` overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding). |
+
+### `[upload.s3]`
+
+S3-compatible storage configuration. Only used when `storage = "s3"`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bucket` | string | (required) | S3 bucket name. |
+| `region` | string | `"us-east-1"` | AWS region. |
+| `endpoint` | string | (AWS default) | Custom endpoint URL for MinIO, R2, B2, etc. |
+| `access_key` | string | (required) | AWS access key ID. |
+| `secret_key` | string | (required) | AWS secret access key. |
+| `prefix` | string | `""` | Optional key prefix prepended to all storage keys. |
+| `public_url_base` | string | `""` | Base URL for public file links (e.g., CDN). Empty = S3 URLs. |
+| `path_style` | boolean | `false` | Use path-style addressing (required for MinIO). |
 
 ### `[email]`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `smtp_host` | string | `""` (empty) | SMTP server hostname. **Empty = email disabled** — all send attempts log a warning and return Ok. |
+| `provider` | string | `"smtp"` | Email provider: `"smtp"` (default), `"webhook"` (HTTP POST), `"log"` (dev mode), or `"custom"` (Lua). |
+| `smtp_host` | string | `""` (empty) | SMTP server hostname. **Empty with smtp provider = falls back to log provider.** |
 | `smtp_port` | integer | `587` | SMTP port. 587 is the standard STARTTLS port. |
 | `smtp_user` | string | `""` | SMTP authentication username. |
 | `smtp_pass` | string | `""` | SMTP authentication password. |
@@ -348,8 +402,14 @@ Password strength requirements applied to all password-setting paths (create, up
 | `from_address` | string | `"noreply@example.com"` | Sender email address for outgoing mail. |
 | `from_name` | string | `"Crap CMS"` | Sender display name. |
 | `smtp_timeout` | integer/string | `30` | SMTP connection and send timeout in seconds. Accepts integer or duration string (`"30s"`, `"1m"`). |
+| `webhook_url` | string | `""` | URL for the webhook email provider. Receives POST with JSON body. |
+| `webhook_headers` | map | `{}` | Extra HTTP headers for webhook requests (e.g., `{ Authorization = "Bearer ..." }`). |
+| `queue_retries` | integer | `3` | Retry count for emails sent via `crap.email.queue()`. |
+| `queue_name` | string | `"email"` | Job queue name for queued emails. |
+| `queue_timeout` | integer | `30` | Per-attempt timeout in seconds for queued email jobs. |
+| `queue_concurrency` | integer | `5` | Max concurrent queued email jobs processed by the scheduler. |
 
-When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API.
+When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API. The `log` provider is useful for development — it logs email content to tracing without sending. The `custom` provider delegates to Lua via `crap.email.register()`.
 
 ### `[hooks]`
 
@@ -357,7 +417,7 @@ When configured, email enables password reset ("Forgot password?" link on login)
 |-------|------|---------|-------------|
 | `on_init` | string[] | `[]` | Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup. |
 | `max_depth` | integer | `3` | Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. `0` = never run hooks from Lua CRUD. |
-| `vm_pool_size` | integer | `max(cpus, 4)` capped at 32 | Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32. |
+| `vm_pool_size` | integer | CPU cores | Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores (fallback: 4 if detection fails). |
 | `max_instructions` | integer | `10000000` | Maximum Lua instructions per hook invocation. `0` = unlimited. |
 | `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes. Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
 | `allow_private_networks` | boolean | `false` | Allow `crap.http.request` to reach private/loopback/link-local IPs. |
@@ -368,6 +428,7 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
+| `default_mode` | string | `"metadata"` | Default event delivery mode. `"metadata"` sends only event type, collection, and document ID. `"full"` sends the complete document payload. |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
 | `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
 | `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
@@ -397,7 +458,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `default_deny` | boolean | `false` | When `true`, collections and globals without an explicit access function deny all operations. When `false` (default), missing access functions allow all operations. |
+| `default_deny` | boolean | `true` | When `true` (default), collections and globals without an explicit access function deny all operations. Set to `false` to allow all operations when no access function is defined. |
 
 Enable this to enforce a "secure by default" posture — every collection must explicitly declare its access rules. Without it, collections without access functions are open to any authenticated (or anonymous) user.
 

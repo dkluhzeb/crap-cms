@@ -1,19 +1,3 @@
-use crate::{
-    admin::{
-        AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
-        handlers::shared::{
-            PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden, not_found,
-            redirect_response, render_or_error, server_error, version_to_json,
-        },
-    },
-    core::{
-        Document,
-        auth::{AuthUser, Claims},
-    },
-    db::query::{self, AccessResult},
-};
-
 use axum::{
     Extension,
     extract::{Path, Query, State},
@@ -21,6 +5,34 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
+
+use crate::{
+    admin::{
+        AdminState,
+        context::{Breadcrumb, ContextBuilder, PageType},
+        handlers::shared::{
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found,
+            redirect_response, render_or_error, server_error, version_to_json,
+        },
+    },
+    core::auth::{AuthUser, Claims},
+    db::query::PaginationResult,
+    service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
+};
+
+/// Fetch paginated version list for a global.
+fn fetch_version_data(ctx: &ServiceContext, pg: &Pagination) -> (Vec<Value>, PaginationResult) {
+    let input = ListVersionsInput::builder("default")
+        .limit(Some(pg.per_page))
+        .offset(Some(pg.offset))
+        .build();
+
+    let result = list_versions(ctx, &input).unwrap_or_default();
+
+    let versions = result.docs.into_iter().map(version_to_json).collect();
+
+    (versions, result.pagination)
+}
 
 /// GET /admin/globals/{slug}/versions — dedicated version history page
 pub async fn list_versions_page(
@@ -40,40 +52,22 @@ pub async fn list_versions_page(
         return redirect_response(&format!("/admin/globals/{}", slug));
     }
 
-    // Check read access
-    match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to view this global");
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
-    let global_table = format!("_global_{}", slug);
-    let page = params.page.unwrap_or(1).max(1);
-    let per_page = params
-        .per_page
-        .unwrap_or(state.config.pagination.default_limit)
-        .clamp(1, state.config.pagination.max_limit);
-    let offset = (page - 1) * per_page;
-
     let conn = match state.pool.get() {
         Ok(c) => c,
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let total = query::count_versions(&conn, &global_table, "default").unwrap_or(0);
-    let versions: Vec<Value> = query::list_versions(
-        &conn,
-        &global_table,
-        "default",
-        Some(per_page),
-        Some(offset),
-    )
-    .unwrap_or_default()
-    .into_iter()
-    .map(version_to_json)
-    .collect();
+    let user_doc = get_user_doc(&auth_user);
+    let pg = params.resolve(&state.config.pagination);
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+
+    let ctx = ServiceContext::global(&slug, &def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user_doc)
+        .build();
+
+    let (versions, pagination) = fetch_version_data(&ctx, &pg);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -90,14 +84,13 @@ pub async fn list_versions_page(
             json!(format!("/admin/globals/{}", slug)),
         )
         .with_pagination(
-            &query::PaginationResult::builder(&[] as &[Document], total, per_page)
-                .page(page, offset),
+            &pagination,
             format!(
                 "/admin/globals/{}/versions?page={}",
                 slug,
-                page.saturating_sub(1).max(1)
+                pg.page.saturating_sub(1).max(1)
             ),
-            format!("/admin/globals/{}/versions?page={}", slug, page + 1),
+            format!("/admin/globals/{}/versions?page={}", slug, pg.page + 1),
         )
         .breadcrumbs(vec![
             Breadcrumb::link("dashboard", "/admin"),

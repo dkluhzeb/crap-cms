@@ -21,9 +21,11 @@ pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedSt
         Ok(Value::String(s)) => Some(LocalizedString::Plain(s.to_str().ok()?.to_string())),
         Ok(Value::Table(t)) => {
             let mut map = HashMap::new();
+
             for (k, v) in t.pairs::<String, String>().flatten() {
                 map.insert(k, v);
             }
+
             if map.is_empty() {
                 None
             } else {
@@ -59,6 +61,7 @@ pub(super) fn parse_relationship_collection(rel_tbl: &Table) -> (String, Vec<Str
                 .filter_map(|r| r.ok())
                 .collect();
             let first = slugs.first().cloned().unwrap_or_default();
+
             (first, slugs)
         }
         _ => (String::new(), vec![]),
@@ -72,9 +75,11 @@ pub(super) fn get_string_val(tbl: &Table, key: &str) -> mlua::Result<String> {
 pub(super) fn parse_string_list(tbl: &Table, key: &str) -> Result<Vec<String>> {
     if let Ok(list_tbl) = get_table(tbl, key) {
         let mut items = Vec::new();
+
         for pair in list_tbl.sequence_values::<String>() {
             items.push(pair?);
         }
+
         Ok(items)
     } else {
         Ok(Vec::new())
@@ -96,13 +101,16 @@ pub(super) fn parse_hooks(hooks_tbl: &Table) -> Result<Hooks> {
 
 pub(super) fn parse_select_options(opts_tbl: &Table) -> Result<Vec<SelectOption>> {
     let mut options = Vec::new();
+
     for pair in opts_tbl.clone().sequence_values::<Table>() {
         let opt = pair?;
         let label = get_localized_string(&opt, "label")
             .unwrap_or_else(|| LocalizedString::Plain(String::new()));
         let value = get_string_val(&opt, "value").unwrap_or_default();
+
         options.push(SelectOption::new(label, value));
     }
+
     Ok(options)
 }
 

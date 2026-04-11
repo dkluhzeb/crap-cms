@@ -7,59 +7,65 @@ use crate::{config::CrapConfig, hooks::api::json_to_lua};
 
 /// Register `crap.config` — read-only config access with dot notation.
 pub(super) fn register_config(lua: &Lua, crap: &Table, config: &CrapConfig) -> Result<()> {
-    let config_table = lua.create_table()?;
     let config_json =
-        serde_json::to_value(config).map_err(|e| anyhow!("Failed to serialize config: {}", e))?;
-    let config_lua = json_to_lua(lua, &config_json)?;
-    lua.set_named_registry_value("_crap_config", config_lua)?;
+        serde_json::to_value(config).map_err(|e| anyhow!("Failed to serialize config: {e}"))?;
+    lua.set_named_registry_value("_crap_config", json_to_lua(lua, &config_json)?)?;
 
-    let config_get_fn = lua.create_function(|lua, key: String| -> LuaResult<Value> {
-        let config_val: Value = lua.named_registry_value("_crap_config")?;
-        let mut current = config_val;
-        for part in key.split('.') {
-            match current {
-                Value::Table(tbl) => {
-                    current = tbl.get(part)?;
-                }
-                _ => return Ok(Value::Nil),
-            }
-        }
-        Ok(current)
-    })?;
-
-    config_table.set("get", config_get_fn)?;
-
-    crap.set("config", config_table)?;
+    let t = lua.create_table()?;
+    t.set(
+        "get",
+        lua.create_function(|lua, key: String| config_get(lua, &key))?,
+    )?;
+    crap.set("config", t)?;
 
     Ok(())
 }
 
 /// Register `crap.locale` — locale configuration access.
 pub(super) fn register_locale(lua: &Lua, crap: &Table, config: &CrapConfig) -> Result<()> {
-    let locale_table = lua.create_table()?;
+    let t = lua.create_table()?;
 
-    let default_locale = config.locale.default_locale.clone();
-    let get_default_fn =
-        lua.create_function(move |_, ()| -> LuaResult<String> { Ok(default_locale.clone()) })?;
-    locale_table.set("get_default", get_default_fn)?;
+    let default = config.locale.default_locale.clone();
+    t.set(
+        "get_default",
+        lua.create_function(move |_, ()| Ok(default.clone()))?,
+    )?;
 
     let locales = config.locale.locales.clone();
-    let get_all_fn = lua.create_function(move |lua, ()| -> LuaResult<Table> {
-        let tbl = lua.create_table()?;
-        for (i, l) in locales.iter().enumerate() {
-            tbl.set(i + 1, l.as_str())?;
-        }
-        Ok(tbl)
-    })?;
-    locale_table.set("get_all", get_all_fn)?;
+    t.set(
+        "get_all",
+        lua.create_function(move |lua, ()| locale_get_all(lua, &locales))?,
+    )?;
 
     let enabled = config.locale.is_enabled();
-    let is_enabled_fn = lua.create_function(move |_, ()| -> LuaResult<bool> { Ok(enabled) })?;
-    locale_table.set("is_enabled", is_enabled_fn)?;
+    t.set("is_enabled", lua.create_function(move |_, ()| Ok(enabled))?)?;
 
-    crap.set("locale", locale_table)?;
+    crap.set("locale", t)?;
 
     Ok(())
+}
+
+/// Traverse a dot-separated key path through the config registry value.
+fn config_get(lua: &Lua, key: &str) -> LuaResult<Value> {
+    let mut current: Value = lua.named_registry_value("_crap_config")?;
+
+    for part in key.split('.') {
+        let Value::Table(tbl) = current else {
+            return Ok(Value::Nil);
+        };
+        current = tbl.get(part)?;
+    }
+
+    Ok(current)
+}
+
+/// Return all configured locales as a Lua sequence table.
+fn locale_get_all(lua: &Lua, locales: &[String]) -> LuaResult<Table> {
+    let tbl = lua.create_table()?;
+    for (i, l) in locales.iter().enumerate() {
+        tbl.set(i + 1, l.as_str())?;
+    }
+    Ok(tbl)
 }
 
 #[cfg(test)]

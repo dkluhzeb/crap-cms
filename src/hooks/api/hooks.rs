@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use mlua::{Function, Lua, Table, Value};
+use tracing::warn;
 
 /// Known lifecycle event names. Used to warn on unrecognized event registrations.
 const KNOWN_EVENTS: &[&str] = &[
@@ -20,73 +21,94 @@ fn is_known_event(event: &str) -> bool {
     KNOWN_EVENTS.contains(&event)
 }
 
+/// Register `crap.hooks.register`, `crap.hooks.remove`, and `crap.hooks.list`.
 pub(super) fn register_hooks(lua: &Lua, crap: &Table) -> Result<()> {
-    // _crap_event_hooks — stored in Lua registry (invisible to Lua code)
-    let event_hooks = lua.create_table()?;
-    lua.set_named_registry_value("_crap_event_hooks", event_hooks)?;
+    lua.set_named_registry_value("_crap_event_hooks", lua.create_table()?)?;
 
-    let hooks_table = lua.create_table()?;
+    let t = lua.create_table()?;
 
-    let register_fn = lua.create_function(|lua, (event, func): (String, Function)| {
-        if !is_known_event(&event) {
-            tracing::warn!(
-                "crap.hooks.register: unknown event '{}'. Known events: {}",
-                event,
-                KNOWN_EVENTS.join(", ")
-            );
-        }
-        let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
-        let list: Table = match event_hooks.get::<Value>(event.as_str())? {
-            Value::Table(t) => t,
-            _ => {
-                let t = lua.create_table()?;
-                event_hooks.set(event.as_str(), t.clone())?;
-                t
-            }
-        };
-        let len = list.raw_len();
-        list.set(len + 1, func)?;
-        Ok(())
-    })?;
-    hooks_table.set("register", register_fn)?;
+    t.set(
+        "register",
+        lua.create_function(|lua, (event, func): (String, Function)| {
+            register_hook(lua, &event, func)
+        })?,
+    )?;
+    t.set(
+        "remove",
+        lua.create_function(|lua, (event, func): (String, Function)| {
+            remove_hook(lua, &event, &func)
+        })?,
+    )?;
+    t.set(
+        "list",
+        lua.create_function(|lua, event: String| list_hooks(lua, &event))?,
+    )?;
 
-    let remove_fn = lua.create_function(|lua, (event, func): (String, Function)| {
-        let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
-        let list: Table = match event_hooks.get::<Value>(event.as_str())? {
-            Value::Table(t) => t,
-            _ => return Ok(()),
-        };
-        let rawequal: Function = lua.globals().get("rawequal")?;
-        let len = list.raw_len();
-        let mut remove_idx = None;
-        for i in 1..=len {
-            let entry: Value = list.raw_get(i)?;
-            let eq: bool = rawequal.call((entry, func.clone()))?;
+    crap.set("hooks", t)?;
 
-            if eq {
-                remove_idx = Some(i);
-                break;
-            }
-        }
-        if let Some(idx) = remove_idx {
-            let table_remove: Function = lua.load("table.remove").eval()?;
-            table_remove.call::<()>((list, idx))?;
-        }
-        Ok(())
-    })?;
-    hooks_table.set("remove", remove_fn)?;
-
-    let list_fn = lua.create_function(|lua, event: String| -> mlua::Result<Table> {
-        let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
-        match event_hooks.get::<Value>(event.as_str())? {
-            Value::Table(t) => Ok(t),
-            _ => lua.create_table(),
-        }
-    })?;
-    hooks_table.set("list", list_fn)?;
-
-    crap.set("hooks", hooks_table)?;
     Ok(())
+}
+
+/// Get the event hook list for an event, creating it if absent.
+fn get_or_create_hook_list(lua: &Lua, event: &str) -> mlua::Result<Table> {
+    let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
+
+    match event_hooks.get::<Value>(event)? {
+        Value::Table(t) => Ok(t),
+        _ => {
+            let t = lua.create_table()?;
+
+            event_hooks.set(event, t.clone())?;
+
+            Ok(t)
+        }
+    }
+}
+
+/// Register a hook function for an event.
+fn register_hook(lua: &Lua, event: &str, func: Function) -> mlua::Result<()> {
+    if !is_known_event(event) {
+        warn!(
+            "crap.hooks.register: unknown event '{event}'. Known events: {}",
+            KNOWN_EVENTS.join(", ")
+        );
+    }
+
+    let list = get_or_create_hook_list(lua, event)?;
+    list.set(list.raw_len() + 1, func)
+}
+
+/// Remove a hook function from an event by identity (rawequal).
+fn remove_hook(lua: &Lua, event: &str, func: &Function) -> mlua::Result<()> {
+    let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
+    let Value::Table(list) = event_hooks.get::<Value>(event)? else {
+        return Ok(());
+    };
+
+    let rawequal: Function = lua.globals().get("rawequal")?;
+
+    for i in 1..=list.raw_len() {
+        let entry: Value = list.raw_get(i)?;
+
+        if rawequal.call::<bool>((entry, func.clone()))? {
+            let table_remove: Function = lua.load("table.remove").eval()?;
+            table_remove.call::<()>((list, i))?;
+
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// List all hook functions registered for an event.
+fn list_hooks(lua: &Lua, event: &str) -> mlua::Result<Table> {
+    let event_hooks: Table = lua.named_registry_value("_crap_event_hooks")?;
+
+    match event_hooks.get::<Value>(event)? {
+        Value::Table(t) => Ok(t),
+        _ => lua.create_table(),
+    }
 }
 
 #[cfg(test)]

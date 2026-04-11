@@ -37,6 +37,8 @@ Before a write operation, denied fields are **stripped from the input data**. Th
 
 After a query, denied fields are **stripped from the response**. The field still exists in the database, but the user doesn't see it.
 
+Fields with `admin.hidden = true` are also stripped from all API responses, regardless of access rules.
+
 ## Example
 
 ```lua

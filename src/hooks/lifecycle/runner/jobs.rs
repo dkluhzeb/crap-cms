@@ -1,6 +1,7 @@
 //! HookRunner methods for job execution and arbitrary Lua evaluation.
 
 use anyhow::{Result, anyhow};
+use mlua::Value;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
@@ -48,21 +49,21 @@ impl HookRunner {
         let func = resolve_hook_function(&lua, handler_ref)?;
 
         // Call handler(ctx)
-        let return_val: mlua::Value = func.call(ctx)?;
+        let return_val: Value = func.call(ctx)?;
 
         // Convert return value to JSON
         match return_val {
-            mlua::Value::Nil => Ok(None),
+            Value::Nil => Ok(None),
             other => {
                 let json_val = api::lua_to_json(&lua, &other)?;
+
                 Ok(Some(serde_json::to_string(&json_val)?))
             }
         }
     }
 
     /// Execute arbitrary Lua code within a transaction + user context.
-    /// The Lua code must return a string. Useful for testing CRUD closures.
-    #[allow(dead_code)]
+    /// Used by integration tests for CRUD closure testing.
     pub fn eval_lua_with_conn(
         &self,
         code: &str,

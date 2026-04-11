@@ -6,11 +6,56 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect},
 };
-use chrono::Utc;
 use tokio::task;
+use tracing::error;
 
-use super::{VerifyEmailQuery, client_ip};
-use crate::{admin::AdminState, db::query};
+use crate::{
+    admin::{
+        AdminState,
+        handlers::auth::{VerifyEmailQuery, client_ip},
+    },
+    core::Registry,
+    db::DbPool,
+    service::{
+        ServiceContext, auth::consume_verification_token as service_consume_verification_token,
+    },
+};
+
+/// Find a verification token across all auth collections, validate it,
+/// and mark the user as verified inside a transaction.
+///
+/// Returns `true` if the email was successfully verified, `false` if the
+/// token is invalid, expired, or the account is locked.
+fn consume_verification_token(
+    pool: &DbPool,
+    registry: &Registry,
+    token: &str,
+) -> Result<bool, Error> {
+    let mut conn = pool.get()?;
+    let tx = conn.transaction()?;
+
+    for def in registry.collections.values() {
+        if !def.is_auth_collection() {
+            continue;
+        }
+
+        if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
+            continue;
+        }
+
+        let ctx = ServiceContext::collection(&def.slug, def).conn(&tx).build();
+
+        match service_consume_verification_token(&ctx, token)? {
+            true => {
+                tx.commit()?;
+                return Ok(true);
+            }
+            false => continue,
+        }
+    }
+
+    Ok(false)
+}
 
 /// GET /admin/verify-email?token=xxx — validate token, mark verified, redirect.
 pub async fn verify_email(
@@ -19,10 +64,11 @@ pub async fn verify_email(
     headers: HeaderMap,
     Query(query): Query<VerifyEmailQuery>,
 ) -> impl IntoResponse {
+    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
+
     // Rate limit by IP to prevent brute-forcing verification tokens.
     // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
     // verification failures blocking legitimate login attempts from the same IP.
-    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
     if state.ip_forgot_password_limiter.is_blocked(&ip) {
         return Redirect::to("/admin/login");
     }
@@ -31,48 +77,8 @@ pub async fn verify_email(
     let registry = state.registry.clone();
     let token = query.token;
 
-    let result = task::spawn_blocking(move || {
-        let mut conn = pool.get()?;
-        let tx = conn.transaction()?;
-
-        for def in registry.collections.values() {
-            if !def.is_auth_collection() {
-                continue;
-            }
-
-            if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
-                continue;
-            }
-
-            if let Some((user, exp)) =
-                query::find_by_verification_token(&tx, &def.slug, def, &token)?
-            {
-                if Utc::now().timestamp() >= exp {
-                    // Clean up expired token
-                    if let Err(e) = query::clear_verification_token(&tx, &def.slug, &user.id) {
-                        tracing::warn!("Failed to clear expired verification token: {}", e);
-                    }
-                    tx.commit()?;
-                    return Ok(false);
-                }
-
-                // Block verification for locked accounts (consistent with reset_password)
-                if query::is_locked(&tx, &def.slug, &user.id)? {
-                    query::clear_verification_token(&tx, &def.slug, &user.id)?;
-                    tx.commit()?;
-                    return Ok(false);
-                }
-
-                query::mark_verified(&tx, &def.slug, &user.id)?;
-                tx.commit()?;
-
-                return Ok(true);
-            }
-        }
-
-        Ok::<_, Error>(false)
-    })
-    .await;
+    let result =
+        task::spawn_blocking(move || consume_verification_token(&pool, &registry, &token)).await;
 
     match result {
         Ok(Ok(true)) => Redirect::to("/admin/login?success=success_email_verified"),
@@ -83,12 +89,14 @@ pub async fn verify_email(
         }
         Ok(Err(e)) => {
             // Internal error — log but don't penalize IP
-            tracing::error!("Email verification error: {}", e);
+            error!("Email verification error: {}", e);
+
             Redirect::to("/admin/login")
         }
         Err(e) => {
             // Task join error — log but don't penalize IP
-            tracing::error!("Email verification task error: {}", e);
+            error!("Email verification task error: {}", e);
+
             Redirect::to("/admin/login")
         }
     }

@@ -14,6 +14,7 @@ pub struct JobDefinitionBuilder {
 }
 
 impl JobDefinitionBuilder {
+    /// Create a new builder with the required `slug` and `handler` fields.
     pub fn new(slug: impl Into<Slug>, handler: impl Into<String>) -> Self {
         Self {
             inner: JobDefinition {
@@ -64,6 +65,7 @@ impl JobDefinitionBuilder {
         self
     }
 
+    /// Build the final [`JobDefinition`].
     pub fn build(self) -> JobDefinition {
         self.inner
     }
@@ -91,6 +93,7 @@ pub struct JobRunBuilder {
 }
 
 impl JobRunBuilder {
+    /// Create a new builder with the required `id` and `slug` fields.
     pub fn new(id: impl Into<String>, slug: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -176,6 +179,7 @@ impl JobRunBuilder {
         self
     }
 
+    /// Build the final [`JobRun`].
     pub fn build(self) -> JobRun {
         JobRun {
             id: self.id,

@@ -9,7 +9,7 @@ use super::{
 use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
 use crate::db::{
     DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext, LocaleMode,
-    query::{is_valid_identifier, sanitize_locale},
+    query::{helpers::locale_column, is_valid_identifier},
 };
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
@@ -209,7 +209,7 @@ pub fn resolve_filter_column(
     {
         for field in &def.fields {
             if let Some(locale) = check_field_locale(field, field_name, ctx) {
-                return Ok(format!("{}__{}", field_name, sanitize_locale(locale)?));
+                return locale_column(field_name, locale);
             }
         }
     }
@@ -257,7 +257,7 @@ fn check_group_locale<'a>(
     field_name: &str,
     ctx: &'a LocaleContext,
 ) -> Option<&'a str> {
-    let prefix = format!("{}__{}", field.name, "");
+    let prefix = format!("{}__", field.name);
 
     if field_name.starts_with(&prefix) {
         let sub_name = &field_name[prefix.len()..];

@@ -1,14 +1,20 @@
 //! Create operation and its helper.
 
-use anyhow::{Context as _, Result, anyhow};
 use std::collections::HashMap;
 
-use crate::core::{CollectionDefinition, Document, FieldDefinition, FieldType};
-use crate::db::{
-    DbConnection, DbValue, LocaleContext,
-    query::{
-        coerce_value, helpers::normalize_date_with_timezone, locale_write_column,
-        read::find_by_id_raw,
+use anyhow::{Context as _, Result, anyhow};
+use nanoid::nanoid;
+
+use crate::{
+    core::{CollectionDefinition, Document, FieldDefinition, FieldType},
+    db::{
+        DbConnection, DbValue, LocaleContext,
+        query::{
+            coerce_value,
+            helpers::{coerce_date_value, prefixed_name, tz_column, utc_now, walk_leaf_fields},
+            locale_write_column,
+            read::find_by_id_raw,
+        },
     },
 };
 
@@ -20,6 +26,16 @@ pub(super) struct InsertCollector {
     pub idx: usize,
 }
 
+impl InsertCollector {
+    /// Push a column, its placeholder, and value.
+    fn push(&mut self, conn: &dyn DbConnection, col: String, val: DbValue) {
+        self.columns.push(col);
+        self.placeholders.push(conn.placeholder(self.idx));
+        self.params.push(val);
+        self.idx += 1;
+    }
+}
+
 /// Create a new document. Returns the created document.
 pub fn create(
     conn: &dyn DbConnection,
@@ -28,10 +44,8 @@ pub fn create(
     data: &HashMap<String, String>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let id = nanoid::nanoid!();
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S.000Z")
-        .to_string();
+    let id = nanoid!();
+    let now = utc_now();
 
     let mut collector = InsertCollector {
         columns: vec!["id".to_string()],
@@ -40,25 +54,11 @@ pub fn create(
         idx: 2,
     };
 
-    collect_insert_params(
-        &def.fields,
-        data,
-        &locale_ctx,
-        &mut collector,
-        conn,
-        "",
-        false,
-    )?;
+    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn)?;
 
     if def.timestamps {
-        collector.columns.push("created_at".to_string());
-        collector.placeholders.push(conn.placeholder(collector.idx));
-        collector.params.push(DbValue::Text(now.clone()));
-        collector.idx += 1;
-
-        collector.columns.push("updated_at".to_string());
-        collector.placeholders.push(conn.placeholder(collector.idx));
-        collector.params.push(DbValue::Text(now));
+        collector.push(conn, "created_at".to_string(), DbValue::Text(now.clone()));
+        collector.push(conn, "updated_at".to_string(), DbValue::Text(now));
     }
 
     let sql = format!(
@@ -72,14 +72,13 @@ pub fn create(
         .with_context(|| format!("Failed to insert into '{}'", slug))?;
 
     // Return the created document with the same locale context.
-    find_by_id_raw(conn, slug, def, &id, locale_ctx)?
+    find_by_id_raw(conn, slug, def, &id, locale_ctx, false)?
         .ok_or_else(|| anyhow!("Failed to find newly created document"))
 }
 
-/// Recursively collect columns, placeholders, and params for INSERT.
-/// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
-pub(super) fn collect_insert_params(
-    fields: &[FieldDefinition],
+/// Collect INSERT params for a single leaf (scalar) field.
+fn collect_leaf_param(
+    field: &FieldDefinition,
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     collector: &mut InsertCollector,
@@ -87,27 +86,63 @@ pub(super) fn collect_insert_params(
     prefix: &str,
     inherited_localized: bool,
 ) -> Result<()> {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_insert_params(
-                    &field.fields,
-                    data,
-                    locale_ctx,
-                    collector,
-                    conn,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                )?;
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_insert_params(
-                    &field.fields,
+    let data_key = prefixed_name(prefix, &field.name);
+    let col_name = locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
+
+    let Some(value) = data.get(&data_key) else {
+        if field.field_type == FieldType::Checkbox {
+            collector.push(conn, col_name, DbValue::Integer(0));
+        }
+
+        return Ok(());
+    };
+
+    let is_date_tz = field.field_type == FieldType::Date && field.timezone;
+    let tz_key = if is_date_tz {
+        Some(tz_column(&data_key))
+    } else {
+        None
+    };
+
+    let db_val = match tz_key.as_ref() {
+        Some(tk) => coerce_date_value(&field.field_type, value, data.get(tk).map(|s| s.as_str())),
+        None => coerce_value(&field.field_type, value),
+    };
+
+    collector.push(conn, col_name, db_val);
+
+    if let Some(tk) = tz_key {
+        let tz_col = locale_write_column(&tk, field, locale_ctx, inherited_localized)?;
+        let tz_val = data.get(&tk).map(|s| s.as_str()).unwrap_or("");
+        let db_val = if tz_val.is_empty() {
+            DbValue::Null
+        } else {
+            DbValue::Text(tz_val.to_string())
+        };
+
+        collector.push(conn, tz_col, db_val);
+    }
+
+    Ok(())
+}
+
+/// Collect columns, placeholders, and params for INSERT.
+/// Uses `walk_leaf_fields` to handle Group/Row/Collapsible/Tabs recursion.
+pub(super) fn collect_insert_params(
+    fields: &[FieldDefinition],
+    data: &HashMap<String, String>,
+    locale_ctx: &Option<&LocaleContext>,
+    collector: &mut InsertCollector,
+    conn: &dyn DbConnection,
+) -> Result<()> {
+    walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            if field.has_parent_column() {
+                collect_leaf_param(
+                    field,
                     data,
                     locale_ctx,
                     collector,
@@ -116,84 +151,10 @@ pub(super) fn collect_insert_params(
                     inherited_localized,
                 )?;
             }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_insert_params(
-                        &tab.fields,
-                        data,
-                        locale_ctx,
-                        collector,
-                        conn,
-                        prefix,
-                        inherited_localized,
-                    )?;
-                }
-            }
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
-                let data_key = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                let col_name =
-                    locale_write_column(&data_key, field, locale_ctx, inherited_localized)?;
 
-                if let Some(value) = data.get(&data_key) {
-                    collector.columns.push(col_name);
-                    collector.placeholders.push(conn.placeholder(collector.idx));
-
-                    // For Date fields with timezone, use timezone-aware normalization
-                    let db_val = if field.field_type == FieldType::Date && field.timezone {
-                        let tz_key = format!("{}_tz", data_key);
-                        if let Some(tz) = data.get(&tz_key).filter(|s| !s.is_empty()) {
-                            if value.is_empty() {
-                                DbValue::Null
-                            } else {
-                                match normalize_date_with_timezone(value, tz) {
-                                    Ok(normalized) => DbValue::Text(normalized),
-                                    Err(_) => coerce_value(&field.field_type, value),
-                                }
-                            }
-                        } else {
-                            coerce_value(&field.field_type, value)
-                        }
-                    } else {
-                        coerce_value(&field.field_type, value)
-                    };
-
-                    collector.params.push(db_val);
-                    collector.idx += 1;
-
-                    // Timezone companion column for date fields
-                    if field.field_type == FieldType::Date && field.timezone {
-                        let tz_key = format!("{}_tz", data_key);
-                        let tz_col =
-                            locale_write_column(&tz_key, field, locale_ctx, inherited_localized)?;
-                        collector.columns.push(tz_col);
-                        collector.placeholders.push(conn.placeholder(collector.idx));
-
-                        let tz_val = data.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
-                        collector.params.push(if tz_val.is_empty() {
-                            DbValue::Null
-                        } else {
-                            DbValue::Text(tz_val.to_string())
-                        });
-                        collector.idx += 1;
-                    }
-                } else if field.field_type == FieldType::Checkbox {
-                    collector.columns.push(col_name);
-                    collector.placeholders.push(conn.placeholder(collector.idx));
-                    collector.params.push(DbValue::Integer(0));
-                    collector.idx += 1;
-                }
-            }
-        }
-    }
-
-    Ok(())
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

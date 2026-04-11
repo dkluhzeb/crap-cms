@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use std::{collections::HashSet, fs, path::Path};
+use tracing::info;
 
 use crate::db::migrate::helpers::table_exists;
 use crate::db::{DbConnection, DbPool, DbValue};
@@ -11,7 +12,9 @@ pub fn list_migration_files(migrations_dir: &Path) -> Result<Vec<String>> {
     if !migrations_dir.exists() {
         return Ok(Vec::new());
     }
+
     let mut files = Vec::new();
+
     for entry in fs::read_dir(migrations_dir)
         .with_context(|| format!("Failed to read {}", migrations_dir.display()))?
     {
@@ -24,7 +27,9 @@ pub fn list_migration_files(migrations_dir: &Path) -> Result<Vec<String>> {
             files.push(name.to_string_lossy().to_string());
         }
     }
+
     files.sort();
+
     Ok(files)
 }
 
@@ -37,11 +42,14 @@ pub fn get_applied_migrations(pool: &DbPool) -> Result<HashSet<String>> {
     if !exists {
         return Ok(HashSet::new());
     }
+
     let rows = conn.query_all("SELECT filename FROM _crap_migrations", &[])?;
     let mut set = HashSet::new();
+
     for r in rows {
         set.insert(r.get_string("filename")?);
     }
+
     Ok(set)
 }
 
@@ -53,14 +61,17 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
     if !exists {
         return Ok(Vec::new());
     }
+
     let rows = conn.query_all(
         "SELECT filename FROM _crap_migrations ORDER BY applied_at DESC, filename DESC",
         &[],
     )?;
     let mut list = Vec::new();
+
     for r in rows {
         list.push(r.get_string("filename")?);
     }
+
     Ok(list)
 }
 
@@ -68,6 +79,7 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
 pub fn get_pending_migrations(pool: &DbPool, migrations_dir: &Path) -> Result<Vec<String>> {
     let all = list_migration_files(migrations_dir)?;
     let applied = get_applied_migrations(pool)?;
+
     Ok(all.into_iter().filter(|f| !applied.contains(f)).collect())
 }
 
@@ -81,6 +93,7 @@ pub fn record_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
         &[DbValue::Text(filename.to_string())],
     )
     .with_context(|| format!("Failed to record migration {}", filename))?;
+
     Ok(())
 }
 
@@ -94,6 +107,7 @@ pub fn remove_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
         &[DbValue::Text(filename.to_string())],
     )
     .with_context(|| format!("Failed to remove migration record {}", filename))?;
+
     Ok(())
 }
 
@@ -103,26 +117,19 @@ pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     let tables = conn.list_user_tables()?;
 
     for table in &tables {
-        conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", table), &[])
+        conn.execute_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", table), &[])
             .with_context(|| format!("Failed to drop table {}", table))?;
-        tracing::info!("Dropped table: {}", table);
+
+        info!("Dropped table: {}", table);
     }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CrapConfig;
-    use crate::db::{DbConnection, DbPool, pool};
-    use tempfile::TempDir;
-
-    fn in_memory_pool() -> (TempDir, DbPool) {
-        let dir = TempDir::new().expect("temp dir");
-        let config = CrapConfig::default();
-        let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
-        (dir, p)
-    }
+    use crate::db::migrate::collection::test_helpers::*;
 
     // ── migration tracking ────────────────────────────────────────────────
 

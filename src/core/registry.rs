@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
+use tracing::{debug, warn};
 
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Slug, collection::GlobalDefinition,
@@ -46,8 +47,10 @@ impl Registry {
 
     /// Register a collection definition, keyed by slug. Overwrites any existing definition.
     pub fn register_collection(&mut self, def: CollectionDefinition) {
-        tracing::debug!("Registering collection '{}'", def.slug);
+        debug!("Registering collection '{}'", def.slug);
+
         Self::warn_invalid_field_refs(&def);
+
         self.collections.insert(def.slug.clone(), def);
     }
 
@@ -58,10 +61,9 @@ impl Registry {
         if let Some(title) = def.title_field()
             && !Self::field_exists_recursive(title, &def.fields)
         {
-            tracing::warn!(
+            warn!(
                 "Collection '{}': use_as_title references '{}' which is not a field",
-                slug,
-                title
+                slug, title
             );
         }
 
@@ -72,20 +74,18 @@ impl Registry {
                 "id" | "created_at" | "updated_at" | "_status" | "_deleted_at"
             ) && !Self::field_exists_recursive(col, &def.fields)
             {
-                tracing::warn!(
+                warn!(
                     "Collection '{}': default_sort references '{}' which is not a field",
-                    slug,
-                    col
+                    slug, col
                 );
             }
         }
 
         for name in &def.admin.list_searchable_fields {
             if !Self::field_exists_recursive(name, &def.fields) {
-                tracing::warn!(
+                warn!(
                     "Collection '{}': list_searchable_fields references '{}' which is not a field",
-                    slug,
-                    name
+                    slug, name
                 );
             }
         }
@@ -113,7 +113,8 @@ impl Registry {
 
     /// Register a global definition, keyed by slug. Overwrites any existing definition.
     pub fn register_global(&mut self, def: GlobalDefinition) {
-        tracing::debug!("Registering global '{}'", def.slug);
+        debug!("Registering global '{}'", def.slug);
+
         self.globals.insert(def.slug.clone(), def);
     }
 
@@ -129,7 +130,8 @@ impl Registry {
 
     /// Register a job definition, keyed by slug. Overwrites any existing definition.
     pub fn register_job(&mut self, def: JobDefinition) {
-        tracing::debug!("Registering job '{}'", def.slug);
+        debug!("Registering job '{}'", def.slug);
+
         self.jobs.insert(def.slug.clone(), def);
     }
 
@@ -140,7 +142,8 @@ impl Registry {
 
     /// Register a custom richtext node definition, keyed by name.
     pub fn register_richtext_node(&mut self, def: RichtextNodeDef) {
-        tracing::debug!("Registering richtext node '{}'", def.name);
+        debug!("Registering richtext node '{}'", def.name);
+
         self.richtext_nodes.insert(def.name.clone(), def);
     }
 
@@ -255,39 +258,42 @@ mod tests {
         assert_eq!(snap.globals.len(), 1);
     }
 
-    #[test]
-    fn field_exists_recursive_finds_field_in_tabs() {
+    /// Wrap a child field inside a layout container for testing field_exists_recursive.
+    fn wrap_in_container(container_type: FieldType, child_name: &str) -> Vec<FieldDefinition> {
         use crate::core::field::FieldTab;
 
-        let fields = vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![FieldTab::new(
-                    "Main",
-                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
-                )])
-                .build(),
-        ];
+        let child = FieldDefinition::builder(child_name, FieldType::Text).build();
 
-        assert!(
-            Registry::field_exists_recursive("title", &fields),
-            "Should find field inside Tabs"
-        );
-        assert!(
-            !Registry::field_exists_recursive("nonexistent", &fields),
-            "Should not find nonexistent field"
-        );
+        match container_type {
+            FieldType::Tabs => vec![
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new("Main", vec![child])])
+                    .build(),
+            ],
+            _ => vec![
+                FieldDefinition::builder("wrapper", container_type)
+                    .fields(vec![child])
+                    .build(),
+            ],
+        }
     }
 
     #[test]
-    fn field_exists_recursive_finds_field_in_row() {
-        let fields = vec![
-            FieldDefinition::builder("row", FieldType::Row)
-                .fields(vec![
-                    FieldDefinition::builder("name", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
+    fn field_exists_recursive_finds_nested_fields() {
+        for container in [FieldType::Row, FieldType::Collapsible, FieldType::Tabs] {
+            let fields = wrap_in_container(container.clone(), "target");
 
-        assert!(Registry::field_exists_recursive("name", &fields));
+            assert!(
+                Registry::field_exists_recursive("target", &fields),
+                "Should find field inside {:?}",
+                container
+            );
+
+            assert!(
+                !Registry::field_exists_recursive("nonexistent", &fields),
+                "Should not find nonexistent field in {:?}",
+                container
+            );
+        }
     }
 }

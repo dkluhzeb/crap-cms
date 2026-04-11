@@ -1,7 +1,6 @@
 //! Admin UI translation loading: compiled-in English + German, config dir overlay.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 static DEFAULT_EN: &str = include_str!("../../translations/en.json");
 static DEFAULT_DE: &str = include_str!("../../translations/de.json");
@@ -21,12 +20,14 @@ impl Translations {
         if let Ok(en) = serde_json::from_str::<HashMap<String, String>>(DEFAULT_EN) {
             locales.insert("en".to_string(), en);
         }
+
         if let Ok(de) = serde_json::from_str::<HashMap<String, String>>(DEFAULT_DE) {
             locales.insert("de".to_string(), de);
         }
 
         // Overlay with config dir translations/*.json if they exist
         let translations_dir = config_dir.join("translations");
+
         if translations_dir.exists()
             && let Ok(entries) = std::fs::read_dir(&translations_dir)
         {
@@ -38,6 +39,7 @@ impl Translations {
                     && let Ok(overrides) = serde_json::from_str::<HashMap<String, String>>(&content)
                 {
                     let map = locales.entry(locale.to_string()).or_default();
+
                     map.extend(overrides);
                 }
             }
@@ -76,10 +78,13 @@ impl Translations {
         params: &HashMap<String, String>,
     ) -> String {
         let template = self.get(locale, key);
+
         if params.is_empty() {
             return template.to_string();
         }
+
         let mut result = template.to_string();
+
         for (k, v) in params {
             result = result.replace(&format!("{{{{{}}}}}", k), v);
         }
@@ -89,13 +94,17 @@ impl Translations {
     /// Return the list of available locale codes.
     pub fn available_locales(&self) -> Vec<&str> {
         let mut locales: Vec<&str> = self.locales.keys().map(|s| s.as_str()).collect();
+
         locales.sort();
+
         locales
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -190,8 +199,8 @@ mod tests {
     fn overlay_translations() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let trans_dir = tmp.path().join("translations");
-        std::fs::create_dir_all(&trans_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&trans_dir).unwrap();
+        fs::write(
             trans_dir.join("en.json"),
             r#"{"custom_key": "custom_value"}"#,
         )
@@ -206,8 +215,8 @@ mod tests {
     fn overlay_adds_new_locale() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let trans_dir = tmp.path().join("translations");
-        std::fs::create_dir_all(&trans_dir).unwrap();
-        std::fs::write(trans_dir.join("fr.json"), r#"{"save": "Enregistrer"}"#).unwrap();
+        fs::create_dir_all(&trans_dir).unwrap();
+        fs::write(trans_dir.join("fr.json"), r#"{"save": "Enregistrer"}"#).unwrap();
         let t = Translations::load(tmp.path());
         assert_eq!(t.get("fr", "save"), "Enregistrer");
         // Unknown key in fr should fallback to en

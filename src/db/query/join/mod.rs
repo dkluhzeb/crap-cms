@@ -2,6 +2,7 @@
 
 mod arrays;
 mod blocks;
+mod helpers;
 mod hydrate;
 mod relationships;
 

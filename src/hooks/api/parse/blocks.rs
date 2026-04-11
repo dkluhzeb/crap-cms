@@ -9,6 +9,7 @@ use super::{fields::parse_fields, helpers::*};
 
 pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<BlockDefinition>> {
     let mut blocks = Vec::new();
+
     for entry in blocks_tbl.clone().sequence_values::<Table>() {
         let block_tbl = entry?;
         let block_type: String = get_string_val(&block_tbl, "type")
@@ -23,17 +24,20 @@ pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<BlockDef
             Vec::new()
         };
         let mut block = BlockDefinition::new(block_type, fields);
+
         block.label = label;
         block.label_field = label_field;
         block.group = group;
         block.image_url = image_url;
         blocks.push(block);
     }
+
     Ok(blocks)
 }
 
 pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<FieldTab>> {
     let mut tabs = Vec::new();
+
     for entry in tabs_tbl.clone().sequence_values::<Table>() {
         let tab_tbl = entry?;
         let label = get_string(&tab_tbl, "label").unwrap_or_default();
@@ -44,6 +48,7 @@ pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<FieldTab>> {
             Vec::new()
         };
         let mut tab = FieldTab::new(label, fields);
+
         tab.description = description;
         tabs.push(tab);
     }

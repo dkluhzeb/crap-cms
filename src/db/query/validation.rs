@@ -4,10 +4,12 @@ use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 
-use crate::core::{CollectionDefinition, FieldType};
+use crate::{
+    core::{CollectionDefinition, FieldDefinition, FieldType},
+    db::{FilterClause, FindQuery, LocaleContext},
+};
 
 use super::columns::get_valid_filter_columns;
-use crate::db::{FilterClause, FindQuery, LocaleContext};
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
 pub fn is_valid_identifier(s: &str) -> bool {
@@ -39,6 +41,7 @@ pub fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
         bail!("Slug cannot be empty");
     }
+
     if !slug
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
@@ -48,9 +51,11 @@ pub fn validate_slug(slug: &str) -> Result<()> {
             slug
         );
     }
+
     if slug.starts_with('_') {
         bail!("Slug cannot start with underscore");
     }
+
     Ok(())
 }
 
@@ -63,6 +68,7 @@ pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Resu
             valid_columns.iter().cloned().collect::<Vec<_>>().join(", ")
         );
     }
+
     Ok(())
 }
 
@@ -98,6 +104,7 @@ pub fn validate_query_fields(
     // order_by only supports flat columns (no sub-field sorting)
     if let Some(ref order) = query.order_by {
         let col = order.strip_prefix('-').unwrap_or(order);
+
         validate_field_name(col, &exact_columns)?;
     }
 
@@ -123,7 +130,7 @@ pub fn get_valid_filter_paths(
 
 /// Recursively collect Array/Blocks/has-many Relationship field names,
 /// descending into transparent layout wrappers (Row, Collapsible, Tabs).
-fn collect_prefix_roots(fields: &[crate::core::FieldDefinition], prefixes: &mut HashSet<String>) {
+fn collect_prefix_roots(fields: &[FieldDefinition], prefixes: &mut HashSet<String>) {
     for field in fields {
         match field.field_type {
             FieldType::Array | FieldType::Blocks => {
@@ -159,6 +166,7 @@ pub(crate) fn validate_filter_field(
     if exact_columns.contains(field) {
         return Ok(());
     }
+
     // Dot notation — check if the first segment is a valid prefix root
     if let Some(dot_pos) = field.find('.') {
         let root = &field[..dot_pos];
@@ -167,11 +175,14 @@ pub(crate) fn validate_filter_field(
             return Ok(());
         }
     }
+
     bail!("Invalid field '{}'. Valid fields: {}", field, {
         let mut all: Vec<String> = exact_columns.iter().cloned().collect();
+
         for p in prefix_roots {
             all.push(format!("{}.*", p));
         }
+
         all.sort();
         all.join(", ")
     })

@@ -1,5 +1,7 @@
 //! Form and query parameter structs for auth handlers.
 
+use std::fmt;
+
 use serde::Deserialize;
 
 /// Form data for the login page.
@@ -13,8 +15,8 @@ pub struct LoginForm {
     pub password: String,
 }
 
-impl std::fmt::Debug for LoginForm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for LoginForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoginForm")
             .field("collection", &self.collection)
             .field("email", &self.email)
@@ -57,8 +59,8 @@ pub struct ResetPasswordForm {
     pub password_confirm: String,
 }
 
-impl std::fmt::Debug for ResetPasswordForm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ResetPasswordForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResetPasswordForm")
             .field("token", &"[REDACTED]")
             .field("password", &"[REDACTED]")
@@ -72,6 +74,28 @@ impl std::fmt::Debug for ResetPasswordForm {
 pub struct VerifyEmailQuery {
     /// The verification token sent via email.
     pub token: String,
+}
+
+/// Query parameters for the MFA code entry page.
+#[derive(Debug, Deserialize, Default)]
+pub struct MfaQuery {
+    /// The collection slug for the user's auth collection.
+    pub collection: Option<String>,
+}
+
+/// Form data for the MFA code verification.
+#[derive(Deserialize)]
+pub struct MfaForm {
+    /// The 6-digit MFA code entered by the user.
+    pub code: String,
+}
+
+impl fmt::Debug for MfaForm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MfaForm")
+            .field("code", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Form data for saving the UI locale.

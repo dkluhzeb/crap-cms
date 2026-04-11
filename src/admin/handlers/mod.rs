@@ -7,9 +7,11 @@ pub mod dashboard;
 /// Event-related handlers for the admin UI.
 pub mod events;
 pub mod field_context;
+/// Shared form parsing helpers (multipart, array fields, select transforms).
+pub mod forms;
 /// Global document handlers (view/edit).
 pub mod globals;
-mod query_utils;
+mod query;
 pub mod shared;
 pub mod static_assets;
 /// File upload handlers.

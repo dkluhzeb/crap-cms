@@ -74,7 +74,7 @@ struct TestApp {
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false; // tests default to open admin
@@ -129,6 +129,10 @@ fn setup_app_with_config(
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
         email_renderer,
+        email_provider: crap_cms::core::email::create_email_provider(
+            &crap_cms::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             5, 300,
@@ -148,6 +152,15 @@ fn setup_app_with_config(
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crap_cms::core::upload::create_storage(
+            tmp.path(),
+            &crap_cms::config::UploadConfig::default(),
+        )
+        .unwrap(),
+        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
     };
 
     let router = build_router(state);

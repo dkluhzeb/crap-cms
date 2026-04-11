@@ -2,7 +2,10 @@
 
 use serde_json::{Map, Value};
 
-use crate::core::{Document, FieldDefinition, FieldType};
+use crate::{
+    core::{Document, FieldDefinition, FieldType},
+    db::query::helpers::prefixed_name,
+};
 
 /// Recursively extract prefixed columns from `doc.fields` into a nested Group object.
 /// Handles Group→Row, Group→Collapsible, Group→Tabs, and Group→Group nesting.
@@ -16,7 +19,7 @@ pub(super) fn reconstruct_group_fields(
         match sub.field_type {
             FieldType::Group => {
                 // Nested group: collect sub-group's fields into a nested object
-                let new_prefix = format!("{}__{}", prefix, sub.name);
+                let new_prefix = prefixed_name(prefix, &sub.name);
                 let mut sub_obj = Map::new();
                 reconstruct_group_fields(&sub.fields, &new_prefix, doc, &mut sub_obj);
 
@@ -34,7 +37,7 @@ pub(super) fn reconstruct_group_fields(
                 }
             }
             _ => {
-                let col_name = format!("{}__{}", prefix, sub.name);
+                let col_name = prefixed_name(prefix, &sub.name);
 
                 if let Some(val) = doc.fields.remove(&col_name) {
                     group_obj.insert(sub.name.clone(), val);

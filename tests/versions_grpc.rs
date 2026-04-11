@@ -12,7 +12,7 @@ use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
-use crap_cms::api::service::{ContentService, ContentServiceDeps};
+use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
@@ -57,7 +57,7 @@ fn make_nonversioned_def() -> CollectionDefinition {
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
     (tmp, db_pool)
@@ -92,7 +92,7 @@ struct TestSetup {
 
 fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
@@ -121,6 +121,13 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -133,6 +140,13 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -1108,10 +1122,12 @@ fn persist_create_published() {
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
     let doc = service::persist_create(
-        &conn,
-        "articles",
-        &def,
+        &ctx,
         &final_data,
         &hook_data,
         &service::PersistOptions::default(),
@@ -1146,8 +1162,10 @@ fn persist_create_draft() {
         .collect();
 
     let opts = service::PersistOptions::builder().draft(true).build();
-    let doc =
-        service::persist_create(&conn, "articles", &def, &final_data, &hook_data, &opts).unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+    let doc = service::persist_create(&ctx, &final_data, &hook_data, &opts).unwrap();
 
     // Document should exist with _status = "draft"
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
@@ -1180,11 +1198,13 @@ fn persist_update_publishes() {
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
     let updated = service::persist_update(
-        &conn,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         &update_data,
         &hook_data,
         &service::PersistOptions::default(),
@@ -1225,8 +1245,11 @@ fn persist_draft_version_merges_data() {
     )]
     .into();
 
-    let existing =
-        service::persist_draft_version(&conn, "articles", &doc.id, &def, &hook_data, None).unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
+    let existing = service::persist_draft_version(&ctx, &doc.id, &hook_data, None).unwrap();
 
     // Returned doc is the existing (unchanged) doc
     assert_eq!(existing.get_str("title"), Some("Original"));
@@ -1266,7 +1289,11 @@ fn persist_unpublish_sets_draft_status() {
     query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
 
     // Call persist_unpublish
-    let result = service::persist_unpublish(&conn, "articles", &doc.id, &def).unwrap();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .conn(&conn)
+        .build();
+
+    let result = service::persist_unpublish(&ctx, &doc.id).unwrap();
     assert_eq!(result.get_str("title"), Some("To Unpublish"));
 
     // Status should now be "draft"
@@ -1303,7 +1330,7 @@ fn service_update_draft_uses_locale_context() {
 
     // Setup DB with locale-aware migration
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.locale = locale_config.clone();
 
@@ -1338,16 +1365,16 @@ fn service_update_draft_uses_locale_context() {
         ("body".into(), "Body".into()),
     ]
     .into();
+    let ctx = service::ServiceContext::collection("articles", &def)
+        .pool(&db_pool)
+        .runner(&hook_runner)
+        .build();
     let (doc, _) = service::create_document(
-        &db_pool,
-        &hook_runner,
-        "articles",
-        &def,
+        &ctx,
         service::WriteInput::builder(data, &HashMap::new())
             .locale_ctx(Some(&en_ctx))
             .locale(Some("en".to_string()))
             .build(),
-        None,
     )
     .unwrap();
 
@@ -1362,17 +1389,13 @@ fn service_update_draft_uses_locale_context() {
     let draft_data: HashMap<String, String> =
         [("title".into(), "Neuer Deutscher Titel".into())].into();
     let (result, _) = service::update_document(
-        &db_pool,
-        &hook_runner,
-        "articles",
+        &ctx,
         &doc.id,
-        &def,
         service::WriteInput::builder(draft_data, &HashMap::new())
             .locale_ctx(Some(&de_ctx))
             .locale(Some("de".to_string()))
             .draft(true)
             .build(),
-        None,
     )
     .unwrap();
 

@@ -89,8 +89,8 @@ rpc Delete (DeleteRequest) returns (DeleteResponse);
 // Force permanent deletion
 DeleteRequest { collection: "posts", id: "abc", force_hard_delete: true }
 
-// Restore from trash
-rpc Restore (RestoreRequest) returns (RestoreResponse);
+// Undelete from trash
+rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
 ```
 
 The `DeleteResponse` includes a `soft_deleted` boolean indicating whether the deletion was soft or hard.
@@ -104,8 +104,8 @@ crap.collections.delete("posts", id)
 -- Force permanent delete
 crap.collections.delete("posts", id, { forceHardDelete = true })
 
--- Restore from trash
-crap.collections.restore("posts", id)
+-- Undelete from trash
+crap.collections.undelete("posts", id)
 ```
 
 ### MCP

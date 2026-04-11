@@ -8,8 +8,31 @@ use axum::{
 use serde_json::{Value, from_str, json, to_string};
 use tokio::task;
 
-use super::LocaleForm;
-use crate::{admin::AdminState, core::auth::AuthUser, db::query};
+use crate::{
+    admin::{AdminState, handlers::auth::LocaleForm},
+    core::auth::AuthUser,
+    db::DbPool,
+    service::user_settings,
+};
+
+/// Read the user's settings JSON, update the `ui_locale` field, and write it back.
+fn update_user_locale(pool: &DbPool, user_id: &str, locale: &str) -> Result<(), Error> {
+    let conn = pool.get()?;
+    let existing = user_settings::get_user_settings(&conn, user_id)?;
+
+    let mut settings: Value = existing
+        .as_deref()
+        .and_then(|s| from_str(s).ok())
+        .unwrap_or_else(|| json!({}));
+
+    settings["ui_locale"] = json!(locale);
+
+    let json_str = to_string(&settings)?;
+
+    user_settings::set_user_settings(&conn, user_id, &json_str)?;
+
+    Ok(())
+}
 
 /// POST /admin/api/locale — save user's preferred admin UI locale.
 pub async fn save_locale(
@@ -17,7 +40,6 @@ pub async fn save_locale(
     Extension(auth_user): Extension<AuthUser>,
     Form(form): Form<LocaleForm>,
 ) -> impl IntoResponse {
-    // Validate locale is available
     let available = state.translations.available_locales();
 
     if !available.contains(&form.locale.as_str()) {
@@ -28,23 +50,7 @@ pub async fn save_locale(
     let user_id = auth_user.claims.sub.clone();
     let locale = form.locale.clone();
 
-    let result = task::spawn_blocking(move || {
-        let conn = pool.get()?;
-        let existing = query::get_user_settings(&conn, &user_id)?;
-        let mut settings: Value = existing
-            .as_deref()
-            .and_then(|s| from_str(s).ok())
-            .unwrap_or_else(|| json!({}));
-
-        settings["ui_locale"] = json!(locale);
-
-        let json_str = to_string(&settings)?;
-
-        query::set_user_settings(&conn, &user_id, &json_str)?;
-
-        Ok::<_, Error>(())
-    })
-    .await;
+    let result = task::spawn_blocking(move || update_user_locale(&pool, &user_id, &locale)).await;
 
     match result {
         Ok(Ok(())) => StatusCode::NO_CONTENT,

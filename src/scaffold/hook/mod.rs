@@ -3,6 +3,3 @@
 mod generator;
 
 pub use generator::{ConditionFieldInfo, HookType, MakeHookOptions, make_hook};
-
-#[cfg(test)]
-mod tests;

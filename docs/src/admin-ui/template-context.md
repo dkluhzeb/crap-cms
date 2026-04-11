@@ -211,7 +211,7 @@ Each entry in `fields_meta`:
 | `unique` | boolean | Whether the field has a unique constraint |
 | `localized` | boolean | Whether the field is localized |
 | `admin.label` | string/null | Display label |
-| `admin.hidden` | boolean | Whether the field is hidden in admin |
+| `admin.hidden` | boolean | Whether the field is hidden in admin and API responses |
 | `admin.readonly` | boolean | Whether the field is readonly |
 | `admin.width` | number/null | Column width hint |
 | `admin.description` | string/null | Help text |

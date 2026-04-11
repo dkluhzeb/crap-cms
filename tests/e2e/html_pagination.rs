@@ -39,7 +39,7 @@ struct Ctx {
 }
 
 fn setup_cursor(limit: i64) -> Ctx {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = true;
@@ -52,7 +52,7 @@ fn setup_cursor(limit: i64) -> Ctx {
 }
 
 fn setup_paged(limit: i64) -> Ctx {
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = true;

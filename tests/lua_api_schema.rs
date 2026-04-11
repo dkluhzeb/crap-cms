@@ -12,7 +12,7 @@ fn fixture_dir() -> PathBuf {
 
 fn setup_lua() -> HookRunner {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
     HookRunner::builder()
         .config_dir(&config_dir)
@@ -26,7 +26,7 @@ fn setup_lua() -> HookRunner {
 /// This uses a temporary in-memory DB for the eval.
 fn eval_lua(runner: &HookRunner, code: &str) -> String {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
@@ -40,12 +40,12 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 #[allow(dead_code)]
 fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
 
     // Create a pool and sync tables from Lua-defined collections/globals
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut db_config = CrapConfig::default();
+    let mut db_config = CrapConfig::test_default();
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync failed");
@@ -73,7 +73,7 @@ fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
 #[test]
 fn parse_collection_minimal() {
     let config_dir = fixture_dir();
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
@@ -121,7 +121,7 @@ crap.collections.define("everything", {
     // Create empty init.lua
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
@@ -164,7 +164,7 @@ crap.collections.define("users", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
@@ -204,7 +204,7 @@ crap.collections.define("members", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
@@ -238,7 +238,7 @@ crap.globals.define("settings", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
@@ -283,7 +283,7 @@ crap.collections.define("media", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -324,7 +324,7 @@ crap.collections.define("users", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -358,7 +358,7 @@ crap.collections.define("events", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -392,7 +392,7 @@ crap.collections.define("private", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -432,7 +432,7 @@ crap.collections.define("pages", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -476,7 +476,7 @@ crap.collections.define("polls", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -525,7 +525,7 @@ crap.collections.define("articles", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -560,7 +560,7 @@ crap.collections.define("docs", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -599,7 +599,7 @@ crap.collections.define("posts", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -632,7 +632,7 @@ crap.collections.define("notes", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -664,7 +664,7 @@ crap.collections.define("plain", {
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
     let def = reg
@@ -816,7 +816,7 @@ fn crypto_encrypt_produces_different_ciphertexts() {
 fn crypto_decrypt_invalid_input() {
     let runner = setup_lua();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");

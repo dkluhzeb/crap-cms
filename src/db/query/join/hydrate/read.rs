@@ -14,9 +14,83 @@ use super::{
     locale,
 };
 use crate::{
-    core::{Document, FieldDefinition, FieldType},
-    db::{DbConnection, LocaleContext},
+    core::{Document, FieldDefinition, FieldType, field::RelationshipConfig},
+    db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
 };
+
+/// Hydrate a has-many relationship field, returning the JSON array value.
+/// Handles both polymorphic and non-polymorphic relationships with locale fallback.
+fn hydrate_relationship(
+    conn: &dyn DbConnection,
+    slug: &str,
+    field_name: &str,
+    doc_id: &str,
+    rc: &RelationshipConfig,
+    locale_ref: Option<&str>,
+    fallback_ref: Option<&str>,
+) -> Result<Value> {
+    if rc.is_polymorphic() {
+        let mut items = find_polymorphic_related(conn, slug, field_name, doc_id, locale_ref)?;
+
+        if items.is_empty() && fallback_ref.is_some() {
+            items = find_polymorphic_related(conn, slug, field_name, doc_id, fallback_ref)?;
+        }
+
+        let json_items: Vec<Value> = items
+            .into_iter()
+            .map(|(col, id)| Value::String(format!("{}/{}", col, id)))
+            .collect();
+
+        Ok(Value::Array(json_items))
+    } else {
+        let mut ids = find_related_ids(conn, slug, field_name, doc_id, locale_ref)?;
+
+        if ids.is_empty() && fallback_ref.is_some() {
+            ids = find_related_ids(conn, slug, field_name, doc_id, fallback_ref)?;
+        }
+
+        let json_ids: Vec<Value> = ids.into_iter().map(Value::String).collect();
+
+        Ok(Value::Array(json_ids))
+    }
+}
+
+/// Hydrate an array field, returning the JSON array value with locale fallback.
+fn hydrate_array(
+    conn: &dyn DbConnection,
+    slug: &str,
+    field_name: &str,
+    doc_id: &str,
+    sub_fields: &[FieldDefinition],
+    locale_ref: Option<&str>,
+    fallback_ref: Option<&str>,
+) -> Result<Value> {
+    let mut rows = find_array_rows(conn, slug, field_name, doc_id, sub_fields, locale_ref)?;
+
+    if rows.is_empty() && fallback_ref.is_some() {
+        rows = find_array_rows(conn, slug, field_name, doc_id, sub_fields, fallback_ref)?;
+    }
+
+    Ok(Value::Array(rows))
+}
+
+/// Hydrate a blocks field, returning the JSON array value with locale fallback.
+fn hydrate_blocks(
+    conn: &dyn DbConnection,
+    slug: &str,
+    field_name: &str,
+    doc_id: &str,
+    locale_ref: Option<&str>,
+    fallback_ref: Option<&str>,
+) -> Result<Value> {
+    let mut rows = find_block_rows(conn, slug, field_name, doc_id, locale_ref)?;
+
+    if rows.is_empty() && fallback_ref.is_some() {
+        rows = find_block_rows(conn, slug, field_name, doc_id, fallback_ref)?;
+    }
+
+    Ok(Value::Array(rows))
+}
 
 /// Recursively hydrate join-table types (Array, Blocks, Relationship) inside a Group.
 /// Uses `__`-prefixed names for join table lookups (e.g., `profile__skills` → table
@@ -31,68 +105,51 @@ fn hydrate_group_join_fields(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     for field in fields {
-        let full_name = format!("{}__{}", prefix, field.name);
+        let full_name = prefixed_name(prefix, &field.name);
         let locale = locale::resolve_join_locale(field, locale_ctx);
-        let locale_ref = locale.as_deref();
         let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
-        let fallback_ref = fallback_locale.as_deref();
+
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
-                    if rc.is_polymorphic() {
-                        let mut items =
-                            find_polymorphic_related(conn, slug, &full_name, &doc.id, locale_ref)?;
-                        if items.is_empty() && fallback_ref.is_some() {
-                            items = find_polymorphic_related(
-                                conn,
-                                slug,
-                                &full_name,
-                                &doc.id,
-                                fallback_ref,
-                            )?;
-                        }
-                        let json_items: Vec<Value> = items
-                            .into_iter()
-                            .map(|(col, id)| Value::String(format!("{}/{}", col, id)))
-                            .collect();
-                        group_obj.insert(field.name.clone(), Value::Array(json_items));
-                    } else {
-                        let mut ids =
-                            find_related_ids(conn, slug, &full_name, &doc.id, locale_ref)?;
-                        if ids.is_empty() && fallback_ref.is_some() {
-                            ids = find_related_ids(conn, slug, &full_name, &doc.id, fallback_ref)?;
-                        }
-                        let json_ids: Vec<Value> = ids.into_iter().map(Value::String).collect();
-                        group_obj.insert(field.name.clone(), Value::Array(json_ids));
-                    }
-                }
-            }
-            FieldType::Array => {
-                let mut rows =
-                    find_array_rows(conn, slug, &full_name, &doc.id, &field.fields, locale_ref)?;
-                if rows.is_empty() && fallback_ref.is_some() {
-                    rows = find_array_rows(
+                    let val = hydrate_relationship(
                         conn,
                         slug,
                         &full_name,
                         &doc.id,
-                        &field.fields,
-                        fallback_ref,
+                        rc,
+                        locale.as_deref(),
+                        fallback_locale.as_deref(),
                     )?;
+                    group_obj.insert(field.name.clone(), val);
                 }
-                group_obj.insert(field.name.clone(), Value::Array(rows));
+            }
+            FieldType::Array => {
+                let val = hydrate_array(
+                    conn,
+                    slug,
+                    &full_name,
+                    &doc.id,
+                    &field.fields,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+                group_obj.insert(field.name.clone(), val);
             }
             FieldType::Blocks => {
-                let mut rows = find_block_rows(conn, slug, &full_name, &doc.id, locale_ref)?;
-                if rows.is_empty() && fallback_ref.is_some() {
-                    rows = find_block_rows(conn, slug, &full_name, &doc.id, fallback_ref)?;
-                }
-                group_obj.insert(field.name.clone(), Value::Array(rows));
+                let val = hydrate_blocks(
+                    conn,
+                    slug,
+                    &full_name,
+                    &doc.id,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+                group_obj.insert(field.name.clone(), val);
             }
             FieldType::Group => {
-                // Nested group: recurse with extended prefix
                 if let Some(Value::Object(sub_obj)) = group_obj.get_mut(&field.name) {
                     hydrate_group_join_fields(
                         conn,
@@ -105,6 +162,7 @@ fn hydrate_group_join_fields(
                     )?;
                 } else {
                     let mut sub_obj = serde_json::Map::new();
+
                     hydrate_group_join_fields(
                         conn,
                         slug,
@@ -114,6 +172,7 @@ fn hydrate_group_join_fields(
                         &mut sub_obj,
                         locale_ctx,
                     )?;
+
                     if !sub_obj.is_empty() {
                         group_obj.insert(field.name.clone(), Value::Object(sub_obj));
                     }
@@ -146,6 +205,7 @@ fn hydrate_group_join_fields(
             _ => {}
         }
     }
+
     Ok(())
 }
 
@@ -162,82 +222,69 @@ pub fn hydrate_document(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     for field in fields {
-        // Skip hydrating fields not in the select list
         if let Some(sel) = select
             && !sel.iter().any(|s| s == &field.name)
         {
             continue;
         }
+
         let locale = locale::resolve_join_locale(field, locale_ctx);
-        let locale_ref = locale.as_deref();
         let fallback_locale = locale::resolve_join_fallback_locale(field, locale_ctx);
-        let fallback_ref = fallback_locale.as_deref();
+
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
                 if let Some(ref rc) = field.relationship
                     && rc.has_many
                 {
-                    if rc.is_polymorphic() {
-                        let mut items =
-                            find_polymorphic_related(conn, slug, &field.name, &doc.id, locale_ref)?;
-
-                        if items.is_empty() && fallback_ref.is_some() {
-                            items = find_polymorphic_related(
-                                conn,
-                                slug,
-                                &field.name,
-                                &doc.id,
-                                fallback_ref,
-                            )?;
-                        }
-                        let json_items: Vec<Value> = items
-                            .into_iter()
-                            .map(|(col, id)| Value::String(format!("{}/{}", col, id)))
-                            .collect();
-                        doc.fields
-                            .insert(field.name.clone(), Value::Array(json_items));
-                    } else {
-                        let mut ids =
-                            find_related_ids(conn, slug, &field.name, &doc.id, locale_ref)?;
-
-                        if ids.is_empty() && fallback_ref.is_some() {
-                            ids = find_related_ids(conn, slug, &field.name, &doc.id, fallback_ref)?;
-                        }
-                        let json_ids: Vec<Value> = ids.into_iter().map(Value::String).collect();
-                        doc.fields
-                            .insert(field.name.clone(), Value::Array(json_ids));
-                    }
-                }
-            }
-            FieldType::Array => {
-                let mut rows =
-                    find_array_rows(conn, slug, &field.name, &doc.id, &field.fields, locale_ref)?;
-
-                if rows.is_empty() && fallback_ref.is_some() {
-                    rows = find_array_rows(
+                    let val = hydrate_relationship(
                         conn,
                         slug,
                         &field.name,
                         &doc.id,
-                        &field.fields,
-                        fallback_ref,
+                        rc,
+                        locale.as_deref(),
+                        fallback_locale.as_deref(),
                     )?;
+
+                    doc.fields.insert(field.name.clone(), val);
                 }
-                doc.fields.insert(field.name.clone(), Value::Array(rows));
+            }
+            FieldType::Array => {
+                let val = hydrate_array(
+                    conn,
+                    slug,
+                    &field.name,
+                    &doc.id,
+                    &field.fields,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+
+                doc.fields.insert(field.name.clone(), val);
+            }
+            FieldType::Blocks => {
+                let val = hydrate_blocks(
+                    conn,
+                    slug,
+                    &field.name,
+                    &doc.id,
+                    locale.as_deref(),
+                    fallback_locale.as_deref(),
+                )?;
+
+                doc.fields.insert(field.name.clone(), val);
             }
             FieldType::Group => {
-                // Reconstruct nested object from prefixed columns: seo__title → { seo: { title: val } }
                 let mut group_obj = serde_json::Map::new();
-                let prefix = &field.name;
-                reconstruct_group_fields(&field.fields, prefix, doc, &mut group_obj);
 
-                // Hydrate join-table types (Array, Blocks, Relationship) inside the Group
+                reconstruct_group_fields(&field.fields, &field.name, doc, &mut group_obj);
+
                 hydrate_group_join_fields(
                     conn,
                     slug,
                     &field.fields,
                     doc,
-                    prefix,
+                    &field.name,
                     &mut group_obj,
                     locale_ctx,
                 )?;
@@ -248,7 +295,6 @@ pub fn hydrate_document(
                 }
             }
             FieldType::Row | FieldType::Collapsible => {
-                // Sub-fields are top-level columns, but recurse for join-table types (blocks, arrays, relationships)
                 hydrate_document(conn, slug, &field.fields, doc, select, locale_ctx)?;
             }
             FieldType::Tabs => {
@@ -256,16 +302,9 @@ pub fn hydrate_document(
                     hydrate_document(conn, slug, &tab.fields, doc, select, locale_ctx)?;
                 }
             }
-            FieldType::Blocks => {
-                let mut rows = find_block_rows(conn, slug, &field.name, &doc.id, locale_ref)?;
-
-                if rows.is_empty() && fallback_ref.is_some() {
-                    rows = find_block_rows(conn, slug, &field.name, &doc.id, fallback_ref)?;
-                }
-                doc.fields.insert(field.name.clone(), Value::Array(rows));
-            }
             _ => {}
         }
     }
+
     Ok(())
 }

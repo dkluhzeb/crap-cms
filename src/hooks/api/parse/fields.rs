@@ -19,316 +19,373 @@ use super::{
     relationship::parse_field_relationship,
 };
 
-/// Parse a Lua sequence of field tables into a `Vec<FieldDefinition>`.
-pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
-    let mut fields = Vec::new();
+/// Parse a default_value from a Lua field table and validate its type.
+fn parse_default_value(
+    field_tbl: &Table,
+    name: &str,
+    field_type: &FieldType,
+) -> Result<Option<JsonValue>> {
+    let val: Value = field_tbl.get("default_value").unwrap_or(Value::Nil);
+    let default_value = match val {
+        Value::Nil => None,
+        Value::Boolean(b) => Some(JsonValue::Bool(b)),
+        Value::Integer(i) => Some(JsonValue::Number(JsonNumber::from(i))),
+        Value::Number(n) => JsonNumber::from_f64(n).map(JsonValue::Number),
+        Value::String(s) => Some(JsonValue::String(s.to_str()?.to_string())),
+        _ => None,
+    };
 
-    for pair in fields_tbl.clone().sequence_values::<Table>() {
-        let field_tbl = pair?;
-        let name: String =
-            get_string_val(&field_tbl, "name").map_err(|_| anyhow!("Field missing 'name'"))?;
-
-        if !query::is_valid_identifier(&name) {
-            bail!(
-                "Invalid field name '{}' — use alphanumeric and underscores only",
-                name
-            );
-        }
-
-        if name.contains("__") {
-            bail!(
-                "Field name '{}' must not contain double underscores — reserved for group field separation",
-                name
-            );
-        }
-
-        let type_str: String =
-            get_string_val(&field_tbl, "type").unwrap_or_else(|_| "text".to_string());
-        let field_type = FieldType::parse_lossy(&type_str);
-
-        let required = get_bool(&field_tbl, "required", false);
-        let unique = get_bool(&field_tbl, "unique", false);
-        let index = get_bool(&field_tbl, "index", false);
-        let validate = get_string(&field_tbl, "validate");
-
-        let default_value = {
-            let val: Value = field_tbl.get("default_value").unwrap_or(Value::Nil);
-            match val {
-                Value::Nil => None,
-                Value::Boolean(b) => Some(JsonValue::Bool(b)),
-                Value::Integer(i) => Some(JsonValue::Number(JsonNumber::from(i))),
-                Value::Number(n) => JsonNumber::from_f64(n).map(JsonValue::Number),
-                Value::String(s) => Some(JsonValue::String(s.to_str()?.to_string())),
-                _ => None,
-            }
+    if let Some(ref dv) = default_value {
+        let expected = match field_type {
+            FieldType::Checkbox => Some(("boolean", dv.is_boolean())),
+            FieldType::Number => Some(("number", dv.is_number())),
+            FieldType::Text
+            | FieldType::Textarea
+            | FieldType::Email
+            | FieldType::Code
+            | FieldType::Richtext
+            | FieldType::Select
+            | FieldType::Radio
+            | FieldType::Date => Some(("string", dv.is_string())),
+            _ => None,
         };
 
-        // Validate that default_value type matches the field type.
-        if let Some(ref dv) = default_value {
-            let type_ok = match field_type {
-                FieldType::Checkbox => dv.is_boolean(),
-                FieldType::Number => dv.is_number(),
-                FieldType::Text
-                | FieldType::Textarea
-                | FieldType::Email
-                | FieldType::Code
-                | FieldType::Richtext
-                | FieldType::Select
-                | FieldType::Radio
-                | FieldType::Date => dv.is_string(),
-                // Other field types (Array, Group, Blocks, etc.) don't support scalar defaults.
-                _ => true,
+        if let Some((expected_type, false)) = expected {
+            let got = match dv {
+                JsonValue::Bool(_) => "boolean",
+                JsonValue::Number(_) => "number",
+                JsonValue::String(_) => "string",
+                _ => "unknown",
             };
-
-            if !type_ok {
-                bail!(
-                    "Field '{}': default_value type mismatch — expected {} but got {}",
-                    name,
-                    match field_type {
-                        FieldType::Checkbox => "boolean",
-                        FieldType::Number => "number",
-                        _ => "string",
-                    },
-                    match dv {
-                        JsonValue::Bool(_) => "boolean",
-                        JsonValue::Number(_) => "number",
-                        JsonValue::String(_) => "string",
-                        _ => "unknown",
-                    },
-                );
-            }
-        }
-
-        let options = if let Ok(opts_tbl) = get_table(&field_tbl, "options") {
-            parse_select_options(&opts_tbl)?
-        } else {
-            Vec::new()
-        };
-
-        let admin = if let Ok(admin_tbl) = get_table(&field_tbl, "admin") {
-            parse_field_admin(&admin_tbl)?
-        } else {
-            FieldAdmin::default()
-        };
-
-        let hooks = if let Ok(hooks_tbl) = get_table(&field_tbl, "hooks") {
-            parse_field_hooks(&hooks_tbl)?
-        } else {
-            FieldHooks::default()
-        };
-
-        let access = if let Ok(access_tbl) = get_table(&field_tbl, "access") {
-            parse_field_access(&access_tbl)
-        } else {
-            FieldAccess::default()
-        };
-
-        // Parse relationship config
-        let relationship = parse_field_relationship(&field_tbl, &field_type)?;
-
-        // Parse sub-fields for Array, Group, Row, and Collapsible types (recursive)
-        let sub_fields = if field_type == FieldType::Array
-            || field_type == FieldType::Group
-            || field_type == FieldType::Row
-            || field_type == FieldType::Collapsible
-        {
-            if let Ok(sub_fields_tbl) = get_table(&field_tbl, "fields") {
-                parse_fields(&sub_fields_tbl)?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        let localized = get_bool(&field_tbl, "localized", false);
-
-        // Parse picker_appearance for date fields
-        let picker_appearance = if field_type == FieldType::Date {
-            get_string(&field_tbl, "picker_appearance")
-        } else {
-            None
-        };
-
-        // Parse timezone config for date fields
-        let timezone = if field_type == FieldType::Date {
-            let tz = get_bool(&field_tbl, "timezone", false);
-            let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
-            if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
-                tracing::warn!(
-                    "Field '{}': timezone is not supported for '{}' picker; ignoring",
-                    name,
-                    appearance
-                );
-                false
-            } else {
-                tz
-            }
-        } else {
-            false
-        };
-
-        let default_timezone = if timezone {
-            get_string(&field_tbl, "default_timezone")
-        } else {
-            None
-        };
-
-        // Parse block definitions for Blocks type
-        let block_defs = if field_type == FieldType::Blocks {
-            if let Ok(blocks_tbl) = get_table(&field_tbl, "blocks") {
-                parse_block_definitions(&blocks_tbl)?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        // Parse tab definitions for Tabs type
-        let tab_defs = if field_type == FieldType::Tabs {
-            if let Ok(tabs_tbl) = get_table(&field_tbl, "tabs") {
-                parse_tab_definitions(&tabs_tbl)?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        let min_rows = field_tbl.get::<Option<usize>>("min_rows").ok().flatten();
-        let max_rows = field_tbl.get::<Option<usize>>("max_rows").ok().flatten();
-        let min_length = field_tbl.get::<Option<usize>>("min_length").ok().flatten();
-        let max_length = field_tbl.get::<Option<usize>>("max_length").ok().flatten();
-        let min = match field_tbl.get::<Value>("min") {
-            Ok(Value::Number(n)) => Some(n),
-            Ok(Value::Integer(i)) => Some(i as f64),
-            _ => None,
-        };
-        let max = match field_tbl.get::<Value>("max") {
-            Ok(Value::Number(n)) => Some(n),
-            Ok(Value::Integer(i)) => Some(i as f64),
-            _ => None,
-        };
-
-        // Validate min <= max constraints
-        if let (Some(mn), Some(mx)) = (min_rows, max_rows)
-            && mn > mx
-        {
             bail!(
-                "Field '{}': min_rows ({}) must not exceed max_rows ({})",
+                "Field '{}': default_value type mismatch — expected {} but got {}",
                 name,
-                mn,
-                mx
+                expected_type,
+                got
             );
         }
-        if let (Some(mn), Some(mx)) = (min_length, max_length)
-            && mn > mx
-        {
-            bail!(
-                "Field '{}': min_length ({}) must not exceed max_length ({})",
-                name,
-                mn,
-                mx
-            );
-        }
-        if let (Some(mn), Some(mx)) = (min, max)
-            && mn > mx
-        {
-            bail!(
-                "Field '{}': min ({}) must not exceed max ({})",
-                name,
-                mn,
-                mx
-            );
-        }
-
-        let has_many = get_bool(&field_tbl, "has_many", false);
-        let min_date = get_string(&field_tbl, "min_date");
-        let max_date = get_string(&field_tbl, "max_date");
-
-        // Parse join config for Join fields
-        let join = if field_type == FieldType::Join {
-            let collection = get_string(&field_tbl, "collection").unwrap_or_default();
-            let on = get_string(&field_tbl, "on").unwrap_or_default();
-            Some(JoinConfig::new(collection, on))
-        } else {
-            None
-        };
-
-        // Parse MCP config for field
-        let mcp = if let Ok(mcp_tbl) = get_table(&field_tbl, "mcp") {
-            McpFieldConfig {
-                description: get_string(&mcp_tbl, "description"),
-            }
-        } else {
-            Default::default()
-        };
-
-        let mut fd_builder = FieldDefinition::builder(&name, field_type)
-            .required(required)
-            .unique(unique)
-            .index(index)
-            .admin(admin)
-            .hooks(hooks)
-            .access(access)
-            .mcp(mcp)
-            .fields(sub_fields)
-            .blocks(block_defs)
-            .tabs(tab_defs)
-            .localized(localized)
-            .has_many(has_many)
-            .options(options);
-
-        if let Some(v) = validate {
-            fd_builder = fd_builder.validate(v);
-        }
-        if let Some(v) = default_value {
-            fd_builder = fd_builder.default_value(v);
-        }
-        if let Some(v) = relationship {
-            fd_builder = fd_builder.relationship(v);
-        }
-        if let Some(v) = picker_appearance {
-            fd_builder = fd_builder.picker_appearance(v);
-        }
-        if let Some(v) = min_rows {
-            fd_builder = fd_builder.min_rows(v);
-        }
-        if let Some(v) = max_rows {
-            fd_builder = fd_builder.max_rows(v);
-        }
-        if let Some(v) = min_length {
-            fd_builder = fd_builder.min_length(v);
-        }
-        if let Some(v) = max_length {
-            fd_builder = fd_builder.max_length(v);
-        }
-        if let Some(v) = min {
-            fd_builder = fd_builder.min(v);
-        }
-        if let Some(v) = max {
-            fd_builder = fd_builder.max(v);
-        }
-        if let Some(v) = min_date {
-            fd_builder = fd_builder.min_date(v);
-        }
-        if let Some(v) = max_date {
-            fd_builder = fd_builder.max_date(v);
-        }
-        if timezone {
-            fd_builder = fd_builder.timezone(true);
-        }
-        if let Some(v) = default_timezone {
-            fd_builder = fd_builder.default_timezone(v);
-        }
-        if let Some(v) = join {
-            fd_builder = fd_builder.join(v);
-        }
-        fields.push(fd_builder.build());
     }
 
-    Ok(fields)
+    Ok(default_value)
+}
+
+/// Parse date-specific config (picker_appearance, timezone, default_timezone).
+fn parse_date_config(
+    field_tbl: &Table,
+    name: &str,
+    field_type: &FieldType,
+) -> (Option<String>, bool, Option<String>) {
+    if *field_type != FieldType::Date {
+        return (None, false, None);
+    }
+
+    let picker_appearance = get_string(field_tbl, "picker_appearance");
+
+    let timezone = {
+        let tz = get_bool(field_tbl, "timezone", false);
+        let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
+
+        if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
+            tracing::warn!(
+                "Field '{}': timezone is not supported for '{}' picker; ignoring",
+                name,
+                appearance
+            );
+            false
+        } else {
+            tz
+        }
+    };
+
+    let default_timezone = if timezone {
+        get_string(field_tbl, "default_timezone")
+    } else {
+        None
+    };
+
+    (picker_appearance, timezone, default_timezone)
+}
+
+/// Parsed constraint values for a single field.
+struct Constraints {
+    min_rows: Option<usize>,
+    max_rows: Option<usize>,
+    min_length: Option<usize>,
+    max_length: Option<usize>,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+/// Validate min/max constraint pairs on a field.
+fn validate_constraints(name: &str, c: &Constraints) -> Result<()> {
+    if let (Some(mn), Some(mx)) = (c.min_rows, c.max_rows)
+        && mn > mx
+    {
+        bail!(
+            "Field '{}': min_rows ({}) must not exceed max_rows ({})",
+            name,
+            mn,
+            mx
+        );
+    }
+
+    if let (Some(mn), Some(mx)) = (c.min_length, c.max_length)
+        && mn > mx
+    {
+        bail!(
+            "Field '{}': min_length ({}) must not exceed max_length ({})",
+            name,
+            mn,
+            mx
+        );
+    }
+
+    if let (Some(mn), Some(mx)) = (c.min, c.max)
+        && mn > mx
+    {
+        bail!(
+            "Field '{}': min ({}) must not exceed max ({})",
+            name,
+            mn,
+            mx
+        );
+    }
+
+    Ok(())
+}
+
+/// Extract and validate a field name from a Lua field table.
+fn parse_field_name(field_tbl: &Table) -> Result<String> {
+    let name: String =
+        get_string_val(field_tbl, "name").map_err(|_| anyhow!("Field missing 'name'"))?;
+
+    if !query::is_valid_identifier(&name) {
+        bail!(
+            "Invalid field name '{}' — use alphanumeric and underscores only",
+            name
+        );
+    }
+
+    if name.contains("__") {
+        bail!(
+            "Field name '{}' must not contain double underscores — reserved for group field separation",
+            name
+        );
+    }
+
+    Ok(name)
+}
+
+/// Parse sub-fields for container types (Array, Group, Row, Collapsible).
+fn parse_sub_fields(field_tbl: &Table, field_type: &FieldType) -> Result<Vec<FieldDefinition>> {
+    let has_sub = matches!(
+        field_type,
+        FieldType::Array | FieldType::Group | FieldType::Row | FieldType::Collapsible
+    );
+
+    if !has_sub {
+        return Ok(Vec::new());
+    }
+
+    get_table(field_tbl, "fields")
+        .map(|tbl| parse_fields(&tbl))
+        .unwrap_or(Ok(Vec::new()))
+}
+
+/// Parse a typed subtable only when the field type matches the expected variant.
+fn parse_typed_subtable<T>(
+    field_tbl: &Table,
+    field_type: &FieldType,
+    expected: &FieldType,
+    key: &str,
+    parser: fn(&Table) -> Result<Vec<T>>,
+) -> Result<Vec<T>> {
+    if field_type != expected {
+        return Ok(Vec::new());
+    }
+
+    get_table(field_tbl, key)
+        .map(|tbl| parser(&tbl))
+        .unwrap_or(Ok(Vec::new()))
+}
+
+/// Parse min/max constraint fields from a Lua field table.
+fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constraints> {
+    let min_rows = field_tbl.get::<Option<usize>>("min_rows").ok().flatten();
+    let max_rows = field_tbl.get::<Option<usize>>("max_rows").ok().flatten();
+    let min_length = field_tbl.get::<Option<usize>>("min_length").ok().flatten();
+    let max_length = field_tbl.get::<Option<usize>>("max_length").ok().flatten();
+
+    let min = match field_tbl.get::<Value>("min") {
+        Ok(Value::Number(n)) => Some(n),
+        Ok(Value::Integer(i)) => Some(i as f64),
+        _ => None,
+    };
+
+    let max = match field_tbl.get::<Value>("max") {
+        Ok(Value::Number(n)) => Some(n),
+        Ok(Value::Integer(i)) => Some(i as f64),
+        _ => None,
+    };
+
+    let constraints = Constraints {
+        min_rows,
+        max_rows,
+        min_length,
+        max_length,
+        min,
+        max,
+    };
+
+    validate_constraints(name, &constraints)?;
+
+    Ok(constraints)
+}
+
+/// Parse a single field definition from a Lua table.
+fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
+    let name = parse_field_name(field_tbl)?;
+
+    let type_str: String = get_string_val(field_tbl, "type").unwrap_or_else(|_| "text".to_string());
+    let field_type = FieldType::parse_lossy(&type_str);
+
+    let default_value = parse_default_value(field_tbl, &name, &field_type)?;
+    let relationship = parse_field_relationship(field_tbl, &field_type)?;
+    let (picker_appearance, timezone, default_timezone) =
+        parse_date_config(field_tbl, &name, &field_type);
+    let constraints = parse_constraints(field_tbl, &name)?;
+
+    let options = get_table(field_tbl, "options")
+        .map(|tbl| parse_select_options(&tbl))
+        .unwrap_or(Ok(Vec::new()))?;
+
+    let admin = get_table(field_tbl, "admin")
+        .map(|tbl| parse_field_admin(&tbl))
+        .unwrap_or(Ok(FieldAdmin::default()))?;
+
+    let hooks = get_table(field_tbl, "hooks")
+        .map(|tbl| parse_field_hooks(&tbl))
+        .unwrap_or(Ok(FieldHooks::default()))?;
+
+    let access = get_table(field_tbl, "access")
+        .map(|tbl| parse_field_access(&tbl))
+        .unwrap_or_default();
+
+    let sub_fields = parse_sub_fields(field_tbl, &field_type)?;
+    let block_defs = parse_typed_subtable(
+        field_tbl,
+        &field_type,
+        &FieldType::Blocks,
+        "blocks",
+        parse_block_definitions,
+    )?;
+    let tab_defs = parse_typed_subtable(
+        field_tbl,
+        &field_type,
+        &FieldType::Tabs,
+        "tabs",
+        parse_tab_definitions,
+    )?;
+
+    let join = if field_type == FieldType::Join {
+        let collection = get_string(field_tbl, "collection").unwrap_or_default();
+        let on = get_string(field_tbl, "on").unwrap_or_default();
+        Some(JoinConfig::new(collection, on))
+    } else {
+        None
+    };
+
+    let mcp = get_table(field_tbl, "mcp")
+        .map(|tbl| McpFieldConfig {
+            description: get_string(&tbl, "description"),
+        })
+        .unwrap_or_default();
+
+    let mut fd_builder = FieldDefinition::builder(&name, field_type)
+        .required(get_bool(field_tbl, "required", false))
+        .unique(get_bool(field_tbl, "unique", false))
+        .index(get_bool(field_tbl, "index", false))
+        .admin(admin)
+        .hooks(hooks)
+        .access(access)
+        .mcp(mcp)
+        .fields(sub_fields)
+        .blocks(block_defs)
+        .tabs(tab_defs)
+        .localized(get_bool(field_tbl, "localized", false))
+        .has_many(get_bool(field_tbl, "has_many", false))
+        .options(options);
+
+    if let Some(v) = get_string(field_tbl, "validate") {
+        fd_builder = fd_builder.validate(v);
+    }
+
+    if let Some(v) = default_value {
+        fd_builder = fd_builder.default_value(v);
+    }
+
+    if let Some(v) = relationship {
+        fd_builder = fd_builder.relationship(v);
+    }
+
+    if let Some(v) = picker_appearance {
+        fd_builder = fd_builder.picker_appearance(v);
+    }
+
+    if let Some(v) = constraints.min_rows {
+        fd_builder = fd_builder.min_rows(v);
+    }
+
+    if let Some(v) = constraints.max_rows {
+        fd_builder = fd_builder.max_rows(v);
+    }
+
+    if let Some(v) = constraints.min_length {
+        fd_builder = fd_builder.min_length(v);
+    }
+
+    if let Some(v) = constraints.max_length {
+        fd_builder = fd_builder.max_length(v);
+    }
+
+    if let Some(v) = constraints.min {
+        fd_builder = fd_builder.min(v);
+    }
+
+    if let Some(v) = constraints.max {
+        fd_builder = fd_builder.max(v);
+    }
+
+    if let Some(v) = get_string(field_tbl, "min_date") {
+        fd_builder = fd_builder.min_date(v);
+    }
+
+    if let Some(v) = get_string(field_tbl, "max_date") {
+        fd_builder = fd_builder.max_date(v);
+    }
+
+    if timezone {
+        fd_builder = fd_builder.timezone(true);
+    }
+
+    if let Some(v) = default_timezone {
+        fd_builder = fd_builder.default_timezone(v);
+    }
+
+    if let Some(v) = join {
+        fd_builder = fd_builder.join(v);
+    }
+
+    Ok(fd_builder.build())
+}
+
+/// Parse a Lua sequence of field tables into a `Vec<FieldDefinition>`.
+pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
+    fields_tbl
+        .clone()
+        .sequence_values::<Table>()
+        .map(|pair| parse_single_field(&pair?))
+        .collect()
 }
 
 pub(super) fn parse_field_access(access_tbl: &Table) -> FieldAccess {

@@ -4,6 +4,7 @@ crap.collections.define("users", {
   auth = {
     forgot_password = true,
     verify_email = false,
+    -- mfa = "email",  -- uncomment to enable email-based MFA
     strategies = {
       {
         name = "api-key",

@@ -1,18 +1,78 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock, atomic::AtomicUsize},
+};
 
+use r2d2_sqlite::SqliteConnectionManager;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
-use super::super::builder::build_field_contexts;
 use super::*;
+
 use crate::{
-    admin::handlers::field_context::MAX_FIELD_DEPTH,
+    admin::{
+        AdminState, Translations,
+        handlers::field_context::{MAX_FIELD_DEPTH, builder::build_field_contexts},
+    },
+    config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
-        FieldType,
+        CollectionDefinition, FieldType, RelationshipConfig,
+        auth::{Argon2PasswordProvider, JwtTokenProvider},
+        email::{EmailRenderer, create_email_provider},
         field::{BlockDefinition, FieldAdmin, FieldDefinition, LocalizedString, SelectOption},
+        rate_limit::LoginRateLimiter,
         registry::Registry,
         richtext::RichtextNodeDef,
+        upload::{CollectionUpload, create_storage},
     },
+    db::DbPool,
+    hooks::HookRunner,
 };
+
+fn make_test_state() -> AdminState {
+    let tmp = tempfile::tempdir().unwrap();
+    let manager = SqliteConnectionManager::memory();
+    let pool = DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
+    let shared_reg = Arc::new(RwLock::new(Registry::default()));
+    let config = CrapConfig::default();
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(shared_reg.clone())
+        .config(&config)
+        .build()
+        .unwrap();
+    let registry = Arc::new(shared_reg.read().unwrap().clone());
+    let hbs = Arc::new(handlebars::Handlebars::new());
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).unwrap());
+    let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));
+    let ip_login_limiter = std::sync::Arc::new(LoginRateLimiter::new(20, 300));
+    let translations = std::sync::Arc::new(Translations::load(tmp.path()));
+    crate::admin::AdminState {
+        config,
+        config_dir: tmp.path().to_path_buf(),
+        pool,
+        registry,
+        handlebars: hbs,
+        hook_runner,
+        jwt_secret: "test".into(),
+        email_renderer,
+        email_provider: create_email_provider(&EmailConfig::default()).unwrap(),
+        event_bus: None,
+        login_limiter,
+        ip_login_limiter,
+        forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
+        ip_forgot_password_limiter: Arc::new(LoginRateLimiter::new(20, 900)),
+        has_auth: false,
+        translations,
+        sse_connections: Arc::new(AtomicUsize::new(0)),
+        max_sse_connections: 0,
+        shutdown: CancellationToken::new(),
+        csp_header: None,
+        storage: create_storage(tmp.path(), &UploadConfig::default()).unwrap(),
+        token_provider: Arc::new(JwtTokenProvider::new("test-secret")),
+        password_provider: Arc::new(Argon2PasswordProvider),
+    }
+}
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, ft).build()
@@ -287,7 +347,6 @@ fn enriched_sub_field_date_short_value() {
 
 #[test]
 fn enriched_sub_field_upload() {
-    use crate::core::field::RelationshipConfig;
     let mut sf = make_field("image", FieldType::Upload);
     sf.relationship = Some(RelationshipConfig::new("media", false));
     let ctx = build_enriched_sub_field_context(
@@ -305,7 +364,6 @@ fn enriched_sub_field_upload() {
 
 #[test]
 fn enriched_sub_field_relationship() {
-    use crate::core::field::RelationshipConfig;
     let mut sf = make_field("author", FieldType::Relationship);
     sf.relationship = Some(RelationshipConfig::new("users", true));
     let ctx = build_enriched_sub_field_context(
@@ -540,9 +598,6 @@ fn enriched_sub_field_nested_blocks_unknown_type() {
 
 #[test]
 fn enrich_nested_fields_upload_gets_options() {
-    use crate::core::collection::*;
-    use crate::core::field::RelationshipConfig;
-
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE media (
@@ -570,14 +625,14 @@ fn enrich_nested_fields_upload_gets_options() {
         make_field("mime_type", FieldType::Text),
         make_field("url", FieldType::Text),
     ];
-    let upload_config = crate::core::upload::CollectionUpload {
+    let upload_config = CollectionUpload {
         enabled: true,
         mime_types: vec!["image/*".to_string()],
         ..Default::default()
     };
     media_def.upload = Some(upload_config);
 
-    let mut registry = crate::core::Registry::new();
+    let mut registry = Registry::new();
     registry.register_collection(media_def);
 
     let mut upload_field = make_field("image", FieldType::Upload);
@@ -603,9 +658,6 @@ fn enrich_nested_fields_upload_gets_options() {
 
 #[test]
 fn enrich_nested_fields_relationship_gets_options() {
-    use crate::core::collection::*;
-    use crate::core::field::RelationshipConfig;
-
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE users (
@@ -626,7 +678,7 @@ fn enrich_nested_fields_relationship_gets_options() {
     users_def.fields = vec![make_field("name", FieldType::Text)];
     users_def.admin.use_as_title = Some("name".to_string());
 
-    let mut registry = crate::core::Registry::new();
+    let mut registry = Registry::new();
     registry.register_collection(users_def);
 
     let mut rel_field = make_field("author", FieldType::Relationship);
@@ -652,9 +704,6 @@ fn enrich_nested_fields_relationship_gets_options() {
 
 #[test]
 fn enrich_nested_fields_recurses_into_layout() {
-    use crate::core::collection::*;
-    use crate::core::field::RelationshipConfig;
-
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE tags (
@@ -673,7 +722,7 @@ fn enrich_nested_fields_recurses_into_layout() {
     tags_def.fields = vec![make_field("label", FieldType::Text)];
     tags_def.admin.use_as_title = Some("label".to_string());
 
-    let mut registry = crate::core::Registry::new();
+    let mut registry = Registry::new();
     registry.register_collection(tags_def);
 
     // A Row containing a Relationship field
@@ -712,8 +761,6 @@ fn enrich_nested_fields_recurses_into_layout() {
 #[test]
 fn enrich_nested_fields_blocks_template_gets_upload_options() {
     // Regression: block definition templates (for new rows) must have upload options enriched
-    use crate::core::collection::*;
-    use crate::core::field::RelationshipConfig;
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -736,13 +783,13 @@ fn enrich_nested_fields_blocks_template_gets_upload_options() {
         make_field("mime_type", FieldType::Text),
         make_field("url", FieldType::Text),
     ];
-    let upload_config = crate::core::upload::CollectionUpload {
+    let upload_config = CollectionUpload {
         enabled: true,
         ..Default::default()
     };
     media_def.upload = Some(upload_config);
 
-    let mut registry = crate::core::Registry::new();
+    let mut registry = Registry::new();
     registry.register_collection(media_def);
 
     // A Blocks field with an "image" block containing an upload field
@@ -787,8 +834,6 @@ fn enrich_nested_fields_blocks_template_gets_upload_options() {
 #[test]
 fn enrich_nested_fields_array_template_gets_upload_options() {
     // Regression: array sub_fields template (for new rows) must have upload options enriched
-    use crate::core::collection::*;
-    use crate::core::field::RelationshipConfig;
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -811,7 +856,7 @@ fn enrich_nested_fields_array_template_gets_upload_options() {
         make_field("mime_type", FieldType::Text),
         make_field("url", FieldType::Text),
     ];
-    let upload_config = crate::core::upload::CollectionUpload {
+    let upload_config = CollectionUpload {
         enabled: true,
         ..Default::default()
     };
@@ -919,6 +964,10 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         hook_runner,
         jwt_secret: "test".into(),
         email_renderer,
+        email_provider: crate::core::email::create_email_provider(
+            &crate::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter,
         ip_login_limiter,
@@ -934,6 +983,15 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crate::core::upload::create_storage(
+            tmp.path(),
+            &crate::config::UploadConfig::default(),
+        )
+        .unwrap(),
+        token_provider: std::sync::Arc::new(crate::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1013,6 +1071,10 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         hook_runner,
         jwt_secret: "test".into(),
         email_renderer,
+        email_provider: crate::core::email::create_email_provider(
+            &crate::config::EmailConfig::default(),
+        )
+        .unwrap(),
         event_bus: None,
         login_limiter,
         ip_login_limiter,
@@ -1028,6 +1090,15 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
         csp_header: None,
+        storage: crate::core::upload::create_storage(
+            tmp.path(),
+            &crate::config::UploadConfig::default(),
+        )
+        .unwrap(),
+        token_provider: std::sync::Arc::new(crate::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
     };
 
     enrich_field_contexts(
@@ -1048,57 +1119,6 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
 }
 
 // ── Layout wrappers inside Array: transparent names and data ─────────
-
-fn make_test_state() -> crate::admin::AdminState {
-    let tmp = tempfile::tempdir().unwrap();
-    let manager = r2d2_sqlite::SqliteConnectionManager::memory();
-    let pool =
-        crate::db::DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
-    let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
-        crate::core::registry::Registry::default(),
-    ));
-    let config = crate::config::CrapConfig::default();
-    let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
-        .config_dir(tmp.path())
-        .registry(shared_reg.clone())
-        .config(&config)
-        .build()
-        .unwrap();
-    let registry = std::sync::Arc::new(shared_reg.read().unwrap().clone());
-    let hbs = std::sync::Arc::new(handlebars::Handlebars::new());
-    let email_renderer =
-        std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
-    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
-    let ip_login_limiter =
-        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
-    let translations =
-        std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
-    crate::admin::AdminState {
-        config,
-        config_dir: tmp.path().to_path_buf(),
-        pool,
-        registry,
-        handlebars: hbs,
-        hook_runner,
-        jwt_secret: "test".into(),
-        email_renderer,
-        event_bus: None,
-        login_limiter,
-        ip_login_limiter,
-        forgot_password_limiter: std::sync::Arc::new(
-            crate::core::rate_limit::LoginRateLimiter::new(3, 900),
-        ),
-        ip_forgot_password_limiter: std::sync::Arc::new(
-            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
-        ),
-        has_auth: false,
-        translations,
-        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_sse_connections: 0,
-        shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
-    }
-}
 
 #[test]
 fn enriched_sub_field_tabs_in_array_transparent_names() {

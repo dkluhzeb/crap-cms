@@ -6,27 +6,27 @@
 use axum::{
     Extension, Json,
     extract::{Path, State},
-    response::{IntoResponse, Response},
+    response::Response,
 };
-use serde_json::json;
 use tokio::task;
 
 use crate::{
     admin::{
         AdminState,
         handlers::{
-            collections::forms::{extract_join_data_from_form, transform_select_has_many},
-            shared::{check_access_or_forbid, get_user_doc, strip_write_denied_string_fields},
+            forms::{extract_join_data_from_form, transform_select_has_many},
+            shared::{check_access_or_forbid, get_user_doc},
             validate::{
-                ValidateRequest, validation_error_response, validation_ok_response,
-                values_to_string_map,
+                RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
+                validation_error_response_simple, values_to_string_map,
             },
         },
     },
-    core::{auth::AuthUser, validate::ValidationError},
-    db::{AccessResult, query::LocaleContext},
-    hooks::{HookContext, ValidationCtx},
-    service,
+    core::auth::AuthUser,
+    db::{
+        AccessResult,
+        query::{LocaleContext, helpers::global_table},
+    },
 };
 
 /// POST /admin/globals/{slug}/validate — validate fields for global update
@@ -42,7 +42,6 @@ pub async fn validate_global(
         None => return validation_error_response_simple("Global not found"),
     };
 
-    // Check global-level update access
     match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => return validation_error_response_simple("Access denied"),
         Err(_) => return validation_error_response_simple("Access check failed"),
@@ -51,21 +50,18 @@ pub async fn validate_global(
 
     let mut form_data = values_to_string_map(&payload.data);
 
-    // Strip field-level update-denied fields
-    if let Err(_resp) =
-        strip_write_denied_string_fields(&state, &auth_user, &def.fields, "update", &mut form_data)
-    {
-        return validation_error_response_simple("Access check failed");
-    }
+    // Field write access stripping is now handled inside service::validate_document
+    // via WriteHooks::field_write_denied.
 
     transform_select_has_many(&mut form_data, &def.fields);
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
-        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
-    let global_table = format!("_global_{}", slug);
+    let gtable = global_table(&slug);
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let slug_owned = slug.clone();
@@ -73,60 +69,24 @@ pub async fn validate_global(
     let user_doc = get_user_doc(&auth_user).cloned();
 
     let result = task::spawn_blocking(move || {
-        let mut conn = pool.get()?;
-        let tx = conn.transaction()?;
-
-        let hook_data = service::build_hook_data(&form_data, &join_data);
-        let hook_ctx = HookContext::builder(&slug_owned, "update")
-            .data(hook_data)
-            .locale(locale_ctx.as_ref().and_then(|ctx| {
-                if let crate::db::query::LocaleMode::Single(l) = &ctx.mode {
-                    Some(l.clone())
-                } else {
-                    None
-                }
-            }))
-            .draft(is_draft)
-            .user(user_doc.as_ref())
-            .build();
-        let val_ctx = ValidationCtx::builder(&tx, &global_table)
-            .exclude_id(Some("default"))
-            .draft(is_draft)
-            .locale_ctx(locale_ctx.as_ref())
-            .build();
-
-        let result =
-            runner.run_before_write(&def_owned.hooks, &def_owned.fields, hook_ctx, &val_ctx);
-
-        // Always rollback — this is validation only
-        drop(tx);
-
-        result
+        run_validation(&RunValidationParams {
+            pool: &pool,
+            runner: &runner,
+            hooks: &def_owned.hooks,
+            fields: &def_owned.fields,
+            slug: &slug_owned,
+            table_name: &gtable,
+            operation: "update",
+            exclude_id: Some("default"),
+            form_data: &form_data,
+            join_data: &join_data,
+            is_draft,
+            soft_delete: false,
+            locale_ctx: locale_ctx.as_ref(),
+            user_doc: user_doc.as_ref(),
+        })
     })
     .await;
 
-    match result {
-        Ok(Ok(_)) => validation_ok_response(),
-        Ok(Err(e)) => {
-            if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user
-                    .as_ref()
-                    .map(|Extension(au)| au.ui_locale.as_str())
-                    .unwrap_or("en");
-                validation_error_response(ve, &state.translations, locale)
-            } else {
-                validation_error_response_simple(&format!("Validation error: {}", e))
-            }
-        }
-        Err(e) => validation_error_response_simple(&format!("Internal error: {}", e)),
-    }
-}
-
-/// Quick error response for non-validation failures.
-fn validation_error_response_simple(msg: &str) -> Response {
-    Json(json!({
-        "valid": false,
-        "errors": { "_form": msg },
-    }))
-    .into_response()
+    handle_validation_result(result, &auth_user, &state)
 }

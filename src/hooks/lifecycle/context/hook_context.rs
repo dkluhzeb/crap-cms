@@ -44,45 +44,30 @@ impl HookContext {
 
     /// Convert this context to a Lua table for passing to hook functions.
     pub(crate) fn to_lua_table(&self, lua: &Lua) -> LuaResult<Table> {
-        let ctx_table = lua.create_table()?;
-        ctx_table.set("collection", self.collection.as_str())?;
-        ctx_table.set("operation", self.operation.as_str())?;
+        let tbl = lua.create_table()?;
 
-        if let Some(ref locale) = self.locale {
-            ctx_table.set("locale", locale.as_str())?;
-        }
-        if let Some(draft) = self.draft {
-            ctx_table.set("draft", draft)?;
-        }
-        let data_table = lua.create_table()?;
-        for (k, v) in &self.data {
-            data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
-        }
-        ctx_table.set("data", data_table)?;
+        tbl.set("collection", self.collection.as_str())?;
+        tbl.set("operation", self.operation.as_str())?;
+        tbl.set("data", hashmap_to_lua(lua, &self.data)?)?;
+        tbl.set("context", hashmap_to_lua(lua, &self.context)?)?;
 
-        // Request-scoped shared context table
-        let context_table = lua.create_table()?;
-        for (k, v) in &self.context {
-            context_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
-        }
-        ctx_table.set("context", context_table)?;
-
-        // Expose current hook depth so hooks can make manual decisions
         let depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
-        ctx_table.set("hook_depth", depth)?;
+        tbl.set("hook_depth", depth)?;
 
-        // Authenticated user document
-        if let Some(ref user_doc) = self.user {
-            let user_tbl = document_to_lua_table(lua, user_doc)?;
-            ctx_table.set("user", user_tbl)?;
+        if let Some(ref v) = self.locale {
+            tbl.set("locale", v.as_str())?;
+        }
+        if let Some(v) = self.draft {
+            tbl.set("draft", v)?;
+        }
+        if let Some(ref v) = self.ui_locale {
+            tbl.set("ui_locale", v.as_str())?;
+        }
+        if let Some(ref doc) = self.user {
+            tbl.set("user", document_to_lua_table(lua, doc)?)?;
         }
 
-        // Admin UI locale
-        if let Some(ref ui_locale) = self.ui_locale {
-            ctx_table.set("ui_locale", ui_locale.as_str())?;
-        }
-
-        Ok(ctx_table)
+        Ok(tbl)
     }
 
     /// Convert data to a string map for query functions.
@@ -92,6 +77,7 @@ impl HookContext {
     /// `{ "seo__meta_title": "X" }` so `query::create/update` can find them.
     pub fn to_string_map(&self, fields: &[FieldDefinition]) -> HashMap<String, String> {
         let mut map = HashMap::new();
+
         for (k, v) in &self.data {
             // Check if this key is a group field that needs flattening
             let is_group = fields
@@ -100,30 +86,47 @@ impl HookContext {
 
             if is_group && let Some(obj) = v.as_object() {
                 flatten_group_to_map(k, obj, &mut map);
+
                 continue;
             }
+
             // If the value is already a string (e.g. from form data), fall through
-            map.insert(
-                k.clone(),
-                match v {
-                    JsonValue::String(s) => s.clone(),
-                    other => other.to_string(),
-                },
-            );
+            map.insert(k.clone(), json_val_to_string(v));
         }
+
         map
     }
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
     pub(crate) fn read_context_back(&mut self, lua: &Lua, tbl: &Table) {
-        if let Ok(context_tbl) = tbl.get::<mlua::Table>("context") {
+        if let Ok(context_tbl) = tbl.get::<Table>("context") {
             self.context.clear();
+
             for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
                 if let Ok(json_val) = api::lua_to_json(lua, &v) {
                     self.context.insert(k, json_val);
                 }
             }
         }
+    }
+}
+
+/// Convert a HashMap<String, JsonValue> to a Lua table.
+fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Table> {
+    let tbl = lua.create_table()?;
+
+    for (k, v) in map {
+        tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+    }
+
+    Ok(tbl)
+}
+
+/// Convert a JSON value to its string representation for the string map.
+fn json_val_to_string(v: &JsonValue) -> String {
+    match v {
+        JsonValue::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -135,16 +138,11 @@ fn flatten_group_to_map(
 ) {
     for (sub_key, sub_val) in obj {
         let flat_key = format!("{}__{}", prefix, sub_key);
+
         if let JsonValue::Object(nested) = sub_val {
             flatten_group_to_map(&flat_key, nested, map);
         } else {
-            map.insert(
-                flat_key,
-                match sub_val {
-                    JsonValue::String(s) => s.clone(),
-                    other => other.to_string(),
-                },
-            );
+            map.insert(flat_key, json_val_to_string(sub_val));
         }
     }
 }

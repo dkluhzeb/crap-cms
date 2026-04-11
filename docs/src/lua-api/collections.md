@@ -220,14 +220,14 @@ crap.collections.delete("posts", "abc123", { overrideAccess = true })
 | `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip before_delete and after_delete hooks. |
 | `forceHardDelete` | boolean | `false` | Permanently delete even when the collection has `soft_delete = true`. Requires `access.delete` permission when `overrideAccess = false`. |
 
-## crap.collections.restore(collection, id)
+## crap.collections.undelete(collection, id)
 
-Restore a soft-deleted document from trash. Returns `true` on success. Only works on collections with `soft_delete = true`. Re-syncs the FTS index after restore.
+Undelete a soft-deleted document from trash. Returns `true` on success. Only works on collections with `soft_delete = true`. Re-syncs the FTS index after undelete.
 
 **Only available inside hooks with transaction context.**
 
 ```lua
-crap.collections.restore("posts", "abc123")
+crap.collections.undelete("posts", "abc123")
 ```
 
 ## Lifecycle Hooks in Lua CRUD

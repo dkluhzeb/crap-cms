@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::EnrichOptions;
+use crate::admin::handlers::field_context::enrich::EnrichOptions;
 
 /// Builder for [`EnrichOptions`].
 pub struct EnrichOptionsBuilder<'a> {

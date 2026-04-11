@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::parsing::{serde_duration, serde_duration_ms, serde_duration_option, serde_filesize};
+use crate::config::parsing::{
+    serde_duration, serde_duration_ms, serde_duration_option, serde_filesize,
+};
 
 /// Response compression mode for the admin HTTP server.
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
@@ -99,13 +101,36 @@ impl Default for ServerConfig {
     }
 }
 
+impl ServerConfig {
+    /// Return the public-facing base URL for generated links (password reset emails, etc.).
+    ///
+    /// Uses `public_url` if set, otherwise falls back to `http://{host}:{admin_port}`.
+    /// Special-cases `0.0.0.0` → `localhost` since `0.0.0.0` is a bind address, not reachable.
+    pub fn base_url(&self) -> String {
+        if let Some(ref url) = self.public_url {
+            url.trim_end_matches('/').to_string()
+        } else if self.host == "0.0.0.0" {
+            format!("http://localhost:{}", self.admin_port)
+        } else {
+            format!("http://{}:{}", self.host, self.admin_port)
+        }
+    }
+}
+
 /// SQLite database path and pool configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
-    /// Path to the SQLite database file.
+    /// Database backend: `"sqlite"` (default) or `"postgres"`.
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    /// PostgreSQL connection URL (only used when `backend = "postgres"`).
+    /// e.g., `"host=localhost user=crap dbname=crap_cms"`
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Path to the SQLite database file (only used when `backend = "sqlite"`).
     pub path: String,
-    /// Maximum number of connections in the pool. Default: 32.
+    /// Maximum number of connections in the pool. Default: 64.
     pub pool_max_size: u32,
     /// SQLite busy timeout in milliseconds. Default: 30000 (30s).
     /// Accepts integer milliseconds or human-readable string ("30s", "1m").
@@ -115,15 +140,48 @@ pub struct DatabaseConfig {
     /// Accepts integer seconds or human-readable string ("5s", "10s").
     #[serde(with = "serde_duration")]
     pub connection_timeout: u64,
+    /// SQLite page cache size in KB. Negative = KB, positive = pages. Default: 16384 (16MB).
+    /// Higher values improve read performance for large datasets.
+    #[serde(default = "default_cache_size")]
+    pub cache_size: i64,
+    /// SQLite memory-mapped I/O size in bytes. Default: 268435456 (256MB).
+    /// Set to 0 to disable. Improves read throughput for databases smaller than this value.
+    #[serde(default = "default_mmap_size")]
+    pub mmap_size: u64,
+    /// SQLite WAL auto-checkpoint threshold in pages. Default: 1000.
+    /// Lower values keep the WAL file smaller; higher values reduce checkpoint frequency.
+    #[serde(default = "default_wal_autocheckpoint")]
+    pub wal_autocheckpoint: u32,
+}
+
+fn default_cache_size() -> i64 {
+    -16384
+}
+
+fn default_mmap_size() -> u64 {
+    268_435_456
+}
+
+fn default_wal_autocheckpoint() -> u32 {
+    1000
+}
+
+fn default_backend() -> String {
+    "sqlite".to_string()
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
+            backend: default_backend(),
+            url: None,
             path: "data/crap.db".to_string(),
-            pool_max_size: 32,
+            pool_max_size: 64,
             busy_timeout: 30000,
             connection_timeout: 5,
+            cache_size: default_cache_size(),
+            mmap_size: default_mmap_size(),
+            wal_autocheckpoint: default_wal_autocheckpoint(),
         }
     }
 }

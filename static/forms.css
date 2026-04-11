@@ -48,7 +48,14 @@ select:focus,
 textarea:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px var(--color-primary-bg);
-  outline: 0;
+  outline: none;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }
 
 input::placeholder,

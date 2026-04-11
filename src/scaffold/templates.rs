@@ -1,9 +1,11 @@
 //! Template/static file listing, extraction, and proto export.
 
-use anyhow::{Context as _, Result, bail};
-use std::{fs, io::Write, path::Path};
+use std::{collections::BTreeMap, fs, io::Write, path::Path};
 
+use anyhow::{Context as _, Result, bail};
 use include_dir::{Dir, include_dir};
+
+use crate::cli;
 
 /// Embedded default templates — compiled into the binary.
 static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
@@ -177,9 +179,6 @@ fn print_categorized(files: &[(String, &[u8])], categories: &[FileCategory]) {
 
 /// Print files grouped by directory in a tree-like format (verbose mode).
 fn print_file_tree(files: &[(String, &[u8])]) {
-    use std::collections::BTreeMap;
-
-    // Group files by directory
     let mut dirs: BTreeMap<String, Vec<(&str, usize)>> = BTreeMap::new();
     for (path, content) in files {
         let (dir, name) = match path.rsplit_once('/') {
@@ -202,63 +201,72 @@ fn print_file_tree(files: &[(String, &[u8])]) {
     }
 }
 
-/// List embedded templates and/or static files.
-///
-/// `type_filter`: None = both, Some("templates") = templates only, Some("static") = static only.
-/// `verbose`: show full file tree instead of compact summary.
-pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
-    // Validate filter
-    if let Some(f) = type_filter
+/// Validate a `--type` filter value.
+fn validate_type_filter(filter: Option<&str>) -> Result<()> {
+    if let Some(f) = filter
         && f != "templates"
         && f != "static"
     {
         bail!("Invalid --type '{}' — valid: templates, static", f);
     }
 
+    Ok(())
+}
+
+/// Print a section header with file count and total size, then files.
+fn print_section(
+    label: &str,
+    files: &[(String, &[u8])],
+    categories: &[FileCategory],
+    verbose: bool,
+) {
+    let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
+    println!(
+        "{} ({} files, {}):",
+        label,
+        files.len(),
+        format_size(total_size)
+    );
+
+    if verbose {
+        print_file_tree(files);
+    } else {
+        println!();
+        print_categorized(files, categories);
+    }
+}
+
+/// List embedded templates and/or static files.
+pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
+    validate_type_filter(type_filter)?;
+
     let show_templates = type_filter.is_none() || type_filter == Some("templates");
     let show_static = type_filter.is_none() || type_filter == Some("static");
 
     if show_templates {
-        let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
-        let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
-        println!(
-            "Templates ({} files, {}):",
-            files.len(),
-            format_size(total_size)
+        print_section(
+            "Templates",
+            &collect_embedded_files_flat(&EMBEDDED_TEMPLATES),
+            TEMPLATE_CATEGORIES,
+            verbose,
         );
 
-        if verbose {
-            print_file_tree(&files);
-        } else {
-            println!();
-            print_categorized(&files, TEMPLATE_CATEGORIES);
-        }
-        if show_static && !verbose {
-            // categorized mode already adds spacing
-        } else if show_static {
+        if show_static && verbose {
             println!();
         }
     }
 
     if show_static {
-        let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
-        let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
-        println!(
-            "Static files ({} files, {}):",
-            files.len(),
-            format_size(total_size)
+        print_section(
+            "Static files",
+            &collect_embedded_files_flat(&EMBEDDED_STATIC),
+            STATIC_CATEGORIES,
+            verbose,
         );
-
-        if verbose {
-            print_file_tree(&files);
-        } else {
-            println!();
-            print_categorized(&files, STATIC_CATEGORIES);
-        }
     }
 
     if !verbose {
-        crate::cli::hint(
+        cli::hint(
             "Extract a file to customize it:\n  crap-cms templates extract <PATH>\n  crap-cms templates extract --all",
         );
     }
@@ -266,12 +274,48 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// Write all files from an embedded dir into `config_dir/subdir/`, returning count written.
+fn extract_dir(dir: &Dir, subdir: &str, config_dir: &Path, force: bool) -> Result<usize> {
+    let files = collect_embedded_files_flat(dir);
+    let mut count = 0;
+
+    for (path, content) in &files {
+        let dest = config_dir.join(subdir).join(path);
+
+        if dest.exists() && !force {
+            cli::warning(&format!("Skipped: {subdir}/{path} (exists, use --force)"));
+            continue;
+        }
+
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&dest, content)?;
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+/// Find a file by path across templates and/or static dirs.
+fn find_embedded_file<'a>(
+    path: &str,
+    want_templates: bool,
+    want_static: bool,
+) -> Option<(&'static str, &'a include_dir::File<'a>)> {
+    if want_templates && let Some(f) = EMBEDDED_TEMPLATES.get_file(path) {
+        return Some(("templates", f));
+    }
+
+    if want_static && let Some(f) = EMBEDDED_STATIC.get_file(path) {
+        return Some(("static", f));
+    }
+
+    None
+}
+
 /// Extract embedded templates/static files into a config directory.
-///
-/// `paths`: specific files to extract (e.g., "layout/base.hbs", "styles.css").
-/// `all`: extract all files.
-/// `type_filter`: None = both, Some("templates") = templates only, Some("static") = static only.
-/// `force`: overwrite existing files.
 pub fn templates_extract(
     config_dir: &Path,
     paths: &[String],
@@ -279,13 +323,7 @@ pub fn templates_extract(
     type_filter: Option<&str>,
     force: bool,
 ) -> Result<()> {
-    // Validate filter
-    if let Some(f) = type_filter
-        && f != "templates"
-        && f != "static"
-    {
-        bail!("Invalid --type '{}' — valid: templates, static", f);
-    }
+    validate_type_filter(type_filter)?;
 
     if !all && paths.is_empty() {
         bail!("Specify file paths to extract, or use --all to extract everything");
@@ -295,117 +333,90 @@ pub fn templates_extract(
     let want_static = type_filter.is_none() || type_filter == Some("static");
 
     if all {
-        let mut count = 0usize;
-
-        if want_templates {
-            let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
-            for (path, content) in &files {
-                let dest = config_dir.join("templates").join(path);
-
-                if dest.exists() && !force {
-                    crate::cli::warning(&format!(
-                        "Skipped: templates/{} (exists, use --force)",
-                        path
-                    ));
-                    continue;
-                }
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&dest, content)?;
-                count += 1;
-            }
-            if want_templates && !want_static {
-                crate::cli::success(&format!(
-                    "Extracted {} template file(s) to {}/templates/",
-                    count,
-                    config_dir.display()
-                ));
-
-                return Ok(());
-            }
-        }
-
-        if want_static {
-            let tpl_count = count;
-            let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
-            for (path, content) in &files {
-                let dest = config_dir.join("static").join(path);
-
-                if dest.exists() && !force {
-                    crate::cli::warning(&format!("Skipped: static/{} (exists, use --force)", path));
-                    continue;
-                }
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&dest, content)?;
-                count += 1;
-            }
-            if !want_templates {
-                crate::cli::success(&format!(
-                    "Extracted {} static file(s) to {}/static/",
-                    count,
-                    config_dir.display()
-                ));
-
-                return Ok(());
-            }
-            crate::cli::success(&format!(
-                "Extracted {} file(s) ({} templates, {} static) to {}/",
-                count,
-                tpl_count,
-                count - tpl_count,
-                config_dir.display()
-            ));
-        }
-
-        return Ok(());
+        return extract_all(config_dir, want_templates, want_static, force);
     }
 
-    // Extract specific paths
+    extract_specific(config_dir, paths, want_templates, want_static, force)
+}
+
+/// Extract all files from templates and/or static dirs.
+fn extract_all(
+    config_dir: &Path,
+    want_templates: bool,
+    want_static: bool,
+    force: bool,
+) -> Result<()> {
+    let tpl_count = if want_templates {
+        extract_dir(&EMBEDDED_TEMPLATES, "templates", config_dir, force)?
+    } else {
+        0
+    };
+
+    let static_count = if want_static {
+        extract_dir(&EMBEDDED_STATIC, "static", config_dir, force)?
+    } else {
+        0
+    };
+
+    let total = tpl_count + static_count;
+
+    match (want_templates, want_static) {
+        (true, false) => cli::success(&format!(
+            "Extracted {} template file(s) to {}/templates/",
+            tpl_count,
+            config_dir.display()
+        )),
+        (false, true) => cli::success(&format!(
+            "Extracted {} static file(s) to {}/static/",
+            static_count,
+            config_dir.display()
+        )),
+        _ => cli::success(&format!(
+            "Extracted {} file(s) ({} templates, {} static) to {}/",
+            total,
+            tpl_count,
+            static_count,
+            config_dir.display()
+        )),
+    }
+
+    Ok(())
+}
+
+/// Extract specific files by path.
+fn extract_specific(
+    config_dir: &Path,
+    paths: &[String],
+    want_templates: bool,
+    want_static: bool,
+    force: bool,
+) -> Result<()> {
     let mut extracted = 0usize;
+
     for path in paths {
-        // Try templates first, then static
-        let found = if want_templates {
-            EMBEDDED_TEMPLATES.get_file(path).map(|f| ("templates", f))
-        } else {
-            None
+        let Some((kind, file)) = find_embedded_file(path, want_templates, want_static) else {
+            cli::warning(&format!("Not found: {}", path));
+            continue;
         };
-        let found = found.or_else(|| {
-            if want_static {
-                EMBEDDED_STATIC.get_file(path).map(|f| ("static", f))
-            } else {
-                None
-            }
-        });
 
-        match found {
-            Some((kind, file)) => {
-                let dest = config_dir.join(kind).join(path);
+        let dest = config_dir.join(kind).join(path);
 
-                if dest.exists() && !force {
-                    crate::cli::warning(&format!(
-                        "Skipped: {}/{} (exists, use --force)",
-                        kind, path
-                    ));
-                    continue;
-                }
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&dest, file.contents())?;
-                crate::cli::success(&format!("{}/{}", kind, path));
-                extracted += 1;
-            }
-            None => {
-                crate::cli::warning(&format!("Not found: {}", path));
-            }
+        if dest.exists() && !force {
+            cli::warning(&format!("Skipped: {kind}/{path} (exists, use --force)"));
+            continue;
         }
+
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&dest, file.contents())?;
+        cli::success(&format!("{kind}/{path}"));
+        extracted += 1;
     }
 
     if extracted > 0 {
-        crate::cli::success(&format!(
+        cli::success(&format!(
             "Extracted {} file(s) to {}/",
             extracted,
             config_dir.display()
@@ -421,32 +432,37 @@ pub fn templates_extract(
 /// - `output` is a directory → writes `content.proto` into it.
 /// - `output` is a file path → writes directly to that file.
 pub fn proto_export(output: Option<&Path>) -> Result<()> {
-    match output {
-        None => {
-            // Write to stdout
-            std::io::stdout()
-                .write_all(PROTO_CONTENT.as_bytes())
-                .context("Failed to write proto to stdout")?;
-        }
-        Some(path) => {
-            let target = if path.is_dir() || path.to_string_lossy().ends_with('/') {
-                fs::create_dir_all(path)
-                    .with_context(|| format!("Failed to create directory '{}'", path.display()))?;
-                path.join("content.proto")
-            } else {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).with_context(|| {
-                        format!("Failed to create directory '{}'", parent.display())
-                    })?;
-                }
-                path.to_path_buf()
-            };
-            fs::write(&target, PROTO_CONTENT)
-                .with_context(|| format!("Failed to write {}", target.display()))?;
-            crate::cli::success(&format!("Wrote {}", target.display()));
-        }
-    }
+    let Some(path) = output else {
+        std::io::stdout()
+            .write_all(PROTO_CONTENT.as_bytes())
+            .context("Failed to write proto to stdout")?;
+        return Ok(());
+    };
+
+    let target = resolve_proto_path(path)?;
+
+    fs::write(&target, PROTO_CONTENT)
+        .with_context(|| format!("Failed to write {}", target.display()))?;
+
+    cli::success(&format!("Wrote {}", target.display()));
+
     Ok(())
+}
+
+/// Resolve the output path for proto export — directory gets `content.proto` appended.
+fn resolve_proto_path(path: &Path) -> Result<std::path::PathBuf> {
+    if path.is_dir() || path.to_string_lossy().ends_with('/') {
+        fs::create_dir_all(path)
+            .with_context(|| format!("Failed to create directory '{}'", path.display()))?;
+        return Ok(path.join("content.proto"));
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory '{}'", parent.display()))?;
+    }
+
+    Ok(path.to_path_buf())
 }
 
 #[cfg(test)]

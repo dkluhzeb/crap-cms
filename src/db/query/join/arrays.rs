@@ -7,8 +7,13 @@ use std::collections::HashMap;
 use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
 use crate::db::{
     DbConnection, DbValue,
-    query::{coerce_value, helpers::normalize_date_with_timezone},
+    query::{
+        coerce_value,
+        helpers::{coerce_date_value, join_table, tz_column},
+    },
 };
+
+use super::helpers::delete_junction_rows;
 
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -22,27 +27,9 @@ pub fn set_array_rows(
     sub_fields: &[FieldDefinition],
     locale: Option<&str>,
 ) -> Result<()> {
-    let table_name = format!("{}_{}", collection, field_name);
+    let table_name = join_table(collection, field_name);
 
-    if let Some(loc) = locale {
-        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-        conn.execute(
-            &format!(
-                "DELETE FROM \"{}\" WHERE parent_id = {p1} AND _locale = {p2}",
-                table_name
-            ),
-            &[
-                DbValue::Text(parent_id.to_string()),
-                DbValue::Text(loc.to_string()),
-            ],
-        )?;
-    } else {
-        let p1 = conn.placeholder(1);
-        conn.execute(
-            &format!("DELETE FROM \"{}\" WHERE parent_id = {p1}", table_name),
-            &[DbValue::Text(parent_id.to_string())],
-        )?;
-    }
+    delete_junction_rows(conn, &table_name, parent_id, locale)?;
 
     let flat_subs = flatten_array_sub_fields(sub_fields);
 
@@ -55,7 +42,7 @@ pub fn set_array_rows(
     for sf in &flat_subs {
         col_names.push(sf.name.clone());
         if sf.field_type == FieldType::Date && sf.timezone {
-            col_names.push(format!("{}_tz", sf.name));
+            col_names.push(tz_column(&sf.name));
         }
     }
 
@@ -108,21 +95,9 @@ pub fn set_array_rows(
         for sf in &flat_subs {
             let value = row.get(&sf.name).cloned().unwrap_or_default();
 
-            // For Date fields with timezone, use timezone-aware normalization
             let db_val = if sf.field_type == FieldType::Date && sf.timezone {
-                let tz_key = format!("{}_tz", sf.name);
-                if let Some(tz) = row.get(&tz_key).filter(|s| !s.is_empty()) {
-                    if value.is_empty() {
-                        DbValue::Null
-                    } else {
-                        match normalize_date_with_timezone(&value, tz) {
-                            Ok(normalized) => DbValue::Text(normalized),
-                            Err(_) => coerce_value(&sf.field_type, &value),
-                        }
-                    }
-                } else {
-                    coerce_value(&sf.field_type, &value)
-                }
+                let tz_key = tz_column(&sf.name);
+                coerce_date_value(&sf.field_type, &value, row.get(&tz_key).map(|s| s.as_str()))
             } else {
                 coerce_value(&sf.field_type, &value)
             };
@@ -130,7 +105,7 @@ pub fn set_array_rows(
 
             // Push timezone companion value
             if sf.field_type == FieldType::Date && sf.timezone {
-                let tz_key = format!("{}_tz", sf.name);
+                let tz_key = tz_column(&sf.name);
                 let tz_val = row.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
                 params.push(if tz_val.is_empty() {
                     DbValue::Null
@@ -155,7 +130,7 @@ pub fn find_array_rows(
     sub_fields: &[FieldDefinition],
     locale: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let table_name = format!("{}_{}", collection, field_name);
+    let table_name = join_table(collection, field_name);
     let flat_subs = flatten_array_sub_fields(sub_fields);
 
     // Build SELECT column list including _tz companions
@@ -163,7 +138,7 @@ pub fn find_array_rows(
     for sf in &flat_subs {
         select_col_names.push(sf.name.clone());
         if sf.field_type == FieldType::Date && sf.timezone {
-            select_col_names.push(format!("{}_tz", sf.name));
+            select_col_names.push(tz_column(&sf.name));
         }
     }
     let select_cols = if select_col_names.is_empty() {
@@ -240,7 +215,7 @@ pub fn find_array_rows(
                     DbValue::Text(s) => Value::String(s),
                     _ => Value::Null,
                 };
-                map.insert(format!("{}_tz", sf.name), tz_json);
+                map.insert(tz_column(&sf.name), tz_json);
             }
         }
 

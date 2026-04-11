@@ -97,59 +97,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_and_deref() {
+    fn conversions_and_traits() {
         let id = DocumentId::new("abc123");
+
+        // Deref, Display, Debug
         assert_eq!(&*id, "abc123");
-    }
-
-    #[test]
-    fn into_inner() {
-        let id = DocumentId::new("abc123");
-        assert_eq!(id.into_inner(), "abc123".to_string());
-    }
-
-    #[test]
-    fn display() {
-        let id = DocumentId::new("abc123");
         assert_eq!(format!("{id}"), "abc123");
-    }
-
-    #[test]
-    fn debug() {
-        let id = DocumentId::new("abc123");
         assert_eq!(format!("{id:?}"), "\"abc123\"");
+
+        // Clone
+        assert_eq!(id.clone(), "abc123");
+
+        // Into/From conversions
+        assert_eq!(id.into_inner(), "abc123");
+        assert_eq!(<DocumentId as From<&str>>::from("x"), "x");
+        assert_eq!(<DocumentId as From<String>>::from("y".into()), "y");
+        assert_eq!(String::from(DocumentId::new("z")), "z");
     }
 
     #[test]
-    fn from_string() {
-        let id: DocumentId = "abc123".to_string().into();
-        assert_eq!(id, "abc123");
-    }
-
-    #[test]
-    fn from_str() {
-        let id: DocumentId = "abc123".into();
-        assert_eq!(id, "abc123");
-    }
-
-    #[test]
-    fn into_string() {
+    fn partial_eq_variants() {
         let id = DocumentId::new("abc123");
-        let s: String = id.into();
-        assert_eq!(s, "abc123");
-    }
 
-    #[test]
-    fn partial_eq_str() {
-        let id = DocumentId::new("abc123");
         assert!(id == "abc123");
         assert!(id != "xyz789");
-    }
 
-    #[test]
-    fn partial_eq_string() {
-        let id = DocumentId::new("abc123");
-        assert!(id == "abc123");
+        let owned = "abc123".to_string();
+        assert!(id == owned);
     }
 
     #[test]
@@ -157,14 +131,8 @@ mod tests {
         let id = DocumentId::new("abc123");
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, "\"abc123\"");
+
         let deserialized: DocumentId = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, id);
-    }
-
-    #[test]
-    fn clone() {
-        let id = DocumentId::new("abc123");
-        let cloned = id.clone();
-        assert_eq!(id, cloned);
     }
 }

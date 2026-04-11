@@ -1,3 +1,63 @@
+use std::io::Cursor;
+
+use anyhow::{Context as _, Result, bail};
+use image::ImageReader;
+
+use crate::core::upload::{CollectionUpload, UploadedFile};
+
+/// Validate MIME type, magic bytes, and file size of an uploaded file.
+pub(super) fn validate_upload(
+    file: &UploadedFile,
+    upload_config: &CollectionUpload,
+    global_max_file_size: u64,
+) -> Result<()> {
+    if !validate_mime_type(&file.content_type, &upload_config.mime_types) {
+        bail!("File type '{}' is not allowed", file.content_type);
+    }
+
+    // Magic-byte verification: detected type must match claimed type
+    if let Some(detected) = infer::get(&file.data) {
+        let detected_mime = detected.mime_type();
+
+        if !mime_matches(detected_mime, &file.content_type) {
+            bail!(
+                "File content does not match claimed type '{}' (detected '{}')",
+                file.content_type,
+                detected_mime,
+            );
+        }
+    }
+
+    let max_size = upload_config.max_file_size.unwrap_or(global_max_file_size);
+
+    if file.data.len() as u64 > max_size {
+        bail!(
+            "File size {} exceeds maximum allowed size {}",
+            format_filesize(file.data.len() as u64),
+            format_filesize(max_size),
+        );
+    }
+
+    Ok(())
+}
+
+/// Check image dimensions against the decompression bomb limit (100 megapixels).
+pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
+    let reader = ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .context("Failed to detect image format")?;
+
+    if let Ok((w, h)) = reader.into_dimensions() {
+        const MAX_PIXELS: u64 = 100_000_000;
+
+        if (w as u64) * (h as u64) > MAX_PIXELS {
+            bail!("Image too large: {}x{} exceeds pixel limit", w, h);
+        }
+    }
+
+    Ok(())
+}
+
 /// Check if a content type matches a MIME glob pattern.
 /// Supports patterns like "image/*", "application/pdf", etc.
 pub(super) fn mime_matches(content_type: &str, pattern: &str) -> bool {

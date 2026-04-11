@@ -15,6 +15,7 @@ pub mod templates;
 pub mod trash;
 pub mod typegen;
 pub mod user;
+pub mod work;
 
 mod cli_types;
 mod helpers;

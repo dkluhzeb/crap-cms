@@ -1,5 +1,6 @@
-use anyhow::Context as _;
-use anyhow::Error;
+use std::collections::HashMap;
+
+use anyhow::{Context as _, Error};
 use axum::{
     Extension,
     extract::{Path, State},
@@ -7,8 +8,8 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use tokio::task;
+use tracing::error;
 
 use crate::{
     admin::{
@@ -17,9 +18,10 @@ use crate::{
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
-            enrich_field_contexts, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
-            server_error, split_sidebar_fields, strip_denied_fields,
+            enrich_field_contexts, extract_doc_status, extract_editor_locale,
+            fetch_version_sidebar_data, flatten_document_values, forbidden, is_non_default_locale,
+            lookup_ref_count, not_found, render_or_error, server_error, split_sidebar_fields,
+            strip_denied_fields,
         },
     },
     core::{
@@ -27,9 +29,222 @@ use crate::{
         auth::{AuthUser, Claims},
         upload,
     },
-    db::{ops, query, query::AccessResult},
-    hooks::lifecycle::AfterReadCtx,
+    db::{
+        DbPool,
+        query::{AccessResult, FilterClause, LocaleContext},
+    },
+    hooks::HookRunner,
+    service::{
+        FindByIdInput, RunnerReadHooks, ServiceContext, auth::is_locked, find_document_by_id,
+    },
 };
+
+/// Parameters for the blocking document-read task.
+struct ReadParams {
+    pool: DbPool,
+    runner: HookRunner,
+    slug: String,
+    id: String,
+    def: CollectionDefinition,
+    locale_ctx: Option<LocaleContext>,
+    access_constraints: Option<Vec<FilterClause>>,
+    has_drafts: bool,
+    user_doc: Option<Document>,
+}
+
+/// Fetch the document via the shared service layer read lifecycle.
+fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
+    let conn = params.pool.get().context("DB connection")?;
+
+    let hooks = RunnerReadHooks::new(&params.runner, &conn);
+    let ctx = ServiceContext::collection(&params.slug, &params.def)
+        .pool(&params.pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(params.user_doc.as_ref())
+        .build();
+
+    let input = FindByIdInput::builder(&params.id)
+        .use_draft(params.has_drafts)
+        .access_constraints(params.access_constraints)
+        .locale_ctx(params.locale_ctx.as_ref())
+        .build();
+
+    find_document_by_id(&ctx, &input).map_err(|e| e.into_anyhow())
+}
+
+/// Append auth-specific fields (password, locked checkbox) to the field list.
+fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &str) {
+    fields.push(json!({
+        "name": "password",
+        "field_type": "password",
+        "label": "password",
+        "required": false,
+        "value": "",
+        "description": "leave_blank_keep_password",
+    }));
+
+    let is_locked = pool
+        .get()
+        .ok()
+        .and_then(|conn| {
+            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+            is_locked(&ctx, id).ok()
+        })
+        .unwrap_or(false);
+
+    fields.push(json!({
+        "name": "_locked",
+        "field_type": "checkbox",
+        "label": "account_locked",
+        "checked": is_locked,
+        "description": "prevent_login",
+    }));
+}
+
+/// Build, enrich, and split the field contexts for the edit form.
+fn prepare_edit_fields(
+    state: &AdminState,
+    def: &CollectionDefinition,
+    document: &Document,
+    id: &str,
+    editor_locale: Option<&str>,
+) -> (Vec<Value>, Vec<Value>) {
+    let values = flatten_document_values(&document.fields, &def.fields);
+    let non_default_locale = is_non_default_locale(state, editor_locale);
+
+    let mut fields = build_field_contexts(
+        &def.fields,
+        &values,
+        &HashMap::new(),
+        true,
+        non_default_locale,
+    );
+
+    enrich_field_contexts(
+        &mut fields,
+        &def.fields,
+        &document.fields,
+        state,
+        &EnrichOptions::builder(&HashMap::new())
+            .filter_hidden(true)
+            .non_default_locale(non_default_locale)
+            .doc_id(id)
+            .build(),
+    );
+
+    let form_data_json = json!(document.fields);
+    apply_display_conditions(
+        &mut fields,
+        &def.fields,
+        &form_data_json,
+        &state.hook_runner,
+        true,
+    );
+
+    if def.is_auth_collection() {
+        append_auth_fields(&mut fields, &state.pool, &def.slug, id);
+    }
+
+    split_sidebar_fields(fields)
+}
+
+/// Extract file metadata fields from a document for upload context.
+struct UploadMeta<'a> {
+    url: Option<&'a str>,
+    mime_type: Option<&'a str>,
+    filename: Option<&'a str>,
+    filesize: Option<u64>,
+    width: Option<u32>,
+    height: Option<u32>,
+    focal_x: Option<f64>,
+    focal_y: Option<f64>,
+}
+
+impl<'a> UploadMeta<'a> {
+    fn from_document(document: &'a Document) -> Self {
+        Self {
+            url: document.fields.get("url").and_then(|v| v.as_str()),
+            mime_type: document.fields.get("mime_type").and_then(|v| v.as_str()),
+            filename: document.fields.get("filename").and_then(|v| v.as_str()),
+            filesize: document
+                .fields
+                .get("filesize")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as u64),
+            width: document
+                .fields
+                .get("width")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as u32),
+            height: document
+                .fields
+                .get("height")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as u32),
+            focal_x: document.fields.get("focal_x").and_then(|v| v.as_f64()),
+            focal_y: document.fields.get("focal_y").and_then(|v| v.as_f64()),
+        }
+    }
+}
+
+/// Build upload preview/info context for upload collection edit forms.
+fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Value {
+    let mut ctx = json!({});
+
+    if let Some(ref u) = def.upload
+        && !u.mime_types.is_empty()
+    {
+        ctx["accept"] = json!(u.mime_types.join(","));
+    }
+
+    let meta = UploadMeta::from_document(document);
+
+    if let Some(fx) = meta.focal_x {
+        ctx["focal_x"] = json!(fx);
+    }
+
+    if let Some(fy) = meta.focal_y {
+        ctx["focal_y"] = json!(fy);
+    }
+
+    if let (Some(url), Some(mime)) = (meta.url, meta.mime_type)
+        && mime.starts_with("image/")
+    {
+        let preview_url = def
+            .upload
+            .as_ref()
+            .and_then(|u| u.admin_thumbnail.as_ref())
+            .and_then(|thumb_name| {
+                document
+                    .fields
+                    .get("sizes")
+                    .and_then(|v| v.get(thumb_name))
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| url.to_string());
+
+        ctx["preview"] = json!(preview_url);
+    }
+
+    if let Some(fname) = meta.filename {
+        let mut info = json!({ "filename": fname });
+
+        if let Some(size) = meta.filesize {
+            info["filesize_display"] = json!(upload::format_filesize(size));
+        }
+
+        if let (Some(w), Some(h)) = (meta.width, meta.height) {
+            info["dimensions"] = json!(format!("{}x{}", w, h));
+        }
+
+        ctx["info"] = info;
+    }
+
+    ctx
+}
 
 /// GET /admin/collections/{slug}/{id} — show edit form
 pub async fn edit_form(
@@ -57,6 +272,7 @@ pub async fn edit_form(
         Ok(r) => r,
         Err(resp) => return *resp,
     };
+
     if matches!(access_result, AccessResult::Denied) {
         return forbidden(&state, "You don't have permission to view this item");
     }
@@ -64,57 +280,25 @@ pub async fn edit_form(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let hooks = def.hooks.clone();
-    let fields = def.fields.clone();
-    let slug_owned = slug.clone();
-    let id_owned = id.clone();
-    let def_owned = def.clone();
     let access_constraints = if let AccessResult::Constrained(ref filters) = access_result {
         Some(filters.clone())
     } else {
         None
     };
-    let has_drafts = def.has_drafts();
-    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
-    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
-    let read_result = task::spawn_blocking(move || {
-        runner.fire_before_read(&hooks, &slug_owned, "find_by_id", HashMap::new())?;
+    let read_params = ReadParams {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        slug: slug.clone(),
+        id: id.clone(),
+        def: def.clone(),
+        locale_ctx,
+        access_constraints,
+        has_drafts: def.has_drafts(),
+        user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
+    };
 
-        let conn = pool.get().context("DB connection")?;
-        let mut doc = ops::find_by_id_full(
-            &conn,
-            &slug_owned,
-            &def_owned,
-            &id_owned,
-            locale_ctx.as_ref(),
-            access_constraints,
-            has_drafts,
-        )?;
-
-        // Assemble sizes for upload collections
-        if let Some(ref mut d) = doc
-            && let Some(ref upload_config) = def_owned.upload
-            && upload_config.enabled
-        {
-            upload::assemble_sizes_object(d, upload_config);
-        }
-
-        let ar_ctx = AfterReadCtx {
-            hooks: &hooks,
-            fields: &fields,
-            collection: &slug_owned,
-            operation: "find_by_id",
-            user: user_doc.as_ref(),
-            ui_locale: user_ui_locale.as_deref(),
-        };
-        let doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
-
-        Ok::<_, Error>(doc)
-    })
-    .await;
+    let read_result = task::spawn_blocking(move || read_document(read_params)).await;
 
     let mut document = match read_result {
         Ok(Ok(Some(doc))) => doc,
@@ -122,11 +306,13 @@ pub async fn edit_form(
             return not_found(&state, &format!("Document '{}' not found", id));
         }
         Ok(Err(e)) => {
-            tracing::error!("Document edit query error: {}", e);
+            error!("Document edit query error: {}", e);
+
             return server_error(&state, "An internal error occurred.");
         }
         Err(e) => {
-            tracing::error!("Document edit task error: {}", e);
+            error!("Document edit task error: {}", e);
+
             return server_error(&state, "An internal error occurred.");
         }
     };
@@ -138,96 +324,37 @@ pub async fn edit_form(
     };
     strip_denied_fields(&mut document.fields, &denied);
 
-    let values = flatten_document_values(&document.fields, &def.fields);
+    let (main_fields, sidebar_fields) =
+        prepare_edit_fields(&state, &def, &document, &id, editor_locale.as_deref());
 
-    let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
-    let mut fields = build_field_contexts(
-        &def.fields,
-        &values,
-        &HashMap::new(),
-        true,
-        non_default_locale,
-    );
-
-    // Enrich relationship and array fields with extra data
-    enrich_field_contexts(
-        &mut fields,
-        &def.fields,
-        &document.fields,
-        &state,
-        &EnrichOptions::builder(&HashMap::new())
-            .filter_hidden(true)
-            .non_default_locale(non_default_locale)
-            .doc_id(&id)
-            .build(),
-    );
-
-    // Evaluate display conditions with document data
-    let form_data_json = json!(document.fields);
-    apply_display_conditions(
-        &mut fields,
-        &def.fields,
-        &form_data_json,
-        &state.hook_runner,
-        true,
-    );
-
-    if def.is_auth_collection() {
-        fields.push(json!({
-            "name": "password",
-            "field_type": "password",
-            "label": "password",
-            "required": false,
-            "value": "",
-            "description": "leave_blank_keep_password",
-        }));
-
-        // Add locked checkbox — read current lock state from DB
-        let is_locked = state
-            .pool
-            .get()
-            .ok()
-            .and_then(|conn| query::auth::is_locked(&conn, &slug, &id).ok())
-            .unwrap_or(false);
-        fields.push(json!({
-            "name": "_locked",
-            "field_type": "checkbox",
-            "label": "account_locked",
-            "checked": is_locked,
-            "description": "prevent_login",
-        }));
-    }
-
-    // Split fields into main and sidebar
-    let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
-
-    // Determine document title for breadcrumb
     let doc_title = def
         .title_field()
         .and_then(|f| document.get_str(f))
         .map(|s| s.to_string())
         .unwrap_or_else(|| document.id.to_string());
 
-    // Fetch document status and version history for versioned collections
+    let has_drafts = def.has_drafts();
     let has_versions = def.has_versions();
-    let doc_status = if has_drafts {
-        document
-            .fields
-            .get("_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("published")
-            .to_string()
-    } else {
-        String::new()
-    };
-    let (versions, total_versions): (Vec<Value>, i64) = if has_versions {
-        fetch_version_sidebar_data(&state.pool, &slug, &document.id)
+
+    let doc_status = extract_doc_status(&document, has_drafts);
+
+    let (versions, total_versions) = if has_versions {
+        if let Ok(vc) = state.pool.get() {
+            let vh = RunnerReadHooks::new(&state.hook_runner, &vc);
+            let version_ctx = ServiceContext::collection(&slug, &def)
+                .conn(&vc)
+                .read_hooks(&vh)
+                .build();
+            fetch_version_sidebar_data(&version_ctx, &document.id)
+        } else {
+            (vec![], 0)
+        }
     } else {
         (vec![], 0)
     };
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let mut data = ContextBuilder::new(&state, claims_ref)
+    let mut builder = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
@@ -250,104 +377,24 @@ pub async fn edit_form(
             "versions_url",
             json!(format!("/admin/collections/{}/{}/versions", slug, id)),
         )
+        .set("document_title", json!(doc_title))
+        .set(
+            "ref_count",
+            json!(lookup_ref_count(&state.pool, &slug, &id)),
+        )
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
             Breadcrumb::current(doc_title.clone()),
         ])
-        .merge(locale_data)
-        .build();
+        .merge(locale_data);
 
-    data["document_title"] = json!(doc_title);
-
-    // Add reference count for delete protection UI
-    let ref_count = state
-        .pool
-        .get()
-        .ok()
-        .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
-        .flatten()
-        .unwrap_or(0);
-    data["ref_count"] = json!(ref_count);
-
-    // Add upload context for upload collections
     if def.is_upload_collection() {
-        data["upload"] = build_upload_context(&def, &document);
+        builder = builder.set("upload", build_upload_context(&def, &document));
     }
 
+    let data = builder.build();
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/edit", &data)
-}
-
-/// Build upload preview/info context for upload collection edit forms.
-fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Value {
-    let mut ctx = json!({});
-
-    if let Some(ref u) = def.upload
-        && !u.mime_types.is_empty()
-    {
-        ctx["accept"] = json!(u.mime_types.join(","));
-    }
-
-    let url = document.fields.get("url").and_then(|v| v.as_str());
-    let mime_type = document.fields.get("mime_type").and_then(|v| v.as_str());
-    let filename = document.fields.get("filename").and_then(|v| v.as_str());
-    let filesize = document
-        .fields
-        .get("filesize")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as u64);
-    let width = document
-        .fields
-        .get("width")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as u32);
-    let height = document
-        .fields
-        .get("height")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as u32);
-
-    // Focal point values
-    if let Some(fx) = document.fields.get("focal_x").and_then(|v| v.as_f64()) {
-        ctx["focal_x"] = json!(fx);
-    }
-    if let Some(fy) = document.fields.get("focal_y").and_then(|v| v.as_f64()) {
-        ctx["focal_y"] = json!(fy);
-    }
-
-    // Show preview for images
-    if let (Some(url), Some(mime)) = (url, mime_type)
-        && mime.starts_with("image/")
-    {
-        let preview_url = def
-            .upload
-            .as_ref()
-            .and_then(|u| u.admin_thumbnail.as_ref())
-            .and_then(|thumb_name| {
-                document
-                    .fields
-                    .get("sizes")
-                    .and_then(|v| v.get(thumb_name))
-                    .and_then(|v| v.get("url"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| url.to_string());
-        ctx["preview"] = json!(preview_url);
-    }
-
-    if let Some(fname) = filename {
-        let mut info = json!({ "filename": fname });
-        if let Some(size) = filesize {
-            info["filesize_display"] = json!(upload::format_filesize(size));
-        }
-        if let (Some(w), Some(h)) = (width, height) {
-            info["dimensions"] = json!(format!("{}x{}", w, h));
-        }
-        ctx["info"] = info;
-    }
-
-    ctx
 }

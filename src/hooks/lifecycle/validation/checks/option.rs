@@ -1,7 +1,8 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use std::collections::HashMap;
 
 /// Validate that Select/Radio value exists in the options list.
 pub(crate) fn check_option_valid(
@@ -17,44 +18,57 @@ pub(crate) fn check_option_valid(
     {
         return;
     }
-    if let Some(Value::String(s)) = value {
-        if field.has_many {
-            // has_many select: value is a JSON array string like '["val1","val2"]'
-            match serde_json::from_str::<Vec<String>>(s) {
-                Ok(values) => {
-                    for v in &values {
-                        if !field.options.iter().any(|opt| opt.value == *v) {
-                            errors.push(FieldError::with_key(
-                                data_key.to_owned(),
-                                format!("{} has an invalid option: {}", field.name, v),
-                                "validation.invalid_option_value",
-                                HashMap::from([
-                                    ("field".to_string(), field.name.clone()),
-                                    ("value".to_string(), v.clone()),
-                                ]),
-                            ));
-                            // Do NOT break — report all invalid values
-                        }
-                    }
-                }
-                Err(_) => {
-                    errors.push(FieldError::with_key(
-                        data_key.to_owned(),
-                        format!(
-                            "{} has invalid multi-select value (malformed JSON)",
-                            field.name
-                        ),
-                        "validation.invalid_multi_select_json",
-                        HashMap::from([("field".to_string(), field.name.clone())]),
-                    ));
-                }
-            }
-        } else if !field.options.iter().any(|opt| opt.value == *s) {
+
+    let Some(Value::String(s)) = value else {
+        return;
+    };
+
+    if field.has_many {
+        check_has_many_options(field, data_key, s, errors);
+    } else if !field.options.iter().any(|opt| opt.value == *s) {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} has an invalid option", field.name),
+            "validation.invalid_option",
+            HashMap::from([("field".to_string(), field.name.clone())]),
+        ));
+    }
+}
+
+/// Validate each value in a has_many select/radio JSON array against the options list.
+fn check_has_many_options(
+    field: &FieldDefinition,
+    data_key: &str,
+    json_str: &str,
+    errors: &mut Vec<FieldError>,
+) {
+    let values: Vec<String> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
-                format!("{} has an invalid option", field.name),
-                "validation.invalid_option",
+                format!(
+                    "{} has invalid multi-select value (malformed JSON)",
+                    field.name
+                ),
+                "validation.invalid_multi_select_json",
                 HashMap::from([("field".to_string(), field.name.clone())]),
+            ));
+
+            return;
+        }
+    };
+
+    for v in &values {
+        if !field.options.iter().any(|opt| opt.value == *v) {
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} has an invalid option: {}", field.name, v),
+                "validation.invalid_option_value",
+                HashMap::from([
+                    ("field".to_string(), field.name.clone()),
+                    ("value".to_string(), v.clone()),
+                ]),
             ));
         }
     }

@@ -9,32 +9,10 @@ use serde_json::Value;
 /// Recursively walks the JSON tree collecting `{ "type": "text", "text": "..." }` nodes.
 /// Returns concatenated plain text with spaces between nodes.
 /// Returns an empty string for invalid input.
+///
+/// Shorthand for [`extract_prosemirror_text_with_nodes`] with no custom nodes.
 pub fn extract_prosemirror_text(json_str: &str) -> String {
-    fn collect_text(value: &Value, out: &mut Vec<String>) {
-        let obj = match value.as_object() {
-            Some(o) => o,
-            None => return,
-        };
-
-        if obj.get("type").and_then(|t| t.as_str()) == Some("text")
-            && let Some(text) = obj.get("text").and_then(|t| t.as_str())
-        {
-            out.push(text.to_string());
-        }
-        if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
-            for child in content {
-                collect_text(child, out);
-            }
-        }
-    }
-
-    let parsed: Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return String::new(),
-    };
-    let mut parts = Vec::new();
-    collect_text(&parsed, &mut parts);
-    parts.join(" ")
+    extract_prosemirror_text_with_nodes(json_str, &HashMap::new())
 }
 
 /// Extract text from ProseMirror JSON, including text from custom node attrs.
@@ -62,6 +40,7 @@ pub fn extract_prosemirror_text_with_nodes(
         {
             out.push(text.to_string());
         }
+
         // Check for custom node with searchable attrs
         if let Some(searchable) = node_searchable.get(node_type)
             && let Some(attrs) = obj.get("attrs").and_then(|a| a.as_object())
@@ -74,6 +53,7 @@ pub fn extract_prosemirror_text_with_nodes(
                 }
             }
         }
+
         if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
             for child in content {
                 collect_text_with_nodes(child, node_searchable, out);
@@ -86,7 +66,9 @@ pub fn extract_prosemirror_text_with_nodes(
         Err(_) => return String::new(),
     };
     let mut parts = Vec::new();
+
     collect_text_with_nodes(&parsed, node_searchable, &mut parts);
+
     parts.join(" ")
 }
 

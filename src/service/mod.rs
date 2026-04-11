@@ -4,83 +4,59 @@
 //! DB operation → commit) shared between admin handlers and the gRPC service. They are meant
 //! to be called from within `spawn_blocking`.
 
-mod after_change_input_builder;
-mod collections;
+pub mod auth;
+mod collection;
+pub mod document_info;
 mod email;
+mod error;
 mod globals;
+pub mod helpers;
+pub mod hooks;
+pub mod jobs;
 mod persist;
-mod persist_options_builder;
+pub mod read;
 mod types;
-mod version_snapshot_ctx_builder;
+pub mod upload;
+pub mod user_settings;
 pub(crate) mod versions;
-mod write_input_builder;
+pub mod write;
 
-pub(crate) use after_change_input_builder::AfterChangeInputBuilder;
-pub use persist_options_builder::PersistOptionsBuilder;
+pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
-pub use types::{PersistOptions, WriteInput, WriteResult};
-pub use write_input_builder::WriteInputBuilder;
+pub use types::{
+    CountDocumentsInput, CountDocumentsInputBuilder, FindByIdInput, FindByIdInputBuilder,
+    FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput, ListVersionsInput,
+    PaginatedResult, PersistOptions, PersistOptionsBuilder, SearchDocumentsInput, ServiceContext,
+    ServiceContextBuilder, WriteInput, WriteInputBuilder, WriteResult,
+};
 
-pub use collections::{
-    create_document, delete_document, restore_document, unpublish_document, update_document,
+pub use collection::{
+    create_document, delete_document, undelete_document, undelete_document_core,
+    unpublish_document, unpublish_document_core, update_document,
 };
 pub use email::send_verification_email;
-pub use globals::{unpublish_global_document, update_global_document};
-pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
-pub use versions::unpublish_with_snapshot;
-
-use std::collections::HashMap;
-
-use anyhow::Result;
-
-use serde_json::Value;
-
-use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
-    db::DbConnection,
-    hooks::{HookContext, HookEvent, HookRunner},
+pub use globals::{unpublish_global_document, update_global_core, update_global_document};
+pub(crate) use helpers::{build_hook_data, run_after_change_hooks};
+pub use hooks::{
+    LuaReadHooks, LuaReadHooksBuilder, LuaWriteHooks, LuaWriteHooksBuilder, ReadHooks,
+    RunnerReadHooks, RunnerWriteHooks, WriteHooks,
 };
-
-/// Build the hook data map from form data + structured join data.
-/// Converts string values to JSON strings and merges in blocks/arrays/has-many.
-pub(crate) fn build_hook_data(
-    data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
-) -> HashMap<String, Value> {
-    let mut hook_data: HashMap<String, Value> = data
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-        .collect();
-    for (k, v) in join_data {
-        hook_data.insert(k.clone(), v.clone());
-    }
-    hook_data
-}
-
-/// Run after-change hooks and return the request-scoped context.
-/// This pattern is repeated across create, update, unpublish, and global update.
-pub(crate) fn run_after_change_hooks(
-    runner: &HookRunner,
-    hooks: &Hooks,
-    fields: &[FieldDefinition],
-    doc: &Document,
-    input: AfterChangeInput<'_>,
-    tx: &dyn DbConnection,
-) -> Result<HashMap<String, Value>> {
-    let mut after_data = doc.fields.clone();
-    after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
-    let after_ctx = HookContext::builder(input.slug, input.operation)
-        .data(after_data)
-        .draft(input.is_draft)
-        .locale(input.locale)
-        .context(input.req_context)
-        .user(input.user)
-        .ui_locale(input.ui_locale)
-        .build();
-    let after_result =
-        runner.run_after_write(hooks, fields, HookEvent::AfterChange, after_ctx, tx)?;
-    Ok(after_result.context)
-}
+pub use persist::{
+    persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
+};
+pub use read::{
+    ReadOptions, ReadOptionsBuilder, count_documents, find_document_by_id, find_documents,
+    get_global_document, search_documents,
+};
+pub(crate) use versions::restore_collection_version_core;
+pub use versions::unpublish_with_snapshot;
+pub use versions::{
+    find_version_by_id, list_versions, restore_collection_version, restore_global_version,
+};
+pub use write::{
+    DeleteResult, ValidateContext, create_document_core, delete_document_core,
+    update_document_core, update_many_single_core, validate_document,
+};
 
 #[cfg(test)]
 mod tests {
@@ -88,6 +64,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::field::*;
     use rusqlite::Connection;
+    use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -118,15 +95,11 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Hello".to_string());
 
-        let doc = persist_create(
-            &conn,
-            "posts",
-            &def,
-            &data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .build();
+
+        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
         assert!(!doc.id.is_empty());
         assert_eq!(doc.get_str("title"), Some("Hello"));
     }
@@ -138,25 +111,19 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Original".to_string());
 
-        let doc = persist_create(
-            &conn,
-            "posts",
-            &def,
-            &data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let ctx = ServiceContext::collection("posts", &def)
+            .conn(&conn)
+            .build();
+
+        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
         let id = doc.id.clone();
 
         let mut update_data = HashMap::new();
         update_data.insert("title".to_string(), "Updated".to_string());
 
         let updated = persist_update(
-            &conn,
-            "posts",
+            &ctx,
             &id,
-            &def,
             &update_data,
             &HashMap::new(),
             &PersistOptions::default(),
@@ -231,15 +198,11 @@ mod tests {
             "/uploads/media/abc123_test.jpg".to_string(),
         );
 
-        let doc = persist_create(
-            &conn,
-            "media",
-            &def,
-            &data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let ctx = ServiceContext::collection("media", &def)
+            .conn(&conn)
+            .build();
+
+        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
 
         assert_eq!(doc.get_str("filename"), Some("abc123_test.jpg"));
         assert_eq!(

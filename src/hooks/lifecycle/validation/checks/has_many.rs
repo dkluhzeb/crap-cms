@@ -1,7 +1,8 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use std::collections::HashMap;
 
 /// Validate individual values within a has_many JSON array.
 /// Checks count bounds (min_rows/max_rows) for all has_many field types
@@ -24,87 +25,114 @@ pub(crate) fn check_has_many_elements(
         {
             check_count_bounds(field, data_key, values.len(), errors);
         }
+
         return;
     }
 
     if field.field_type != FieldType::Text && field.field_type != FieldType::Number {
         return;
     }
+
     if let Some(Value::String(s)) = value
         && let Ok(values) = serde_json::from_str::<Vec<String>>(s)
     {
         check_count_bounds(field, data_key, values.len(), errors);
 
-        // Validate each value
         for v in &values {
-            if field.field_type == FieldType::Text {
-                if let Some(min_len) = field.min_length
-                    && v.chars().count() < min_len
-                {
-                    errors.push(FieldError::with_key(
-                        data_key.to_owned(),
-                        format!(
-                            "{}: '{}' must be at least {} characters",
-                            field.name, v, min_len
-                        ),
-                        "validation.has_many_min_length",
-                        HashMap::from([
-                            ("field".to_string(), field.name.clone()),
-                            ("value".to_string(), v.clone()),
-                            ("min".to_string(), min_len.to_string()),
-                        ]),
-                    ));
-                }
-                if let Some(max_len) = field.max_length
-                    && v.chars().count() > max_len
-                {
-                    errors.push(FieldError::with_key(
-                        data_key.to_owned(),
-                        format!(
-                            "{}: '{}' must be at most {} characters",
-                            field.name, v, max_len
-                        ),
-                        "validation.has_many_max_length",
-                        HashMap::from([
-                            ("field".to_string(), field.name.clone()),
-                            ("value".to_string(), v.clone()),
-                            ("max".to_string(), max_len.to_string()),
-                        ]),
-                    ));
-                }
-            } else if field.field_type == FieldType::Number
-                && let Ok(num) = v.parse::<f64>()
-            {
-                if let Some(min_val) = field.min
-                    && num < min_val
-                {
-                    errors.push(FieldError::with_key(
-                        data_key.to_owned(),
-                        format!("{}: {} must be at least {}", field.name, v, min_val),
-                        "validation.has_many_min_value",
-                        HashMap::from([
-                            ("field".to_string(), field.name.clone()),
-                            ("value".to_string(), v.clone()),
-                            ("min".to_string(), min_val.to_string()),
-                        ]),
-                    ));
-                }
-                if let Some(max_val) = field.max
-                    && num > max_val
-                {
-                    errors.push(FieldError::with_key(
-                        data_key.to_owned(),
-                        format!("{}: {} must be at most {}", field.name, v, max_val),
-                        "validation.has_many_max_value",
-                        HashMap::from([
-                            ("field".to_string(), field.name.clone()),
-                            ("value".to_string(), v.clone()),
-                            ("max".to_string(), max_val.to_string()),
-                        ]),
-                    ));
-                }
+            match field.field_type {
+                FieldType::Text => check_text_value_length(field, data_key, v, errors),
+                FieldType::Number => check_number_value_bounds(field, data_key, v, errors),
+                _ => {}
             }
         }
+    }
+}
+
+/// Validate a single text value against min_length/max_length constraints.
+fn check_text_value_length(
+    field: &FieldDefinition,
+    data_key: &str,
+    v: &str,
+    errors: &mut Vec<FieldError>,
+) {
+    let char_count = v.chars().count();
+
+    if let Some(min_len) = field.min_length
+        && char_count < min_len
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!(
+                "{}: '{}' must be at least {} characters",
+                field.name, v, min_len
+            ),
+            "validation.has_many_min_length",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("value".to_string(), v.to_string()),
+                ("min".to_string(), min_len.to_string()),
+            ]),
+        ));
+    }
+
+    if let Some(max_len) = field.max_length
+        && char_count > max_len
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!(
+                "{}: '{}' must be at most {} characters",
+                field.name, v, max_len
+            ),
+            "validation.has_many_max_length",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("value".to_string(), v.to_string()),
+                ("max".to_string(), max_len.to_string()),
+            ]),
+        ));
+    }
+}
+
+/// Validate a single number value against min/max constraints.
+fn check_number_value_bounds(
+    field: &FieldDefinition,
+    data_key: &str,
+    v: &str,
+    errors: &mut Vec<FieldError>,
+) {
+    let Ok(num) = v.parse::<f64>() else {
+        return;
+    };
+
+    if let Some(min_val) = field.min
+        && num < min_val
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{}: {} must be at least {}", field.name, v, min_val),
+            "validation.has_many_min_value",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("value".to_string(), v.to_string()),
+                ("min".to_string(), min_val.to_string()),
+            ]),
+        ));
+    }
+
+    if let Some(max_val) = field.max
+        && num > max_val
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{}: {} must be at most {}", field.name, v, max_val),
+            "validation.has_many_max_value",
+            HashMap::from([
+                ("field".to_string(), field.name.clone()),
+                ("value".to_string(), v.to_string()),
+                ("max".to_string(), max_val.to_string()),
+            ]),
+        ));
     }
 }
 

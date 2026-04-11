@@ -11,7 +11,7 @@ use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
-use crap_cms::api::service::{ContentService, ContentServiceDeps};
+use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
@@ -111,7 +111,7 @@ fn setup_service_inner(
     locales: Vec<&str>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -152,6 +152,13 @@ fn setup_service_inner(
         .jwt_secret(config.auth.secret.clone())
         .config(config.clone())
         .config_dir(tmp.path().to_path_buf())
+        .storage(
+            crap_cms::core::upload::create_storage(
+                tmp.path(),
+                &crap_cms::config::UploadConfig::default(),
+            )
+            .unwrap(),
+        )
         .email_renderer(email_renderer)
         .login_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -164,7 +171,14 @@ fn setup_service_inner(
         ))
         .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
             20, 900,
-        )));
+        )))
+        .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+        .token_provider(std::sync::Arc::new(
+            crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+        ))
+        .password_provider(std::sync::Arc::new(
+            crap_cms::core::auth::Argon2PasswordProvider,
+        ));
 
     let service = ContentService::new(deps.build());
 
@@ -470,6 +484,58 @@ async fn grpc_unpublish_via_update() {
         resp.pagination.as_ref().unwrap().total_docs,
         1,
         "unpublished doc should appear with draft=true"
+    );
+}
+
+/// Regression: unpublish response must report `_status = "draft"`, not the
+/// stale pre-unpublish status.
+#[tokio::test]
+async fn grpc_unpublish_response_has_draft_status() {
+    let ts = setup_service(vec![make_versioned_posts_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Will Unpublish")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let resp = ts
+        .service
+        .update(Request::new(content::UpdateRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            data: None,
+            locale: None,
+            draft: None,
+            unpublish: Some(true),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let updated = resp.document.unwrap();
+    let status = updated
+        .fields
+        .as_ref()
+        .and_then(|s| s.fields.get("_status"))
+        .and_then(|v| match &v.kind {
+            Some(Kind::StringValue(s)) => Some(s.as_str()),
+            _ => None,
+        });
+
+    assert_eq!(
+        status,
+        Some("draft"),
+        "unpublish response must return _status = 'draft', got {:?}",
+        status
     );
 }
 

@@ -5,10 +5,11 @@ use std::sync::Arc;
 use chrono::Utc;
 use nanoid::nanoid;
 use serde_json::json;
+use tracing::{error, warn};
 
 use crate::{
     config::{EmailConfig, ServerConfig},
-    core::email::{EmailRenderer, is_configured, send_email},
+    core::email::{EmailRenderer, is_configured, queue_email},
     db::{DbPool, query},
 };
 
@@ -28,7 +29,7 @@ pub fn send_verification_email(
 ) {
     tokio::task::spawn_blocking(move || {
         if !is_configured(&email_config) {
-            tracing::warn!(
+            warn!(
                 "Email not configured — skipping verification email for {}",
                 user_email
             );
@@ -42,33 +43,40 @@ pub fn send_verification_email(
         let conn = match pool.get() {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("DB connection for verification token: {}", e);
+                error!("DB connection for verification token: {}", e);
 
                 return;
             }
         };
 
         if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token, exp) {
-            tracing::error!("Failed to set verification token: {}", e);
+            error!("Failed to set verification token: {}", e);
 
             return;
         }
 
-        let fallback = format!("http://{}:{}", server_config.host, server_config.admin_port);
-        let base_url = server_config.public_url.as_deref().unwrap_or(&fallback);
+        let base_url = server_config.base_url();
         let verify_url = format!("{}/admin/verify-email?token={}", base_url, token);
         let data = json!({ "verify_url": verify_url });
         let html = match email_renderer.render("verify_email", &data) {
             Ok(h) => h,
             Err(e) => {
-                tracing::error!("Failed to render verify email template: {}", e);
+                error!("Failed to render verify email template: {}", e);
 
                 return;
             }
         };
 
-        if let Err(e) = send_email(&email_config, &user_email, "Verify your email", &html, None) {
-            tracing::error!("Failed to send verification email: {}", e);
+        if let Err(e) = queue_email(
+            &conn,
+            &user_email,
+            "Verify your email",
+            &html,
+            None,
+            email_config.queue_retries + 1,
+            &email_config.queue_name,
+        ) {
+            error!("Failed to queue verification email: {}", e);
         }
     });
 }

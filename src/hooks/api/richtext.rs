@@ -2,12 +2,180 @@
 
 use mlua::{Error::RuntimeError, Function, Lua, Table, Value};
 use serde_json::Value as JsonValue;
+use tracing::warn;
 
 use super::parse::fields::parse_fields;
 use crate::core::{
-    SharedRegistry,
+    FieldDefinition, SharedRegistry,
     richtext::{RichtextNodeDef, render_html_custom_nodes, render_prosemirror_to_html},
 };
+
+/// Validates that a node name is non-empty and contains only alphanumeric characters
+/// and underscores.
+fn validate_node_name(name: &str) -> mlua::Result<()> {
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(RuntimeError(format!(
+            "Invalid node name '{}': must be non-empty and contain only alphanumeric characters and underscores",
+            name
+        )));
+    }
+
+    Ok(())
+}
+
+/// Parses the `attrs` table from a node spec, validates that all types are scalar,
+/// and warns on irrelevant features.
+fn parse_node_attrs(name: &str, spec: &Table) -> mlua::Result<Vec<FieldDefinition>> {
+    let attrs_tbl = match spec.get::<Table>("attrs") {
+        Ok(tbl) => tbl,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let fields = parse_fields(&attrs_tbl)
+        .map_err(|e| RuntimeError(format!("Invalid node attrs: {:#}", e)))?;
+
+    for f in &fields {
+        if !f.field_type.is_node_attr_type() {
+            return Err(RuntimeError(format!(
+                "Node attr '{}' has type '{}' which is not allowed as a node attribute. \
+                 Allowed types: text, number, textarea, select, radio, checkbox, date, email, json, code",
+                f.name,
+                f.field_type.as_str(),
+            )));
+        }
+
+        warn_irrelevant_node_attr_features(name, f);
+    }
+
+    Ok(fields)
+}
+
+/// Parses and validates `searchable_attrs` from a node spec, ensuring all referenced
+/// attr names exist.
+fn parse_searchable_attrs(
+    name: &str,
+    attrs: &[FieldDefinition],
+    spec: &Table,
+) -> mlua::Result<Vec<String>> {
+    let searchable_attrs: Vec<String> = match spec.get::<Table>("searchable_attrs") {
+        Ok(sa_tbl) => sa_tbl
+            .sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect(),
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let attr_names: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
+
+    for sa in &searchable_attrs {
+        if !attr_names.contains(&sa.as_str()) {
+            return Err(RuntimeError(format!(
+                "Node '{}': searchable_attrs references unknown attr '{}'.\n\
+                 Available attrs: [{}]",
+                name,
+                sa,
+                attr_names.join(", "),
+            )));
+        }
+    }
+
+    Ok(searchable_attrs)
+}
+
+/// Stores a node entry (label, inline flag, optional render function) in the Lua registry.
+fn store_node_in_lua(
+    lua: &Lua,
+    name: &str,
+    label: &str,
+    inline: bool,
+    has_render: bool,
+    spec: &Table,
+) -> mlua::Result<()> {
+    let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
+
+    let node_entry = lua.create_table()?;
+    node_entry.set("label", label)?;
+    node_entry.set("inline", inline)?;
+
+    if has_render {
+        let render_fn: Function = spec.get("render")?;
+        node_entry.set("render", render_fn)?;
+    }
+
+    storage.set(name, node_entry)?;
+
+    Ok(())
+}
+
+/// Handles the `crap.richtext.register_node(name, spec)` call — validates input,
+/// parses attrs, and stores the node definition in both Lua and Rust registries.
+fn register_node(
+    lua: &Lua,
+    registry: &SharedRegistry,
+    name: String,
+    spec: Table,
+) -> mlua::Result<()> {
+    validate_node_name(&name)?;
+
+    let label: String = spec.get::<String>("label").unwrap_or_else(|_| name.clone());
+    let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
+    let attrs = parse_node_attrs(&name, &spec)?;
+    let searchable_attrs = parse_searchable_attrs(&name, &attrs, &spec)?;
+
+    let has_render = spec
+        .get::<Value>("render")
+        .map(|v| matches!(v, Value::Function(_)))
+        .unwrap_or(false);
+
+    store_node_in_lua(lua, &name, &label, inline, has_render, &spec)?;
+
+    let def = RichtextNodeDef::builder(&name, &label)
+        .inline(inline)
+        .attrs(attrs)
+        .searchable_attrs(searchable_attrs)
+        .has_render(has_render)
+        .build();
+
+    let mut reg = registry
+        .write()
+        .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
+    reg.register_richtext_node(def);
+
+    Ok(())
+}
+
+/// Renders richtext content (JSON or HTML) to HTML, invoking Lua render functions
+/// for custom nodes.
+fn render(lua: &Lua, content: String) -> mlua::Result<String> {
+    let content = content.trim();
+
+    if content.is_empty() {
+        return Ok(String::new());
+    }
+
+    let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
+
+    let render_custom = |node_type: &str, attrs: &JsonValue| -> Option<String> {
+        let entry: Table = storage.get(node_type).ok()?;
+        let render_fn: Function = entry.get("render").ok()?;
+        let attrs_lua = super::json_to_lua(lua, attrs).ok()?;
+
+        match render_fn.call::<String>(attrs_lua) {
+            Ok(html) => Some(html),
+            Err(e) => {
+                warn!("Render function for '{}' failed: {}", node_type, e);
+                None
+            }
+        }
+    };
+
+    if content.starts_with('{') {
+        render_prosemirror_to_html(content, &render_custom)
+            .map_err(|e| RuntimeError(format!("Render error: {:#}", e)))
+    } else {
+        Ok(render_html_custom_nodes(content, &render_custom))
+    }
+}
 
 /// Register the `crap.richtext` namespace on the `crap` global table.
 ///
@@ -16,160 +184,31 @@ use crate::core::{
 /// - `crap.richtext.register_node(name, spec)` — registers a custom node type
 /// - `crap.richtext.render(content_string)` — renders custom nodes to HTML
 pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> anyhow::Result<()> {
-    // Node specs stored in Lua registry (invisible to Lua code)
     let nodes_storage = lua.create_table()?;
     lua.set_named_registry_value("_crap_richtext_nodes", nodes_storage)?;
 
     let richtext_table = lua.create_table()?;
 
-    // crap.richtext.register_node(name, spec)
     let reg_clone = registry.clone();
-    let register_node_fn = lua.create_function(move |_lua, (name, spec): (String, Table)| {
-        // Validate name: alphanumeric + underscore
-        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Err(RuntimeError(format!(
-                "Invalid node name '{}': must be non-empty and contain only alphanumeric characters and underscores",
-                name
-            )));
-        }
-
-        let label: String = spec.get::<String>("label")
-            .unwrap_or_else(|_| name.clone());
-        let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
-
-        // Parse attrs using the shared field parser (crap.fields.* factory syntax)
-        let attrs = if let Ok(attrs_tbl) = spec.get::<Table>("attrs") {
-            let fields = parse_fields(&attrs_tbl)
-                .map_err(|e| RuntimeError(format!("Invalid node attrs: {:#}", e)))?;
-
-            // Validate: only scalar types allowed as node attrs
-            for f in &fields {
-                if !f.field_type.is_node_attr_type() {
-                    return Err(RuntimeError(format!(
-                        "Node attr '{}' has type '{}' which is not allowed as a node attribute. \
-                         Allowed types: text, number, textarea, select, radio, checkbox, date, email, json, code",
-                        f.name,
-                        f.field_type.as_str(),
-                    )));
-                }
-                warn_irrelevant_node_attr_features(&name, f);
-            }
-            fields
-        } else {
-            Vec::new()
-        };
-
-        // Parse searchable_attrs
-        let searchable_attrs = if let Ok(sa_tbl) = spec.get::<Table>("searchable_attrs") {
-            sa_tbl.sequence_values::<String>()
-                .filter_map(|r| r.ok())
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Validate searchable_attrs reference existing attr names
-        let attr_names: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
-        for sa in &searchable_attrs {
-            if !attr_names.contains(&sa.as_str()) {
-                return Err(RuntimeError(format!(
-                    "Node '{}': searchable_attrs references unknown attr '{}'.\n\
-                     Available attrs: [{}]",
-                    name,
-                    sa,
-                    attr_names.join(", "),
-                )));
-            }
-        }
-
-        // Check for render function
-        let has_render = spec.get::<Value>("render")
-            .map(|v| matches!(v, Value::Function(_)))
-            .unwrap_or(false);
-
-        // Store the full spec in Lua registry (including render function)
-        let storage: Table = _lua.named_registry_value("_crap_richtext_nodes")?;
-        let node_entry = _lua.create_table()?;
-        node_entry.set("label", label.as_str())?;
-        node_entry.set("inline", inline)?;
-
-        if has_render {
-            let render_fn: Function = spec.get("render")?;
-            node_entry.set("render", render_fn)?;
-        }
-        storage.set(name.as_str(), node_entry)?;
-
-        // Register in Rust registry
-        let def = RichtextNodeDef::builder(&name, &label)
-            .inline(inline)
-            .attrs(attrs)
-            .searchable_attrs(searchable_attrs)
-            .has_render(has_render)
-            .build();
-        let mut reg = reg_clone.write()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {:#}", e)))?;
-        reg.register_richtext_node(def);
-
-        Ok(())
+    let register_node_fn = lua.create_function(move |lua, (name, spec): (String, Table)| {
+        register_node(lua, &reg_clone, name, spec)
     })?;
     richtext_table.set("register_node", register_node_fn)?;
 
-    // crap.richtext.render(content_string)
-    let render_fn = lua.create_function(|lua, content: String| -> mlua::Result<String> {
-        let content = content.trim();
-
-        if content.is_empty() {
-            return Ok(String::new());
-        }
-
-        let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
-
-        // Build the custom renderer closure that calls Lua render functions
-        let render_custom = |node_type: &str, attrs: &JsonValue| -> Option<String> {
-            let entry: Table = match storage.get(node_type) {
-                Ok(e) => e,
-                Err(_) => return None,
-            };
-            let render_fn: Function = match entry.get("render") {
-                Ok(f) => f,
-                Err(_) => return None,
-            };
-            // Convert attrs JSON to Lua table
-            let attrs_lua = match super::json_to_lua(lua, attrs) {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            match render_fn.call::<String>(attrs_lua) {
-                Ok(html) => Some(html),
-                Err(e) => {
-                    tracing::warn!("Render function for '{}' failed: {}", node_type, e);
-                    None
-                }
-            }
-        };
-
-        // Detect format: starts with '{' → JSON, otherwise HTML
-        if content.starts_with('{') {
-            render_prosemirror_to_html(content, &render_custom)
-                .map_err(|e| RuntimeError(format!("Render error: {:#}", e)))
-        } else {
-            Ok(render_html_custom_nodes(content, &render_custom))
-        }
-    })?;
+    let render_fn = lua.create_function(|lua, content: String| render(lua, content))?;
     richtext_table.set("render", render_fn)?;
 
     crap.set("richtext", richtext_table)?;
+
     Ok(())
 }
 
 /// Warn when a node attr uses features that have no effect on node attributes.
-fn warn_irrelevant_node_attr_features(node_name: &str, f: &crate::core::FieldDefinition) {
+fn warn_irrelevant_node_attr_features(node_name: &str, f: &FieldDefinition) {
     let warn = |feature: &str| {
-        tracing::warn!(
+        warn!(
             "Node '{}' attr '{}': '{}' has no effect on node attributes",
-            node_name,
-            f.name,
-            feature,
+            node_name, f.name, feature,
         );
     };
 
@@ -177,9 +216,11 @@ fn warn_irrelevant_node_attr_features(node_name: &str, f: &crate::core::FieldDef
     if !f.hooks.before_change.is_empty() {
         warn("hooks.before_change");
     }
+
     if !f.hooks.after_change.is_empty() {
         warn("hooks.after_change");
     }
+
     if !f.hooks.after_read.is_empty() {
         warn("hooks.after_read");
     }
@@ -188,9 +229,11 @@ fn warn_irrelevant_node_attr_features(node_name: &str, f: &crate::core::FieldDef
     if f.access.read.is_some() {
         warn("access.read");
     }
+
     if f.access.create.is_some() {
         warn("access.create");
     }
+
     if f.access.update.is_some() {
         warn("access.update");
     }
@@ -199,6 +242,7 @@ fn warn_irrelevant_node_attr_features(node_name: &str, f: &crate::core::FieldDef
     if f.unique {
         warn("unique");
     }
+
     if f.index {
         warn("index");
     }

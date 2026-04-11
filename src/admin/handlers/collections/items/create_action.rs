@@ -1,42 +1,163 @@
+use std::collections::HashMap;
+
 use axum::{
     Extension,
-    extract::{Form, FromRequest, Path, Request, State},
+    extract::{Path, Request, State},
     response::Response,
 };
-use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use serde_json::Value;
 use tokio::task;
+use tracing::{error, warn};
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
         handlers::{
-            collections::{
-                forms::{
-                    extract_join_data_from_form, parse_multipart_form, transform_select_has_many,
-                },
-                shared::{collect_upload_hidden_fields, render_upload_error},
+            collections::shared::{
+                UploadParams, UploadResult, process_collection_upload,
+                render_form_validation_errors,
             },
+            forms::{extract_join_data_from_form, parse_form, transform_select_has_many},
             shared::{
-                EnrichOptions, apply_display_conditions, build_field_contexts,
-                check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
-                get_user_doc, html_with_toast, htmx_redirect_with_created, redirect_response,
-                split_sidebar_fields, strip_write_denied_string_fields, toast_only_error,
-                translate_validation_errors,
+                forbidden, get_event_user, get_user_doc, htmx_redirect_with_created,
+                redirect_response, toast_only_error,
             },
         },
     },
     core::{
+        CollectionDefinition, Document,
         auth::AuthUser,
         event::{EventOperation, EventTarget},
         upload,
-        validate::ValidationError,
     },
-    db::query::{AccessResult, LocaleContext, LocaleMode},
+    db::query::{LocaleContext, LocaleMode},
     hooks::lifecycle::PublishEventInput,
-    service,
+    service::{self, ServiceError},
 };
+
+/// Handle post-create success: commit upload, enqueue conversions, publish event, send verification email.
+fn handle_create_success(
+    state: &AdminState,
+    def: &CollectionDefinition,
+    slug: &str,
+    doc: &Document,
+    upload_result: Option<UploadResult>,
+    auth_user: &Option<Extension<AuthUser>>,
+) {
+    if let Some(mut ur) = upload_result {
+        ur.guard.commit();
+
+        if !ur.queued_conversions.is_empty()
+            && let Ok(conn) = state.pool.get()
+            && let Err(e) =
+                upload::enqueue_conversions(&conn, slug, &doc.id, &ur.queued_conversions)
+        {
+            warn!("Failed to enqueue image conversions: {}", e);
+        }
+    }
+
+    state.hook_runner.publish_event(
+        &state.event_bus,
+        &def.hooks,
+        def.live.as_ref(),
+        PublishEventInput::builder(EventTarget::Collection, EventOperation::Create)
+            .collection(slug.to_string())
+            .document_id(doc.id.clone())
+            .data(doc.fields.clone())
+            .edited_by(get_event_user(auth_user))
+            .build(),
+    );
+
+    if def.is_auth_collection()
+        && def.auth.as_ref().is_some_and(|a| a.verify_email)
+        && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
+    {
+        service::send_verification_email(
+            state.pool.clone(),
+            state.config.email.clone(),
+            state.email_renderer.clone(),
+            state.config.server.clone(),
+            slug.to_string(),
+            doc.id.to_string(),
+            user_email.to_string(),
+        );
+    }
+}
+
+/// Extract and validate the password field for auth collections.
+/// Returns `Ok(None)` for non-auth collections.
+fn extract_and_validate_password(
+    state: &AdminState,
+    def: &CollectionDefinition,
+    form_data: &mut HashMap<String, String>,
+) -> Result<Option<String>, Box<Response>> {
+    if !def.is_auth_collection() {
+        return Ok(None);
+    }
+
+    let password = form_data.remove("password");
+
+    if password.as_deref().unwrap_or("").is_empty() {
+        return Err(Box::new(toast_only_error("Password is required")));
+    }
+
+    if let Some(ref pw) = password
+        && let Err(e) = state.config.auth.password_policy.validate(pw)
+    {
+        return Err(Box::new(toast_only_error(&e.to_string())));
+    }
+
+    Ok(password)
+}
+
+/// Prepared form data for creating a document.
+struct CreateInput {
+    form_data: HashMap<String, String>,
+    join_data: HashMap<String, Value>,
+    password: Option<String>,
+    locale_ctx: Option<LocaleContext>,
+    draft: bool,
+}
+
+/// Clone state and run `service::create_document` in a blocking task.
+async fn spawn_create(
+    state: &AdminState,
+    slug: &str,
+    def: &CollectionDefinition,
+    auth_user: &Option<Extension<AuthUser>>,
+    input: CreateInput,
+) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
+    let pool = state.pool.clone();
+    let runner = state.hook_runner.clone();
+    let slug_owned = slug.to_string();
+    let def_owned = def.clone();
+    let user_doc = get_user_doc(auth_user).cloned();
+    let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
+        LocaleMode::Single(l) => Some(l.clone()),
+        _ => None,
+    });
+    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
+
+    task::spawn_blocking(move || {
+        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
+            .pool(&pool)
+            .runner(&runner)
+            .user(user_doc.as_ref())
+            .build();
+
+        service::create_document(
+            &ctx,
+            service::WriteInput::builder(input.form_data, &input.join_data)
+                .password(input.password.as_deref())
+                .locale_ctx(input.locale_ctx.as_ref())
+                .locale(locale)
+                .draft(input.draft)
+                .ui_locale(ui_locale)
+                .build(),
+        )
+    })
+    .await
+}
 
 /// POST /admin/collections/{slug} — create a new item
 pub async fn create_action(
@@ -50,185 +171,80 @@ pub async fn create_action(
         None => return redirect_response("/admin/collections"),
     };
 
-    // Check create access
-    match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(
-                &state,
-                "You don't have permission to create items in this collection",
-            );
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
+    // Collection-level access check is handled inside service::create_document_core.
 
-    // Parse form data — multipart for upload collections, regular form for others
-    let (mut form_data, file) = if def.is_upload_collection() {
-        match parse_multipart_form(request, &state).await {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!("Multipart parse error: {}", e);
-                return redirect_response(&format!("/admin/collections/{}/create", slug));
-            }
+    let (mut form_data, file) = match parse_form(request, &state, &def).await {
+        Ok(result) => result,
+        Err(e) => {
+            error!("{}", e);
+            return redirect_response(&format!("/admin/collections/{}/create", slug));
         }
-    } else {
-        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await
-        {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::error!("Form parse error: {}", e);
-                return redirect_response(&format!("/admin/collections/{}/create", slug));
-            }
-        };
-        (data, None)
     };
 
-    // Process upload if file present — runs on blocking thread
-    let mut queued_conversions = Vec::new();
-    let mut upload_guard: Option<upload::CleanupGuard> = None;
+    // Process upload if file present
+    let mut upload_result = None;
+
     if let Some(f) = file
-        && let Some(upload_config) = def.upload.clone()
+        && def.upload.is_some()
     {
-        let config_dir = state.config_dir.clone();
-        let slug_for_upload = slug.clone();
-        let global_max = state.config.upload.max_file_size;
-        let upload_result = tokio::task::spawn_blocking(move || {
-            upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
-        })
-        .await;
-
-        match upload_result {
-            Ok(Ok((processed, guard))) => {
-                queued_conversions = processed.queued_conversions.clone();
-                upload_guard = Some(guard);
-
-                upload::inject_upload_metadata(&mut form_data, &processed);
-            }
-            Ok(Err(e)) => {
-                tracing::error!("Upload processing error: {}", e);
-                return render_upload_error(&state, &def, &form_data, &auth_user, &e.to_string());
-            }
-            Err(e) => {
-                tracing::error!("Upload task error: {}", e);
-                return render_upload_error(&state, &def, &form_data, &auth_user, &e.to_string());
-            }
+        match process_collection_upload(
+            &UploadParams {
+                state: &state,
+                def: &def,
+                slug: &slug,
+                doc_id: None,
+                locale_ctx: None,
+                auth_user: &auth_user,
+            },
+            &mut form_data,
+            f,
+        )
+        .await
+        {
+            Ok(ur) => upload_result = Some(ur),
+            Err(resp) => return resp,
         }
     }
 
-    // Strip field-level create-denied fields (fail closed on pool exhaustion)
-    if let Err(resp) =
-        strip_write_denied_string_fields(&state, &auth_user, &def.fields, "create", &mut form_data)
-    {
-        return *resp;
-    }
+    // Field write access is now checked inside service::create_document_core.
 
-    // Extract password before it enters hooks/regular data flow
-    let password = if def.is_auth_collection() {
-        form_data.remove("password")
-    } else {
-        None
+    let password = match extract_and_validate_password(&state, &def, &mut form_data) {
+        Ok(pw) => pw,
+        Err(resp) => return *resp,
     };
 
-    // Create requires a non-empty password for auth collections
-    if def.is_auth_collection() && password.as_deref().unwrap_or("").is_empty() {
-        return toast_only_error("Password is required");
-    }
-
-    // Validate password against policy
-    if let Some(ref pw) = password
-        && !pw.is_empty()
-        && let Err(e) = state.config.auth.password_policy.validate(pw)
-    {
-        return toast_only_error(&e.to_string());
-    }
-
-    // Convert comma-separated multi-select values to JSON arrays
     transform_select_has_many(&mut form_data, &def.fields);
-
-    // Extract join table data (arrays + has-many relationships) from form
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
 
-    // Extract action (publish/save_draft) and locale before they enter hooks
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
 
     let form_locale = form_data.remove("_locale");
     let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let slug_owned = slug.clone();
-    let def_owned = def.clone();
     let form_data_clone = form_data.clone();
     let join_data_clone = join_data.clone();
-    let user_doc = get_user_doc(&auth_user).cloned();
-    let locale = locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
-        LocaleMode::Single(l) => Some(l.clone()),
-        _ => None,
-    });
-    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
-    let result = task::spawn_blocking(move || {
-        service::create_document(
-            &pool,
-            &runner,
-            &slug_owned,
-            &def_owned,
-            service::WriteInput::builder(form_data, &join_data)
-                .password(password.as_deref())
-                .locale_ctx(locale_ctx.as_ref())
-                .locale(locale)
-                .draft(draft)
-                .ui_locale(ui_locale)
-                .build(),
-            user_doc.as_ref(),
-        )
-    })
+    let result = spawn_create(
+        &state,
+        &slug,
+        &def,
+        &auth_user,
+        CreateInput {
+            form_data,
+            join_data,
+            password,
+            locale_ctx,
+            draft,
+        },
+    )
     .await;
 
     match result {
         Ok(Ok((doc, _req_context))) => {
-            if let Some(mut g) = upload_guard {
-                g.commit();
-            }
-
-            // Enqueue deferred image conversions if any
-            if !queued_conversions.is_empty()
-                && let Ok(conn) = state.pool.get()
-                && let Err(e) =
-                    upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
-            {
-                tracing::warn!("Failed to enqueue image conversions: {}", e);
-            }
-
-            state.hook_runner.publish_event(
-                &state.event_bus,
-                &def.hooks,
-                def.live.as_ref(),
-                PublishEventInput::builder(EventTarget::Collection, EventOperation::Create)
-                    .collection(slug.clone())
-                    .document_id(doc.id.clone())
-                    .data(doc.fields.clone())
-                    .edited_by(get_event_user(&auth_user))
-                    .build(),
-            );
-
-            // Auto-send verification email for auth collections with verify_email enabled
-            if def.is_auth_collection()
-                && def.auth.as_ref().is_some_and(|a| a.verify_email)
-                && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
-            {
-                service::send_verification_email(
-                    state.pool.clone(),
-                    state.config.email.clone(),
-                    state.email_renderer.clone(),
-                    state.config.server.clone(),
-                    slug.clone(),
-                    doc.id.to_string(),
-                    user_email.to_string(),
-                );
-            }
+            handle_create_success(&state, &def, &slug, &doc, upload_result, &auth_user);
 
             let label = def
                 .title_field()
@@ -238,70 +254,27 @@ pub async fn create_action(
 
             htmx_redirect_with_created(&format!("/admin/collections/{}", slug), &doc.id, label)
         }
-        Ok(Err(e)) => {
-            if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user
-                    .as_ref()
-                    .map(|Extension(au)| au.ui_locale.as_str())
-                    .unwrap_or("en");
-                let error_map = translate_validation_errors(ve, &state.translations, locale);
-                let toast_msg = state.translations.get(locale, "validation.error_summary");
-                let mut fields =
-                    build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-
-                enrich_field_contexts(
-                    &mut fields,
-                    &def.fields,
-                    &join_data_clone,
-                    &state,
-                    &EnrichOptions::builder(&error_map)
-                        .filter_hidden(true)
-                        .build(),
-                );
-
-                let form_json = json!(
-                    form_data_clone
-                        .iter()
-                        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-                        .collect::<Map<String, Value>>()
-                );
-
-                apply_display_conditions(
-                    &mut fields,
-                    &def.fields,
-                    &form_json,
-                    &state.hook_runner,
-                    true,
-                );
-
-                let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
-
-                let mut data = ContextBuilder::new(&state, None)
-                    .locale_from_auth(&auth_user)
-                    .filter_nav_by_access(&state, &auth_user)
-                    .page(PageType::CollectionCreate, "create_name")
-                    .page_title_name(def.singular_name())
-                    .collection_def(&def)
-                    .fields(main_fields)
-                    .set("sidebar_fields", json!(sidebar_fields))
-                    .set("editing", json!(false))
-                    .set("has_drafts", json!(def.has_drafts()))
-                    .build();
-
-                // Preserve upload metadata as hidden inputs so they survive form re-submission
-                if def.is_upload_collection() {
-                    data["upload_hidden_fields"] =
-                        collect_upload_hidden_fields(&def.fields, &form_data_clone);
-                }
-
-                html_with_toast(&state, "collections/edit", &data, toast_msg)
-            } else {
-                tracing::error!("Create error: {}", e);
+        Ok(Err(e)) => match e {
+            ServiceError::AccessDenied(_) => forbidden(
+                &state,
+                "You don't have permission to create items in this collection",
+            ),
+            ServiceError::Validation(ref ve) => render_form_validation_errors(
+                &state,
+                &def,
+                None,
+                &form_data_clone,
+                &join_data_clone,
+                ve,
+                &auth_user,
+            ),
+            other => {
+                error!("Create error: {}", other);
                 redirect_response(&format!("/admin/collections/{}/create", slug))
             }
-        }
+        },
         Err(e) => {
-            tracing::error!("Create task error: {}", e);
+            error!("Create task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/create", slug))
         }
     }

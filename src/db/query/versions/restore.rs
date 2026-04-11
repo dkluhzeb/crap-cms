@@ -6,16 +6,32 @@ use std::collections::HashMap;
 
 use crate::{
     config::LocaleConfig,
-    core::{
-        CollectionDefinition, Document, FieldDefinition, FieldType, collection::GlobalDefinition,
+    core::{CollectionDefinition, Document, FieldDefinition, collection::GlobalDefinition},
+    db::{
+        DbConnection, DbValue,
+        query::{
+            LocaleContext, LocaleMode,
+            global::update_global,
+            helpers::{global_table, locale_column, prefixed_name, walk_leaf_fields},
+            join::save_join_table_data,
+            ref_count,
+            write::update,
+        },
     },
-    db::{DbConnection, DbValue, query::sanitize_locale},
 };
 
 use super::{
     crud::{create_version, set_document_status},
     snapshot::{collect_join_data_from_snapshot, extract_snapshot_data},
 };
+
+/// Build a default-locale context when locales are enabled, or None otherwise.
+fn default_locale_ctx(locale_config: &LocaleConfig) -> Option<LocaleContext> {
+    locale_config.is_enabled().then(|| LocaleContext {
+        mode: LocaleMode::Default,
+        config: locale_config.clone(),
+    })
+}
 
 /// Restore a version snapshot back to the main table. Updates all regular columns
 /// and join tables from the snapshot data. Creates a new version recording the restore.
@@ -40,39 +56,17 @@ pub fn restore_version(
     let locales_enabled = locale_config.is_enabled();
     let data = extract_snapshot_data(obj, &def.fields, locales_enabled);
 
-    // When locales are enabled, use a default locale context so that update()'s
-    // internal find_by_id can read back columns with locale suffixes.
-    let locale_ctx = if locales_enabled {
-        Some(super::super::LocaleContext {
-            mode: super::super::LocaleMode::Default,
-            config: locale_config.clone(),
-        })
-    } else {
-        None
-    };
+    let locale_ctx = default_locale_ctx(locale_config);
 
-    // Snapshot outgoing refs before restore for ref count adjustment
-    let old_refs = super::super::ref_count::snapshot_outgoing_refs(
-        conn,
-        slug,
-        parent_id,
-        &def.fields,
-        locale_config,
-    )?;
+    let old_refs =
+        ref_count::snapshot_outgoing_refs(conn, slug, parent_id, &def.fields, locale_config)?;
 
-    let doc = super::super::update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
+    let doc = update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
 
     restore_locale_and_join_data(conn, slug, parent_id, &def.fields, obj, locale_config)?;
 
     // Adjust ref counts based on before/after diff
-    super::super::ref_count::after_update(
-        conn,
-        slug,
-        parent_id,
-        &def.fields,
-        locale_config,
-        old_refs,
-    )?;
+    ref_count::after_update(conn, slug, parent_id, &def.fields, locale_config, old_refs)?;
 
     // Update status and create a new version for the restore
     set_document_status(conn, slug, parent_id, status)?;
@@ -95,43 +89,23 @@ pub fn restore_global_version(
         .as_object()
         .ok_or_else(|| anyhow!("Snapshot is not a JSON object"))?;
 
-    let global_table = format!("_global_{}", slug);
+    let gtable = global_table(slug);
     let locales_enabled = locale_config.is_enabled();
     let data = extract_snapshot_data(obj, &def.fields, locales_enabled);
 
-    let locale_ctx = if locales_enabled {
-        Some(super::super::LocaleContext {
-            mode: super::super::LocaleMode::Default,
-            config: locale_config.clone(),
-        })
-    } else {
-        None
-    };
+    let locale_ctx = default_locale_ctx(locale_config);
 
-    // Snapshot outgoing refs before restore for ref count adjustment
-    let old_refs = super::super::ref_count::snapshot_outgoing_refs(
-        conn,
-        &global_table,
-        "default",
-        &def.fields,
-        locale_config,
-    )?;
+    let old_refs =
+        ref_count::snapshot_outgoing_refs(conn, &gtable, "default", &def.fields, locale_config)?;
 
-    let doc = super::super::update_global(conn, slug, def, &data, locale_ctx.as_ref())?;
+    let doc = update_global(conn, slug, def, &data, locale_ctx.as_ref())?;
 
-    restore_locale_and_join_data(
-        conn,
-        &global_table,
-        "default",
-        &def.fields,
-        obj,
-        locale_config,
-    )?;
+    restore_locale_and_join_data(conn, &gtable, "default", &def.fields, obj, locale_config)?;
 
     // Adjust ref counts based on before/after diff
-    super::super::ref_count::after_update(
+    ref_count::after_update(
         conn,
-        &global_table,
+        &gtable,
         "default",
         &def.fields,
         locale_config,
@@ -139,8 +113,8 @@ pub fn restore_global_version(
     )?;
 
     // Update status and create a new version for the restore
-    set_document_status(conn, &global_table, "default", status)?;
-    create_version(conn, &global_table, "default", status, snapshot)?;
+    set_document_status(conn, &gtable, "default", status)?;
+    create_version(conn, &gtable, "default", status, snapshot)?;
 
     Ok(doc)
 }
@@ -157,86 +131,24 @@ fn restore_locale_and_join_data(
 ) -> Result<()> {
     let locales_enabled = locale_config.is_enabled();
 
-    // Restore localized main-table columns: clear ALL locale columns, set default from snapshot.
     if locales_enabled {
         let mut set_clauses = Vec::new();
         let mut params: Vec<DbValue> = Vec::new();
         let mut idx = 1;
 
-        for field in fields {
-            if field.field_type == FieldType::Group {
-                let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
-                for sub in &field.fields {
-                    let is_localized = field.localized || sub.localized;
-
-                    if !is_localized {
-                        continue;
-                    }
-                    let base = format!("{}__{}", field.name, sub.name);
-                    // Resolve value from flat key or nested path
-                    let val = obj
-                        .get(&base)
-                        .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
-                    restore_locale_columns(
-                        conn,
-                        val,
-                        &base,
-                        locale_config,
-                        &mut set_clauses,
-                        &mut params,
-                        &mut idx,
-                    )?;
-                }
-                continue;
-            }
-            // Row/Collapsible fields promote sub-fields as top-level columns (no prefix).
-            // Recurse to handle nested layout wrappers.
-            if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
-                collect_locale_restore_fields(
-                    conn,
-                    &field.fields,
-                    obj,
-                    locale_config,
-                    &mut set_clauses,
-                    &mut params,
-                    &mut idx,
-                )?;
-                continue;
-            }
-            // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
-            // Recurse to handle nested layout wrappers.
-            if field.field_type == FieldType::Tabs {
-                for tab in &field.tabs {
-                    collect_locale_restore_fields(
-                        conn,
-                        &tab.fields,
-                        obj,
-                        locale_config,
-                        &mut set_clauses,
-                        &mut params,
-                        &mut idx,
-                    )?;
-                }
-                continue;
-            }
-            if !field.localized || !field.has_parent_column() {
-                continue;
-            }
-            restore_locale_columns(
-                conn,
-                obj.get(&field.name),
-                &field.name,
-                locale_config,
-                &mut set_clauses,
-                &mut params,
-                &mut idx,
-            )?;
-        }
+        collect_locale_restore_fields(
+            conn,
+            fields,
+            obj,
+            locale_config,
+            &mut set_clauses,
+            &mut params,
+            &mut idx,
+        )?;
 
         if !set_clauses.is_empty() {
             let sql = format!(
-                "UPDATE \"{}\" SET {} WHERE id = {}",
-                table,
+                "UPDATE \"{table}\" SET {} WHERE id = {}",
                 set_clauses.join(", "),
                 conn.placeholder(idx)
             );
@@ -251,13 +163,34 @@ fn restore_locale_and_join_data(
     collect_join_data_from_snapshot(fields, obj, &mut join_data);
 
     if !join_data.is_empty() {
-        super::super::save_join_table_data(conn, table, fields, parent_id, &join_data, None)?;
+        save_join_table_data(conn, table, fields, parent_id, &join_data, None)?;
     }
 
     Ok(())
 }
 
-/// Recursively collect locale fields to restore from layout wrappers (Row/Collapsible/Tabs).
+/// Resolve a snapshot value by trying the flat `"group__sub"` key first,
+/// then navigating into the nested JSON object using the prefix segments.
+fn resolve_snapshot_value<'a>(
+    obj: &'a Map<String, Value>,
+    base: &str,
+    prefix: &str,
+    field_name: &str,
+) -> Option<&'a Value> {
+    obj.get(base).or_else(|| {
+        let parts: Vec<&str> = prefix.split("__").collect();
+        let mut node: &Value = obj.get(parts[0])?;
+
+        for part in &parts[1..] {
+            node = node.as_object()?.get(*part)?;
+        }
+
+        node.as_object()?.get(field_name)
+    })
+}
+
+/// Collect locale fields to restore using `walk_leaf_fields` to handle
+/// Group/Row/Collapsible/Tabs recursion uniformly.
 fn collect_locale_restore_fields(
     conn: &dyn DbConnection,
     fields: &[FieldDefinition],
@@ -267,57 +200,28 @@ fn collect_locale_restore_fields(
     params: &mut Vec<DbValue>,
     idx: &mut usize,
 ) -> Result<()> {
-    for field in fields {
-        if field.field_type == FieldType::Group {
-            let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
-            for sub in &field.fields {
-                let is_localized = field.localized || sub.localized;
+    walk_leaf_fields(
+        fields,
+        "",
+        false,
+        &mut |field, prefix, inherited_localized| {
+            let is_localized = field.localized || inherited_localized;
 
-                if !is_localized {
-                    continue;
-                }
-                let base = format!("{}__{}", field.name, sub.name);
-                let val = obj
-                    .get(&base)
-                    .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
-                restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx)?;
+            if !is_localized || !field.has_parent_column() {
+                return Ok(());
             }
-        } else if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
-            collect_locale_restore_fields(
-                conn,
-                &field.fields,
-                obj,
-                locale_config,
-                set_clauses,
-                params,
-                idx,
-            )?;
-        } else if field.field_type == FieldType::Tabs {
-            for tab in &field.tabs {
-                collect_locale_restore_fields(
-                    conn,
-                    &tab.fields,
-                    obj,
-                    locale_config,
-                    set_clauses,
-                    params,
-                    idx,
-                )?;
-            }
-        } else if field.localized && field.has_parent_column() {
-            restore_locale_columns(
-                conn,
-                obj.get(&field.name),
-                &field.name,
-                locale_config,
-                set_clauses,
-                params,
-                idx,
-            )?;
-        }
-    }
 
-    Ok(())
+            let base = prefixed_name(prefix, &field.name);
+
+            let val = if prefix.is_empty() {
+                obj.get(&field.name)
+            } else {
+                resolve_snapshot_value(obj, &base, prefix, &field.name)
+            };
+
+            restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx)
+        },
+    )
 }
 
 /// Emit SET clauses that NULL all locale columns for a field, then set the
@@ -332,33 +236,25 @@ fn restore_locale_columns(
     idx: &mut usize,
 ) -> Result<()> {
     for locale in &locale_config.locales {
-        let col = format!("{}__{}", field_name, sanitize_locale(locale)?);
+        let col = locale_column(field_name, locale)?;
 
-        if *locale == locale_config.default_locale {
-            // Set default locale from snapshot
+        let db_val = if *locale == locale_config.default_locale {
             match snapshot_val {
-                Some(Value::String(s)) => {
-                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
-                    params.push(DbValue::Text(s.clone()));
-                    *idx += 1;
-                }
-                Some(Value::Number(n)) => {
-                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
-                    params.push(DbValue::Text(n.to_string()));
-                    *idx += 1;
-                }
-                Some(Value::Bool(b)) => {
-                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
-                    params.push(DbValue::Integer(if *b { 1 } else { 0 }));
-                    *idx += 1;
-                }
-                _ => {
-                    set_clauses.push(format!("{} = NULL", col));
-                }
+                Some(Value::String(s)) => Some(DbValue::Text(s.clone())),
+                Some(Value::Number(n)) => Some(DbValue::Text(n.to_string())),
+                Some(Value::Bool(b)) => Some(DbValue::Integer(if *b { 1 } else { 0 })),
+                _ => None,
             }
         } else {
-            // Clear non-default locale columns
-            set_clauses.push(format!("{} = NULL", col));
+            None
+        };
+
+        if let Some(val) = db_val {
+            set_clauses.push(format!("{col} = {}", conn.placeholder(*idx)));
+            params.push(val);
+            *idx += 1;
+        } else {
+            set_clauses.push(format!("{col} = NULL"));
         }
     }
 
@@ -372,6 +268,7 @@ mod tests {
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::{
+        FieldType,
         collection::{CollectionDefinition, VersionsConfig},
         field::{FieldDefinition, FieldTab},
     };

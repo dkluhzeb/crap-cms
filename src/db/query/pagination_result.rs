@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::core::Document;
 
-use super::cursor;
+use super::cursor::{self, SortDirection};
 
 /// Unified pagination result — returned by the builder, consumed by entry-point converters.
 #[derive(Debug, Clone, Serialize)]
@@ -97,7 +97,7 @@ impl<'a> PaginationResultBuilder<'a> {
         cursor_has_more: Option<bool>,
     ) -> PaginationResult {
         let (sort_col, sort_dir) = resolve_sort(order_by, has_timestamps);
-        let (start_cursor, end_cursor) = cursor::build_cursors(self.docs, &sort_col, &sort_dir);
+        let (start_cursor, end_cursor) = cursor::build_cursors(self.docs, &sort_col, sort_dir);
 
         let total_pages = if self.limit > 0 {
             (self.total + self.limit - 1) / self.limit
@@ -142,18 +142,13 @@ impl<'a> PaginationResultBuilder<'a> {
 
 /// Resolve sort column and direction from an `order_by` string.
 ///
-/// Returns `(column, direction)` where direction is `"ASC"` or `"DESC"`.
-pub fn resolve_sort(order_by: Option<&str>, has_timestamps: bool) -> (String, String) {
-    if let Some(order) = order_by {
-        if let Some(stripped) = order.strip_prefix('-') {
-            (stripped.to_string(), "DESC".to_string())
-        } else {
-            (order.to_string(), "ASC".to_string())
-        }
-    } else if has_timestamps {
-        ("created_at".to_string(), "DESC".to_string())
-    } else {
-        ("id".to_string(), "ASC".to_string())
+/// Returns `(column, direction)`. A leading `-` means descending.
+pub fn resolve_sort(order_by: Option<&str>, has_timestamps: bool) -> (String, SortDirection) {
+    match order_by {
+        Some(order) if order.starts_with('-') => (order[1..].to_string(), SortDirection::Desc),
+        Some(order) => (order.to_string(), SortDirection::Asc),
+        None if has_timestamps => ("created_at".to_string(), SortDirection::Desc),
+        None => ("id".to_string(), SortDirection::Asc),
     }
 }
 
@@ -178,28 +173,28 @@ mod tests {
     fn resolve_sort_explicit_asc() {
         let (col, dir) = resolve_sort(Some("title"), false);
         assert_eq!(col, "title");
-        assert_eq!(dir, "ASC");
+        assert_eq!(dir, SortDirection::Asc);
     }
 
     #[test]
     fn resolve_sort_explicit_desc() {
         let (col, dir) = resolve_sort(Some("-created_at"), true);
         assert_eq!(col, "created_at");
-        assert_eq!(dir, "DESC");
+        assert_eq!(dir, SortDirection::Desc);
     }
 
     #[test]
     fn resolve_sort_default_with_timestamps() {
         let (col, dir) = resolve_sort(None, true);
         assert_eq!(col, "created_at");
-        assert_eq!(dir, "DESC");
+        assert_eq!(dir, SortDirection::Desc);
     }
 
     #[test]
     fn resolve_sort_default_without_timestamps() {
         let (col, dir) = resolve_sort(None, false);
         assert_eq!(col, "id");
-        assert_eq!(dir, "ASC");
+        assert_eq!(dir, SortDirection::Asc);
     }
 
     // ── Page-based ────────────────────────────────────────────────────

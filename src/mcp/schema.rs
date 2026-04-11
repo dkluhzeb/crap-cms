@@ -15,6 +15,82 @@ pub enum CrudOp {
     Find,
     FindById,
     Delete,
+    Undelete,
+    Unpublish,
+    Count,
+    ListVersions,
+    RestoreVersion,
+}
+
+/// Schema for Select/Radio fields, handling empty options, single, and has-many variants.
+fn select_radio_schema(field: &FieldDefinition) -> Value {
+    if field.options.is_empty() {
+        return json!({ "type": "string" });
+    }
+
+    let values: Vec<Value> = field
+        .options
+        .iter()
+        .map(|o| Value::String(o.value.clone()))
+        .collect();
+
+    if field.has_many {
+        return json!({
+            "type": "array",
+            "items": { "type": "string", "enum": values }
+        });
+    }
+
+    json!({ "type": "string", "enum": values })
+}
+
+/// Schema for Relationship/Upload fields — string or array of strings based on cardinality.
+fn relationship_schema(field: &FieldDefinition) -> Value {
+    let has_many = field
+        .relationship
+        .as_ref()
+        .map(|r| r.has_many)
+        .unwrap_or(field.has_many);
+
+    if has_many {
+        json!({ "type": "array", "items": { "type": "string" } })
+    } else {
+        json!({ "type": "string" })
+    }
+}
+
+/// Schema for Blocks fields — array with `oneOf` variants per block type.
+fn blocks_schema(field: &FieldDefinition) -> Value {
+    if field.blocks.is_empty() {
+        return json!({ "type": "array" });
+    }
+
+    let variants: Vec<Value> = field
+        .blocks
+        .iter()
+        .map(|b| {
+            let mut props = Map::new();
+            props.insert(
+                "blockType".to_string(),
+                json!({ "type": "string", "const": b.block_type }),
+            );
+
+            for sf in &b.fields {
+                props.insert(sf.name.clone(), field_to_json_schema(sf));
+            }
+
+            json!({
+                "type": "object",
+                "properties": props,
+                "required": ["blockType"]
+            })
+        })
+        .collect();
+
+    json!({
+        "type": "array",
+        "items": { "oneOf": variants }
+    })
 }
 
 /// Convert a single `FieldDefinition` to a JSON Schema value.
@@ -26,103 +102,24 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
         .map(|ls| ls.resolve_default()));
 
     let mut schema = match field.field_type {
-        FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Code => {
-            json!({ "type": "string" })
-        }
-        FieldType::Date => {
-            json!({ "type": "string", "format": "date-time" })
-        }
-        FieldType::Number => {
-            json!({ "type": "number" })
-        }
-        FieldType::Checkbox => {
-            json!({ "type": "boolean" })
-        }
-        FieldType::Select | FieldType::Radio => {
-            if field.options.is_empty() {
-                json!({ "type": "string" })
-            } else if field.has_many {
-                let values: Vec<Value> = field
-                    .options
-                    .iter()
-                    .map(|o| Value::String(o.value.clone()))
-                    .collect();
-                json!({
-                    "type": "array",
-                    "items": { "type": "string", "enum": values }
-                })
-            } else {
-                let values: Vec<Value> = field
-                    .options
-                    .iter()
-                    .map(|o| Value::String(o.value.clone()))
-                    .collect();
-                json!({ "type": "string", "enum": values })
-            }
-        }
-        FieldType::Richtext => {
-            json!({ "type": "string" })
-        }
-        FieldType::Json => {
-            json!({})
-        }
-        FieldType::Relationship | FieldType::Upload => {
-            let has_many = field
-                .relationship
-                .as_ref()
-                .map(|r| r.has_many)
-                .unwrap_or(field.has_many);
-
-            if has_many {
-                json!({ "type": "array", "items": { "type": "string" } })
-            } else {
-                json!({ "type": "string" })
-            }
-        }
+        FieldType::Text
+        | FieldType::Textarea
+        | FieldType::Email
+        | FieldType::Code
+        | FieldType::Richtext => json!({ "type": "string" }),
+        FieldType::Date => json!({ "type": "string", "format": "date-time" }),
+        FieldType::Number => json!({ "type": "number" }),
+        FieldType::Checkbox => json!({ "type": "boolean" }),
+        FieldType::Select | FieldType::Radio => select_radio_schema(field),
+        FieldType::Json => json!({}),
+        FieldType::Relationship | FieldType::Upload => relationship_schema(field),
         FieldType::Array => {
-            let sub_schema = fields_to_object_schema(&field.fields);
-            json!({ "type": "array", "items": sub_schema })
+            json!({ "type": "array", "items": fields_to_object_schema(&field.fields) })
         }
-        FieldType::Blocks => {
-            if field.blocks.is_empty() {
-                json!({ "type": "array" })
-            } else {
-                let variants: Vec<Value> = field
-                    .blocks
-                    .iter()
-                    .map(|b| {
-                        let mut props = Map::new();
-                        props.insert(
-                            "blockType".to_string(),
-                            json!({ "type": "string", "const": b.block_type }),
-                        );
-                        for sf in &b.fields {
-                            props.insert(sf.name.clone(), field_to_json_schema(sf));
-                        }
-                        json!({
-                            "type": "object",
-                            "properties": props,
-                            "required": ["blockType"]
-                        })
-                    })
-                    .collect();
-                json!({
-                    "type": "array",
-                    "items": { "oneOf": variants }
-                })
-            }
-        }
+        FieldType::Blocks => blocks_schema(field),
         FieldType::Group => fields_to_object_schema(&field.fields),
-        // Layout-only types — sub-fields are promoted to parent level
-        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
-            // These don't appear as individual JSON Schema properties;
-            // their children are flattened. Return empty object as placeholder.
-            json!({})
-        }
-        // Join fields are virtual/read-only — not included in input schemas
-        FieldType::Join => {
-            json!({ "type": "string" })
-        }
+        FieldType::Row | FieldType::Collapsible | FieldType::Tabs => json!({}),
+        FieldType::Join => json!({ "type": "string" }),
     };
 
     if let Some(desc) = description
@@ -134,6 +131,15 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
     schema
 }
 
+/// Insert a field into the schema properties, tracking required fields.
+fn insert_prop(props: &mut Map<String, Value>, required: &mut Vec<Value>, field: &FieldDefinition) {
+    props.insert(field.name.clone(), field_to_json_schema(field));
+
+    if field.required {
+        required.push(Value::String(field.name.clone()));
+    }
+}
+
 /// Convert a list of `FieldDefinition`s to a JSON Schema `object` with `properties` and `required`.
 fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
     let mut props = Map::new();
@@ -141,36 +147,20 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
 
     for field in fields {
         match field.field_type {
-            // Layout types: promote children to parent
             FieldType::Row | FieldType::Collapsible => {
                 for sf in &field.fields {
-                    props.insert(sf.name.clone(), field_to_json_schema(sf));
-
-                    if sf.required {
-                        required.push(Value::String(sf.name.clone()));
-                    }
+                    insert_prop(&mut props, &mut required, sf);
                 }
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
                     for sf in &tab.fields {
-                        props.insert(sf.name.clone(), field_to_json_schema(sf));
-
-                        if sf.required {
-                            required.push(Value::String(sf.name.clone()));
-                        }
+                        insert_prop(&mut props, &mut required, sf);
                     }
                 }
             }
-            // Join fields are read-only, skip
             FieldType::Join => {}
-            _ => {
-                props.insert(field.name.clone(), field_to_json_schema(field));
-
-                if field.required {
-                    required.push(Value::String(field.name.clone()));
-                }
-            }
+            _ => insert_prop(&mut props, &mut required, field),
         }
     }
 
@@ -185,92 +175,136 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
             .expect("json!({}) is Object")
             .insert("required".to_string(), Value::Array(required));
     }
+
     schema
+}
+
+/// Helper: get the `properties` sub-object from a schema value.
+fn get_props(schema: &mut Value) -> Option<&mut Map<String, Value>> {
+    schema
+        .as_object_mut()?
+        .get_mut("properties")?
+        .as_object_mut()
+}
+
+/// Input schema for collection create — includes required password for auth collections.
+fn create_schema(def: &CollectionDefinition) -> Value {
+    let mut schema = fields_to_object_schema(&def.fields);
+
+    if !def.is_auth_collection() {
+        return schema;
+    }
+
+    let Some(props) = get_props(&mut schema) else {
+        return schema;
+    };
+    props.insert("password".to_string(), json!({ "type": "string" }));
+
+    let obj = schema.as_object_mut().expect("schema is object");
+    let req = obj
+        .entry("required")
+        .or_insert_with(|| Value::Array(Vec::new()));
+
+    if let Some(arr) = req.as_array_mut() {
+        arr.push(Value::String("password".to_string()));
+    }
+
+    schema
+}
+
+/// Input schema for collection update — requires id, optional password for auth collections.
+fn update_schema(def: &CollectionDefinition) -> Value {
+    let mut schema = fields_to_object_schema(&def.fields);
+
+    let Some(props) = get_props(&mut schema) else {
+        return schema;
+    };
+    props.insert("id".to_string(), json!({ "type": "string" }));
+
+    if def.is_auth_collection() {
+        props.insert(
+            "password".to_string(),
+            json!({
+                "type": "string",
+                "description": "Leave empty to keep current password"
+            }),
+        );
+    }
+
+    let obj = schema.as_object_mut().expect("schema is object");
+    obj.insert("required".to_string(), json!(["id"]));
+
+    schema
+}
+
+/// Schema requiring only an `id` field.
+fn id_only_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "id": { "type": "string" } },
+        "required": ["id"]
+    })
 }
 
 /// Generate the input schema for a collection CRUD tool.
 pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
     match op {
-        CrudOp::Create => {
-            let mut schema = fields_to_object_schema(&def.fields);
-            // Auth collections get a required password field
-            if def.is_auth_collection()
-                && let Some(obj) = schema.as_object_mut()
-            {
-                if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-                    props.insert("password".to_string(), json!({ "type": "string" }));
-                }
-                // Ensure required array exists, then add password
-                let req = obj
-                    .entry("required")
-                    .or_insert_with(|| Value::Array(Vec::new()));
-                if let Some(arr) = req.as_array_mut() {
-                    arr.push(Value::String("password".to_string()));
-                }
-            }
-            schema
-        }
-        CrudOp::Update => {
-            let mut schema = fields_to_object_schema(&def.fields);
-
-            if let Some(obj) = schema.as_object_mut() {
-                // Add required id field
-                if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-                    props.insert("id".to_string(), json!({ "type": "string" }));
-                }
-                obj.insert("required".to_string(), json!(["id"]));
-                // Auth collections can update password
-                if def.is_auth_collection()
-                    && let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut())
-                {
-                    props.insert(
-                        "password".to_string(),
-                        json!({
-                            "type": "string",
-                            "description": "Leave empty to keep current password"
-                        }),
-                    );
-                }
-            }
-            schema
-        }
-        CrudOp::Delete => {
-            json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string" }
+        CrudOp::Create => create_schema(def),
+        CrudOp::Update => update_schema(def),
+        CrudOp::Delete | CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
+        CrudOp::FindById => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "depth": { "type": "integer", "description": "Relationship population depth" },
+                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
+            },
+            "required": ["id"]
+        }),
+        CrudOp::Find => json!({
+            "type": "object",
+            "properties": {
+                "where": {
+                    "type": "object",
+                    "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
                 },
-                "required": ["id"]
-            })
-        }
-        CrudOp::FindById => {
-            json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string" },
-                    "depth": { "type": "integer", "description": "Relationship population depth" }
+                "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
+                "limit": { "type": "integer", "description": "Max results per page" },
+                "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
+                "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
+                "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
+                "depth": { "type": "integer", "description": "Relationship population depth" },
+                "search": { "type": "string", "description": "Full-text search query" },
+                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
+            }
+        }),
+        CrudOp::Count => json!({
+            "type": "object",
+            "properties": {
+                "where": {
+                    "type": "object",
+                    "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
                 },
-                "required": ["id"]
-            })
-        }
-        CrudOp::Find => {
-            json!({
-                "type": "object",
-                "properties": {
-                    "where": {
-                        "type": "object",
-                        "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
-                    },
-                    "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
-                    "limit": { "type": "integer", "description": "Max results per page" },
-                    "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
-                    "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
-                    "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
-                    "depth": { "type": "integer", "description": "Relationship population depth" },
-                    "search": { "type": "string", "description": "Full-text search query" }
-                }
-            })
-        }
+                "draft": { "type": "boolean", "description": "Include draft/deleted documents in the count" }
+            }
+        }),
+        CrudOp::ListVersions => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Document ID to list versions for" },
+                "limit": { "type": "integer", "description": "Max versions to return" },
+                "offset": { "type": "integer", "description": "Number of versions to skip" }
+            },
+            "required": ["id"]
+        }),
+        CrudOp::RestoreVersion => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Document ID to restore" },
+                "version_id": { "type": "string", "description": "Version snapshot ID to restore from" }
+            },
+            "required": ["id", "version_id"]
+        }),
     }
 }
 
@@ -822,8 +856,6 @@ mod tests {
 
     #[test]
     fn auth_collection_password_required_even_without_other_required_fields() {
-        use crate::core::collection::{Auth, CollectionDefinition};
-
         let mut def = CollectionDefinition::new("users");
         def.auth = Some(Auth::new(true));
         // Only optional fields — no required fields

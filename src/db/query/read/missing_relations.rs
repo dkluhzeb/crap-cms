@@ -9,7 +9,7 @@ use crate::{
         BlockDefinition, FieldDefinition, FieldType, Registry, RelationshipConfig,
         field::{flatten_array_sub_fields, to_title_case},
     },
-    db::{DbConnection, DbValue},
+    db::{DbConnection, DbValue, query::helpers::prefixed_name},
 };
 
 use super::back_references::field_display_label;
@@ -49,9 +49,8 @@ pub fn find_missing_relations(
     snapshot: &Value,
     fields: &[FieldDefinition],
 ) -> Vec<MissingRelation> {
-    let obj = match snapshot.as_object() {
-        Some(o) => o,
-        None => return Vec::new(),
+    let Some(obj) = snapshot.as_object() else {
+        return Vec::new();
     };
     let mut results = Vec::new();
     collect_missing_fields(conn, registry, obj, fields, "", &mut results);
@@ -70,11 +69,7 @@ fn collect_missing_fields(
     for field in fields {
         match field.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+                let new_prefix = prefixed_name(prefix, &field.name);
                 // Group snapshot can be flat (seo__title) or nested (seo: { title })
                 if let Some(nested) = obj.get(&field.name).and_then(|v| v.as_object()) {
                     collect_missing_fields(
@@ -105,33 +100,16 @@ fn collect_missing_fields(
                 }
             }
             FieldType::Relationship | FieldType::Upload => {
-                let rc = match &field.relationship {
-                    Some(rc) => rc,
-                    None => continue,
+                let Some(rc) = &field.relationship else {
+                    continue;
                 };
-                let key = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
+
+                let key = prefixed_name(prefix, &field.name);
                 let val = obj.get(&key).or_else(|| obj.get(&field.name));
                 let ids = extract_ref_ids(val, rc.is_polymorphic());
+                let label = field_display_label(field);
 
-                if ids.is_empty() {
-                    continue;
-                }
-                let missing = check_ids_exist(conn, registry, &ids, rc);
-
-                if !missing.is_empty() {
-                    let label = field_display_label(field);
-                    let total = ids.len();
-                    results.push(MissingRelation::new(
-                        field.name.clone(),
-                        label,
-                        missing.into_iter().collect(),
-                        total,
-                    ));
-                }
+                push_if_missing(conn, registry, ids, rc, field.name.clone(), label, results);
             }
             FieldType::Array => {
                 if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
@@ -188,18 +166,12 @@ fn extract_ref_ids(val: Option<&Value>, is_polymorphic: bool) -> Vec<(String, St
 
 /// Parse a single reference ID string, returning (collection, id).
 fn parse_ref_id(s: &str, is_polymorphic: bool) -> Option<(String, String)> {
-    if is_polymorphic {
-        let parts: Vec<&str> = s.splitn(2, '/').collect();
-
-        if parts.len() == 2 {
-            Some((parts[0].to_string(), parts[1].to_string()))
-        } else {
-            None // invalid polymorphic format
-        }
-    } else {
-        // For non-polymorphic, collection is resolved later from RelationshipConfig
-        Some((String::new(), s.to_string()))
+    if !is_polymorphic {
+        return Some((String::new(), s.to_string()));
     }
+
+    let (col, id) = s.split_once('/')?;
+    Some((col.to_string(), id.to_string()))
 }
 
 /// Check which IDs are missing from the database.
@@ -220,30 +192,25 @@ fn check_ids_exist(
         by_collection.entry(target).or_default().push(id.clone());
     }
 
+    let display_id = |collection: &str, id: &str| -> String {
+        if rc.is_polymorphic() {
+            format!("{collection}/{id}")
+        } else {
+            id.to_string()
+        }
+    };
+
     let mut missing = HashSet::new();
     for (collection, check_ids) in &by_collection {
-        // Verify the collection exists in the registry
         if !registry.collections.contains_key(collection.as_str()) {
-            // Collection doesn't exist at all — all IDs are missing
-            for id in check_ids {
-                let display = if rc.is_polymorphic() {
-                    format!("{}/{}", collection, id)
-                } else {
-                    id.clone()
-                };
-                missing.insert(display);
-            }
+            missing.extend(check_ids.iter().map(|id| display_id(collection, id)));
             continue;
         }
+
         let existing = query_existing_ids(conn, collection, check_ids);
         for id in check_ids {
             if !existing.contains(id) {
-                let display = if rc.is_polymorphic() {
-                    format!("{}/{}", collection, id)
-                } else {
-                    id.clone()
-                };
-                missing.insert(display);
+                missing.insert(display_id(collection, id));
             }
         }
     }
@@ -284,6 +251,33 @@ fn query_existing_ids(
     }
 }
 
+/// If any IDs are missing, push a `MissingRelation` onto results.
+fn push_if_missing(
+    conn: &dyn DbConnection,
+    registry: &Registry,
+    all_ids: Vec<(String, String)>,
+    rc: &RelationshipConfig,
+    field_name: String,
+    label: String,
+    results: &mut Vec<MissingRelation>,
+) {
+    if all_ids.is_empty() {
+        return;
+    }
+
+    let missing = check_ids_exist(conn, registry, &all_ids, rc);
+    if missing.is_empty() {
+        return;
+    }
+
+    results.push(MissingRelation::new(
+        field_name,
+        label,
+        missing.into_iter().collect(),
+        all_ids.len(),
+    ));
+}
+
 /// Check array sub-fields for missing relations.
 fn collect_missing_in_array(
     conn: &dyn DbConnection,
@@ -293,42 +287,34 @@ fn collect_missing_in_array(
     array_name: &str,
     results: &mut Vec<MissingRelation>,
 ) {
-    let flat = flatten_array_sub_fields(fields);
-    for sub in flat {
-        match sub.field_type {
-            FieldType::Relationship | FieldType::Upload => {
-                let rc = match &sub.relationship {
-                    Some(rc) => rc,
-                    None => continue,
-                };
-                let mut all_ids = Vec::new();
-                for row in rows {
-                    if let Some(obj) = row.as_object() {
-                        let val = obj.get(&sub.name);
-                        all_ids.extend(extract_ref_ids(val, rc.is_polymorphic()));
-                    }
-                }
-                if all_ids.is_empty() {
-                    continue;
-                }
-                let missing = check_ids_exist(conn, registry, &all_ids, rc);
-
-                if !missing.is_empty() {
-                    let label = format!(
-                        "{} > {}",
-                        to_title_case(array_name),
-                        field_display_label(sub)
-                    );
-                    results.push(MissingRelation::new(
-                        format!("{}.{}", array_name, sub.name),
-                        label,
-                        missing.into_iter().collect(),
-                        all_ids.len(),
-                    ));
-                }
-            }
-            _ => {}
+    for sub in flatten_array_sub_fields(fields) {
+        if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
+            continue;
         }
+        let Some(rc) = &sub.relationship else {
+            continue;
+        };
+
+        let all_ids: Vec<_> = rows
+            .iter()
+            .filter_map(|row| row.as_object())
+            .flat_map(|obj| extract_ref_ids(obj.get(&sub.name), rc.is_polymorphic()))
+            .collect();
+
+        let label = format!(
+            "{} > {}",
+            to_title_case(array_name),
+            field_display_label(sub)
+        );
+        push_if_missing(
+            conn,
+            registry,
+            all_ids,
+            rc,
+            format!("{}.{}", array_name, sub.name),
+            label,
+            results,
+        );
     }
 }
 
@@ -342,54 +328,44 @@ fn collect_missing_in_blocks(
     results: &mut Vec<MissingRelation>,
 ) {
     for block in blocks {
-        let flat = flatten_array_sub_fields(&block.fields);
-        for sub in &flat {
-            match sub.field_type {
-                FieldType::Relationship | FieldType::Upload => {
-                    let rc = match &sub.relationship {
-                        Some(rc) => rc,
-                        None => continue,
-                    };
-                    let mut all_ids = Vec::new();
-                    for row in rows {
-                        if let Some(obj) = row.as_object() {
-                            let bt = obj
-                                .get("_block_type")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-
-                            if bt == block.block_type {
-                                let val = obj.get(&sub.name);
-                                all_ids.extend(extract_ref_ids(val, rc.is_polymorphic()));
-                            }
-                        }
-                    }
-                    if all_ids.is_empty() {
-                        continue;
-                    }
-                    let missing = check_ids_exist(conn, registry, &all_ids, rc);
-
-                    if !missing.is_empty() {
-                        let label = format!(
-                            "{} > {} > {}",
-                            to_title_case(blocks_name),
-                            block
-                                .label
-                                .as_ref()
-                                .map(|l| l.resolve_default().to_string())
-                                .unwrap_or_else(|| to_title_case(&block.block_type)),
-                            field_display_label(sub),
-                        );
-                        results.push(MissingRelation::new(
-                            format!("{}.{}.{}", blocks_name, block.block_type, sub.name),
-                            label,
-                            missing.into_iter().collect(),
-                            all_ids.len(),
-                        ));
-                    }
-                }
-                _ => {}
+        for sub in &flatten_array_sub_fields(&block.fields) {
+            if !matches!(sub.field_type, FieldType::Relationship | FieldType::Upload) {
+                continue;
             }
+            let Some(rc) = &sub.relationship else {
+                continue;
+            };
+
+            let all_ids: Vec<_> = rows
+                .iter()
+                .filter_map(|row| row.as_object())
+                .filter(|obj| {
+                    obj.get("_block_type")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|bt| bt == block.block_type)
+                })
+                .flat_map(|obj| extract_ref_ids(obj.get(&sub.name), rc.is_polymorphic()))
+                .collect();
+
+            let label = format!(
+                "{} > {} > {}",
+                to_title_case(blocks_name),
+                block
+                    .label
+                    .as_ref()
+                    .map(|l| l.resolve_default().to_string())
+                    .unwrap_or_else(|| to_title_case(&block.block_type)),
+                field_display_label(sub),
+            );
+            push_if_missing(
+                conn,
+                registry,
+                all_ids,
+                rc,
+                format!("{}.{}.{}", blocks_name, block.block_type, sub.name),
+                label,
+                results,
+            );
         }
     }
 }
@@ -411,7 +387,7 @@ mod tests {
 
     fn setup_db(
         collections: &[CollectionDefinition],
-        globals: &[crate::core::collection::GlobalDefinition],
+        globals: &[GlobalDefinition],
         locale: &LocaleConfig,
     ) -> (tempfile::TempDir, DbPool, Registry) {
         let tmp = tempfile::tempdir().expect("tempdir");

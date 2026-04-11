@@ -14,7 +14,10 @@ Crap CMS provides built-in authentication via auth-enabled collections. Any coll
 - **Secure cookies** — the `crap_session` cookie includes the `Secure` flag in production (when `dev_mode = false`).
 - **`_password_hash`** — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.
 - **`_locked`** — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See [Auth Collections](auth-collections.md#account-locking).
-- **Custom strategies** — pluggable auth via Lua functions (API keys, LDAP, SSO).
+- **Token/Password providers** — `TokenProvider` (JWT) and `PasswordProvider` (Argon2id) traits abstract token and password primitives. Rarely swapped.
+- **Strategy chain** — `local` (email+password) is the built-in strategy. Per-collection Lua strategies are tried as fallback. OAuth2, Cloudflare Access, AD, and API key auth are implemented as Lua strategies.
+- **Email MFA** — built-in multi-factor authentication. Enable `mfa = "email"` on an auth collection to send a 6-digit code after password verification.
+- **Auth callbacks** — `/admin/auth/callback/{name}` catch-all route dispatches to Lua hooks for OAuth2/OIDC redirect flows.
 - **Password reset** — token-based forgot/reset password flow via admin UI and gRPC. Requires email configuration.
 - **Email verification** — optional per-collection. When enabled, users must verify their email before logging in.
 

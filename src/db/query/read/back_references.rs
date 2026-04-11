@@ -3,6 +3,8 @@
 
 use serde::Serialize;
 
+use anyhow::Result;
+
 use crate::{
     config::LocaleConfig,
     core::{
@@ -10,6 +12,10 @@ use crate::{
         field::{flatten_array_sub_fields, to_title_case},
     },
     db::{DbConnection, DbValue},
+};
+
+use crate::db::query::helpers::{
+    global_table, join_table, locale_column, prefixed_name as prefixed,
 };
 
 /// A group of documents in one collection/global that reference a target via one field.
@@ -64,7 +70,7 @@ pub fn find_back_references(
     target_collection: &str,
     target_id: &str,
     locale_config: &LocaleConfig,
-) -> Vec<BackReference> {
+) -> Result<Vec<BackReference>> {
     let mut results = Vec::new();
 
     // Scan collections
@@ -79,12 +85,12 @@ pub fn find_back_references(
             owner_label: def.display_name(),
             is_global: false,
         };
-        scan_fields(&scan, &def.fields, table, "", &mut results);
+        scan_fields(&scan, &def.fields, table, "", &mut results)?;
     }
 
     // Scan globals
     for (slug, def) in &registry.globals {
-        let table = format!("_global_{}", slug);
+        let table = global_table(slug);
         let scan = BackRefScan {
             conn,
             target_collection,
@@ -94,10 +100,10 @@ pub fn find_back_references(
             owner_label: def.display_name(),
             is_global: true,
         };
-        scan_fields(&scan, &def.fields, &table, "", &mut results);
+        scan_fields(&scan, &def.fields, &table, "", &mut results)?;
     }
 
-    results
+    Ok(results)
 }
 
 /// Recursively walk a field tree, matching the same recursion pattern as
@@ -108,112 +114,91 @@ fn scan_fields(
     parent_table: &str,
     prefix: &str,
     results: &mut Vec<BackReference>,
-) {
+) -> Result<()> {
     for field in fields {
         match field.field_type {
             FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                scan_fields(scan, &field.fields, parent_table, &new_prefix, results);
+                scan_fields(
+                    scan,
+                    &field.fields,
+                    parent_table,
+                    &prefixed(prefix, &field.name),
+                    results,
+                )?;
             }
             FieldType::Row | FieldType::Collapsible => {
-                scan_fields(scan, &field.fields, parent_table, prefix, results);
+                scan_fields(scan, &field.fields, parent_table, prefix, results)?;
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    scan_fields(scan, &tab.fields, parent_table, prefix, results);
+                    scan_fields(scan, &tab.fields, parent_table, prefix, results)?;
                 }
             }
             FieldType::Relationship | FieldType::Upload => {
-                let rc = match &field.relationship {
-                    Some(rc) if rc.all_collections().contains(&scan.target_collection) => rc,
-                    _ => continue,
-                };
-                let field_label = field_display_label(field);
-
-                if field.has_parent_column() {
-                    // Has-one: column on parent table
-                    let col = if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    };
-                    let ids = query_has_one(
-                        scan,
-                        parent_table,
-                        &col,
-                        rc.is_polymorphic(),
-                        field.localized && scan.locale_config.is_enabled(),
-                    );
-
-                    if !ids.is_empty() {
-                        results.push(BackReference::new(
-                            scan.owner_slug.to_string(),
-                            scan.owner_label.to_string(),
-                            field.name.clone(),
-                            field_label,
-                            ids,
-                            scan.is_global,
-                        ));
-                    }
-                } else {
-                    // Has-many: junction table
-                    let col = if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    };
-                    let junction = format!("{}_{}", parent_table, col);
-                    let ids = query_has_many(
-                        scan.conn,
-                        &junction,
-                        scan.target_collection,
-                        scan.target_id,
-                        rc.is_polymorphic(),
-                    );
-
-                    if !ids.is_empty() {
-                        results.push(BackReference::new(
-                            scan.owner_slug.to_string(),
-                            scan.owner_label.to_string(),
-                            field.name.clone(),
-                            field_label,
-                            ids,
-                            scan.is_global,
-                        ));
-                    }
-                }
+                scan_relationship(scan, field, parent_table, prefix, results)?;
             }
             FieldType::Array => {
-                let array_table = format!(
-                    "{}_{}",
-                    parent_table,
-                    if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    }
-                );
-                scan_array_sub_fields(scan, &field.fields, &array_table, &field.name, results);
+                let table = join_table(parent_table, &prefixed(prefix, &field.name));
+                scan_array_sub_fields(scan, &field.fields, &table, &field.name, results);
             }
             FieldType::Blocks => {
-                let blocks_table = format!(
-                    "{}_{}",
-                    parent_table,
-                    if prefix.is_empty() {
-                        field.name.clone()
-                    } else {
-                        format!("{}__{}", prefix, field.name)
-                    }
-                );
-                scan_blocks(scan, &field.blocks, &blocks_table, &field.name, results);
+                let table = join_table(parent_table, &prefixed(prefix, &field.name));
+                scan_blocks(scan, &field.blocks, &table, &field.name, results);
             }
             _ => {}
         }
     }
+
+    Ok(())
+}
+
+/// Scan a single relationship/upload field for back-references.
+fn scan_relationship(
+    scan: &BackRefScan,
+    field: &FieldDefinition,
+    parent_table: &str,
+    prefix: &str,
+    results: &mut Vec<BackReference>,
+) -> Result<()> {
+    let rc = match &field.relationship {
+        Some(rc) if rc.all_collections().contains(&scan.target_collection) => rc,
+        _ => return Ok(()),
+    };
+
+    let col = prefixed(prefix, &field.name);
+    let field_label = field_display_label(field);
+
+    let ids = if field.has_parent_column() {
+        query_has_one(
+            scan,
+            parent_table,
+            &col,
+            rc.is_polymorphic(),
+            field.localized && scan.locale_config.is_enabled(),
+        )?
+    } else {
+        let junction = join_table(parent_table, &col);
+        query_has_many(
+            scan.conn,
+            &junction,
+            scan.target_collection,
+            scan.target_id,
+            rc.is_polymorphic(),
+        )
+    };
+
+    if !ids.is_empty() {
+        results.push(BackReference::new(
+            scan.owner_slug.to_string(),
+            scan.owner_label.to_string(),
+            field.name.clone(),
+            field_label,
+            ids,
+            scan.is_global,
+        ));
+    }
+
+    Ok(())
 }
 
 /// Query has-one relationship column for a reference.
@@ -223,18 +208,18 @@ fn query_has_one(
     col: &str,
     is_polymorphic: bool,
     is_localized: bool,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     if is_localized {
         // Localized has-one: check all locale columns
         let locale_cols: Vec<String> = scan
             .locale_config
             .locales
             .iter()
-            .map(|l| format!("{}__{}", col, l))
-            .collect();
+            .map(|l| locale_column(col, l))
+            .collect::<Result<Vec<String>>>()?;
 
         if locale_cols.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let match_value = if is_polymorphic {
@@ -253,7 +238,7 @@ fn query_has_one(
             table,
             conditions.join(" OR ")
         );
-        query_ids(
+        Ok(query_ids(
             scan.conn,
             &sql,
             &[DbValue::Text(match_value)],
@@ -261,12 +246,12 @@ fn query_has_one(
             scan.target_id,
             scan.target_collection,
             scan.is_global,
-        )
+        ))
     } else if is_polymorphic {
         let match_value = format!("{}/{}", scan.target_collection, scan.target_id);
         let p1 = scan.conn.placeholder(1);
         let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = {p1}", table, col);
-        query_ids(
+        Ok(query_ids(
             scan.conn,
             &sql,
             &[DbValue::Text(match_value)],
@@ -274,11 +259,11 @@ fn query_has_one(
             scan.target_id,
             scan.target_collection,
             scan.is_global,
-        )
+        ))
     } else {
         let p1 = scan.conn.placeholder(1);
         let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = {p1}", table, col);
-        query_ids(
+        Ok(query_ids(
             scan.conn,
             &sql,
             &[DbValue::Text(scan.target_id.to_string())],
@@ -286,7 +271,7 @@ fn query_has_one(
             scan.target_id,
             scan.target_collection,
             scan.is_global,
-        )
+        ))
     }
 }
 
@@ -651,7 +636,7 @@ mod tests {
         insert_doc_with_field(&conn, "posts", "p2", "image", "m1");
         insert_doc_with_field(&conn, "posts", "p3", "image", "other");
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].owner_slug, "posts");
         assert_eq!(refs[0].field_name, "image");
@@ -676,7 +661,7 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_doc(&conn, "media", "m1");
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert!(refs.is_empty());
     }
 
@@ -709,7 +694,7 @@ mod tests {
         )
         .unwrap();
 
-        let refs = find_back_references(&conn, &registry, "tags", "t1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "tags", "t1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].owner_slug, "posts");
         assert_eq!(refs[0].count, 2);
@@ -739,7 +724,7 @@ mod tests {
         insert_doc(&conn, "media", "m1");
         insert_doc_with_field(&conn, "posts", "p1", "featured", "media/m1");
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].owner_slug, "posts");
         assert_eq!(refs[0].count, 1);
@@ -773,7 +758,7 @@ mod tests {
             &[DbValue::Text("p1".into()), DbValue::Text("m1".into()), DbValue::Text("media".into())],
         ).unwrap();
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].count, 1);
     }
@@ -800,7 +785,7 @@ mod tests {
         insert_doc(&conn, "media", "m1");
         insert_doc_with_field(&conn, "posts", "p1", "meta__hero", "m1");
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].field_name, "hero");
     }
@@ -832,7 +817,7 @@ mod tests {
         )
         .unwrap();
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].field_name, "slides.image");
         assert_eq!(refs[0].count, 1);
@@ -867,7 +852,7 @@ mod tests {
             &[],
         ).unwrap();
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].field_name, "content.hero.bg_image");
         assert_eq!(refs[0].count, 1);
@@ -896,7 +881,7 @@ mod tests {
         )
         .unwrap();
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].owner_slug, "settings");
         assert!(refs[0].is_global);
@@ -923,7 +908,7 @@ mod tests {
         conn.execute("INSERT INTO posts (id, hero__en) VALUES ('p1', 'm1')", &[])
             .unwrap();
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &locale);
+        let refs = find_back_references(&conn, &registry, "media", "m1", &locale).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].count, 1);
     }
@@ -953,7 +938,7 @@ mod tests {
         insert_doc_with_field(&conn, "posts", "p1", "image", "m1");
         insert_doc_with_field(&conn, "pages", "pg1", "banner", "m1");
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(refs.len(), 2);
         let slugs: Vec<&str> = refs.iter().map(|r| r.owner_slug.as_str()).collect();
         assert!(slugs.contains(&"posts"));
@@ -981,7 +966,7 @@ mod tests {
         insert_doc_with_field(&conn, "posts", "p1", "related_post", "p1");
         insert_doc_with_field(&conn, "posts", "p2", "related_post", "p1");
 
-        let refs = find_back_references(&conn, &registry, "posts", "p1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "posts", "p1", &no_locale()).unwrap();
 
         // Only p2 should appear as a back-reference, not p1 (self)
         assert_eq!(refs.len(), 1, "should have exactly one back-ref group");
@@ -1014,7 +999,7 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_doc(&conn, "media", "m1");
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert!(refs.is_empty());
     }
 
@@ -1050,7 +1035,7 @@ mod tests {
         )
         .unwrap();
 
-        let refs = find_back_references(&conn, &registry, "tags", "t1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "tags", "t1", &no_locale()).unwrap();
         assert_eq!(
             refs.len(),
             1,
@@ -1095,7 +1080,7 @@ mod tests {
         )
         .unwrap();
 
-        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
+        let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale()).unwrap();
         assert_eq!(
             refs.len(),
             1,

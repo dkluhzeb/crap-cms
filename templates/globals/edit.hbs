@@ -8,7 +8,7 @@
 <crap-validate-form validate-url="/admin/globals/{{global.slug}}/validate">
 <crap-dirty-form>
 <crap-scroll-restore>
-<crap-conditions collection="{{global.slug}}">
+<crap-conditions collection="{{global.slug}}" type="global">
 <form id="edit-form"
       hx-post="/admin/globals/{{global.slug}}"
       action="/admin/globals/{{global.slug}}"

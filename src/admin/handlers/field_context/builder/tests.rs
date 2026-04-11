@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+
 use serde_json::json;
 
-use super::super::{MAX_FIELD_DEPTH, safe_template_id};
-use super::*;
-
-use crate::core::field::{
-    BlockDefinition, FieldDefinition, FieldType, LocalizedString, SelectOption,
+use crate::{
+    admin::handlers::field_context::{
+        builder::build_field_contexts, count_errors_in_fields, safe_template_id,
+        split_sidebar_fields,
+    },
+    core::field::{
+        BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString, SelectOption,
+    },
 };
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
@@ -361,7 +366,7 @@ fn split_sidebar_fields_separates_by_position() {
         json!({"name": "body", "field_type": "richtext"}),
         json!({"name": "status", "field_type": "select", "position": "sidebar"}),
     ];
-    let (main, sidebar) = super::super::split_sidebar_fields(fields);
+    let (main, sidebar) = split_sidebar_fields(fields);
     assert_eq!(main.len(), 2);
     assert_eq!(sidebar.len(), 2);
     assert_eq!(main[0]["name"], "title");
@@ -376,7 +381,7 @@ fn split_sidebar_fields_no_sidebar() {
         json!({"name": "title", "field_type": "text"}),
         json!({"name": "body", "field_type": "richtext"}),
     ];
-    let (main, sidebar) = super::super::split_sidebar_fields(fields);
+    let (main, sidebar) = split_sidebar_fields(fields);
     assert_eq!(main.len(), 2);
     assert!(sidebar.is_empty());
 }
@@ -387,14 +392,14 @@ fn split_sidebar_fields_all_sidebar() {
         json!({"name": "a", "position": "sidebar"}),
         json!({"name": "b", "position": "sidebar"}),
     ];
-    let (main, sidebar) = super::super::split_sidebar_fields(fields);
+    let (main, sidebar) = split_sidebar_fields(fields);
     assert!(main.is_empty());
     assert_eq!(sidebar.len(), 2);
 }
 
 #[test]
 fn split_sidebar_fields_empty() {
-    let (main, sidebar) = super::super::split_sidebar_fields(vec![]);
+    let (main, sidebar) = split_sidebar_fields(vec![]);
     assert!(main.is_empty());
     assert!(sidebar.is_empty());
 }
@@ -833,203 +838,11 @@ fn build_field_contexts_date_short_value_day_and_time() {
     assert_eq!(result[0]["datetime_local_value"], "short");
 }
 
-// --- apply_field_type_extras tests ---
-
-#[test]
-fn apply_extras_checkbox_checked() {
-    let sf = make_field("active", FieldType::Checkbox);
-    let mut ctx = json!({"name": "group__active"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
-    apply_field_type_extras(&sf, "true", &mut ctx, &extras);
-    assert_eq!(ctx["checked"], true);
-}
-
-#[test]
-fn apply_extras_checkbox_unchecked() {
-    let sf = make_field("active", FieldType::Checkbox);
-    let mut ctx = json!({"name": "group__active"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
-    apply_field_type_extras(&sf, "0", &mut ctx, &extras);
-    assert_eq!(ctx["checked"], false);
-}
-
-#[test]
-fn apply_extras_select() {
-    let mut sf = make_field("color", FieldType::Select);
-    sf.options = vec![
-        SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
-        SelectOption::new(LocalizedString::Plain("Green".to_string()), "green"),
-    ];
-    let mut ctx = json!({"name": "group__color"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__color").build();
-    apply_field_type_extras(&sf, "green", &mut ctx, &extras);
-    let opts = ctx["options"].as_array().unwrap();
-    assert_eq!(opts[0]["selected"], false);
-    assert_eq!(opts[1]["selected"], true);
-}
-
-#[test]
-fn apply_extras_date_day_only() {
-    let sf = make_field("d", FieldType::Date);
-    let mut ctx = json!({"name": "group__d"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
-    apply_field_type_extras(&sf, "2026-01-15T12:00:00Z", &mut ctx, &extras);
-    assert_eq!(ctx["picker_appearance"], "dayOnly");
-    assert_eq!(ctx["date_only_value"], "2026-01-15");
-}
-
-#[test]
-fn apply_extras_date_day_and_time() {
-    let mut sf = make_field("d", FieldType::Date);
-    sf.picker_appearance = Some("dayAndTime".to_string());
-    let mut ctx = json!({"name": "group__d"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
-    apply_field_type_extras(&sf, "2026-01-15T09:30:00Z", &mut ctx, &extras);
-    assert_eq!(ctx["picker_appearance"], "dayAndTime");
-    assert_eq!(ctx["datetime_local_value"], "2026-01-15T09:30");
-}
-
-#[test]
-fn apply_extras_date_short_values() {
-    let sf = make_field("d", FieldType::Date);
-    let mut ctx = json!({"name": "g__d"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "g__d").build();
-    apply_field_type_extras(&sf, "short", &mut ctx, &extras);
-    assert_eq!(ctx["date_only_value"], "short");
-
-    let mut sf2 = make_field("d2", FieldType::Date);
-    sf2.picker_appearance = Some("dayAndTime".to_string());
-    let mut ctx2 = json!({"name": "g__d2"});
-    let (vals2, errs2) = (HashMap::new(), HashMap::new());
-    let extras2 = FieldRecursionCtx::builder(&vals2, &errs2, "g__d2").build();
-    apply_field_type_extras(&sf2, "short", &mut ctx2, &extras2);
-    assert_eq!(ctx2["datetime_local_value"], "short");
-}
-
-#[test]
-fn apply_extras_relationship() {
-    use crate::core::field::RelationshipConfig;
-    let mut sf = make_field("author", FieldType::Relationship);
-    sf.relationship = Some(RelationshipConfig::new("users", true));
-    let mut ctx = json!({"name": "group__author"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__author").build();
-    apply_field_type_extras(&sf, "", &mut ctx, &extras);
-    assert_eq!(ctx["relationship_collection"], "users");
-    assert_eq!(ctx["has_many"], true);
-}
-
-#[test]
-fn apply_extras_upload() {
-    use crate::core::field::RelationshipConfig;
-    let mut sf = make_field("image", FieldType::Upload);
-    sf.relationship = Some(RelationshipConfig::new("media", false));
-    let mut ctx = json!({"name": "group__image"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__image").build();
-    apply_field_type_extras(&sf, "", &mut ctx, &extras);
-    assert_eq!(ctx["relationship_collection"], "media");
-    assert_eq!(ctx["picker"], "drawer");
-}
-
-#[test]
-fn apply_extras_array_in_group() {
-    let mut arr = make_field("tags", FieldType::Array);
-    arr.fields = vec![make_field("name", FieldType::Text)];
-    arr.min_rows = Some(1);
-    arr.max_rows = Some(3);
-    arr.admin.collapsed = true;
-    arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
-    arr.admin.label_field = Some("name".to_string());
-    let mut ctx = json!({"name": "group__tags"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__tags").build();
-    apply_field_type_extras(&arr, "", &mut ctx, &extras);
-    assert!(ctx["sub_fields"].as_array().is_some());
-    assert_eq!(ctx["row_count"], 0);
-    assert_eq!(ctx["min_rows"], 1);
-    assert_eq!(ctx["max_rows"], 3);
-    assert_eq!(ctx["init_collapsed"], true);
-    assert_eq!(ctx["add_label"], "Tag");
-    assert_eq!(ctx["label_field"], "name");
-}
-
-#[test]
-fn apply_extras_group_in_group() {
-    let mut inner = make_field("meta", FieldType::Group);
-    inner.fields = vec![make_field("author", FieldType::Text)];
-    inner.admin.collapsed = true;
-    let mut ctx = json!({"name": "outer__meta"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "outer__meta").build();
-    apply_field_type_extras(&inner, "", &mut ctx, &extras);
-    assert!(ctx["sub_fields"].as_array().is_some());
-    assert_eq!(ctx["collapsed"], true);
-}
-
-#[test]
-fn apply_extras_blocks_in_group() {
-    let mut blk = make_field("sections", FieldType::Blocks);
-    blk.blocks = vec![{
-        let mut bd = BlockDefinition::new("text", vec![make_field("body", FieldType::Text)]);
-        bd.label_field = Some("body".to_string());
-        bd
-    }];
-    blk.min_rows = Some(0);
-    blk.max_rows = Some(5);
-    blk.admin.collapsed = true;
-    blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
-    let mut ctx = json!({"name": "group__sections"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__sections").build();
-    apply_field_type_extras(&blk, "", &mut ctx, &extras);
-    assert!(ctx["block_definitions"].as_array().is_some());
-    assert_eq!(ctx["row_count"], 0);
-    assert_eq!(ctx["min_rows"], 0);
-    assert_eq!(ctx["max_rows"], 5);
-    assert_eq!(ctx["init_collapsed"], true);
-    assert_eq!(ctx["add_label"], "Section");
-    let bd = ctx["block_definitions"].as_array().unwrap();
-    assert_eq!(bd[0]["label_field"], "body");
-}
-
-#[test]
-fn apply_extras_max_depth_stops_recursion() {
-    let mut arr = make_field("deep", FieldType::Array);
-    arr.fields = vec![make_field("leaf", FieldType::Text)];
-    let mut ctx = json!({"name": "group__deep"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__deep")
-        .depth(MAX_FIELD_DEPTH)
-        .build();
-    apply_field_type_extras(&arr, "", &mut ctx, &extras);
-    // At max depth, no sub_fields should be added
-    assert!(ctx.get("sub_fields").is_none());
-}
-
-#[test]
-fn apply_extras_unknown_type_is_noop() {
-    let sf = make_field("body", FieldType::Richtext);
-    let mut ctx = json!({"name": "group__body", "field_type": "richtext"});
-    let (vals, errs) = (HashMap::new(), HashMap::new());
-    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__body").build();
-    apply_field_type_extras(&sf, "hello", &mut ctx, &extras);
-    // Should not add any extra fields
-    assert!(ctx.get("options").is_none());
-    assert!(ctx.get("checked").is_none());
-}
-
 // --- count_errors_in_fields tests ---
 
 #[test]
 fn count_errors_empty_fields() {
-    assert_eq!(super::super::count_errors_in_fields(&[]), 0);
+    assert_eq!(count_errors_in_fields(&[]), 0);
 }
 
 #[test]
@@ -1038,7 +851,7 @@ fn count_errors_no_errors() {
         json!({"name": "title", "value": "hello"}),
         json!({"name": "body", "value": "world"}),
     ];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 0);
+    assert_eq!(count_errors_in_fields(&fields), 0);
 }
 
 #[test]
@@ -1048,7 +861,7 @@ fn count_errors_direct_errors() {
         json!({"name": "body", "value": "ok"}),
         json!({"name": "email", "error": "Invalid email"}),
     ];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 2);
+    assert_eq!(count_errors_in_fields(&fields), 2);
 }
 
 #[test]
@@ -1060,7 +873,7 @@ fn count_errors_nested_in_sub_fields() {
             {"name": "nested2", "value": "ok"},
         ]
     })];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 1);
+    assert_eq!(count_errors_in_fields(&fields), 1);
 }
 
 #[test]
@@ -1083,7 +896,7 @@ fn count_errors_nested_in_tabs() {
             }
         ]
     })];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 2);
+    assert_eq!(count_errors_in_fields(&fields), 2);
 }
 
 #[test]
@@ -1105,19 +918,17 @@ fn count_errors_nested_in_array_rows() {
             }
         ]
     })];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 1);
+    assert_eq!(count_errors_in_fields(&fields), 1);
 }
 
 #[test]
 fn count_errors_null_error_not_counted() {
     let fields = vec![json!({"name": "title", "error": null})];
-    assert_eq!(super::super::count_errors_in_fields(&fields), 0);
+    assert_eq!(count_errors_in_fields(&fields), 0);
 }
 
 #[test]
 fn tabs_field_context_includes_error_count() {
-    use crate::core::field::FieldTab;
-
     let mut tabs_field = make_field("settings", FieldType::Tabs);
     tabs_field.tabs = vec![
         FieldTab::new(

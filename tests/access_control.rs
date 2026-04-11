@@ -15,7 +15,7 @@ fn setup() -> (
     HookRunner,
 ) {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
-    let config = CrapConfig::default();
+    let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
 
     let tmp = tempfile::tempdir().unwrap();

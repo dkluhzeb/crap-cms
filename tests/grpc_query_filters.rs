@@ -12,7 +12,7 @@ use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
-use crap_cms::api::service::{ContentService, ContentServiceDeps};
+use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
@@ -83,7 +83,7 @@ fn setup_service(
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -119,6 +119,13 @@ fn setup_service(
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -131,6 +138,13 @@ fn setup_service(
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -513,7 +527,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -557,6 +571,13 @@ return M
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -569,6 +590,13 @@ return M
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -636,7 +664,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -683,6 +711,13 @@ return M
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -695,6 +730,13 @@ return M
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -747,7 +789,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -790,6 +832,13 @@ return M
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -802,6 +851,13 @@ return M
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -864,7 +920,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -908,6 +964,13 @@ return M
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -920,6 +983,13 @@ return M
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );
@@ -979,7 +1049,7 @@ return M
     .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
-    let mut config = CrapConfig::default();
+    let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
 
@@ -1019,6 +1089,13 @@ return M
             .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
+            .storage(
+                crap_cms::core::upload::create_storage(
+                    tmp.path(),
+                    &crap_cms::config::UploadConfig::default(),
+                )
+                .unwrap(),
+            )
             .email_renderer(email_renderer)
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
@@ -1031,6 +1108,13 @@ return M
             ))
             .ip_forgot_password_limiter(Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
+            ))
+            .cache(std::sync::Arc::new(crap_cms::core::cache::NoneCache))
+            .token_provider(std::sync::Arc::new(
+                crap_cms::core::auth::JwtTokenProvider::new("test-secret"),
+            ))
+            .password_provider(std::sync::Arc::new(
+                crap_cms::core::auth::Argon2PasswordProvider,
             ))
             .build(),
     );

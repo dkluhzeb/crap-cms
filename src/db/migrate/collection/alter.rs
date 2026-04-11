@@ -2,19 +2,21 @@
 
 use anyhow::{Context as _, Result};
 use std::collections::{HashMap, HashSet};
+use tracing::{error, info, warn};
 
 use crate::{
     config::LocaleConfig,
-    core::CollectionDefinition,
+    core::{CollectionDefinition, collection::MfaMode},
     db::{
         DbConnection,
         migrate::helpers::{
-            collect_column_specs, get_table_column_types, get_table_columns, sanitize_locale,
+            ColumnSpec, collect_column_specs, get_table_column_types, get_table_columns,
         },
+        query::helpers::locale_column,
     },
 };
 
-use super::create::append_default_value;
+use super::create::{append_default_value_for, create_collection_table};
 
 /// Shared context for ALTER TABLE operations.
 struct AlterCtx<'a> {
@@ -79,15 +81,48 @@ fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
     if let Some(db_type) = ctx.column_types.get(col_name)
         && !db_type.eq_ignore_ascii_case(expected_type)
     {
-        tracing::warn!(
+        warn!(
             "Column '{}' in table '{}' has type '{}' but definition expects '{}' \
              (not auto-migrated — manual migration required)",
-            col_name,
-            ctx.slug,
-            db_type,
-            expected_type
+            col_name, ctx.slug, db_type, expected_type
         );
     }
+}
+
+/// Add a single field column if it doesn't exist, with optional default value.
+fn add_field_column(
+    ctx: &AlterCtx,
+    col_name: &str,
+    expected_type: &str,
+    spec: &ColumnSpec,
+) -> Result<()> {
+    if ctx.existing.contains(col_name) {
+        warn_type_mismatch(ctx, col_name, expected_type);
+        return Ok(());
+    }
+
+    let mut col_def = expected_type.to_string();
+
+    if !spec.companion_text {
+        append_default_value_for(
+            &mut col_def,
+            &spec.field.default_value,
+            &spec.field.field_type,
+            ctx.conn.kind(),
+        );
+    }
+
+    let sql = format!(
+        "ALTER TABLE \"{}\" ADD COLUMN {} {}",
+        ctx.slug, col_name, col_def
+    );
+    info!("Adding column to {}: {}", ctx.slug, col_name);
+
+    ctx.conn
+        .execute_ddl(&sql, &[])
+        .with_context(|| format!("Failed to add column {} to {}", col_name, ctx.slug))?;
+
+    Ok(())
 }
 
 /// Add missing user-defined field columns (including localized variants).
@@ -101,155 +136,120 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
-
-                if ctx.existing.contains(&col_name) {
-                    warn_type_mismatch(ctx, &col_name, expected_type);
-                } else {
-                    let mut col_def = expected_type.to_string();
-
-                    if !spec.companion_text {
-                        append_default_value(
-                            &mut col_def,
-                            &spec.field.default_value,
-                            &spec.field.field_type,
-                        );
-                    }
-
-                    let sql = format!(
-                        "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-                        ctx.slug, col_name, col_def
-                    );
-                    tracing::info!("Adding column to {}: {}", ctx.slug, col_name);
-                    ctx.conn.execute(&sql, &[]).with_context(|| {
-                        format!("Failed to add column {} to {}", col_name, ctx.slug)
-                    })?;
-                }
+                let col_name = locale_column(&spec.col_name, locale)?;
+                add_field_column(ctx, &col_name, expected_type, spec)?;
             }
-        } else if ctx.existing.contains(&spec.col_name) {
-            warn_type_mismatch(ctx, &spec.col_name, expected_type);
         } else {
-            let mut col_def = expected_type.to_string();
-
-            if !spec.companion_text {
-                append_default_value(
-                    &mut col_def,
-                    &spec.field.default_value,
-                    &spec.field.field_type,
-                );
-            }
-
-            let sql = format!(
-                "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-                ctx.slug, spec.col_name, col_def
-            );
-            tracing::info!("Adding column to {}: {}", ctx.slug, spec.col_name);
-            ctx.conn.execute(&sql, &[]).with_context(|| {
-                format!("Failed to add column {} to {}", spec.col_name, ctx.slug)
-            })?;
+            add_field_column(ctx, &spec.col_name, expected_type, spec)?;
         }
     }
 
     Ok(())
 }
 
+/// Add a column to a table if it doesn't already exist.
+fn ensure_column(ctx: &AlterCtx, col_def: &str) -> Result<()> {
+    let col_name = col_def
+        .split_whitespace()
+        .next()
+        .expect("static column definition");
+
+    if ctx.existing.contains(col_name) {
+        return Ok(());
+    }
+
+    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col_def);
+    info!("Adding {} column to {}", col_name, ctx.slug);
+
+    ctx.conn
+        .execute_ddl(&sql, &[])
+        .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
+
+    Ok(())
+}
+
 /// Add system columns (_status, auth, timestamps) as needed.
 fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
-    // Versioned collections with drafts: ensure _status column exists
-    if ctx.def.has_drafts() && !ctx.existing.contains("_status") {
-        let sql = format!(
-            "ALTER TABLE \"{}\" ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
-            ctx.slug
-        );
-        tracing::info!("Adding _status column to {}", ctx.slug);
-        ctx.conn
-            .execute(&sql, &[])
-            .with_context(|| format!("Failed to add _status to {}", ctx.slug))?;
+    add_draft_columns(ctx)?;
+    add_auth_columns(ctx)?;
+    add_soft_delete_columns(ctx)?;
+    add_ref_count_column(ctx)?;
+    add_timestamp_columns(ctx)?;
+
+    Ok(())
+}
+
+/// Add _status column for versioned collections with drafts.
+fn add_draft_columns(ctx: &AlterCtx) -> Result<()> {
+    if ctx.def.has_drafts() {
+        ensure_column(ctx, "_status TEXT NOT NULL DEFAULT 'published'")?;
     }
 
-    // Auth collections: ensure system columns exist
-    if ctx.def.is_auth_collection() {
+    Ok(())
+}
+
+/// Add auth system columns (password, reset tokens, lock, session version, MFA).
+fn add_auth_columns(ctx: &AlterCtx) -> Result<()> {
+    if !ctx.def.is_auth_collection() {
+        return Ok(());
+    }
+
+    for col in [
+        "_password_hash TEXT",
+        "_reset_token TEXT",
+        "_reset_token_exp INTEGER",
+        "_locked INTEGER DEFAULT 0",
+        "_settings TEXT",
+        "_session_version INTEGER DEFAULT 0",
+    ] {
+        ensure_column(ctx, col)?;
+    }
+
+    if ctx.def.auth.as_ref().is_some_and(|a| a.verify_email) {
         for col in [
-            "_password_hash TEXT",
-            "_reset_token TEXT",
-            "_reset_token_exp INTEGER",
-            "_locked INTEGER DEFAULT 0",
-            "_settings TEXT",
-            "_session_version INTEGER DEFAULT 0",
+            "_verified INTEGER DEFAULT 0",
+            "_verification_token TEXT",
+            "_verification_token_exp INTEGER",
         ] {
-            let col_name = col
-                .split_whitespace()
-                .next()
-                .expect("static column definition");
-
-            if !ctx.existing.contains(col_name) {
-                let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
-                tracing::info!("Adding {} column to {}", col_name, ctx.slug);
-                ctx.conn
-                    .execute(&sql, &[])
-                    .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
-            }
-        }
-        if ctx.def.auth.as_ref().is_some_and(|a| a.verify_email) {
-            for col in [
-                "_verified INTEGER DEFAULT 0",
-                "_verification_token TEXT",
-                "_verification_token_exp INTEGER",
-            ] {
-                let col_name = col
-                    .split_whitespace()
-                    .next()
-                    .expect("static column definition");
-
-                if !ctx.existing.contains(col_name) {
-                    let sql = format!("ALTER TABLE \"{}\" ADD COLUMN {}", ctx.slug, col);
-                    tracing::info!("Adding {} column to {}", col_name, ctx.slug);
-                    ctx.conn
-                        .execute(&sql, &[])
-                        .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
-                }
-            }
+            ensure_column(ctx, col)?;
         }
     }
 
-    // Soft-delete collections: ensure _deleted_at column exists
+    if ctx.def.auth.as_ref().is_some_and(|a| a.mfa != MfaMode::Off) {
+        for col in ["_mfa_code TEXT", "_mfa_code_exp INTEGER"] {
+            ensure_column(ctx, col)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Add _deleted_at column for soft-delete collections.
+fn add_soft_delete_columns(ctx: &AlterCtx) -> Result<()> {
     if ctx.def.soft_delete && !ctx.existing.contains("_deleted_at") {
-        let sql = format!("ALTER TABLE \"{}\" ADD COLUMN _deleted_at TEXT", ctx.slug);
-        tracing::info!("Adding _deleted_at column to {}", ctx.slug);
-        ctx.conn
-            .execute(&sql, &[])
-            .with_context(|| format!("Failed to add _deleted_at to {}", ctx.slug))?;
+        let col_def = format!("_deleted_at {}", ctx.conn.timestamp_column_type());
+        ensure_column(ctx, &col_def)?;
     }
 
-    // All collections: ensure _ref_count column exists for delete protection
-    if !ctx.existing.contains("_ref_count") {
-        let sql = format!(
-            "ALTER TABLE \"{}\" ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
-            ctx.slug
-        );
-        tracing::info!("Adding _ref_count column to {}", ctx.slug);
-        ctx.conn
-            .execute(&sql, &[])
-            .with_context(|| format!("Failed to add _ref_count to {}", ctx.slug))?;
+    Ok(())
+}
+
+/// Add _ref_count column for delete protection.
+fn add_ref_count_column(ctx: &AlterCtx) -> Result<()> {
+    ensure_column(ctx, "_ref_count INTEGER NOT NULL DEFAULT 0")
+}
+
+/// Add created_at/updated_at timestamp columns.
+fn add_timestamp_columns(ctx: &AlterCtx) -> Result<()> {
+    if !ctx.def.timestamps {
+        return Ok(());
     }
 
-    // Timestamps: ensure created_at/updated_at exist
-    // Note: SQLite ALTER TABLE cannot use non-constant defaults like datetime('now'),
-    // so we add with no default (NULL for existing rows) — new inserts set these explicitly.
-    if ctx.def.timestamps {
-        for col_name in ["created_at", "updated_at"] {
-            if !ctx.existing.contains(col_name) {
-                let ts_type = ctx.conn.timestamp_column_type();
-                let sql = format!(
-                    "ALTER TABLE \"{}\" ADD COLUMN {} {}",
-                    ctx.slug, col_name, ts_type
-                );
-                tracing::info!("Adding {} column to {}", col_name, ctx.slug);
-                ctx.conn
-                    .execute(&sql, &[])
-                    .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
-            }
-        }
+    let ts_type = ctx.conn.timestamp_column_type();
+
+    for col_name in ["created_at", "updated_at"] {
+        let col_def = format!("{} {}", col_name, ts_type);
+        ensure_column(ctx, &col_def)?;
     }
 
     Ok(())
@@ -293,17 +293,13 @@ pub(super) fn alter_collection_table(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    let existing = get_table_columns(conn, slug)?;
+    let column_types = get_table_column_types(conn, slug)?;
+    let existing: HashSet<String> = column_types.keys().cloned().collect();
 
     // Detect transition: soft_delete just enabled on a table with unique fields.
-    // When a table was created without soft_delete, unique fields have inline UNIQUE
-    // constraints (e.g. `slug TEXT UNIQUE`). SQLite cannot drop inline constraints, so
-    // we must rebuild the table to remove them. The partial unique index created by
-    // sync_indexes will enforce uniqueness for active rows only.
     let needs_rebuild =
         def.soft_delete && !existing.contains("_deleted_at") && def.fields.iter().any(|f| f.unique);
 
-    let column_types = get_table_column_types(conn, slug)?;
     let ctx = AlterCtx::builder(conn, slug)
         .def(def)
         .existing(&existing)
@@ -319,10 +315,9 @@ pub(super) fn alter_collection_table(
 
     for col in &existing {
         if !expected.contains(col) && !system.contains(col.as_str()) {
-            tracing::warn!(
+            warn!(
                 "Column '{}' exists in table '{}' but not in Lua definition (not removed)",
-                col,
-                slug
+                col, slug
             );
         }
     }
@@ -349,7 +344,7 @@ fn rebuild_without_inline_unique(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    tracing::info!(
+    info!(
         "Rebuilding table '{}' to remove inline UNIQUE constraints (soft_delete transition)",
         slug
     );
@@ -357,9 +352,9 @@ fn rebuild_without_inline_unique(
     let old_cols = get_table_columns(conn, slug)?;
     let temp = format!("_rebuild_{}", slug);
 
-    conn.execute_batch(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
+    conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", slug, temp))?;
 
-    super::create::create_collection_table(conn, slug, def, locale_config)?;
+    create_collection_table(conn, slug, def, locale_config)?;
 
     let new_cols = get_table_columns(conn, slug)?;
 
@@ -381,25 +376,25 @@ fn rebuild_without_inline_unique(
 
     if let Err(e) = copy_result {
         // Recovery: drop the empty new table and restore the old one
-        tracing::error!(
+        error!(
             "Failed to copy data during rebuild of '{}', attempting recovery: {}",
-            slug,
-            e
+            slug, e
         );
-        let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
-        let _ = conn.execute_batch(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
+        let _ = conn.execute_batch_ddl(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
+        let _ = conn.execute_batch_ddl(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
+
         return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{}'", slug));
     }
 
-    conn.execute_batch(&format!("DROP TABLE \"{}\"", temp))?;
+    conn.execute_batch_ddl(&format!("DROP TABLE \"{}\"", temp))?;
 
-    tracing::info!("Table '{}' rebuilt successfully", slug);
+    info!("Table '{}' rebuilt successfully", slug);
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::create::create_collection_table;
     use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;

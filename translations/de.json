@@ -137,6 +137,11 @@
   "error_reset_link_invalid": "Ungültiger oder abgelaufener Link. Bitte fordern Sie einen neuen an.",
   "success_password_reset": "Passwort erfolgreich zurückgesetzt",
   "success_email_verified": "E-Mail erfolgreich bestätigt",
+  "mfa_page_title": "Verifizierung",
+  "mfa_enter_code": "Geben Sie den 6-stelligen Code ein, der an Ihre E-Mail gesendet wurde.",
+  "mfa_code_label": "Verifizierungscode",
+  "mfa_verify": "Verifizieren",
+  "error_mfa_invalid_code": "Ungültiger oder abgelaufener Code. Bitte versuchen Sie es erneut.",
 
   "restore_has_missing_relations": "Diese Version referenziert Inhalte, die nicht mehr existieren:",
   "restore_missing_warning": "Beim Wiederherstellen werden veraltete Referenzen in das Dokument geschrieben.",

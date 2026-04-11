@@ -1,16 +1,3 @@
-use crate::{
-    admin::{
-        AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
-        handlers::shared::{
-            check_access_or_forbid, extract_editor_locale, forbidden, not_found, redirect_response,
-            render_or_error, server_error,
-        },
-    },
-    core::auth::{AuthUser, Claims},
-    db::query::{AccessResult, find_missing_relations, find_version_by_id},
-};
-
 use axum::{
     Extension,
     extract::{Path, State},
@@ -18,6 +5,21 @@ use axum::{
     response::Response,
 };
 use serde_json::json;
+
+use crate::{
+    admin::{
+        AdminState,
+        context::{Breadcrumb, ContextBuilder, PageType},
+        handlers::shared::{
+            check_access_or_forbid, extract_editor_locale, forbidden,
+            load_version_with_missing_relations, not_found, redirect_response, render_or_error,
+            server_error,
+        },
+    },
+    core::auth::{AuthUser, Claims},
+    db::query::AccessResult,
+    service,
+};
 
 /// GET /admin/collections/{slug}/{id}/versions/{version_id}/restore — confirmation page
 pub async fn restore_confirm(
@@ -57,16 +59,20 @@ pub async fn restore_confirm(
         Err(_) => return server_error(&state, "Database error"),
     };
 
-    let version = match find_version_by_id(&conn, &slug, &version_id) {
-        Ok(Some(v)) => v,
-        Ok(None) => return not_found(&state, "Version not found"),
-        Err(e) => {
-            tracing::error!("Find version error: {}", e);
-            return server_error(&state, "Database error");
-        }
-    };
+    let version_ctx = service::ServiceContext::collection(&slug, &def)
+        .conn(&conn)
+        .build();
 
-    let missing = find_missing_relations(&conn, &state.registry, &version.snapshot, &def.fields);
+    let (version, missing) = match load_version_with_missing_relations(
+        &version_ctx,
+        &conn,
+        &state.registry,
+        &version_id,
+        &def.fields,
+    ) {
+        Ok(data) => data,
+        Err(msg) => return server_error(&state, msg),
+    };
 
     let restore_url = format!(
         "/admin/collections/{}/{}/versions/{}/restore",

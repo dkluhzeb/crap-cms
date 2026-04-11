@@ -52,7 +52,7 @@ The config structure mirrors `crap.toml`:
 | `locale.fallback` | boolean | true |
 | `email.smtp_host` | string | "" |
 | `live.enabled` | boolean | true |
-| `access.default_deny` | boolean | false |
+| `access.default_deny` | boolean | true |
 
 All sections from `crap.toml` are available — this table is not exhaustive. The entire `CrapConfig` struct is serialized to Lua.
 
