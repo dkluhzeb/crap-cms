@@ -583,6 +583,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `delete_junction_rows()` helper and once via a manual inline query.
   Removed the redundant manual delete.
 
+- **Flaky subscribe test race condition** — `subscribe_receives_update_event`
+  and `subscribe_receives_delete_event` could receive a stale "create" event
+  instead of the expected operation because event publishing runs in a
+  background `spawn_blocking` task. Added a small delay between document
+  creation and subscribing so the background create-event publish completes
+  before the subscriber is registered.
+
 - **Keyboard focus indicators suppressed** — `outline: 0` /
   `outline: none` on focused form inputs and the search bar removed
   the keyboard focus indicator, making the admin UI inaccessible for
