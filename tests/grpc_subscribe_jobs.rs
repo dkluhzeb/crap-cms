@@ -382,7 +382,10 @@ async fn subscribe_receives_create_event() {
 async fn subscribe_receives_update_event() {
     let ts = setup_service_with_event_bus(vec![make_posts_def()], vec![]);
 
-    // Create first, then subscribe
+    // Create first, then subscribe.
+    // Yield after create so the background `spawn_blocking` event-publish
+    // task completes before we subscribe — otherwise the subscriber can
+    // pick up the stale create event instead of the update.
     let doc = ts
         .service
         .create(Request::new(content::CreateRequest {
@@ -396,6 +399,10 @@ async fn subscribe_receives_update_event() {
         .into_inner()
         .document
         .unwrap();
+
+    // Small sleep so the background spawn_blocking event-publish task for
+    // the create completes before we subscribe.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let resp = ts
         .service
@@ -448,6 +455,9 @@ async fn subscribe_receives_delete_event() {
         .into_inner()
         .document
         .unwrap();
+
+    // Let the background create event publish complete before subscribing
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let resp = ts
         .service
