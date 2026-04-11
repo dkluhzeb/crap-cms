@@ -3,23 +3,26 @@
 //! Used in multi-server deployments where app servers run `serve --no-scheduler`
 //! and one or more dedicated workers run `work`.
 
+use std::{path::Path, process};
+#[cfg(unix)]
 use std::{
-    path::Path,
-    process,
     thread::sleep,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result, bail};
+#[cfg(unix)]
+use anyhow::bail;
+use anyhow::{Context as _, Result};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::info;
+#[cfg(unix)]
+use tracing::{debug, warn};
 
+#[cfg(unix)]
+use crate::commands::helpers::{is_process_running, read_pid};
 use crate::{
     cli,
-    commands::helpers::{
-        self, is_process_running, load_and_validate_config, read_pid, run_on_init_hooks,
-        spawn_shutdown_signal,
-    },
+    commands::helpers::{self, load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
     core::{email::create_email_provider, upload::create_storage},
     db::{migrate, pool},
     hooks::{self, HookRunner},
