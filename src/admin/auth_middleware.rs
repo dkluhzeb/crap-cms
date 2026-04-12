@@ -254,10 +254,20 @@ pub(super) async fn auth_middleware(
 /// is denied, or None if access is allowed (or no access function is configured).
 #[cfg(not(tarpaulin_include))]
 async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<Response> {
+    check_admin_gate_for_doc(state, &auth_user.user_doc).await
+}
+
+/// Check `admin.access` against a user document. Used by both the auth middleware
+/// and the login handler to enforce the gate before issuing a session.
+#[cfg(not(tarpaulin_include))]
+pub(crate) async fn check_admin_gate_for_doc(
+    state: &AdminState,
+    user_doc: &crate::core::Document,
+) -> Option<Response> {
     let access_ref = state.config.admin.access.as_deref()?;
     let pool = state.pool.clone();
     let hook_runner = state.hook_runner.clone();
-    let user_doc = auth_user.user_doc.clone();
+    let user_doc = user_doc.clone();
     let access_ref = access_ref.to_string();
 
     let result = tokio::task::spawn_blocking(move || {

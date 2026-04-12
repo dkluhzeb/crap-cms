@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.1.0-alpha.4] — Unreleased
+## [0.1.0-alpha.5] — Unreleased
+
+### Fixed
+
+- **`admin.access` gate not enforced at login** — Users who failed the
+  `admin.access` check could still log in and receive a session cookie,
+  only to see a 403 on every subsequent page. The access gate is now
+  checked in the login handler before issuing the session. Denied users
+  see the 403 immediately at login without a cookie being set.
+
+## [0.1.0-alpha.4] — 2026-04-11
 
 ### Changed
 

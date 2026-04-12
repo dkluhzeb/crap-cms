@@ -381,6 +381,14 @@ pub async fn login_action(
     state.login_limiter.clear(&form.email);
     state.ip_login_limiter.clear(&ip);
 
+    // Check admin.access gate before issuing session — deny login entirely
+    // if the user doesn't pass the gate function.
+    if let Some(response) =
+        crate::admin::auth_middleware::check_admin_gate_for_doc(&state, &login.user).await
+    {
+        return response;
+    }
+
     // Check if MFA is required
     let mfa_enabled = def.auth.as_ref().is_some_and(|a| a.mfa == MfaMode::Email);
 
