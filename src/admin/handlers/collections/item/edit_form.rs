@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Error};
 use axum::{
     Extension,
     extract::{Path, State},
@@ -17,11 +16,10 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
-            enrich_field_contexts, extract_doc_status, extract_editor_locale,
-            fetch_version_sidebar_data, flatten_document_values, forbidden, is_non_default_locale,
-            lookup_ref_count, not_found, render_or_error, server_error, split_sidebar_fields,
-            strip_denied_fields,
+            build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
+            extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
+            flatten_document_values, forbidden, is_non_default_locale, lookup_ref_count, not_found,
+            render_or_error, server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -29,13 +27,11 @@ use crate::{
         auth::{AuthUser, Claims},
         upload,
     },
-    db::{
-        DbPool,
-        query::{AccessResult, FilterClause, LocaleContext},
-    },
+    db::{DbPool, query::LocaleContext},
     hooks::HookRunner,
     service::{
-        FindByIdInput, RunnerReadHooks, ServiceContext, auth::is_locked, find_document_by_id,
+        FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, auth::is_locked,
+        find_document_by_id,
     },
 };
 
@@ -47,14 +43,13 @@ struct ReadParams {
     id: String,
     def: CollectionDefinition,
     locale_ctx: Option<LocaleContext>,
-    access_constraints: Option<Vec<FilterClause>>,
     has_drafts: bool,
     user_doc: Option<Document>,
 }
 
 /// Fetch the document via the shared service layer read lifecycle.
-fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
-    let conn = params.pool.get().context("DB connection")?;
+fn read_document(params: ReadParams) -> Result<Option<Document>, ServiceError> {
+    let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
     let ctx = ServiceContext::collection(&params.slug, &params.def)
@@ -66,11 +61,10 @@ fn read_document(params: ReadParams) -> Result<Option<Document>, Error> {
 
     let input = FindByIdInput::builder(&params.id)
         .use_draft(params.has_drafts)
-        .access_constraints(params.access_constraints)
         .locale_ctx(params.locale_ctx.as_ref())
         .build();
 
-    find_document_by_id(&ctx, &input).map_err(|e| e.into_anyhow())
+    find_document_by_id(&ctx, &input)
 }
 
 /// Append auth-specific fields (password, locked checkbox) to the field list.
@@ -109,6 +103,7 @@ fn prepare_edit_fields(
     document: &Document,
     id: &str,
     editor_locale: Option<&str>,
+    denied_read_fields: &[String],
 ) -> (Vec<Value>, Vec<Value>) {
     let values = flatten_document_values(&document.fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
@@ -132,6 +127,14 @@ fn prepare_edit_fields(
             .doc_id(id)
             .build(),
     );
+
+    // Remove read-denied fields entirely — they shouldn't render in the form
+    if !denied_read_fields.is_empty() {
+        fields.retain(|f| {
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            !denied_read_fields.iter().any(|d| d == name)
+        });
+    }
 
     let form_data_json = json!(document.fields);
     apply_display_conditions(
@@ -261,30 +264,8 @@ pub async fn edit_form(
         }
     };
 
-    // Check read access
-    let access_result = match check_access_or_forbid(
-        &state,
-        def.access.read.as_deref(),
-        &auth_user,
-        Some(&id),
-        None,
-    ) {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
-
-    if matches!(access_result, AccessResult::Denied) {
-        return forbidden(&state, "You don't have permission to view this item");
-    }
-
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
-
-    let access_constraints = if let AccessResult::Constrained(ref filters) = access_result {
-        Some(filters.clone())
-    } else {
-        None
-    };
 
     let read_params = ReadParams {
         pool: state.pool.clone(),
@@ -293,17 +274,19 @@ pub async fn edit_form(
         id: id.clone(),
         def: def.clone(),
         locale_ctx,
-        access_constraints,
         has_drafts: def.has_drafts(),
         user_doc: auth_user.as_ref().map(|Extension(au)| au.user_doc.clone()),
     };
 
     let read_result = task::spawn_blocking(move || read_document(read_params)).await;
 
-    let mut document = match read_result {
+    let document = match read_result {
         Ok(Ok(Some(doc))) => doc,
         Ok(Ok(None)) => {
             return not_found(&state, &format!("Document '{}' not found", id));
+        }
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            return forbidden(&state, "You don't have permission to view this item");
         }
         Ok(Err(e)) => {
             error!("Document edit query error: {}", e);
@@ -317,15 +300,21 @@ pub async fn edit_form(
         }
     };
 
-    // Strip field-level read-denied fields (fail closed on pool exhaustion)
+    // Compute read-denied fields to exclude from form rendering.
+    // The service already stripped their values — this filters the form fields themselves.
     let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
-    strip_denied_fields(&mut document.fields, &denied);
 
-    let (main_fields, sidebar_fields) =
-        prepare_edit_fields(&state, &def, &document, &id, editor_locale.as_deref());
+    let (main_fields, sidebar_fields) = prepare_edit_fields(
+        &state,
+        &def,
+        &document,
+        &id,
+        editor_locale.as_deref(),
+        &denied,
+    );
 
     let doc_title = def
         .title_field()

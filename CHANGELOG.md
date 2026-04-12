@@ -16,6 +16,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Previously, soft-deleted documents were only accessible through the
   admin UI.
 
+- **Admin access harmonization** — The admin UI now delegates all access
+  checks and field stripping to the service layer instead of duplicating
+  them. Read-denied fields are completely hidden from edit forms (previously
+  they rendered as empty form fields, leaking field existence). Removed
+  redundant `strip_denied_fields` from admin handlers. The collection list,
+  edit form (collections + globals), and delete confirmation page all go
+  through the service layer with proper `ServiceError::AccessDenied`
+  handling.
+
 ### Fixed
 
 - **`admin.access` gate not enforced at login** — Users who failed the

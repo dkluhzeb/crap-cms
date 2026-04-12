@@ -17,9 +17,9 @@ use crate::{
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PaginationParams, compute_denied_read_fields,
-                extract_editor_locale, extract_where_params, forbidden, not_found,
-                parse_where_params, render_or_error, server_error, validate_sort,
+                ListUrlContext, PaginationParams, extract_editor_locale, extract_where_params,
+                forbidden, not_found, parse_where_params, render_or_error, server_error,
+                validate_sort,
             },
         },
     },
@@ -199,19 +199,6 @@ fn load_user_columns(
     )
 }
 
-/// Strip denied fields from documents.
-fn prepare_documents(documents: Vec<Document>, denied_fields: &[String]) -> Vec<Document> {
-    documents
-        .into_iter()
-        .map(|mut doc| {
-            for field_name in denied_fields {
-                doc.fields.remove(field_name);
-            }
-            doc
-        })
-        .collect()
-}
-
 /// GET /admin/collections/{slug} — list items in a collection
 pub async fn list_items(
     State(state): State<AdminState>,
@@ -318,13 +305,8 @@ pub async fn list_items(
         }
     };
 
-    let denied_fields = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
     let pagination_result = result.pagination;
-    let documents = prepare_documents(result.docs, &denied_fields);
+    let documents = result.docs;
 
     let user_columns = load_user_columns(&state, &auth_user, &slug);
 

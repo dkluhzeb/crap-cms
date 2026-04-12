@@ -16,10 +16,10 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
-            enrich_field_contexts, extract_doc_status, extract_editor_locale,
-            fetch_version_sidebar_data, flatten_document_values, forbidden, is_non_default_locale,
-            not_found, render_or_error, server_error, split_sidebar_fields, strip_denied_fields,
+            build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
+            extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
+            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
+            server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -27,9 +27,9 @@ use crate::{
         auth::{AuthUser, Claims},
         collection::GlobalDefinition,
     },
-    db::{DbPool, query::AccessResult},
+    db::DbPool,
     hooks::HookRunner,
-    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},
+    service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
 };
 
 /// Parameters for the blocking global-read task.
@@ -44,8 +44,8 @@ struct ReadParams {
 }
 
 /// Fetch the global document via the shared service layer read lifecycle.
-fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
-    let conn = params.pool.get()?;
+fn read_global_document(params: ReadParams) -> Result<Document, ServiceError> {
+    let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
     let ctx = ServiceContext::global(&params.slug, &params.def)
@@ -57,7 +57,7 @@ fn read_global_document(params: ReadParams) -> Result<Document, anyhow::Error> {
 
     let input = GetGlobalInput::new(params.locale_ctx.as_ref(), params.user_ui_locale.as_deref());
 
-    get_global_document(&ctx, &input).map_err(|e| e.into_anyhow())
+    get_global_document(&ctx, &input)
 }
 
 /// Build, enrich, and split the field contexts for the global edit form.
@@ -66,6 +66,7 @@ fn prepare_edit_fields(
     def: &GlobalDefinition,
     doc_fields: &HashMap<String, Value>,
     editor_locale: Option<&str>,
+    denied_read_fields: &[String],
 ) -> (Vec<Value>, Vec<Value>) {
     let values = flatten_document_values(doc_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
@@ -87,6 +88,14 @@ fn prepare_edit_fields(
             .non_default_locale(non_default_locale)
             .build(),
     );
+
+    // Remove read-denied fields entirely from the form
+    if !denied_read_fields.is_empty() {
+        fields.retain(|f| {
+            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            !denied_read_fields.iter().any(|d| d == name)
+        });
+    }
 
     let form_data_json = json!(doc_fields);
     apply_display_conditions(
@@ -113,14 +122,6 @@ pub async fn edit_form(
         None => return not_found(&state, &format!("Global '{}' not found", slug)),
     };
 
-    match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to view this global");
-        }
-        Err(resp) => return *resp,
-        _ => {}
-    }
-
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
@@ -138,6 +139,9 @@ pub async fn edit_form(
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            return forbidden(&state, "You don't have permission to view this global");
+        }
         Ok(Err(e)) => {
             error!("Global read query error: {}", e);
             return server_error(&state, "An internal error occurred.");
@@ -148,15 +152,19 @@ pub async fn edit_form(
         }
     };
 
-    let mut doc_fields = document.fields.clone();
+    // Compute read-denied fields to exclude from form rendering.
     let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
-    strip_denied_fields(&mut doc_fields, &denied);
 
-    let (main_fields, sidebar_fields) =
-        prepare_edit_fields(&state, &def, &doc_fields, editor_locale.as_deref());
+    let (main_fields, sidebar_fields) = prepare_edit_fields(
+        &state,
+        &def,
+        &document.fields,
+        editor_locale.as_deref(),
+        &denied,
+    );
 
     let has_versions = def.has_versions();
     let has_drafts = def.has_drafts();
