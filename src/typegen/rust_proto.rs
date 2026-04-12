@@ -32,7 +32,9 @@ pub(super) fn render(registry: &Registry, proto_mod: &str) -> String {
     w!(out, "use super::generated::*;");
     w!(out, "");
 
+    render_from_document_trait(&mut out);
     render_helpers(&mut out);
+    render_rel_helpers(&mut out);
 
     for slug in sorted_collection_slugs(registry) {
         let col = &registry.collections[slug];
@@ -152,6 +154,128 @@ fn render_helpers(out: &mut String) {
     w!(out, "");
 }
 
+/// Render the `FromDocument` trait definition.
+fn render_from_document_trait(out: &mut String) {
+    w!(
+        out,
+        "/// Trait for types that can be constructed from a proto Document."
+    );
+    w!(out, "pub trait FromDocument {{");
+    w!(out, "    fn from_document(doc: &Document) -> Self;");
+    w!(out, "}}");
+    w!(out, "");
+}
+
+/// Render relationship helpers that use `FromDocument` + `Rel<T>`.
+fn render_rel_helpers(out: &mut String) {
+    w!(
+        out,
+        "// ── Relationship helpers ──────────────────────────────────"
+    );
+    w!(out, "");
+    w!(
+        out,
+        "fn struct_to_document(s: &prost_types::Struct) -> Document {{"
+    );
+    w!(out, "    let id = s.fields.get(\"id\")");
+    w!(out, "        .and_then(|v| match &v.kind {{");
+    w!(
+        out,
+        "            Some(Kind::StringValue(s)) => Some(s.clone()),"
+    );
+    w!(out, "            _ => None,");
+    w!(out, "        }})");
+    w!(out, "        .unwrap_or_default();");
+    w!(out, "");
+    w!(out, "    Document {{");
+    w!(out, "        id,");
+    w!(
+        out,
+        "        fields: Some(prost_types::Struct {{ fields: s.fields.clone() }}),"
+    );
+    w!(
+        out,
+        "        created_at: s.fields.get(\"created_at\").and_then(|v| match &v.kind {{"
+    );
+    w!(
+        out,
+        "            Some(Kind::StringValue(s)) => Some(s.clone()),"
+    );
+    w!(out, "            _ => None,");
+    w!(out, "        }}),");
+    w!(
+        out,
+        "        updated_at: s.fields.get(\"updated_at\").and_then(|v| match &v.kind {{"
+    );
+    w!(
+        out,
+        "            Some(Kind::StringValue(s)) => Some(s.clone()),"
+    );
+    w!(out, "            _ => None,");
+    w!(out, "        }}),");
+    w!(out, "    }}");
+    w!(out, "}}");
+    w!(out, "");
+    w!(
+        out,
+        "fn get_rel<T: FromDocument>(doc: &Document, name: &str) -> Option<Rel<T>> {{"
+    );
+    w!(out, "    doc.fields.as_ref()");
+    w!(out, "        .and_then(|f| f.fields.get(name))");
+    w!(out, "        .and_then(|v| match &v.kind {{");
+    w!(
+        out,
+        "            Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())),"
+    );
+    w!(out, "            Some(Kind::StructValue(s)) => {{");
+    w!(out, "                let inner = struct_to_document(s);");
+    w!(
+        out,
+        "                Some(Rel::Doc(Box::new(T::from_document(&inner))))"
+    );
+    w!(out, "            }}");
+    w!(out, "            _ => None,");
+    w!(out, "        }})");
+    w!(out, "}}");
+    w!(out, "");
+    w!(
+        out,
+        "fn get_rel_list<T: FromDocument>(doc: &Document, name: &str) -> Vec<Rel<T>> {{"
+    );
+    w!(out, "    doc.fields.as_ref()");
+    w!(out, "        .and_then(|f| f.fields.get(name))");
+    w!(out, "        .and_then(|v| match &v.kind {{");
+    w!(out, "            Some(Kind::ListValue(list)) => Some(");
+    w!(out, "                list.values.iter()");
+    w!(out, "                    .filter_map(|v| match &v.kind {{");
+    w!(
+        out,
+        "                        Some(Kind::StringValue(s)) if !s.is_empty() => Some(Rel::Id(s.clone())),"
+    );
+    w!(
+        out,
+        "                        Some(Kind::StructValue(s)) => {{"
+    );
+    w!(
+        out,
+        "                            let inner = struct_to_document(s);"
+    );
+    w!(
+        out,
+        "                            Some(Rel::Doc(Box::new(T::from_document(&inner))))"
+    );
+    w!(out, "                        }}");
+    w!(out, "                        _ => None,");
+    w!(out, "                    }})");
+    w!(out, "                    .collect()");
+    w!(out, "            ),");
+    w!(out, "            _ => None,");
+    w!(out, "        }})");
+    w!(out, "        .unwrap_or_default()");
+    w!(out, "}}");
+    w!(out, "");
+}
+
 /// Render `from_document` impl for a collection.
 fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
@@ -178,6 +302,12 @@ fn render_collection_impl(out: &mut String, col: &CollectionDefinition) {
     w!(out, "    }}");
     w!(out, "}}");
     w!(out, "");
+    w!(out, "impl FromDocument for {} {{", pascal);
+    w!(out, "    fn from_document(doc: &Document) -> Self {{");
+    w!(out, "        {}::from_document(doc)", pascal);
+    w!(out, "    }}");
+    w!(out, "}}");
+    w!(out, "");
 }
 
 /// Render `from_document` impl for a global.
@@ -199,6 +329,12 @@ fn render_global_impl(out: &mut String, global: &GlobalDefinition) {
     w!(out, "            created_at: doc.created_at.clone(),");
     w!(out, "            updated_at: doc.updated_at.clone(),");
     w!(out, "        }}");
+    w!(out, "    }}");
+    w!(out, "}}");
+    w!(out, "");
+    w!(out, "impl FromDocument for {} {{", pascal);
+    w!(out, "    fn from_document(doc: &Document) -> Self {{");
+    w!(out, "        {}::from_document(doc)", pascal);
     w!(out, "    }}");
     w!(out, "}}");
     w!(out, "");
@@ -230,12 +366,33 @@ fn render_field_extractions(
     }
 }
 
+/// Wrap a list extraction in `Option` if the field is optional.
+fn opt_list(expr: &str, doc_var: &str, name: &str, optional: bool) -> String {
+    if optional {
+        format!(
+            "{{ let v = {expr}({doc_var}, \"{name}\"); if v.is_empty() {{ None }} else {{ Some(v) }} }}"
+        )
+    } else {
+        format!("{expr}({doc_var}, \"{name}\")")
+    }
+}
+
+/// Simple scalar extraction: `get_X` or `get_X_opt` depending on optionality.
+fn scalar(base: &str, doc_var: &str, name: &str, optional: bool) -> String {
+    if optional {
+        format!("{base}_opt({doc_var}, \"{name}\")")
+    } else {
+        format!("{base}({doc_var}, \"{name}\")")
+    }
+}
+
 /// Generate the extraction expression for a single field.
 fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str) -> String {
     let name = &field.name;
     let optional = is_optional(field);
 
     match &field.field_type {
+        // String-like scalars
         FieldType::Text
         | FieldType::Textarea
         | FieldType::Email
@@ -243,96 +400,83 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
         | FieldType::Richtext
         | FieldType::Code
         | FieldType::Select
-        | FieldType::Radio => {
-            if field.has_many {
-                if optional {
-                    format!(
-                        "{{ let v = get_str_list({doc_var}, \"{name}\"); if v.is_empty() {{ None }} else {{ Some(v) }} }}"
-                    )
-                } else {
-                    format!("get_str_list({doc_var}, \"{name}\")")
-                }
-            } else if optional {
-                format!("get_str_opt({doc_var}, \"{name}\")")
+        | FieldType::Radio
+            if field.has_many =>
+        {
+            opt_list("get_str_list", doc_var, name, optional)
+        }
+
+        FieldType::Text
+        | FieldType::Textarea
+        | FieldType::Email
+        | FieldType::Date
+        | FieldType::Richtext
+        | FieldType::Code
+        | FieldType::Select
+        | FieldType::Radio => scalar("get_str", doc_var, name, optional),
+
+        // Numbers
+        FieldType::Number if field.has_many => opt_list("get_str_list", doc_var, name, optional), // TODO: number list
+        FieldType::Number => scalar("get_num", doc_var, name, optional),
+
+        // Booleans
+        FieldType::Checkbox => scalar("get_bool", doc_var, name, optional),
+
+        // Relationships — polymorphic stays as plain strings
+        FieldType::Relationship | FieldType::Upload
+            if field
+                .relationship
+                .as_ref()
+                .is_some_and(|rc| rc.is_polymorphic()) =>
+        {
+            if rel_has_many(field) {
+                opt_list("get_str_list", doc_var, name, optional)
             } else {
-                format!("get_str({doc_var}, \"{name}\")")
+                scalar("get_str", doc_var, name, optional)
             }
         }
 
-        FieldType::Number => {
-            if field.has_many {
-                // Number lists — extract from ListValue
-                if optional {
-                    format!("None /* TODO: number list {name} */")
-                } else {
-                    format!("vec![] /* TODO: number list {name} */")
-                }
-            } else if optional {
-                format!("get_num_opt({doc_var}, \"{name}\")")
-            } else {
-                format!("get_num({doc_var}, \"{name}\")")
-            }
-        }
-
-        FieldType::Checkbox => {
-            if optional {
-                format!("get_bool_opt({doc_var}, \"{name}\")")
-            } else {
-                format!("get_bool({doc_var}, \"{name}\")")
-            }
+        // Relationships — typed with Rel<T>
+        FieldType::Relationship | FieldType::Upload if rel_has_many(field) => {
+            opt_list("get_rel_list", doc_var, name, optional)
         }
 
         FieldType::Relationship | FieldType::Upload => {
-            let has_many = rel_has_many(field);
-            if has_many {
-                if optional {
-                    format!(
-                        "{{ let v = get_str_list({doc_var}, \"{name}\"); if v.is_empty() {{ None }} else {{ Some(v) }} }}"
-                    )
-                } else {
-                    format!("get_str_list({doc_var}, \"{name}\")")
-                }
-            } else if optional {
-                format!("get_str_opt({doc_var}, \"{name}\")")
+            format!("get_rel({doc_var}, \"{name}\")")
+        }
+
+        // Typed arrays
+        FieldType::Array if !field.fields.is_empty() => {
+            let sub = format!("{}{}", parent_pascal, to_pascal_case(name));
+            let expr = format!(
+                "{doc_var}.fields.as_ref()\
+                .and_then(|f| f.fields.get(\"{name}\"))\
+                .and_then(|v| match &v.kind {{\
+                    Some(Kind::ListValue(list)) => Some(\
+                        list.values.iter()\
+                            .filter_map(|v| match &v.kind {{\
+                                Some(Kind::StructValue(s)) => Some({sub}::from_struct(s)),\
+                                _ => None,\
+                            }})\
+                            .collect::<Vec<_>>()\
+                    ),\
+                    _ => None,\
+                }})"
+            );
+
+            if optional {
+                expr
             } else {
-                format!("get_str({doc_var}, \"{name}\")")
+                format!("{expr}.unwrap_or_default()")
             }
         }
 
-        FieldType::Array => {
-            if field.fields.is_empty() {
-                if optional {
-                    "None /* untyped array */".to_string()
-                } else {
-                    "vec![] /* untyped array */".to_string()
-                }
-            } else {
-                let sub_pascal = format!("{}{}", parent_pascal, to_pascal_case(name));
-                let extract = format!(
-                    "{doc_var}.fields.as_ref()\
-                    .and_then(|f| f.fields.get(\"{name}\"))\
-                    .and_then(|v| match &v.kind {{\
-                        Some(Kind::ListValue(list)) => Some(\
-                            list.values.iter()\
-                                .filter_map(|v| match &v.kind {{\
-                                    Some(Kind::StructValue(s)) => Some({sub_pascal}::from_struct(s)),\
-                                    _ => None,\
-                                }})\
-                                .collect::<Vec<_>>()\
-                        ),\
-                        _ => None,\
-                    }})"
-                );
-                if optional {
-                    extract
-                } else {
-                    format!("{extract}.unwrap_or_default()")
-                }
-            }
-        }
-
-        FieldType::Json | FieldType::Blocks | FieldType::Join | FieldType::Group => {
-            // These map to serde_json::Value — skip proto extraction for now
+        // Fallbacks
+        FieldType::Array
+        | FieldType::Json
+        | FieldType::Blocks
+        | FieldType::Join
+        | FieldType::Group => {
             if optional {
                 "None /* complex field */".to_string()
             } else {
@@ -340,9 +484,8 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
             }
         }
 
-        // Layout wrappers handled in render_field_extractions
         FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
-            unreachable!("layout wrappers handled above")
+            unreachable!("layout wrappers handled in render_field_extractions")
         }
     }
 }
@@ -495,13 +638,13 @@ mod tests {
         render_collection_impl(&mut out, &col);
 
         assert!(
-            out.contains("author: get_str(doc, \"author\")"),
-            "required has-one: {}",
+            out.contains("author: get_rel(doc, \"author\")"),
+            "required has-one should use get_rel: {}",
             out
         );
         assert!(
-            out.contains("get_str_list(doc, \"tags\")"),
-            "optional has-many: {}",
+            out.contains("get_rel_list(doc, \"tags\")"),
+            "optional has-many should use get_rel_list: {}",
             out
         );
     }
