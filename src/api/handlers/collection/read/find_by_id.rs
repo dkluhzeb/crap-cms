@@ -72,6 +72,8 @@ impl ContentService {
                 .user(user_doc)
                 .build();
 
+            let include_deleted = req.trash.unwrap_or(false) && def_owned.soft_delete;
+
             let input = FindByIdInput::builder(&id)
                 .depth(depth)
                 .select(select.as_deref())
@@ -79,6 +81,7 @@ impl ContentService {
                 .registry(Some(&registry))
                 .use_draft(use_draft_version)
                 .cache(Some(&*pop_cache))
+                .include_deleted(include_deleted)
                 .build();
 
             let doc = find_document_by_id(&ctx, &input).map_err(Status::from)?;

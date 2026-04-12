@@ -16,6 +16,8 @@ pub struct FindByIdInput<'a> {
     pub cache: Option<&'a dyn CacheBackend>,
     pub use_draft: bool,
     pub access_constraints: Option<Vec<FilterClause>>,
+    /// When true, include soft-deleted documents (trash view).
+    pub include_deleted: bool,
 }
 
 impl<'a> FindByIdInput<'a> {
@@ -34,6 +36,7 @@ pub struct FindByIdInputBuilder<'a> {
     cache: Option<&'a dyn CacheBackend>,
     use_draft: bool,
     access_constraints: Option<Vec<FilterClause>>,
+    include_deleted: bool,
 }
 
 impl<'a> FindByIdInputBuilder<'a> {
@@ -47,6 +50,7 @@ impl<'a> FindByIdInputBuilder<'a> {
             cache: None,
             use_draft: false,
             access_constraints: None,
+            include_deleted: false,
         }
     }
 
@@ -85,6 +89,11 @@ impl<'a> FindByIdInputBuilder<'a> {
         self
     }
 
+    pub fn include_deleted(mut self, include_deleted: bool) -> Self {
+        self.include_deleted = include_deleted;
+        self
+    }
+
     pub fn build(self) -> FindByIdInput<'a> {
         FindByIdInput {
             id: self.id,
@@ -95,6 +104,7 @@ impl<'a> FindByIdInputBuilder<'a> {
             cache: self.cache,
             use_draft: self.use_draft,
             access_constraints: self.access_constraints,
+            include_deleted: self.include_deleted,
         }
     }
 }

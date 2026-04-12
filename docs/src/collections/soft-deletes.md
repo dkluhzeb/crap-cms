@@ -95,6 +95,33 @@ rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
 
 The `DeleteResponse` includes a `soft_deleted` boolean indicating whether the deletion was soft or hard.
 
+#### Querying trashed documents
+
+Use `trash = true` on `Find` and `FindByID` to access soft-deleted documents:
+
+```bash
+# List all trashed posts (sorted by deletion date, most recent first)
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "trash": true
+}' localhost:50051 crap.ContentAPI/Find
+
+# Find a specific trashed document by ID
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "id": "abc123",
+    "trash": true
+}' localhost:50051 crap.ContentAPI/FindByID
+```
+
+When `trash = true`:
+- Only documents with a `_deleted_at` timestamp are returned
+- Default sort is `-_deleted_at` (most recently deleted first)
+- `access.trash` is evaluated (falls back to `access.update`, same as
+  delete/undelete operations). This means users who can only read but not
+  trash/update cannot browse the trash.
+- Ignored if the collection does not have `soft_delete = true`
+
 ### Lua
 
 ```lua

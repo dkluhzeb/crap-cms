@@ -270,6 +270,7 @@ async fn create_and_find_by_id() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -366,6 +367,7 @@ async fn delete_document() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap_err();

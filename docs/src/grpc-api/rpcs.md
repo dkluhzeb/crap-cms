@@ -20,6 +20,7 @@ message FindRequest {
   optional string after_cursor = 10;    // opaque forward cursor for cursor-based pagination
   optional string before_cursor = 11;   // opaque backward cursor for cursor-based pagination
   optional string search = 12;          // FTS5 full-text search query
+  optional bool trash = 13;             // true = return only soft-deleted documents
 }
 
 message PaginationInfo {
@@ -68,6 +69,7 @@ message FindByIDRequest {
   optional string locale = 4;  // locale code for localized fields
   repeated string select = 5;  // fields to return (empty = all)
   optional bool draft = 6;   // true = return latest version (may be draft)
+  optional bool trash = 7;   // true = allow finding soft-deleted documents
 }
 
 message FindByIDResponse {

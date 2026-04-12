@@ -339,6 +339,7 @@ async fn create_returns_document_with_fields() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -804,6 +805,151 @@ async fn delete_many_force_hard_delete_on_soft_delete_collection() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Trash query via Find(trash=true)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Regression: Find with `trash=true` must return only soft-deleted documents.
+/// Find without `trash` must exclude them.
+#[tokio::test]
+async fn find_trash_returns_soft_deleted_documents() {
+    let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
+
+    // Create 3 documents
+    for title in &["Keep", "Trash1", "Trash2"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title)])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Soft-delete 2 of them
+    let all = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(all.pagination.as_ref().unwrap().total_docs, 3);
+
+    for doc in &all.documents[1..] {
+        ts.service
+            .delete(Request::new(content::DeleteRequest {
+                collection: "posts".to_string(),
+                id: doc.id.clone(),
+                force_hard_delete: false,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Normal find should return only 1
+    let normal = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        normal.pagination.as_ref().unwrap().total_docs,
+        1,
+        "normal find should exclude soft-deleted documents"
+    );
+
+    // Find with trash=true should return 2
+    let trash = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            trash: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        trash.pagination.as_ref().unwrap().total_docs,
+        2,
+        "trash find should return only soft-deleted documents"
+    );
+}
+
+/// FindByID with `trash=true` should find a soft-deleted document.
+#[tokio::test]
+async fn find_by_id_trash_finds_soft_deleted() {
+    let ts = setup_service(vec![make_soft_delete_posts_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Will Delete")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Soft-delete it
+    ts.service
+        .delete(Request::new(content::DeleteRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            force_hard_delete: false,
+        }))
+        .await
+        .unwrap();
+
+    // Normal FindByID should return NOT_FOUND
+    let err = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            trash: None,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::NotFound);
+
+    // FindByID with trash=true should find it
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            trash: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(
+        found.document.is_some(),
+        "trash find_by_id should return the document"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Versioning RPCs (collection without versions)
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -956,6 +1102,7 @@ async fn find_by_id_with_select() {
             locale: None,
             select: vec!["title".to_string()],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -1031,6 +1178,7 @@ async fn find_by_id_not_found() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap_err();

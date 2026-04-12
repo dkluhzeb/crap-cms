@@ -23,10 +23,21 @@ pub fn find_documents(
     let hooks = ctx.read_hooks()?;
     let def = ctx.collection_def();
 
-    let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
+    let access_ref = if input.trash {
+        def.access.resolve_trash()
+    } else {
+        def.access.read.as_deref()
+    };
+
+    let access = hooks.check_access(access_ref, ctx.user, None, None)?;
 
     if matches!(access, AccessResult::Denied) {
-        return Err(ServiceError::AccessDenied("Read access denied".into()));
+        let msg = if input.trash {
+            "Trash access denied"
+        } else {
+            "Read access denied"
+        };
+        return Err(ServiceError::AccessDenied(msg.into()));
     }
 
     let mut fq = input.query.clone();

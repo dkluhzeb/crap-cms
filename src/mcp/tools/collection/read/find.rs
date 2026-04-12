@@ -77,7 +77,26 @@ pub(in crate::mcp::tools) fn exec_find(
         fq = fq.search(s.as_str());
     }
 
-    let fq = fq.build();
+    let is_trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false) && def.soft_delete;
+
+    if is_trash {
+        fq = fq.include_deleted(true);
+
+        if order_by.is_none() {
+            fq = fq.order_by("-_deleted_at");
+        }
+    }
+
+    let mut fq = fq.build();
+
+    if is_trash {
+        use crate::db::{Filter, FilterClause, FilterOp};
+
+        fq.filters.push(FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        }));
+    }
     let hooks = RunnerReadHooks::new(runner, &conn);
     let ctx = ServiceContext::collection(slug, def)
         .pool(pool)

@@ -1,4 +1,3 @@
-use anyhow::Context as _;
 use axum::{
     Extension,
     extract::{Path, Query, State},
@@ -18,9 +17,9 @@ use crate::{
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PaginationParams, check_access_or_forbid,
-                compute_denied_read_fields, extract_editor_locale, extract_where_params, forbidden,
-                not_found, parse_where_params, render_or_error, server_error, validate_sort,
+                ListUrlContext, PaginationParams, compute_denied_read_fields,
+                extract_editor_locale, extract_where_params, forbidden, not_found,
+                parse_where_params, render_or_error, server_error, validate_sort,
             },
         },
     },
@@ -28,10 +27,10 @@ use crate::{
         CollectionDefinition, Document,
         auth::{AuthUser, Claims},
     },
-    db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
+    db::query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     service::{
-        FindDocumentsInput, PaginatedResult, RunnerReadHooks, ServiceContext, find_documents,
-        user_settings::get_user_settings,
+        FindDocumentsInput, PaginatedResult, RunnerReadHooks, ServiceContext, ServiceError,
+        find_documents, user_settings::get_user_settings,
     },
 };
 
@@ -44,8 +43,8 @@ fn fetch_list_documents(
     locale_ctx: Option<&query::LocaleContext>,
     auth_user: &Option<Extension<AuthUser>>,
     cursor_enabled: bool,
-) -> anyhow::Result<PaginatedResult<Document>> {
-    let conn = state.pool.get().context("Failed to get DB connection")?;
+) -> Result<PaginatedResult<Document>, ServiceError> {
+    let conn = state.pool.get().map_err(ServiceError::Internal)?;
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
 
     let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
@@ -56,15 +55,16 @@ fn fetch_list_documents(
         .user(user_doc.as_ref())
         .build();
 
+    let is_trash = find_query.include_deleted;
+
     let input = FindDocumentsInput::builder(find_query)
         .hydrate(false)
         .locale_ctx(locale_ctx)
         .cursor_enabled(cursor_enabled)
+        .trash(is_trash)
         .build();
 
-    let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
-
-    Ok(result)
+    find_documents(&ctx, &input)
 }
 
 /// Compute title column sort URL and sort direction indicators.
@@ -145,17 +145,12 @@ fn build_list_pagination(
 /// Build the FindQuery from pagination, filters, sort, and search params.
 fn build_find_query(
     pagination: &query::FindPagination,
-    access_result: &AccessResult,
     url_filters: &[FilterClause],
     is_trash: bool,
     order_by: Option<String>,
     search: Option<&str>,
 ) -> FindQuery {
     let mut filters: Vec<FilterClause> = Vec::new();
-
-    if let AccessResult::Constrained(constraint_filters) = access_result {
-        filters.extend(constraint_filters.clone());
-    }
 
     filters.extend(url_filters.iter().cloned());
 
@@ -234,21 +229,11 @@ pub async fn list_items(
         }
     };
 
-    // Check read access
-    let access_result =
-        match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
-            Ok(r) => r,
-            Err(resp) => return *resp,
-        };
-
-    if matches!(access_result, AccessResult::Denied) {
-        return forbidden(&state, "You don't have permission to view this collection");
-    }
+    let is_trash = def.soft_delete && params.trash.as_deref() == Some("1");
 
     let raw_query = uri.query().unwrap_or("");
     let cursor_enabled = state.config.pagination.is_cursor();
     let search = params.search.filter(|s| !s.trim().is_empty());
-    let is_trash = def.soft_delete && params.trash.as_deref() == Some("1");
 
     let pg_ctx = query::PaginationCtx::new(
         state.config.pagination.default_limit,
@@ -280,7 +265,6 @@ pub async fn list_items(
 
     let find_query = build_find_query(
         &pagination,
-        &access_result,
         &url_filters,
         is_trash,
         order_by.clone(),
@@ -312,6 +296,16 @@ pub async fn list_items(
 
     let result = match read_result {
         Ok(Ok(v)) => v,
+        Ok(Err(ServiceError::AccessDenied(_))) => {
+            return forbidden(
+                &state,
+                if is_trash {
+                    "You don't have permission to view the trash"
+                } else {
+                    "You don't have permission to view this collection"
+                },
+            );
+        }
         Ok(Err(e)) => {
             error!("Collection list query error: {}", e);
 

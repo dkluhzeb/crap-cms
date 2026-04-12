@@ -20,6 +20,9 @@ pub struct FindDocumentsInput<'a> {
     /// Whether cursor-based pagination is enabled (from config).
     /// When true, PaginationResult uses cursor mode; when false, page mode.
     pub cursor_enabled: bool,
+    /// When true, use `access.trash` (or fallback `access.update`) instead of
+    /// `access.read` for the access check. Used for trash/soft-delete queries.
+    pub trash: bool,
 }
 
 impl<'a> FindDocumentsInput<'a> {
@@ -40,6 +43,7 @@ pub struct FindDocumentsInputBuilder<'a> {
     use_draft: bool,
     access_constraints: Option<Vec<FilterClause>>,
     cursor_enabled: bool,
+    trash: bool,
 }
 
 impl<'a> FindDocumentsInputBuilder<'a> {
@@ -55,6 +59,7 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             use_draft: false,
             access_constraints: None,
             cursor_enabled: false,
+            trash: false,
         }
     }
 
@@ -103,6 +108,11 @@ impl<'a> FindDocumentsInputBuilder<'a> {
         self
     }
 
+    pub fn trash(mut self, trash: bool) -> Self {
+        self.trash = trash;
+        self
+    }
+
     pub fn build(self) -> FindDocumentsInput<'a> {
         FindDocumentsInput {
             query: self.query,
@@ -115,6 +125,7 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             use_draft: self.use_draft,
             access_constraints: self.access_constraints,
             cursor_enabled: self.cursor_enabled,
+            trash: self.trash,
         }
     }
 }

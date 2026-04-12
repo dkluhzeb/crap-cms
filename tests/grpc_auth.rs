@@ -914,6 +914,7 @@ async fn password_hash_not_in_response() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()

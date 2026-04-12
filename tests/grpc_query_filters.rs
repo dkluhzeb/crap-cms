@@ -1206,6 +1206,7 @@ async fn find_depth_0_returns_id_only() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()

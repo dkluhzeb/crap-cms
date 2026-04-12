@@ -11,7 +11,7 @@ use crate::{
             ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
         },
     },
-    db::{AccessResult, FindQuery, LocaleContext, query},
+    db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };
 
@@ -57,7 +57,26 @@ fn build_find_query(
         fq = fq.search(s.clone());
     }
 
-    Ok(fq.build())
+    let is_trash = req.trash.unwrap_or(false) && def.soft_delete;
+
+    if is_trash {
+        fq = fq.include_deleted(true);
+
+        if req.order_by.is_none() {
+            fq = fq.order_by("-_deleted_at");
+        }
+    }
+
+    let mut fq = fq.build();
+
+    if is_trash {
+        fq.filters.push(FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        }));
+    }
+
+    Ok(fq)
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -102,6 +121,7 @@ impl ContentService {
         let collection = req.collection.clone();
         let pop_cache = self.cache.clone();
         let def_owned = def;
+        let is_trash = req.trash.unwrap_or(false) && def_owned.soft_delete;
 
         let find_query = build_find_query(&req, &def_owned, &pagination, select.as_deref())?;
 
@@ -133,6 +153,7 @@ impl ContentService {
                 .registry(Some(&registry))
                 .cache(Some(&*pop_cache))
                 .cursor_enabled(cursor_enabled)
+                .trash(is_trash)
                 .build();
 
             let result = find_documents(&ctx, &input).map_err(Status::from)?;

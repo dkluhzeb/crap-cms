@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.5] — Unreleased
 
+### Added
+
+- **gRPC trash query** — `Find` and `FindByID` requests now accept an
+  optional `trash` parameter. When `trash = true`, only soft-deleted
+  documents are returned (sorted by `_deleted_at` descending by default).
+  Uses `access.trash` permission (falls back to `access.update`) instead
+  of `access.read`. Requires `soft_delete = true` on the collection.
+  Previously, soft-deleted documents were only accessible through the
+  admin UI.
+
 ### Fixed
 
 - **`admin.access` gate not enforced at login** — Users who failed the

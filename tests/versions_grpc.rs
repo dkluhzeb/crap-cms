@@ -362,6 +362,7 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
             locale: None,
             select: vec![],
             draft: Some(true),
+            trash: None,
         }))
         .await
         .unwrap()
@@ -415,6 +416,7 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -613,6 +615,7 @@ async fn grpc_restore_version() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
