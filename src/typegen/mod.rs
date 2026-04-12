@@ -9,6 +9,7 @@
 mod go;
 mod lua;
 mod python;
+mod rust_proto;
 mod rust_types;
 mod typescript;
 
@@ -99,6 +100,25 @@ pub fn generate_lang(
     let output = render(registry, lang);
     let filename = format!("generated.{}", lang.file_extension());
     let path = types_dir.join(filename);
+    std::fs::write(&path, output)?;
+    Ok(path)
+}
+
+/// Generate proto conversion code for Rust (prost_types → typed structs).
+/// Writes to `<output_dir>/generated_proto.rs`.
+pub fn generate_proto_conversion(
+    config_dir: &Path,
+    registry: &Registry,
+    proto_mod: &str,
+    output_dir: Option<&Path>,
+) -> Result<PathBuf> {
+    let types_dir = output_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| config_dir.join("types"));
+    std::fs::create_dir_all(&types_dir)?;
+
+    let output = rust_proto::render(registry, proto_mod);
+    let path = types_dir.join("generated_proto.rs");
     std::fs::write(&path, output)?;
     Ok(path)
 }

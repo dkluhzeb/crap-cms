@@ -8,6 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Rust typegen proto conversion** — `crap-cms typegen -l rs --proto <module>`
+  generates `generated_proto.rs` with `from_document()` impls that extract
+  fields directly from `prost_types::Struct` — no JSON intermediate, no
+  serde deserialization. Depends only on `prost_types`, not `tonic`.
+  Sub-types (array rows) get `from_struct()` methods. Handles all field
+  types: text, number, checkbox, relationships, arrays with sub-fields,
+  uploads, selects. Layout wrappers (Row, Collapsible, Tabs) are
+  transparently promoted.
+
 - **gRPC trash query** — `Find` and `FindByID` requests now accept an
   optional `trash` parameter. When `trash = true`, only soft-deleted
   documents are returned (sorted by `_deleted_at` descending by default).

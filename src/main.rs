@@ -141,6 +141,11 @@ enum Command {
         /// Output directory for generated files (default: <config>/types/)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Generate prost_types conversion code for Rust. Value is the proto module path
+        /// (e.g. "crate::proto"). Writes generated_proto.rs alongside generated.rs.
+        #[arg(long)]
+        proto: Option<String>,
     },
 
     /// Export the embedded content.proto file for gRPC client codegen
@@ -436,9 +441,13 @@ async fn run(cli: Cli) -> Result<()> {
                 crap_cms::scaffold::blueprint_remove(&name)
             }
         },
-        Command::Typegen { lang, output } => {
+        Command::Typegen {
+            lang,
+            output,
+            proto,
+        } => {
             let config = commands::resolve_config_dir(config_flag)?;
-            commands::typegen::run(&config, &lang, output.as_deref())
+            commands::typegen::run(&config, &lang, output.as_deref(), proto.as_deref())
         }
         Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { action } => {

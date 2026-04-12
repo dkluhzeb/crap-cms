@@ -369,7 +369,7 @@ fn cmd_typegen_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "lua", None);
+    let result = commands::typegen::run(&config_dir, "lua", None, None);
     assert!(
         result.is_ok(),
         "typegen lua should succeed: {:?}",
@@ -382,7 +382,7 @@ fn cmd_typegen_all_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "all", None);
+    let result = commands::typegen::run(&config_dir, "all", None, None);
     assert!(
         result.is_ok(),
         "typegen all should succeed: {:?}",
@@ -395,7 +395,7 @@ fn cmd_typegen_invalid_lang_errors() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "invalid_lang", None);
+    let result = commands::typegen::run(&config_dir, "invalid_lang", None, None);
     assert!(result.is_err(), "typegen with invalid language should fail");
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -411,7 +411,7 @@ fn cmd_typegen_custom_output_dir() {
     let config_dir = tmp.path().join("config");
     let custom_output = tmp.path().join("custom_types");
 
-    let result = commands::typegen::run(&config_dir, "lua", Some(&custom_output));
+    let result = commands::typegen::run(&config_dir, "lua", Some(&custom_output), None);
     assert!(
         result.is_ok(),
         "typegen with custom output should succeed: {:?}",

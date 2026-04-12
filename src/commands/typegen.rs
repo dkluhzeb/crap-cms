@@ -6,7 +6,12 @@ use std::path::Path;
 use crate::{cli, config, hooks, typegen};
 
 /// Handle the `typegen` subcommand — loads the Lua registry and generates types.
-pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Result<()> {
+pub fn run(
+    config_dir: &Path,
+    lang_str: &str,
+    output_dir: Option<&Path>,
+    proto_mod: Option<&str>,
+) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -35,6 +40,14 @@ pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Resu
 
         let path = typegen::generate_lang(&config_dir, &reg, lang, output_dir)
             .context("Failed to generate type definitions")?;
+
+        cli::success(&format!("Generated {}", path.display()));
+    }
+
+    // Generate proto conversion code if requested (Rust only)
+    if let Some(proto_path) = proto_mod {
+        let path = typegen::generate_proto_conversion(&config_dir, &reg, proto_path, output_dir)
+            .context("Failed to generate proto conversion code")?;
 
         cli::success(&format!("Generated {}", path.display()));
     }
