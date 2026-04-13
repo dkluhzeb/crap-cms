@@ -189,6 +189,7 @@ fn render_rel_helpers(out: &mut String) {
     w!(out, "");
     w!(out, "    Document {{");
     w!(out, "        id,");
+    w!(out, "        collection: String::new(),");
     w!(
         out,
         "        fields: Some(prost_types::Struct {{ fields: s.fields.clone() }}),"
@@ -442,7 +443,11 @@ fn field_extraction(field: &FieldDefinition, parent_pascal: &str, doc_var: &str)
         }
 
         FieldType::Relationship | FieldType::Upload => {
-            format!("get_rel({doc_var}, \"{name}\")")
+            if optional {
+                format!("get_rel({doc_var}, \"{name}\")")
+            } else {
+                format!("get_rel({doc_var}, \"{name}\").unwrap_or(Rel::Id(String::new()))")
+            }
         }
 
         // Typed arrays
