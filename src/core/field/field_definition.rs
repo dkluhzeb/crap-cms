@@ -132,6 +132,12 @@ pub struct FieldDefinition {
     /// Configuration for join (virtual reverse-relationship) fields.
     #[serde(default)]
     pub join: Option<JoinConfig>,
+    /// Strip this field from all read responses (gRPC, Lua, MCP, admin JSON, REST).
+    /// Writes are not stripped — internal hooks/Lua can still write the column.
+    /// Implies the field is also skipped in the admin form (no data to render).
+    /// See `admin.hidden` for the admin-form-only equivalent (still returned in API).
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 impl Default for FieldDefinition {
@@ -167,6 +173,7 @@ impl Default for FieldDefinition {
             timezone: false,
             default_timezone: None,
             join: None,
+            hidden: false,
         }
     }
 }

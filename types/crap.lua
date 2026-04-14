@@ -58,7 +58,7 @@ crap = {}
 --- @field label?       crap.LocalizedString   UI label (defaults to field name).
 --- @field description? crap.LocalizedString   Help text shown below the input.
 --- @field placeholder? crap.LocalizedString   Input placeholder text.
---- @field hidden?      boolean  Hide from admin UI (default: false).
+--- @field hidden?      boolean  Hide from the admin edit form only (default: false). The field's value is still returned in API responses (gRPC, Lua, MCP, REST). For full API stripping, use top-level `hidden` on `crap.FieldDefinition` instead.
 --- @field readonly?    boolean  Non-editable in admin (default: false).
 --- @field width?       crap.FieldWidth  Field width: "full", "half", or "third".
 --- @field collapsed?   boolean  Start collapsed in admin UI — groups, collapsibles, array/block rows (default: true). Set `false` to start expanded.
@@ -137,7 +137,7 @@ crap = {}
 --- @field index?        boolean           Create a B-tree index on this column (default: false). Skipped when unique=true (already indexed).
 --- @field localized?    boolean           Per-locale values (default: false).
 --- @field default_value? any              Default value on create.
---- @field hidden?       boolean           Hide from API responses (default: false).
+--- @field hidden?       boolean           Strip from all read responses — gRPC, Lua, MCP, admin JSON, REST (default: false). Writes are not stripped (internal hooks/Lua can still write the column). Implies the field is also skipped in the admin form. For admin-form-only hiding while keeping the value in API responses, use `admin.hidden` instead.
 --- @field validate?     string            Lua function ref (module.function format) called as crap.ValidateFunction.
 --- @field hooks?        crap.FieldHooks   Per-field lifecycle hooks (value transformers, no CRUD access).
 --- @field options?      crap.SelectOption[] Options for "select" field type.
@@ -183,6 +183,7 @@ crap = {}
 --- @field index?        boolean           Create a B-tree index on this column (default: false). Skipped when unique=true.
 --- @field localized?    boolean           Per-locale values (default: false).
 --- @field default_value? any              Default value on create.
+--- @field hidden?       boolean           Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
 --- @field validate?     string            Lua function ref called as `crap.ValidateFunction`.
 --- @field hooks?        crap.FieldHooks   Per-field lifecycle hooks.
 --- @field access?       crap.FieldAccess  Field-level access control (read/create/update).

@@ -36,7 +36,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let mut doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
 
     let mut denied = hooks.field_read_denied(&def.fields, ctx.user);
-    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&denied);
 

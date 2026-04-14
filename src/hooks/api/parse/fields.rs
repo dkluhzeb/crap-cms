@@ -314,6 +314,7 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
         .tabs(tab_defs)
         .localized(get_bool(field_tbl, "localized", false)?)
         .has_many(get_bool(field_tbl, "has_many", false)?)
+        .hidden(get_bool(field_tbl, "hidden", false)?)
         .options(options);
 
     if let Some(v) = get_string(field_tbl, "validate") {

@@ -99,7 +99,7 @@ pub fn search_documents(
     }
 
     let mut denied = hooks.field_read_denied(&def.fields, ctx.user);
-    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     if !denied.is_empty() {
         for doc in &mut docs {

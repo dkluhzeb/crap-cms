@@ -1075,9 +1075,79 @@ async fn upload_api_create_returns_201_with_document() {
             .ends_with("photo.png")
     );
 
-    // Hidden fields (url, mime_type, filesize, width, height) are stripped from API responses
-    assert!(json["document"]["url"].is_null());
-    assert!(json["document"]["mime_type"].is_null());
+    // Upload auto-injected fields use `admin.hidden = true` (admin-form-only) —
+    // they remain in API responses so consumers (gRPC, Lua, MCP, admin upload
+    // preview widget, focal-point selector) can render previews and crops.
+    // The strict "strip from API" semantic lives on top-level `hidden = true`,
+    // which upload meta fields do NOT set.
+    assert!(
+        json["document"]["url"].is_string(),
+        "url must be in API response (admin.hidden does not strip from API)"
+    );
+    assert_eq!(json["document"]["mime_type"], "image/png");
+    assert!(json["document"]["filesize"].is_number());
+    assert!(json["document"]["width"].is_number());
+    assert!(json["document"]["height"].is_number());
+}
+
+/// Regression for the upload-edit form bug: after uploading an image to a
+/// media collection, the admin edit page must render the `<crap-focal-point>`
+/// preview block. The block is gated on `upload.preview` being set, which is
+/// derived from the `url` + `mime_type` fields the document carries — so this
+/// test fails the moment those fields get stripped from the service-layer
+/// response again (e.g. by re-introducing `admin.hidden` → API stripping).
+#[tokio::test]
+async fn admin_upload_edit_form_renders_focal_point_preview() {
+    let app = setup_app(vec![make_users_def(), make_media_def()], vec![]);
+    let user_id = create_test_user(&app, "uploaduiedit@test.com", "secret123");
+    let bearer = make_bearer_token(&app, &user_id, "uploaduiedit@test.com");
+    let cookie = make_auth_cookie(&app, &user_id, "uploaduiedit@test.com");
+
+    // Upload an image via the upload API.
+    let png = tiny_png();
+    let (ct, body) = build_multipart_body("photo.png", "image/png", &png, &[("alt", "preview")]);
+    let upload_resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/api/upload/media")
+                .header("content-type", ct)
+                .header("authorization", &bearer)
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload_resp.status(), StatusCode::CREATED);
+    let upload_json: serde_json::Value =
+        serde_json::from_str(&body_string(upload_resp.into_body()).await).unwrap();
+    let doc_id = upload_json["document"]["id"].as_str().unwrap().to_string();
+
+    // GET the admin edit form for the uploaded doc.
+    let edit_resp = app
+        .router
+        .oneshot(
+            Request::get(format!("/admin/collections/media/{}", doc_id))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edit_resp.status(), StatusCode::OK);
+
+    let html = body_string(edit_resp.into_body()).await;
+    assert!(
+        html.contains("<crap-focal-point"),
+        "edit page must render the focal-point preview widget; if this fails, \
+         upload meta fields are being stripped from the service response again"
+    );
+    assert!(
+        html.contains("data-src=\"/uploads/"),
+        "preview widget must point at the uploaded image"
+    );
 }
 
 #[tokio::test]

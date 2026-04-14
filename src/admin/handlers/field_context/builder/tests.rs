@@ -430,6 +430,40 @@ fn build_field_contexts_no_filter_includes_hidden_fields() {
     assert_eq!(result.len(), 2);
 }
 
+/// Top-level `hidden = true` is unconditional: even with `filter_hidden = false`
+/// the field is skipped, because its data is stripped from API responses, so
+/// rendering an empty input would just confuse the user.
+#[test]
+fn build_field_contexts_top_level_hidden_always_skipped() {
+    let mut api_hidden_field = make_field("internal", FieldType::Text);
+    api_hidden_field.hidden = true;
+
+    let fields = vec![make_field("title", FieldType::Text), api_hidden_field];
+
+    // filter_hidden = false (the error re-render path) — top-level hidden still skipped.
+    let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0]["name"], "title");
+}
+
+/// `admin.hidden = true` (only) is the upload-meta case: it must NOT cause the
+/// field to be stripped from API responses. The form-builder still skips it
+/// via the `filter_hidden = true` branch (admin form rendering), but the data
+/// reaches consumers and the upload preview widget through the service layer.
+#[test]
+fn build_field_contexts_admin_hidden_does_not_imply_top_level_hidden() {
+    let mut admin_hidden = make_field("url", FieldType::Text);
+    admin_hidden.admin.hidden = true;
+    // Critically: top-level hidden stays false — this is what upload meta fields look like.
+    assert!(!admin_hidden.hidden);
+
+    let fields = vec![make_field("title", FieldType::Text), admin_hidden];
+
+    // filter_hidden = false → both rendered (error re-render path).
+    let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+    assert_eq!(result.len(), 2);
+}
+
 // --- build_field_contexts: relationship tests ---
 
 #[test]

@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::{ServiceError, helpers::strip_denied_fields};
-use crate::service::helpers::{collect_hidden_field_names, enforce_access_constraints};
+use crate::service::helpers::{collect_api_hidden_field_names, enforce_access_constraints};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -117,7 +117,7 @@ pub fn update_document_core(
 
     // Strip read-denied fields AFTER hydration
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

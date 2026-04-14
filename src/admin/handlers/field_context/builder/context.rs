@@ -49,6 +49,14 @@ pub(in crate::admin::handlers::field_context) fn build_select_options(
 
 /// Build field context objects for template rendering.
 ///
+/// `filter_hidden`: when true, fields with `admin.hidden = true` are skipped
+/// (form rendering — false during error re-renders so the user's entered
+/// values are preserved across the round-trip).
+///
+/// Fields with top-level `hidden = true` are *always* skipped — the data is
+/// stripped from API responses, so there's nothing to render and no value to
+/// preserve. The `filter_hidden` toggle does not apply.
+///
 /// `non_default_locale`: when true, non-localized fields are rendered readonly
 /// (locked) because they are shared across all locales and should only be edited
 /// from the default locale.
@@ -59,13 +67,11 @@ pub fn build_field_contexts(
     filter_hidden: bool,
     non_default_locale: bool,
 ) -> Vec<Value> {
-    let iter: Box<dyn Iterator<Item = &FieldDefinition>> = if filter_hidden {
-        Box::new(fields.iter().filter(|field| !field.admin.hidden))
-    } else {
-        Box::new(fields.iter())
-    };
-
-    iter.map(|field| build_single_field_context(field, values, errors, "", non_default_locale, 0))
+    fields
+        .iter()
+        .filter(|field| !field.hidden)
+        .filter(|field| !filter_hidden || !field.admin.hidden)
+        .map(|field| build_single_field_context(field, values, errors, "", non_default_locale, 0))
         .collect()
 }
 

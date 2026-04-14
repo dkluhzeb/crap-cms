@@ -196,6 +196,13 @@ impl FieldDefinitionBuilder {
         self
     }
 
+    /// Set whether this field is stripped from all read responses (API-hidden).
+    /// See [`FieldDefinition::hidden`] for full semantics.
+    pub fn hidden(mut self, v: bool) -> Self {
+        self.inner.hidden = v;
+        self
+    }
+
     /// Build the final `FieldDefinition` instance.
     pub fn build(self) -> FieldDefinition {
         self.inner

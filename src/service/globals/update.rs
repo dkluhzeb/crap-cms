@@ -166,7 +166,7 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
     query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(svc_helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(svc_helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

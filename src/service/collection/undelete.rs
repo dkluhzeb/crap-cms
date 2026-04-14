@@ -47,7 +47,7 @@ pub fn undelete_document_core(ctx: &ServiceContext, id: &str) -> Result<Document
         .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

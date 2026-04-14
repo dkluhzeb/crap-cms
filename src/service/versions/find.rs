@@ -51,7 +51,7 @@ pub fn find_version_by_id(
 
     // Strip read-denied fields from the snapshot JSON
     let mut denied = hooks.field_read_denied(ctx.fields(), ctx.user);
-    denied.extend(helpers::collect_hidden_field_names(ctx.fields(), ""));
+    denied.extend(helpers::collect_api_hidden_field_names(ctx.fields(), ""));
 
     if !denied.is_empty() {
         strip_snapshot_fields(&mut version.snapshot, &denied);

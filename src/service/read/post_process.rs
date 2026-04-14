@@ -122,7 +122,7 @@ pub(crate) fn post_process_single(
     }
 
     let mut denied = hooks.field_read_denied(&def.fields, user);
-    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&denied);
 
@@ -240,7 +240,7 @@ pub(crate) fn post_process_docs(
     }
 
     let mut denied = hooks.field_read_denied(&def.fields, user);
-    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     if !denied.is_empty() {
         for doc in docs.iter_mut() {

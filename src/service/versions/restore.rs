@@ -187,7 +187,7 @@ pub(crate) fn restore_collection_version_core(
     )?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 
@@ -267,7 +267,7 @@ pub(crate) fn restore_global_version_core(
     )?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

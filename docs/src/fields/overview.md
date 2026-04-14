@@ -49,6 +49,7 @@ Every field type accepts these properties:
 | `localized` | boolean | `false` | Enable per-locale values. Requires [localization](../locale/overview.md) to be configured. |
 | `validate` | string | `nil` | Lua function ref for custom validation (see below). |
 | `default_value` | any | `nil` | Default value applied on create if no value provided. |
+| `hidden` | boolean | `false` | Strip from all read responses (gRPC, Lua, MCP, admin JSON, REST) and skip in the admin form. Writes are not stripped — internal hooks/Lua can still write the column. For admin-form-only hiding (value still returned by API), use `admin.hidden` instead. |
 | `admin` | table | `{}` | Admin UI display options. |
 | `hooks` | table | `{}` | Per-field lifecycle hooks. |
 | `access` | table | `{}` | Per-field access control. |
@@ -82,7 +83,7 @@ Every field type accepts these properties:
 | `label` | string \| table | `nil` | UI label (defaults to title-cased field name). Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `placeholder` | string \| table | `nil` | Input placeholder text. Supports [localized strings](../locale/overview.md#admin-label-localization). |
 | `description` | string \| table | `nil` | Help text displayed below the input. Supports [localized strings](../locale/overview.md#admin-label-localization). |
-| `hidden` | boolean | `false` | Hide from admin UI forms |
+| `hidden` | boolean | `false` | Hide from the admin edit form. The field's value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it. For full API stripping, use the top-level `hidden` field property instead. |
 | `readonly` | boolean | `false` | Display but don't allow editing |
 | `width` | string | `nil` | Field width: `"full"` (default), `"half"`, or `"third"` |
 | `position` | string | `"main"` | Form layout position: `"main"` or `"sidebar"` |

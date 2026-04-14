@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Top-level `hidden` field flag** — new `hidden = true` on
+  `crap.FieldDefinition` strips a field from all read responses (gRPC,
+  Lua, MCP, admin JSON, REST) and skips it in the admin form. Writes
+  are not stripped — internal hooks/Lua can still write the column.
+  This separates the two concerns that `admin.hidden` was overloaded
+  to express: `admin.hidden` now controls admin-form rendering only
+  (data still returned by the API, matching PayloadCMS's `hidden`
+  semantic), while top-level `hidden` is the strict "do not return
+  this anywhere" flag. Both flags are independent and composable.
+
 - **`[live] transport = "redis"` for cross-node event fan-out** — new
   config key that pipes live-update mutation events and user-invalidation
   signals through Redis pub/sub instead of the default in-process
@@ -174,6 +184,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   cross-request dedup in the Changed section.
 
 ### Fixed
+
+- **Admin upload edit page renders the image preview and focal-point
+  selector again.** The admin access harmonization in this release had
+  extended the service-layer field stripping to also strip every field
+  marked `admin.hidden = true`, conflating "don't render in the admin
+  form" with "remove from API output". Upload's auto-injected meta
+  fields (`url`, `mime_type`, `filesize`, `width`, `height`,
+  `focal_x`, `focal_y`, per-size variants) were marked `admin.hidden`
+  to keep them out of the form, so the service stripped them — and the
+  admin's upload preview widget (which also reads them via the service
+  layer) got nothing to render. The two concerns are now split:
+  `admin.hidden` is admin-form rendering only; the new top-level
+  `hidden` is the API-stripping flag (see Added). Upload meta fields
+  are restored to all API responses, fixing the missing image preview
+  and unblocking gRPC/Lua/MCP consumers that need them.
 
 - **[SECURITY] SEC-G Join field population bypassed target-collection
   read access** — `populate_join_docs` was running raw `query::find`

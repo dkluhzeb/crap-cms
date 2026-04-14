@@ -71,7 +71,7 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
     query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 
