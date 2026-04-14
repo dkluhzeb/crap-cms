@@ -44,6 +44,7 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
+        let invalidation_transport = self.invalidation_transport.clone();
 
         task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool
@@ -57,7 +58,12 @@ impl ContentService {
                 return Err(Status::unauthenticated("Authentication required"));
             }
 
-            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
+            // Service-layer lock_user publishes the invalidation signal
+            // when a transport is attached to the context.
+            let ctx = ServiceContext::slug_only(&collection)
+                .conn(&conn)
+                .invalidation_transport(Some(invalidation_transport))
+                .build();
             service::auth::lock_user(&ctx, &id)
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 

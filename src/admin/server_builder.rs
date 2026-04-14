@@ -8,7 +8,7 @@ use crate::{
     core::{
         JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
-        event::EventBus,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
@@ -24,7 +24,7 @@ pub struct AdminStartParamsBuilder {
     registry: Option<Arc<Registry>>,
     hook_runner: Option<HookRunner>,
     jwt_secret: Option<JwtSecret>,
-    event_bus: Option<EventBus>,
+    event_transport: Option<SharedEventTransport>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
@@ -32,6 +32,7 @@ pub struct AdminStartParamsBuilder {
     storage: Option<SharedStorage>,
     token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
 impl AdminStartParamsBuilder {
@@ -43,7 +44,7 @@ impl AdminStartParamsBuilder {
             registry: None,
             hook_runner: None,
             jwt_secret: None,
-            event_bus: None,
+            event_transport: None,
             login_limiter: None,
             ip_login_limiter: None,
             forgot_password_limiter: None,
@@ -51,6 +52,7 @@ impl AdminStartParamsBuilder {
             storage: None,
             token_provider: None,
             password_provider: None,
+            invalidation_transport: None,
         }
     }
 
@@ -90,8 +92,8 @@ impl AdminStartParamsBuilder {
         self
     }
 
-    pub fn event_bus(mut self, event_bus: Option<EventBus>) -> Self {
-        self.event_bus = event_bus;
+    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
+        self.event_transport = transport;
 
         self
     }
@@ -138,6 +140,12 @@ impl AdminStartParamsBuilder {
         self
     }
 
+    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
+        self.invalidation_transport = Some(transport);
+
+        self
+    }
+
     pub fn build(self) -> AdminStartParams {
         AdminStartParams {
             config: self.config.expect("config is required"),
@@ -146,7 +154,7 @@ impl AdminStartParamsBuilder {
             registry: self.registry.expect("registry is required"),
             hook_runner: self.hook_runner.expect("hook_runner is required"),
             jwt_secret: self.jwt_secret.expect("jwt_secret is required"),
-            event_bus: self.event_bus,
+            event_transport: self.event_transport,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
@@ -160,6 +168,7 @@ impl AdminStartParamsBuilder {
             password_provider: self
                 .password_provider
                 .expect("password_provider is required"),
+            invalidation_transport: self.invalidation_transport,
         }
     }
 }

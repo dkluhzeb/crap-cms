@@ -32,6 +32,8 @@ fn batch_depth_zero_noop() {
             depth: 0,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -58,6 +60,8 @@ fn batch_empty_docs_noop() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -112,6 +116,8 @@ fn batch_select_filters_fields() {
             depth: 1,
             select: Some(&select),
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -159,6 +165,8 @@ fn batch_max_depth_zero_stays_as_id() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -171,7 +179,7 @@ fn batch_max_depth_zero_stays_as_id() {
 // ── Missing related docs ──────────────────────────────────────────────────
 
 #[test]
-fn batch_missing_related_docs_stay_as_ids() {
+fn batch_missing_related_has_one_becomes_null() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
@@ -200,13 +208,15 @@ fn batch_missing_related_docs_stay_as_ids() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
     .unwrap();
 
-    // Missing doc stays as ID string
-    assert_eq!(docs[0].fields["author"].as_str(), Some("nonexistent"));
+    // Missing has-one target is set to null (not kept as raw ID).
+    assert_eq!(docs[0].fields.get("author"), Some(&serde_json::Value::Null));
 }
 
 // ── Join fields in batch ──────────────────────────────────────────────────
@@ -238,6 +248,8 @@ fn batch_with_join_field() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -278,6 +290,8 @@ fn populate_relationships_batch_wrapper_creates_fresh_cache() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
     )
     .unwrap();

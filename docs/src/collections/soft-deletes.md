@@ -143,25 +143,25 @@ MCP delete tools automatically use soft delete when the collection has it enable
 
 ```bash
 # List all trashed documents
-crap trash list
+crap-cms trash list
 
 # List trashed documents in a specific collection
-crap trash list --collection posts
+crap-cms trash list --collection posts
 
 # Restore a document from trash
-crap trash restore posts abc123
+crap-cms trash restore posts abc123
 
 # Purge all expired documents (respects soft_delete_retention)
-crap trash purge
+crap-cms trash purge
 
 # Purge documents older than 7 days
-crap trash purge --older-than 7d
+crap-cms trash purge --older-than 7d
 
 # Dry run — show what would be purged without deleting
-crap trash purge --dry-run
+crap-cms trash purge --dry-run
 
 # Empty all trash in a collection (requires --confirm)
-crap trash empty posts --confirm
+crap-cms trash empty posts --confirm
 ```
 
 ## Database Schema

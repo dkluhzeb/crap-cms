@@ -56,6 +56,12 @@ fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Resul
 }
 
 /// Build a FindQuery that returns only soft-deleted documents.
+///
+/// CLI bypasses the service layer (`find_documents`) intentionally — there is
+/// no auth/hook context for a CLI invocation, so we go direct to `query::find`.
+/// The trade-off: this `_deleted_at EXISTS` filter is an internal injection,
+/// not a user filter, so it sidesteps the service-layer validator. Keep this
+/// helper private to the CLI so the bypass stays scoped.
 fn deleted_filter() -> query::FindQuery {
     let mut fq = query::FindQuery::new();
 
@@ -142,7 +148,9 @@ fn collect_trash_rows(
 }
 
 /// Parse a duration string like "30d", "7d", "24h" into seconds.
-/// Returns `None` for "all" or invalid input.
+///
+/// Returns `None` for "all", invalid input, or a value that overflows `i64`
+/// when multiplied by its unit factor (e.g. `i64::MAX d`).
 fn parse_older_than(s: &str) -> Option<i64> {
     let s = s.trim();
 
@@ -151,11 +159,11 @@ fn parse_older_than(s: &str) -> Option<i64> {
     }
 
     if let Some(days) = s.strip_suffix('d') {
-        days.parse::<i64>().ok().map(|d| d * 86400)
+        days.parse::<i64>().ok().and_then(|d| d.checked_mul(86400))
     } else if let Some(hours) = s.strip_suffix('h') {
-        hours.parse::<i64>().ok().map(|h| h * 3600)
+        hours.parse::<i64>().ok().and_then(|h| h.checked_mul(3600))
     } else if let Some(mins) = s.strip_suffix('m') {
-        mins.parse::<i64>().ok().map(|m| m * 60)
+        mins.parse::<i64>().ok().and_then(|m| m.checked_mul(60))
     } else {
         s.parse::<i64>().ok()
     }
@@ -466,5 +474,17 @@ mod tests {
     fn parse_older_than_whitespace_trimmed() {
         assert_eq!(parse_older_than(" 30d "), Some(30 * 86400));
         assert_eq!(parse_older_than(" all "), None);
+    }
+
+    /// BUG-4 regression: a value that would overflow i64 when multiplied by
+    /// its unit factor must return None instead of silently wrapping.
+    #[test]
+    fn parse_older_than_overflow_errors() {
+        // i64::MAX days × 86400 overflows.
+        assert_eq!(parse_older_than(&format!("{}d", i64::MAX)), None);
+        assert_eq!(parse_older_than(&format!("{}h", i64::MAX)), None);
+        assert_eq!(parse_older_than(&format!("{}m", i64::MAX)), None);
+        // Bare seconds fit (parse returns the number as-is without multiply).
+        assert_eq!(parse_older_than(&i64::MAX.to_string()), Some(i64::MAX));
     }
 }

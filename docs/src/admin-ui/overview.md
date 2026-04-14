@@ -76,6 +76,16 @@ When auth collections are configured and no `access` function is set, any authen
 | `/static/*` | Static assets (public) |
 | `/uploads/{collection_slug}/{filename}` | Uploaded files |
 
+### Session Refresh Endpoint
+
+`POST /admin/api/session-refresh` reissues the admin session cookie when the user is about to be logged out by token expiry.
+
+- **Triggered by the client.** The `<crap-session-guard>` web component (`static/components/session-guard.js`) shows a pre-expiry warning toast and POSTs here when the operator clicks "Stay signed in". It is **not** polled on a fixed interval — only fired in response to the warning.
+- **Authentication required.** The handler reads `Claims` from request extensions (populated by the admin auth middleware), so an unauthenticated request returns `401 Unauthorized` before any work is done. CSRF is enforced via the `X-CSRF-Token` header / `crap_csrf` cookie like the rest of the admin POST routes.
+- **Re-validates the user before reissuing.** It checks that the user still exists, is not `_locked`, and that the token's `session_version` matches the current value in the auth collection (so a password change or session-version bump invalidates older tokens). Any failure returns `401`; a deleted user can't silently keep refreshing.
+- **Behavior on success.** Issues a fresh JWT, sets `crap_session` (and the matching expiry cookie) with the same `SameSite`/`Secure` flags as login, and returns `204 No Content`. The body is empty — the client treats the new cookie as the success signal.
+- **No explicit rate limit.** The endpoint is not separately rate-limited, but it requires a valid existing session (so it can't be abused unauthenticated) and the cost is one DB read plus a JWT sign.
+
 ## Versioning & Drafts Workflow
 
 For collections with `versions = { drafts = true }`, the admin UI provides a draft/publish workflow:

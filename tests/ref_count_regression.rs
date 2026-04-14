@@ -17,7 +17,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -436,5 +436,75 @@ async fn version_restore_adjusts_ref_counts() {
         get_ref_count(&setup, "tags", &tag_b_id),
         0,
         "Tag B ref_count should be 0 after restoring version that doesn't reference it"
+    );
+}
+
+// ── Regression: creating a reference to a vanished target must fail ─────
+
+/// If a referenced document has been hard-deleted out from under us (e.g.
+/// by a concurrent process that bypassed the ref_count guard, or a direct
+/// SQL delete), attempting to create a new document referencing it must
+/// fail loudly rather than silently writing a dangling reference.
+#[tokio::test]
+async fn create_with_dangling_reference_fails() {
+    let setup = setup(make_posts_and_tags());
+
+    // Create a tag, then wipe it directly via SQL — bypassing the ref_count
+    // check so the row is simply gone. This simulates a concurrent hard-delete
+    // racing with a create.
+    let tag_id = setup
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "tags".into(),
+            data: Some(make_struct(&[("name", "Doomed")])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap()
+        .id;
+
+    {
+        let conn = setup.pool.get().unwrap();
+        conn.execute(
+            "DELETE FROM tags WHERE id = ?1",
+            &[DbValue::Text(tag_id.clone())],
+        )
+        .unwrap();
+    }
+
+    // Now try to create a post referencing the vanished tag. This must fail
+    // rather than silently persisting a dangling reference.
+    let result = setup
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".into(),
+            data: Some(make_struct(&[("title", "Ghost Post"), ("tag", &tag_id)])),
+            ..Default::default()
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "creating a post that references a vanished tag must fail"
+    );
+
+    // The post must not have been persisted (transaction rolled back).
+    let list = setup
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(
+        list.documents.len(),
+        0,
+        "no post should exist after the failed create — tx must have rolled back"
     );
 }

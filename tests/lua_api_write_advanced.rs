@@ -240,6 +240,34 @@ fn lua_delete_many_with_operator_filters() {
     assert_eq!(result, "ok");
 }
 
+// ── CRUD: delete_many result shape — `{ deleted, skipped }` ──────────────────
+//
+// The Lua `delete_many` result is a table `{ deleted, skipped }`. `skipped`
+// counts documents that were found but blocked by the ref-count guard
+// (incoming references). Non-referenced, access-allowed docs flow through
+// `deleted`. Access-denied on a target doc errors the whole op (not skipped).
+// This test asserts the return shape and default values on a vanilla op.
+
+#[test]
+fn lua_delete_many_result_shape_includes_deleted_and_skipped() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        crap.collections.create("articles", { title = "S1" })
+        crap.collections.create("articles", { title = "S2" })
+
+        local r = crap.collections.delete_many("articles", {})
+        if r.deleted ~= 2 then return "WRONG_DEL:" .. tostring(r.deleted) end
+        -- `skipped` must be present and 0 when no docs are referenced.
+        if r.skipped ~= 0 then return "WRONG_SKIPPED:" .. tostring(r.skipped) end
+        return "ok"
+    "#,
+    );
+    assert_eq!(result, "ok");
+}
+
 // ── CRUD: update_many nonexistent collection ─────────────────────────────────
 
 #[test]

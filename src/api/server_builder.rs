@@ -9,11 +9,11 @@ use crate::{
         JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
-        event::EventBus,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::{LoginRateLimiter, SharedRateLimitBackend},
         upload::SharedStorage,
     },
-    db::DbPool,
+    db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
 };
 
@@ -25,7 +25,7 @@ pub struct GrpcStartParamsBuilder {
     jwt_secret: Option<JwtSecret>,
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
-    event_bus: Option<EventBus>,
+    event_transport: Option<SharedEventTransport>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
@@ -35,6 +35,8 @@ pub struct GrpcStartParamsBuilder {
     token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
     rate_limit_backend: Option<SharedRateLimitBackend>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl GrpcStartParamsBuilder {
@@ -46,7 +48,7 @@ impl GrpcStartParamsBuilder {
             jwt_secret: None,
             config: None,
             config_dir: None,
-            event_bus: None,
+            event_transport: None,
             login_limiter: None,
             ip_login_limiter: None,
             forgot_password_limiter: None,
@@ -56,6 +58,8 @@ impl GrpcStartParamsBuilder {
             token_provider: None,
             password_provider: None,
             rate_limit_backend: None,
+            invalidation_transport: None,
+            populate_singleflight: None,
         }
     }
 
@@ -95,8 +99,8 @@ impl GrpcStartParamsBuilder {
         self
     }
 
-    pub fn event_bus(mut self, event_bus: Option<EventBus>) -> Self {
-        self.event_bus = event_bus;
+    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
+        self.event_transport = transport;
 
         self
     }
@@ -155,6 +159,19 @@ impl GrpcStartParamsBuilder {
         self
     }
 
+    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
+        self.invalidation_transport = Some(transport);
+
+        self
+    }
+
+    /// Process-wide populate singleflight shared with the HookRunner.
+    pub fn populate_singleflight(mut self, sf: SharedPopulateSingleflight) -> Self {
+        self.populate_singleflight = Some(sf);
+
+        self
+    }
+
     pub fn build(self) -> GrpcStartParams {
         GrpcStartParams {
             pool: self.pool.expect("pool is required"),
@@ -163,7 +180,7 @@ impl GrpcStartParamsBuilder {
             jwt_secret: self.jwt_secret.expect("jwt_secret is required"),
             config: self.config.expect("config is required"),
             config_dir: self.config_dir.expect("config_dir is required"),
-            event_bus: self.event_bus,
+            event_transport: self.event_transport,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
@@ -181,6 +198,8 @@ impl GrpcStartParamsBuilder {
             rate_limit_backend: self
                 .rate_limit_backend
                 .expect("rate_limit_backend is required"),
+            invalidation_transport: self.invalidation_transport,
+            populate_singleflight: self.populate_singleflight,
         }
     }
 }

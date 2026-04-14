@@ -4,8 +4,8 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::{
-    core::{Document, SharedRegistry},
-    db::AccessResult,
+    core::{Document, FieldDefinition, SharedRegistry},
+    db::{AccessResult, FilterClause, FilterOp},
     hooks::lifecycle::{
         UserContext,
         access::{
@@ -130,9 +130,7 @@ fn check(
 }
 
 /// Convert constraint filter clauses to a Lua table for return to user code.
-fn constraints_to_lua(lua: &Lua, clauses: &[crate::db::FilterClause]) -> LuaResult<Table> {
-    use crate::db::FilterClause;
-
+fn constraints_to_lua(lua: &Lua, clauses: &[FilterClause]) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     for clause in clauses {
@@ -164,9 +162,7 @@ fn constraints_to_lua(lua: &Lua, clauses: &[crate::db::FilterClause]) -> LuaResu
 }
 
 /// Convert a single `FilterOp` to a Lua value.
-fn filter_op_to_lua(lua: &Lua, op: &crate::db::FilterOp) -> LuaResult<Value> {
-    use crate::db::FilterOp;
-
+fn filter_op_to_lua(lua: &Lua, op: &FilterOp) -> LuaResult<Value> {
     match op {
         FilterOp::Equals(v) => Ok(Value::String(lua.create_string(v)?)),
         _ => {
@@ -198,9 +194,7 @@ enum OpValue {
 }
 
 /// Extract operator name and value for Lua table representation.
-fn filter_op_name_value(op: &crate::db::FilterOp) -> (&'static str, OpValue) {
-    use crate::db::FilterOp;
-
+fn filter_op_name_value(op: &FilterOp) -> (&'static str, OpValue) {
     match op {
         FilterOp::Equals(v) => ("equals", OpValue::Single(v.clone())),
         FilterOp::NotEquals(v) => ("not_equals", OpValue::Single(v.clone())),
@@ -263,10 +257,7 @@ fn field_write_denied(
 }
 
 /// Look up the field definitions for a collection or global.
-fn resolve_fields(
-    registry: &SharedRegistry,
-    collection: &str,
-) -> LuaResult<Vec<crate::core::FieldDefinition>> {
+fn resolve_fields(registry: &SharedRegistry, collection: &str) -> LuaResult<Vec<FieldDefinition>> {
     let r = registry
         .read()
         .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;

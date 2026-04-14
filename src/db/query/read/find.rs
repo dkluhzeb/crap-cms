@@ -35,7 +35,14 @@ pub fn find(
     let mut has_where = false;
 
     let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
-    let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
+    let where_clause = build_where_clause(
+        conn,
+        &resolved_filters,
+        slug,
+        &def.fields,
+        locale_ctx,
+        &mut params,
+    )?;
     if !where_clause.is_empty() {
         sql.push_str(&where_clause);
         has_where = true;

@@ -2,9 +2,11 @@
 
 use crate::{
     core::{Document, upload},
-    db::{AccessResult, query},
+    db::{AccessResult, Filter, FilterClause, FilterOp, query},
     service::{PaginatedResult, SearchDocumentsInput, ServiceContext, ServiceError, helpers},
 };
+
+use super::validate_filters::validate_access_constraints;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -29,9 +31,23 @@ pub fn search_documents(
     }
 
     let mut fq = input.query.clone();
+    let injecting_status = !input.include_drafts && def.has_drafts();
 
     if let AccessResult::Constrained(extra) = access {
+        // `_status` is allowed when the service is about to inject
+        // `_status = "published"` (matches `find_documents`' behaviour);
+        // otherwise `_status` from an access hook is rejected as a
+        // probable typo. `_deleted_at` is always rejected here — search
+        // never reaches trashed rows.
+        validate_access_constraints(&extra, false, injecting_status, ctx.slug)?;
         fq.filters.extend(extra);
+    }
+
+    if injecting_status {
+        fq.filters.push(FilterClause::Single(Filter {
+            field: "_status".to_string(),
+            op: FilterOp::Equals("published".to_string()),
+        }));
     }
 
     let had_cursor = fq.after_cursor.is_some() || fq.before_cursor.is_some();

@@ -4,6 +4,7 @@ use anyhow::Result;
 use serde_json::{Map, Value};
 
 use crate::core::{Document, cache::CacheBackend};
+use crate::db::query::populate::Singleflight;
 
 /// Try to get a cached document from the cache backend.
 pub(super) fn cache_get_doc(cache: &dyn CacheBackend, key: &str) -> Result<Option<Document>> {
@@ -20,6 +21,59 @@ pub(super) fn cache_set_doc(cache: &dyn CacheBackend, key: &str, doc: &Document)
     cache.set(key, &bytes)?;
 
     Ok(())
+}
+
+/// Result of a cache-or-fetch attempt.
+///
+/// Callers can tell a cache hit (already fully populated) from a fresh fetch
+/// (caller still needs to run recursive population and write the populated
+/// version back to the cache).
+pub(super) enum CacheOrFetch {
+    /// Cache hit: returned document is already fully populated. Callers MUST
+    /// use it as-is and skip the recursive populate step.
+    Hit(Document),
+    /// Fresh fetch via singleflight: returned `Some(doc)` is a raw (not yet
+    /// recursively populated) document; `None` means the target is missing.
+    Fresh(Option<Document>),
+}
+
+/// Get a populated document from the cache, or fetch it via the singleflight
+/// (deduplicating concurrent misses for the same key).
+///
+/// On cache hit, returns `Hit(doc)` without consulting the singleflight.
+/// On miss, the first thread runs `fetch` and writes the result into the
+/// cache; concurrent misses for the same key wait for that fetch to
+/// complete and receive the same value — collapsing N concurrent DB queries
+/// into one. The resulting `Fresh(...)` value is the raw (pre-populate)
+/// document; callers are still expected to recursively populate it and then
+/// update the cache with the populated version.
+///
+/// `fetch` returns `Option<Document>` so a "not found" result also dedupes
+/// (all concurrent waiters learn the miss without re-querying).
+pub(super) fn cache_or_fetch_doc<F>(
+    cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
+    key: &str,
+    fetch: F,
+) -> CacheOrFetch
+where
+    F: FnOnce() -> Option<Document>,
+{
+    if let Ok(Some(doc)) = cache_get_doc(cache, key) {
+        return CacheOrFetch::Hit(doc);
+    }
+
+    let fresh = singleflight.get_or_fetch(key, || {
+        let doc = fetch();
+
+        if let Some(ref d) = doc {
+            let _ = cache_set_doc(cache, key, d);
+        }
+
+        doc
+    });
+
+    CacheOrFetch::Fresh(fresh)
 }
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
@@ -61,10 +115,141 @@ pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::sync::{
+        Arc, Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::thread;
 
     use crate::core::Document;
+    use crate::core::cache::MemoryCache;
 
     use super::*;
+
+    // ── cache_or_fetch_doc tests ──────────────────────────────────────────────
+
+    #[test]
+    fn cache_or_fetch_doc_hit_skips_fetch() {
+        let cache = MemoryCache::new(10_000);
+        let sf: Singleflight<Option<Document>> = Singleflight::new();
+
+        // Pre-populate cache.
+        let mut cached = Document::new("d1".to_string());
+        cached.fields.insert("t".to_string(), json!("cached"));
+        cache_set_doc(&cache, "k", &cached).unwrap();
+
+        let counter = AtomicUsize::new(0);
+        let result = cache_or_fetch_doc(&cache, &sf, "k", || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            None
+        });
+
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        match result {
+            CacheOrFetch::Hit(d) => assert_eq!(d.id.as_ref(), "d1"),
+            _ => panic!("expected cache hit"),
+        }
+    }
+
+    #[test]
+    fn cache_or_fetch_doc_miss_runs_fetch_and_caches() {
+        let cache = MemoryCache::new(10_000);
+        let sf: Singleflight<Option<Document>> = Singleflight::new();
+        let counter = AtomicUsize::new(0);
+
+        let result = cache_or_fetch_doc(&cache, &sf, "k", || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut d = Document::new("d1".to_string());
+            d.fields.insert("t".to_string(), json!("fresh"));
+            Some(d)
+        });
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        match result {
+            CacheOrFetch::Fresh(Some(d)) => assert_eq!(d.id.as_ref(), "d1"),
+            _ => panic!("expected fresh Some"),
+        }
+
+        // Second call should hit the cache now (fetch closure must not run).
+        let result2 = cache_or_fetch_doc(&cache, &sf, "k", || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            None
+        });
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "fetch should not re-run");
+        assert!(matches!(result2, CacheOrFetch::Hit(_)));
+    }
+
+    #[test]
+    fn cache_or_fetch_doc_miss_none_dedupes_not_found() {
+        let cache = MemoryCache::new(10_000);
+        let sf: Singleflight<Option<Document>> = Singleflight::new();
+        let counter = AtomicUsize::new(0);
+
+        let r = cache_or_fetch_doc(&cache, &sf, "missing", || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            None
+        });
+        assert!(matches!(r, CacheOrFetch::Fresh(None)));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    /// Regression: N concurrent cache-miss fetches for the same key must
+    /// collapse into exactly one DB fetch.
+    #[test]
+    fn populate_deduplicates_concurrent_cache_miss() {
+        let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new(10_000));
+        let sf: Arc<Singleflight<Option<Document>>> = Arc::new(Singleflight::new());
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let n = 16;
+        let barrier = Arc::new(Barrier::new(n));
+
+        let mut handles = Vec::new();
+
+        for _ in 0..n {
+            let cache = Arc::clone(&cache);
+            let sf = Arc::clone(&sf);
+            let counter = Arc::clone(&counter);
+            let barrier = Arc::clone(&barrier);
+
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+
+                cache_or_fetch_doc(&*cache, &sf, "hot-key", || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    thread::sleep(std::time::Duration::from_millis(40));
+
+                    let mut d = Document::new("shared".to_string());
+                    d.fields.insert("v".to_string(), json!("one"));
+                    Some(d)
+                })
+            }));
+        }
+
+        let mut got_hit = 0;
+        let mut got_fresh = 0;
+
+        for h in handles {
+            match h.join().unwrap() {
+                CacheOrFetch::Hit(_) => got_hit += 1,
+                CacheOrFetch::Fresh(Some(_)) => got_fresh += 1,
+                CacheOrFetch::Fresh(None) => panic!("unexpected None"),
+            }
+        }
+
+        // Exactly one thread ran the DB fetch.
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "concurrent cache misses must collapse into a single fetch"
+        );
+        // All N threads got a result; some via Fresh (from singleflight),
+        // possibly some via Hit (if scheduling let them observe the cache
+        // write before their singleflight call). The important invariant is
+        // the fetch-count above.
+        assert_eq!(got_hit + got_fresh, n);
+    }
 
     // ── document_to_json tests ────────────────────────────────────────────────
 

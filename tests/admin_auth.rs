@@ -133,7 +133,7 @@ fn setup_app_with_config(
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: std::sync::Arc::new(
@@ -157,6 +157,11 @@ fn setup_app_with_config(
             "test-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crap_cms::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
     };
 
     let router = build_router(state);
@@ -320,6 +325,86 @@ async fn login_action_valid_credentials() {
     assert!(
         cookie.unwrap().contains("crap_session"),
         "Cookie should be crap_session"
+    );
+}
+
+#[tokio::test]
+async fn login_sets_session_cookie_with_samesite_lax_by_default() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    create_test_user(&app, "samesite-lax@test.com", "correct123");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "collection=users&email=samesite-lax@test.com&password=correct123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let session_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("crap_session="))
+        .expect("login should set crap_session cookie");
+
+    assert!(
+        session_cookie.contains("SameSite=Lax"),
+        "default session cookie must be SameSite=Lax, got: {session_cookie}"
+    );
+    assert!(
+        !session_cookie.contains("SameSite=Strict"),
+        "default must not be Strict, got: {session_cookie}"
+    );
+}
+
+#[tokio::test]
+async fn login_sets_session_cookie_with_samesite_strict_when_configured() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.auth.session_cookie_samesite = crap_cms::config::SessionCookieSameSite::Strict;
+
+    let app = setup_app_with_config(vec![make_users_def()], vec![], config);
+    create_test_user(&app, "samesite-strict@test.com", "correct123");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "collection=users&email=samesite-strict@test.com&password=correct123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let session_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("crap_session="))
+        .expect("login should set crap_session cookie");
+
+    assert!(
+        session_cookie.contains("SameSite=Strict"),
+        "configured session cookie must be SameSite=Strict, got: {session_cookie}"
     );
 }
 
@@ -1130,7 +1215,7 @@ end"#,
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
@@ -1150,6 +1235,11 @@ end"#,
             "test-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crap_cms::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
     };
 
     let router = build_router(state);

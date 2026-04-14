@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{DbConnection, query};
 
+use super::validation::validate_no_crlf;
+
 /// System job slug for queued emails.
 pub const SYSTEM_EMAIL_JOB: &str = "_system_email";
 
@@ -34,6 +36,9 @@ pub fn queue_email(
     max_attempts: u32,
     queue: &str,
 ) -> Result<String> {
+    validate_no_crlf("to", to)?;
+    validate_no_crlf("subject", subject)?;
+
     let data = EmailJobData {
         to: to.to_string(),
         subject: subject.to_string(),

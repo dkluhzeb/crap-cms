@@ -142,6 +142,7 @@ features = ["tokio-runtime"]
 [dependencies.redis]
 version = "0.29"
 optional = true
+features = ["tokio-comp"]
 
 [dependencies.rust-s3]
 version = "0.35"

@@ -13,7 +13,7 @@ mod server;
 pub mod smtp_password;
 mod types;
 
-pub use auth::{AuthConfig, PasswordPolicy};
+pub use auth::{AuthConfig, PasswordPolicy, SessionCookieSameSite};
 pub use cors::CorsConfig;
 pub use features::{
     AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,

@@ -1,0 +1,15 @@
+# Minimal config for admin HTTP + gRPC globals access-denied tests.
+# Tests don't actually parse this file — they use `CrapConfig::test_default()`
+# and only rely on the fixture dir as the HookRunner's config_dir. The file is
+# kept so `validate_config_dir` wouldn't reject the fixture if some future test
+# does parse it.
+[server]
+host = "127.0.0.1"
+admin_port = 13000
+grpc_port = 13001
+
+[auth]
+secret = "test-jwt-secret"
+
+[admin]
+require_auth = false

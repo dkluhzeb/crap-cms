@@ -47,7 +47,7 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
         .ok()
         .flatten()
         .unwrap_or(1);
-    let skip_if_running = get_bool(config, "skip_if_running", true);
+    let skip_if_running = get_bool(config, "skip_if_running", true)?;
     let access = get_string(config, "access");
 
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {

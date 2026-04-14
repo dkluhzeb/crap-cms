@@ -91,7 +91,7 @@ fn publish_update_event(
     auth_user: &Option<Extension<AuthUser>>,
 ) {
     state.hook_runner.publish_event(
-        &state.event_bus,
+        &state.event_transport,
         hooks,
         def.live.as_ref(),
         PublishEventInput::builder(EventTarget::Global, EventOperation::Update)

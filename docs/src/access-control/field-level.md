@@ -33,6 +33,8 @@ Before a write operation, denied fields are **stripped from the input data**. Th
 - On create: denied fields get their default value (or NULL)
 - On update: denied fields keep their current value
 
+> **This is silent.** Stripping happens before validation and before any hook sees the data — the client gets no error or warning that fields were dropped, and the returned document reflects the stored state. If a client reports "I set field X but it didn't save", check whether field-level access is denying their role for that field.
+
 ### Read Access
 
 After a query, denied fields are **stripped from the response**. The field still exists in the database, but the user doesn't see it.

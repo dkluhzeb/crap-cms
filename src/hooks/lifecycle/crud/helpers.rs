@@ -11,12 +11,14 @@ use tracing::warn;
 
 use crate::{
     core::{CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition},
-    db::{AccessResult, Filter, FilterClause, FilterOp},
+    db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        HookDepth, HookDepthGuard, MaxHookDepth, UiLocaleContext, UserContext,
+        HookDepth, HookDepthGuard, LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext,
+        UserContext,
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
+    service::validate_access_constraints,
 };
 
 /// Extract a bool from an optional Lua options table, returning `default` when absent.
@@ -44,6 +46,16 @@ pub(crate) fn hook_user(lua: &Lua) -> Option<Document> {
 pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
     lua.app_data_ref::<UiLocaleContext>()
         .and_then(|uc| uc.0.clone())
+}
+
+/// Extract the process-wide populate singleflight from Lua app_data (if set
+/// via `HookRunner::builder().populate_singleflight(..)`). Returns `None` when
+/// no singleflight was threaded in, so the service layer falls back to a
+/// fresh per-call singleflight. For override-access reads the service layer
+/// discards this Arc via its access-leak guardrail.
+pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSingleflight> {
+    lua.app_data_ref::<LuaPopulateSingleflight>()
+        .map(|sf| sf.0.clone())
 }
 
 /// Look up a collection definition from the shared registry, returning a
@@ -105,48 +117,46 @@ pub(crate) fn check_hook_depth<'a>(
     (hooks_enabled, guard)
 }
 
+/// Parameters for [`enforce_access`].
+pub(crate) struct EnforceAccessParams<'a> {
+    pub slug: &'a str,
+    pub override_access: bool,
+    pub access_fn: Option<&'a str>,
+    pub id: Option<&'a str>,
+    pub deny_msg: &'a str,
+    /// Whether the caller is about to inject a `_status = 'published'` filter.
+    /// Controls whether access-hook `_status` constraints are accepted.
+    pub injecting_status: bool,
+}
+
 /// Enforce access control: check the given access function, merge constrained filters, deny if blocked.
 ///
 /// Returns `Ok(())` if access is allowed (possibly after extending `filters` with constraints).
-/// Returns `Err` with a `RuntimeError` if access is denied.
+/// Returns `Err` with a `RuntimeError` if access is denied or if an access hook
+/// returns a filter table that references a disallowed system column.
 /// When `override_access` is true, skips the check entirely.
 pub(crate) fn enforce_access(
     lua: &Lua,
-    override_access: bool,
-    access_fn: Option<&str>,
-    id: Option<&str>,
+    params: &EnforceAccessParams<'_>,
     filters: &mut Vec<FilterClause>,
-    deny_msg: &str,
 ) -> LuaResult<()> {
-    if override_access {
+    if params.override_access {
         return Ok(());
     }
 
     let user_doc = hook_user(lua);
-    let result = check_access_with_lua(lua, access_fn, user_doc.as_ref(), id, None)
+    let result = check_access_with_lua(lua, params.access_fn, user_doc.as_ref(), params.id, None)
         .map_err(|e| RuntimeError(format!("access check error: {e:#}")))?;
 
     match result {
-        AccessResult::Denied => Err(RuntimeError(deny_msg.to_string())),
+        AccessResult::Denied => Err(RuntimeError(params.deny_msg.to_string())),
         AccessResult::Constrained(extra) => {
+            validate_access_constraints(&extra, false, params.injecting_status, params.slug)
+                .map_err(|e| RuntimeError(e.to_string()))?;
             filters.extend(extra);
             Ok(())
         }
         AccessResult::Allowed => Ok(()),
-    }
-}
-
-/// Append a `_status = 'published'` filter when the collection has drafts and `draft` is false.
-pub(crate) fn add_draft_filter(
-    def: &CollectionDefinition,
-    draft: bool,
-    filters: &mut Vec<FilterClause>,
-) {
-    if def.has_drafts() && !draft {
-        filters.push(FilterClause::Single(Filter {
-            field: "_status".to_string(),
-            op: FilterOp::Equals("published".to_string()),
-        }));
     }
 }
 

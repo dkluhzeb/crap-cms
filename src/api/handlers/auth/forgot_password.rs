@@ -7,7 +7,9 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    core::email,
+    config::{EmailConfig, ServerConfig},
+    core::{CollectionDefinition, email, email::EmailRenderer},
+    db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
 };
 
@@ -80,13 +82,13 @@ impl ContentService {
 
 /// Context for sending a password reset email.
 struct ResetEmailCtx<'a> {
-    pool: &'a crate::db::DbPool,
+    pool: &'a DbPool,
     slug: &'a str,
-    def: &'a crate::core::CollectionDefinition,
+    def: &'a CollectionDefinition,
     user_email: &'a str,
-    email_config: &'a crate::config::EmailConfig,
-    email_renderer: &'a crate::core::email::EmailRenderer,
-    server_config: &'a crate::config::ServerConfig,
+    email_config: &'a EmailConfig,
+    email_renderer: &'a EmailRenderer,
+    server_config: &'a ServerConfig,
     reset_expiry: u64,
 }
 

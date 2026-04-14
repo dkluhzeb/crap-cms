@@ -3,7 +3,7 @@
 /// Parse a human-readable duration string into seconds.
 ///
 /// Supports: `"30s"` (seconds), `"30m"` (minutes), `"24h"` (hours), `"7d"` (days).
-/// Returns `None` for empty or invalid input.
+/// Returns `None` for empty, invalid, or overflowing input.
 pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     let s = s.trim();
 
@@ -20,11 +20,12 @@ pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     let num_str = &s[..s.len() - suffix.len_utf8()];
     let num: u64 = num_str.parse().ok()?;
 
+    // Use checked_mul so values near u64::MAX return None rather than wrapping.
     match suffix {
         's' => Some(num),
-        'm' => Some(num * 60),
-        'h' => Some(num * 3600),
-        'd' => Some(num * 86400),
+        'm' => num.checked_mul(60),
+        'h' => num.checked_mul(3600),
+        'd' => num.checked_mul(86400),
         _ => None,
     }
 }
@@ -48,13 +49,29 @@ pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
 
     let upper = s.to_ascii_uppercase();
 
-    // Try two-char suffix first (KB, MB, GB), then one-char (B)
+    // Try two-char suffix first (KB, MB, GB), then one-char (B).
+    // Use checked_mul so values near u64::MAX return None rather than wrapping.
     if upper.len() >= 3 {
         let (num_str, suffix) = upper.split_at(upper.len() - 2);
         match suffix {
-            "KB" => return num_str.parse::<u64>().ok().map(|n| n * 1024),
-            "MB" => return num_str.parse::<u64>().ok().map(|n| n * 1024 * 1024),
-            "GB" => return num_str.parse::<u64>().ok().map(|n| n * 1024 * 1024 * 1024),
+            "KB" => {
+                return num_str
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|n| n.checked_mul(1024));
+            }
+            "MB" => {
+                return num_str
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|n| n.checked_mul(1024 * 1024));
+            }
+            "GB" => {
+                return num_str
+                    .parse::<u64>()
+                    .ok()
+                    .and_then(|n| n.checked_mul(1024 * 1024 * 1024));
+            }
             _ => {}
         }
     }
@@ -177,7 +194,12 @@ pub(crate) mod serde_duration_ms {
                         s
                     ))
                 })?;
-                Ok(secs * 1000)
+                secs.checked_mul(1000).ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "duration '{}' overflows u64 when converted to milliseconds",
+                        s
+                    ))
+                })
             }
         }
     }
@@ -475,5 +497,23 @@ mod tests {
         std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nmax_concurrent = 5\n").unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(7 * 86400)); // default
+    }
+
+    /// BUG-4 regression: a filesize value that would overflow u64 when
+    /// multiplied by its unit factor must return None instead of wrapping.
+    #[test]
+    fn parse_filesize_overflow_errors() {
+        // u64::MAX GB obviously overflows when multiplied by 1024**3.
+        assert_eq!(parse_filesize_string(&format!("{}GB", u64::MAX)), None);
+        assert_eq!(parse_filesize_string(&format!("{}MB", u64::MAX)), None);
+        assert_eq!(parse_filesize_string(&format!("{}KB", u64::MAX)), None);
+    }
+
+    /// BUG-4 regression: duration overflow returns None.
+    #[test]
+    fn parse_duration_overflow_errors() {
+        assert_eq!(parse_duration_string(&format!("{}d", u64::MAX)), None);
+        assert_eq!(parse_duration_string(&format!("{}h", u64::MAX)), None);
+        assert_eq!(parse_duration_string(&format!("{}m", u64::MAX)), None);
     }
 }

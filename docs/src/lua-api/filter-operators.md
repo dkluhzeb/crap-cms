@@ -181,9 +181,33 @@ See [Query & Filters](../query-and-filters/overview.md#nested-field-filters-dot-
 
 ## Value Types
 
-Filter values are always converted to strings for SQL parameter binding. Numbers and booleans are stringified:
+Filter values are coerced to a SQL bind type based on the **field's declared type**, so
+comparisons run on the right kind of column (REAL for numbers, INTEGER for booleans,
+TEXT for ISO date strings, etc.). Coercion only applies to comparison operators —
+text-pattern operators (`like`, `contains`, `starts_with`, `ends_with`, `regex`) always
+bind as TEXT regardless of the field type.
+
+| Field type | Comparison bind type | Notes |
+|------------|---------------------|-------|
+| `number` | REAL | Filter value is parsed as a 64-bit float. Invalid input (non-numeric, `NaN`, `Infinity`) falls back to TEXT and logs a warning — the query still runs and will typically return no rows. |
+| `checkbox` | INTEGER (`0` / `1`) | Accepts `"true"`, `"false"`, `"1"`, `"0"`, `"yes"`, `"no"`, `"on"`, `"off"`. Anything else falls back to TEXT with a warning. |
+| `date` | TEXT (normalized ISO) | Stored as ISO-8601 strings; the filter value is normalized via the date coercer (e.g. `"2024-01-15"` → `"2024-01-15T00:00:00.000Z"`) so lexicographic comparison aligns with stored values. |
+| `text`, `textarea`, `email`, `select`, `radio`, `json`, `code`, `richtext` | TEXT | Bound as-is. |
+| Field type unknown / not resolved | TEXT | Default fallback when the caller cannot determine the field type. |
 
 ```lua
-{ where = { count = 42 } }       -- equals "42"
-{ where = { active = true } }    -- equals "true"
+-- Number field — bound as REAL, comparison is numeric
+crap.collections.find("products", {
+    where = { price = { greater_than = 9.99 } },
+})
+
+-- Checkbox field — bound as INTEGER 1
+crap.collections.find("posts", {
+    where = { published = true },
+})
+
+-- Text-only operator on a number field still binds as TEXT
+crap.collections.find("products", {
+    where = { sku = { contains = "42" } },
+})
 ```

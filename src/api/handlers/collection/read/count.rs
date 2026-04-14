@@ -38,8 +38,7 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let req_where = req.r#where.clone();
-        let has_drafts = def.has_drafts();
-        let draft = req.draft;
+        let include_drafts = req.draft.unwrap_or(false);
         let search = req.search.clone();
         let def_owned = def;
 
@@ -51,11 +50,10 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            // Build caller-side filters (where + draft). Access check is handled by
-            // service::count_documents via ReadHooks.
+            // Parse user filters only — the service layer injects `_status`
+            // based on the `include_drafts` flag below, post-validation.
             let filters = FilterBuilder::new(&def_owned.fields, &AccessResult::Allowed)
                 .where_json(req_where.as_deref())
-                .draft_filter(has_drafts, !draft.unwrap_or(false))
                 .build()?;
 
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
@@ -71,6 +69,7 @@ impl ContentService {
             let input = CountDocumentsInput::builder(&filters)
                 .locale_ctx(locale_ctx.as_ref())
                 .search(search.as_deref())
+                .include_drafts(include_drafts)
                 .build();
 
             count_documents(&ctx, &input).map_err(Status::from)

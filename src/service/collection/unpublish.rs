@@ -33,6 +33,9 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
+    // When the hook returned Constrained filters, enforce row-level match.
+    helpers::enforce_access_constraints(ctx, id, &access, "Update", false)?;
+
     let doc = query::find_by_id_raw(conn, ctx.slug, def, id, None, false)?.ok_or_else(|| {
         ServiceError::NotFound(format!("Document '{id}' not found in '{}'", ctx.slug))
     })?;

@@ -8,4 +8,6 @@ mod poly;
 #[cfg(test)]
 mod tests;
 
-pub use dispatch::populate_relationships_cached;
+pub use dispatch::{
+    populate_relationships_cached, populate_relationships_cached_with_singleflight,
+};

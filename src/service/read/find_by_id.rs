@@ -7,6 +7,7 @@ use crate::{
 };
 
 use super::post_process::post_process_single;
+use super::validate_filters::validate_access_constraints;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -39,13 +40,22 @@ pub fn find_document_by_id(
         return Err(ServiceError::AccessDenied(msg.into()));
     }
 
+    // find_by_id has no draft-filtering flag of its own: when `use_draft` is
+    // false on a drafts-enabled collection the service is effectively reading
+    // the published snapshot, so access-hook filters on `_status` are allowed.
+    let injecting_status = !input.use_draft && def.has_drafts();
+
     let constraints = match (input.access_constraints.clone(), access) {
         (Some(mut existing), AccessResult::Constrained(extra)) => {
+            validate_access_constraints(&extra, input.include_deleted, injecting_status, ctx.slug)?;
             existing.extend(extra);
             Some(existing)
         }
         (Some(existing), _) => Some(existing),
-        (None, AccessResult::Constrained(extra)) => Some(extra),
+        (None, AccessResult::Constrained(extra)) => {
+            validate_access_constraints(&extra, input.include_deleted, injecting_status, ctx.slug)?;
+            Some(extra)
+        }
         _ => None,
     };
 

@@ -91,6 +91,20 @@ For each uploaded image:
 
 Non-image files (PDFs, etc.) skip steps 2-4.
 
+## Decompression Bomb Protection
+
+Before any resizing or format conversion, image dimensions are checked against a hard
+limit of **100 megapixels** total (`width × height`). Images exceeding this limit are
+rejected with an error like `Image too large: 12000x9000 exceeds pixel limit`.
+
+This protects the server from "decompression bomb" inputs — small, highly compressed
+files that decode into enormous bitmaps (e.g. a 50 KB PNG decoding to a 50,000 × 50,000
+canvas), which would otherwise consume gigabytes of RAM during resizing.
+
+The limit is fixed at 100 megapixels and is not configurable. For reference: a 12,000 ×
+8,000 pixel image (96 MP) is accepted; a 12,000 × 9,000 image (108 MP) is rejected.
+File-size and MIME-type checks are independent and run alongside this check.
+
 ## Admin Thumbnail
 
 Set `admin_thumbnail` to the name of an image size to display it in admin list views:

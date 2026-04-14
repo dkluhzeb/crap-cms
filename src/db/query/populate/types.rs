@@ -1,8 +1,29 @@
 //! Type definitions for the populate subsystem.
 
+use anyhow::Result;
+
 use crate::core::cache::CacheBackend;
-use crate::core::{CollectionDefinition, Registry};
+use crate::core::{CollectionDefinition, Document, Registry};
+use crate::db::query::AccessResult;
+use crate::db::query::populate::Singleflight;
 use crate::db::{DbConnection, LocaleContext, LocaleMode};
+
+/// Minimal access-check abstraction used by join-field population.
+///
+/// `populate_join_docs` fetches documents from the *target* collection, which
+/// has its own read-access hook. We must honor that hook so a user who is
+/// denied direct reads on the target can't exfiltrate data via a virtual
+/// reverse-lookup join field on another collection.
+///
+/// Implemented in the service layer (see `service::hooks::ReadHooks`) — kept
+/// as a narrow trait here to avoid a `db -> service` dependency.
+pub trait JoinAccessCheck {
+    /// Check read access for the target collection.
+    ///
+    /// `access_ref` is the target collection's `access.read` string reference.
+    /// Implementations return `Allowed`, `Denied`, or `Constrained(filters)`.
+    fn check(&self, access_ref: Option<&str>, user: Option<&Document>) -> Result<AccessResult>;
+}
 
 /// Build a cache key for a populated document.
 ///
@@ -31,15 +52,21 @@ pub(crate) fn locale_cache_key(locale_ctx: Option<&LocaleContext>) -> Option<Str
 
 /// Bundled parameters for inner population helpers, reducing argument count.
 ///
-/// Carries the connection, registry, effective depth, locale context, and cache
-/// that every recursive population function needs. The remaining per-call params
-/// (doc/docs, field_name, rel_collection, rel_def, visited) stay as regular args.
+/// Carries the connection, registry, effective depth, locale context, cache,
+/// and singleflight that every recursive population function needs. The
+/// remaining per-call params (doc/docs, field_name, rel_collection, rel_def,
+/// visited) stay as regular args.
 pub(crate) struct PopulateCtx<'a> {
     pub conn: &'a dyn DbConnection,
     pub registry: &'a Registry,
     pub effective_depth: i32,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub cache: &'a dyn CacheBackend,
+    /// Deduplicates concurrent cache-miss fetches for the same target. The
+    /// top-level entry point constructs this fresh per populate call; service
+    /// layers may in future share a process-wide singleflight here to dedupe
+    /// across concurrent requests.
+    pub singleflight: &'a Singleflight<Option<Document>>,
 }
 
 /// Collection and registry context for population.
@@ -67,10 +94,19 @@ impl<'a> PopulateContext<'a> {
 }
 
 /// Options controlling population behavior.
+#[derive(Default)]
 pub struct PopulateOpts<'a> {
     pub(crate) depth: i32,
     pub(crate) select: Option<&'a [String]>,
     pub(crate) locale_ctx: Option<&'a LocaleContext>,
+    /// Optional access-check for join-field target collections. When `None`,
+    /// join population proceeds without a target-collection access check
+    /// (legacy / internal callers). When `Some`, the check is invoked for
+    /// each join field and may deny or constrain the underlying find.
+    pub(crate) join_access: Option<&'a dyn JoinAccessCheck>,
+    /// Current user for the access check. Only consulted when
+    /// `join_access` is also set.
+    pub(crate) user: Option<&'a Document>,
 }
 
 impl<'a> PopulateOpts<'a> {
@@ -79,6 +115,8 @@ impl<'a> PopulateOpts<'a> {
             depth,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         }
     }
 
@@ -89,6 +127,18 @@ impl<'a> PopulateOpts<'a> {
 
     pub fn locale_ctx(mut self, ctx: &'a LocaleContext) -> Self {
         self.locale_ctx = Some(ctx);
+        self
+    }
+
+    /// Attach an access-check for join-field target collections plus the
+    /// current user. Both must be set together to enable the check.
+    pub fn join_access(
+        mut self,
+        check: &'a dyn JoinAccessCheck,
+        user: Option<&'a Document>,
+    ) -> Self {
+        self.join_access = Some(check);
+        self.user = user;
         self
     }
 }

@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{ServiceError, helpers::strip_denied_fields};
-use crate::service::helpers::collect_hidden_field_names;
+use crate::service::helpers::{collect_hidden_field_names, enforce_access_constraints};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -37,6 +37,9 @@ pub fn update_many_single_core(
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
+
+    // When the hook returned Constrained filters, enforce row-level match.
+    enforce_access_constraints(ctx, id, &access, "Update", false)?;
 
     let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
     let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);

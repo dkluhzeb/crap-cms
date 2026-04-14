@@ -193,7 +193,7 @@ message UndeleteResponse {
 grpcurl -plaintext -d '{
     "collection": "posts",
     "id": "abc123"
-}' localhost:50051 crap.ContentAPI/Restore
+}' localhost:50051 crap.ContentAPI/Undelete
 ```
 
 ## Count
@@ -443,6 +443,130 @@ grpcurl -plaintext -d '{
 ```
 
 Only relevant for auth collections with `verify_email: true`.
+
+## Validate
+
+Check field data against collection rules without persisting. Runs field validation (required, unique, type checks, custom validators) but does not open a write transaction. Use this to preview validation errors before a `Create` or `Update` call.
+
+```protobuf
+message ValidateRequest {
+  string collection = 1;
+  google.protobuf.Struct data = 2;
+  optional bool draft = 3;              // relaxes required-field checks for draft collections
+  optional string locale = 4;           // locale code for localized field validation
+  optional string id = 5;               // when set, exclude this ID from unique checks (update path)
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  map<string, string> errors = 2;       // per-field error messages; empty when valid
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "data": { "title": "Hello", "slug": "hello" }
+}' localhost:50051 crap.ContentAPI/Validate
+```
+
+**Access:** optional. If a Bearer token is present, the collection's `create`/`update` access function is evaluated (`update` when `id` is set). Field-level write-denied fields are stripped before validation runs.
+
+## LockAccount
+
+Prevent a user from logging in. Only valid for auth-enabled collections. Any active live-update streams owned by the locked user are torn down with `PermissionDenied`.
+
+```protobuf
+message AccountActionRequest {
+  string collection = 1;                // auth collection slug
+  string id = 2;                        // target user's nanoid ID
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/LockAccount
+```
+
+**Access:** authentication required. Returns `INVALID_ARGUMENT` if the collection is not an auth collection, `NOT_FOUND` if the user ID is missing, and `UNAUTHENTICATED` if no valid Bearer token is provided.
+
+## UnlockAccount
+
+Re-enable login for a previously locked account. Only valid for auth-enabled collections.
+
+```protobuf
+message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/UnlockAccount
+```
+
+**Access:** authentication required. Same error semantics as `LockAccount`.
+
+## VerifyAccount
+
+Mark a user's email as verified without requiring the user to click the verification link. Only valid for auth-enabled collections.
+
+```protobuf
+message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/VerifyAccount
+```
+
+**Access:** authentication required. Same error semantics as `LockAccount`. See `VerifyEmail` for the token-based flow triggered by the user.
+
+## UnverifyAccount
+
+Mark a user's email as unverified. Only valid for auth-enabled collections.
+
+```protobuf
+message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/UnverifyAccount
+```
+
+**Access:** authentication required. Same error semantics as `LockAccount`.
 
 ## ListCollections
 

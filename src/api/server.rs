@@ -6,6 +6,7 @@ use anyhow::Result;
 use tokio::{select, spawn, time::interval};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tracing::warn;
 
 use crate::{
@@ -21,11 +22,11 @@ use crate::{
         auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         email::EmailRenderer,
-        event::EventBus,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::{GrpcRateLimiter, LoginRateLimiter, SharedRateLimitBackend},
         upload::SharedStorage,
     },
-    db::DbPool,
+    db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
 };
 
@@ -37,7 +38,7 @@ pub struct GrpcStartParams {
     pub jwt_secret: JwtSecret,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
-    pub event_bus: Option<EventBus>,
+    pub event_transport: Option<SharedEventTransport>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
@@ -47,6 +48,12 @@ pub struct GrpcStartParams {
     pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
     pub rate_limit_backend: SharedRateLimitBackend,
+    /// Optional shared invalidation transport — when `None`, a fresh in-process
+    /// one is created.
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
+    /// Optional process-wide populate singleflight — when `None`, the
+    /// ContentService creates a fresh one (dedup only within its own process).
+    pub populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl GrpcStartParams {
@@ -72,26 +79,33 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
     let grpc_max_msg = params.config.server.grpc_max_message_size as usize;
     let cors_layer = params.config.cors.build_layer();
 
-    let content_service = ContentService::new(
-        ContentServiceDeps::builder()
-            .pool(params.pool)
-            .registry(params.registry)
-            .hook_runner(params.hook_runner)
-            .jwt_secret(params.jwt_secret)
-            .config(params.config)
-            .config_dir(params.config_dir)
-            .email_renderer(email_renderer)
-            .event_bus(params.event_bus)
-            .login_limiter(params.login_limiter)
-            .ip_login_limiter(params.ip_login_limiter)
-            .forgot_password_limiter(params.forgot_password_limiter)
-            .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
-            .storage(params.storage)
-            .cache(params.cache)
-            .token_provider(params.token_provider)
-            .password_provider(params.password_provider)
-            .build(),
-    );
+    let mut deps_builder = ContentServiceDeps::builder()
+        .pool(params.pool)
+        .registry(params.registry)
+        .hook_runner(params.hook_runner)
+        .jwt_secret(params.jwt_secret)
+        .config(params.config)
+        .config_dir(params.config_dir)
+        .email_renderer(email_renderer)
+        .event_transport(params.event_transport)
+        .login_limiter(params.login_limiter)
+        .ip_login_limiter(params.ip_login_limiter)
+        .forgot_password_limiter(params.forgot_password_limiter)
+        .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
+        .storage(params.storage)
+        .cache(params.cache)
+        .token_provider(params.token_provider)
+        .password_provider(params.password_provider);
+
+    if let Some(transport) = params.invalidation_transport {
+        deps_builder = deps_builder.invalidation_transport(transport);
+    }
+
+    if let Some(sf) = params.populate_singleflight {
+        deps_builder = deps_builder.populate_singleflight(sf);
+    }
+
+    let content_service = ContentService::new(deps_builder.build());
 
     if cache_max_age > 0 && content_service.cache_handle().kind() != "none" {
         spawn_periodic_cache_clear(
@@ -113,7 +127,7 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .max_encoding_message_size(grpc_max_msg);
 
     // gRPC health service (grpc.health.v1.Health)
-    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    let (health_reporter, health_service) = health_reporter();
 
     health_reporter
         .set_serving::<ContentApiServer<ContentService>>()
@@ -152,11 +166,7 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
 
 /// Spawn a background task that periodically clears the cache.
 /// Handles external DB mutations that bypass the API's cache invalidation.
-fn spawn_periodic_cache_clear(
-    cache: crate::core::cache::SharedCache,
-    interval_secs: u64,
-    shutdown: CancellationToken,
-) {
+fn spawn_periodic_cache_clear(cache: SharedCache, interval_secs: u64, shutdown: CancellationToken) {
     spawn(async move {
         let mut tick = interval(Duration::from_secs(interval_secs));
 

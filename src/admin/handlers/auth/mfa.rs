@@ -141,7 +141,7 @@ fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response 
         }
     };
 
-    let mut response = session_redirect(&session, state.config.admin.dev_mode);
+    let mut response = session_redirect(state, &session);
 
     append_cookies(
         &mut response,

@@ -22,11 +22,11 @@ use crate::{
         auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         email::EmailRenderer,
-        event::EventBus,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
-    db::DbPool,
+    db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
 };
 
@@ -39,7 +39,7 @@ pub struct ContentServiceDeps {
     pub config: CrapConfig,
     pub config_dir: PathBuf,
     pub email_renderer: Arc<EmailRenderer>,
-    pub event_bus: Option<EventBus>,
+    pub event_transport: Option<SharedEventTransport>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
@@ -48,6 +48,12 @@ pub struct ContentServiceDeps {
     pub cache: SharedCache,
     pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
+    /// Optional: shared invalidation transport. When `None`, a fresh
+    /// in-process one is created internally.
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
+    /// Optional: shared populate singleflight. When `None`, a fresh
+    /// process-wide one is created internally for this service.
+    pub populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl ContentServiceDeps {

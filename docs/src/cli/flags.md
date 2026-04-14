@@ -500,18 +500,22 @@ crap-cms import backup.json -c posts
 ### `typegen` — Generate typed definitions
 
 ```bash
-crap-cms typegen [-l <LANG>] [-o <DIR>]
+crap-cms typegen [-l <LANG>] [-o <DIR>] [--proto <MODULE_PATH>]
 ```
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--lang` | `-l` | `lua` | Output language: `lua`, `ts`, `go`, `py`, `rs`, `all` |
 | `--output` | `-o` | `<config>/types/` | Output directory for generated files |
+| `--proto` | — | — | (Rust only) Generate `From<proto::Document>` conversions alongside `generated.rs`. The value is the Rust module path to the prost-generated proto types (e.g. `"crate::proto"`). Writes `generated_proto.rs` next to `generated.rs`. |
 
 ```bash
 crap-cms typegen
 crap-cms typegen -l all
 crap-cms typegen -l ts -o ./client/src/types
+
+# Rust + proto conversions
+crap-cms typegen -l rs --proto "crate::proto"
 ```
 
 ### `proto` — Export proto file
@@ -758,6 +762,61 @@ crap-cms images stats
 crap-cms images retry --id abc123
 crap-cms images retry --all -y
 crap-cms images purge --older-than 30d
+```
+
+### `trash` — Manage soft-deleted documents
+
+Inspect, restore, and purge documents in the trash (only for collections with `soft_delete = true`). See [Soft Deletes](../collections/soft-deletes.md) for details on the soft-delete model.
+
+#### `trash list`
+
+```bash
+crap-cms trash list [-c <COLLECTION>]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--collection` | `-c` | Filter by collection slug (default: all collections with soft delete) |
+
+#### `trash restore`
+
+```bash
+crap-cms trash restore <COLLECTION> <ID>
+```
+
+Restore a single trashed document back to the active list. Both `COLLECTION` and `ID` are positional arguments.
+
+#### `trash purge`
+
+```bash
+crap-cms trash purge [-c <COLLECTION>] [--older-than <DURATION>] [--dry-run]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--collection` | `-c` | — | Filter by collection slug (default: all soft-delete collections) |
+| `--older-than` | — | `all` | Purge documents deleted more than this ago (e.g. `30d`, `24h`, `30m`), or `all` for every trashed document |
+| `--dry-run` | — | — | Print what would be deleted without actually deleting |
+
+#### `trash empty`
+
+```bash
+crap-cms trash empty <COLLECTION> [-y]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--confirm` | `-y` | Required — confirms the destructive operation |
+
+Permanently delete every trashed document in the given collection.
+
+```bash
+crap-cms trash list
+crap-cms trash list -c posts
+crap-cms trash restore posts abc123
+crap-cms trash purge --older-than 7d
+crap-cms trash purge -c posts --dry-run
+crap-cms trash empty posts -y
 ```
 
 ### `mcp` — Start the MCP server (stdio)

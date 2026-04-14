@@ -372,6 +372,67 @@ local result = crap.collections.update_many("posts", {
 
 The `data` table contains fields to update on all matched documents (partial update).
 
+## crap.collections.list_versions(collection, id, opts?)
+
+List version snapshots for a document, newest first. Returns a table with `docs` (an array of version summaries) and `pagination` metadata matching the standard pagination shape. Only available on collections with `versions` enabled.
+
+**Only available inside hooks with transaction context.**
+
+```lua
+-- List the 10 most recent versions for a document
+local result = crap.collections.list_versions("posts", "abc123", { limit = 10 })
+for _, v in ipairs(result.docs) do
+    print(v.version, v.status, v.created_at, v.latest)
+end
+
+-- Paginate
+local page2 = crap.collections.list_versions("posts", "abc123", { limit = 10, offset = 10 })
+
+-- Internal listing that must ignore collection-level read access (e.g. a migration)
+local all = crap.collections.list_versions("posts", "abc123", { overrideAccess = true })
+```
+
+### Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | integer | `nil` | Maximum number of versions to return. Nil = all remaining. |
+| `offset` | integer | `0` | Number of versions to skip (offset pagination). |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to `true` — it is now opt-in. |
+
+### Version summary shape
+
+Each entry in `result.docs` has:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Version row ID (not the parent document ID). |
+| `version` | integer | Monotonically-increasing version number, newest first. |
+| `status` | string | Version status (e.g. `"published"`, `"draft"`). |
+| `latest` | boolean | `true` for the newest version. |
+| `created_at` | string? | ISO 8601 timestamp the snapshot was taken (nil if unset). |
+
+## crap.collections.restore_version(collection, id, version_id, opts?)
+
+Restore a previous version: copies the snapshot data back onto the parent document and writes a new version row. Returns the restored document. Only available on collections with `versions` enabled.
+
+**Only available inside hooks with transaction context.**
+
+```lua
+-- Restore version "v2-abc" of document "post-1"
+local doc = crap.collections.restore_version("posts", "post-1", "v2-abc")
+print(doc.title)
+
+-- Internal restore bypassing per-user access (e.g. automated rollback job)
+crap.collections.restore_version("posts", "post-1", "v2-abc", { overrideAccess = true })
+```
+
+### Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to `true` — it is now opt-in. |
+
 ## crap.collections.delete_many(collection, query, opts?)
 
 Delete multiple documents matching a query. Returns `{ deleted = N, skipped = N }`. For upload collections, associated files are automatically cleaned up from disk for each deleted document. Documents that are still referenced by other documents are skipped (hard delete only) and reported in `skipped`.

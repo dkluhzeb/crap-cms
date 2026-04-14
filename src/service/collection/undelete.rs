@@ -25,6 +25,10 @@ pub fn undelete_document_core(ctx: &ServiceContext, id: &str) -> Result<Document
         return Err(ServiceError::AccessDenied("Undelete access denied".into()));
     }
 
+    // When the hook returned Constrained filters, enforce row-level match.
+    // The target row is soft-deleted, so we must search the trash view.
+    helpers::enforce_access_constraints(ctx, id, &access, "Undelete", true)?;
+
     let restored = query::restore(conn, ctx.slug, id)?;
 
     if !restored {

@@ -11,13 +11,19 @@ use crate::{
             ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
         },
     },
-    db::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query},
+    db::{AccessResult, FindQuery, LocaleContext, query},
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };
 
 use crate::api::handlers::convert::pagination_result_to_proto;
 
 /// Build a FindQuery from the gRPC request parameters.
+///
+/// Produces a *user* query — system filters (`_status`, `_deleted_at`) are
+/// injected by the service layer based on the typed `trash` / `include_drafts`
+/// flags on `FindDocumentsInput`. The handler still steers presentation order
+/// to `-_deleted_at` for trash listings since the default sort order is a
+/// presentation concern, not a service-layer semantic.
 fn build_find_query(
     req: &content::FindRequest,
     def: &crate::core::CollectionDefinition,
@@ -26,7 +32,6 @@ fn build_find_query(
 ) -> Result<FindQuery, Status> {
     let filters = FilterBuilder::new(&def.fields, &AccessResult::Allowed)
         .where_json(req.r#where.as_deref())
-        .draft_filter(def.has_drafts(), !req.draft.unwrap_or(false))
         .build()?;
 
     let mut fq = FindQuery::builder()
@@ -59,24 +64,11 @@ fn build_find_query(
 
     let is_trash = req.trash.unwrap_or(false) && def.soft_delete;
 
-    if is_trash {
-        fq = fq.include_deleted(true);
-
-        if req.order_by.is_none() {
-            fq = fq.order_by("-_deleted_at");
-        }
+    if is_trash && req.order_by.is_none() {
+        fq = fq.order_by("-_deleted_at");
     }
 
-    let mut fq = fq.build();
-
-    if is_trash {
-        fq.filters.push(FilterClause::Single(Filter {
-            field: "_deleted_at".to_string(),
-            op: FilterOp::Exists,
-        }));
-    }
-
-    Ok(fq)
+    Ok(fq.build())
 }
 
 #[cfg(not(tarpaulin_include))]
@@ -120,8 +112,10 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let pop_cache = self.cache.clone();
+        let singleflight = self.populate_singleflight.clone();
         let def_owned = def;
         let is_trash = req.trash.unwrap_or(false) && def_owned.soft_delete;
+        let include_drafts = req.draft.unwrap_or(false);
 
         let find_query = build_find_query(&req, &def_owned, &pagination, select.as_deref())?;
 
@@ -154,6 +148,8 @@ impl ContentService {
                 .cache(Some(&*pop_cache))
                 .cursor_enabled(cursor_enabled)
                 .trash(is_trash)
+                .include_drafts(include_drafts)
+                .singleflight(Some(singleflight))
                 .build();
 
             let result = find_documents(&ctx, &input).map_err(Status::from)?;

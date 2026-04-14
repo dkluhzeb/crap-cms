@@ -13,7 +13,7 @@ use tracing::{debug, error};
 
 use crate::{
     admin::{
-        AdminState,
+        AdminState, auth_middleware,
         handlers::auth::{
             LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
             login_error, mfa_pending_cookie, session_redirect,
@@ -21,7 +21,7 @@ use crate::{
     },
     config::EmailConfig,
     core::{
-        CollectionDefinition, Document, DocumentId, Slug,
+        CollectionDefinition, Document, DocumentId, Slug, auth,
         auth::{ClaimsBuilder, SharedPasswordProvider},
         collection::MfaMode,
         email,
@@ -63,10 +63,21 @@ fn try_strategy_auth(
     let auth = def.auth.as_ref()?;
 
     for strategy in &auth.strategies {
-        if let Ok(Some(doc)) =
-            hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, conn)
-        {
-            return Some(doc);
+        match hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, conn) {
+            Ok(Some(doc)) => return Some(doc),
+            Ok(None) => continue,
+            Err(e) => {
+                // Log and fall through to the next strategy. Operators need visibility
+                // into strategy failures (DB errors, bad config, Lua panics) that
+                // previously silenced themselves as "authentication failed".
+                error!(
+                    collection = slug,
+                    strategy = %strategy.authenticate,
+                    error = ?e,
+                    "Custom auth strategy returned an error; continuing to next strategy"
+                );
+                continue;
+            }
         }
     }
 
@@ -139,7 +150,7 @@ async fn verify_credentials(
         }
 
         if !params.disable_local {
-            crate::core::auth::dummy_verify();
+            auth::dummy_verify();
         }
 
         Ok::<_, anyhow::Error>(None)
@@ -299,7 +310,7 @@ fn build_session_response(
         }
     };
 
-    session_redirect(&session, state.config.admin.dev_mode)
+    session_redirect(state, &session)
 }
 
 /// POST /admin/login — verify credentials, set cookie, redirect.
@@ -383,9 +394,7 @@ pub async fn login_action(
 
     // Check admin.access gate before issuing session — deny login entirely
     // if the user doesn't pass the gate function.
-    if let Some(response) =
-        crate::admin::auth_middleware::check_admin_gate_for_doc(&state, &login.user).await
-    {
+    if let Some(response) = auth_middleware::check_admin_gate_for_doc(&state, &login.user).await {
         return response;
     }
 

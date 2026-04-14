@@ -78,25 +78,15 @@ pub(in crate::mcp::tools) fn exec_find(
     }
 
     let is_trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false) && def.soft_delete;
+    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    if is_trash {
-        fq = fq.include_deleted(true);
-
-        if order_by.is_none() {
-            fq = fq.order_by("-_deleted_at");
-        }
+    // Default sort for trash listings is a presentation concern — keep here.
+    if is_trash && order_by.is_none() {
+        fq = fq.order_by("-_deleted_at");
     }
 
-    let mut fq = fq.build();
+    let fq = fq.build();
 
-    if is_trash {
-        use crate::db::{Filter, FilterClause, FilterOp};
-
-        fq.filters.push(FilterClause::Single(Filter {
-            field: "_deleted_at".to_string(),
-            op: FilterOp::Exists,
-        }));
-    }
     let hooks = RunnerReadHooks::new(runner, &conn);
     let ctx = ServiceContext::collection(slug, def)
         .pool(pool)
@@ -110,6 +100,8 @@ pub(in crate::mcp::tools) fn exec_find(
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(registry.as_ref()))
         .cursor_enabled(config.pagination.is_cursor())
+        .trash(is_trash)
+        .include_drafts(include_drafts)
         .build();
 
     let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;

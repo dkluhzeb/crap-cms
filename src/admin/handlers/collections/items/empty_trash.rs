@@ -13,8 +13,11 @@ use tracing::error;
 use crate::{
     admin::AdminState,
     config::LocaleConfig,
-    core::{CollectionDefinition, auth::AuthUser, upload, upload::StorageBackend},
-    db::{DbPool, Filter, FilterClause, FilterOp, FindQuery},
+    core::{
+        CollectionDefinition, auth::AuthUser, event::SharedInvalidationTransport, upload,
+        upload::StorageBackend,
+    },
+    db::{DbPool, FindQuery},
     hooks::HookRunner,
     service::{
         FindDocumentsInput, RunnerReadHooks, RunnerWriteHooks, ServiceContext, ServiceError,
@@ -23,6 +26,7 @@ use crate::{
 };
 
 /// Find all trashed documents via the service layer and permanently delete them.
+#[allow(clippy::too_many_arguments)]
 fn empty_trash(
     pool: &DbPool,
     runner: &HookRunner,
@@ -31,19 +35,18 @@ fn empty_trash(
     locale_cfg: &LocaleConfig,
     storage: &dyn StorageBackend,
     user_doc: Option<&crate::core::Document>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
 ) -> Result<usize, ServiceError> {
     // Find trashed documents via service (respects access.trash)
     let conn = pool.get().map_err(ServiceError::Internal)?;
     let read_hooks = RunnerReadHooks::new(runner, &conn);
 
-    let fq = FindQuery::builder()
-        .include_deleted(true)
-        .filters(vec![FilterClause::Single(Filter {
-            field: "_deleted_at".to_string(),
-            op: FilterOp::Exists,
-        })])
-        .limit(10000)
-        .build();
+    // System filters (`_deleted_at EXISTS`, `include_deleted`) are injected by
+    // the service layer based on `.trash(true)`. We also pass
+    // `.include_drafts(true)` because the trash view must show drafts and
+    // published rows alike — anything that was soft-deleted, regardless of
+    // status, should be eligible for purging.
+    let fq = FindQuery::builder().limit(10000).build();
 
     let read_ctx = ServiceContext::collection(slug, def)
         .pool(pool)
@@ -55,6 +58,7 @@ fn empty_trash(
     let input = FindDocumentsInput::builder(&fq)
         .hydrate(false)
         .trash(true)
+        .include_drafts(true)
         .build();
 
     let result = find_documents(&read_ctx, &input)?;
@@ -76,6 +80,7 @@ fn empty_trash(
         .conn(&tx)
         .write_hooks(&wh)
         .user(user_doc)
+        .invalidation_transport(invalidation_transport)
         .build();
 
     let mut deleted = 0;
@@ -128,6 +133,7 @@ pub async fn empty_trash_action(
     let locale_cfg = state.config.locale.clone();
     let runner = state.hook_runner.clone();
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    let invalidation_transport = state.invalidation_transport.clone();
 
     let result = task::spawn_blocking(move || {
         empty_trash(
@@ -138,6 +144,7 @@ pub async fn empty_trash_action(
             &locale_cfg,
             &*storage,
             user_doc.as_ref(),
+            Some(invalidation_transport),
         )
     })
     .await;

@@ -87,7 +87,7 @@ Pass an array of IDs:
 
 Order is preserved via the `_order` column in the junction table.
 
-On write, all existing junction table rows for the parent are deleted and replaced. This is a full replacement.
+When a has-many field **is included** in the update payload, all existing junction rows for the parent are deleted and replaced with the new list — a full replacement of that field's targets.
 
 ## Partial Updates
 

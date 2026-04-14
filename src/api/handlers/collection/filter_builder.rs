@@ -6,6 +6,7 @@ use crate::{
     api::handlers::convert::parse_where_json,
     core::FieldDefinition,
     db::{AccessResult, Filter, FilterClause, FilterOp, query::filter::normalize_filter_fields},
+    service::read::{validate_access_constraints, validate_user_filters},
 };
 
 /// Builder for constructing filter clauses from a gRPC request's `where` JSON,
@@ -17,6 +18,7 @@ pub(super) struct FilterBuilder<'a> {
     access_result: &'a AccessResult,
     has_drafts: bool,
     include_published_only: bool,
+    slug: &'a str,
 }
 
 impl<'a> FilterBuilder<'a> {
@@ -28,7 +30,16 @@ impl<'a> FilterBuilder<'a> {
             access_result,
             has_drafts: false,
             include_published_only: false,
+            slug: "",
         }
+    }
+
+    /// Set the collection slug — used when validating access-hook constraint filters
+    /// so the operator-facing error message can name the offending collection.
+    pub fn slug(mut self, slug: &'a str) -> Self {
+        self.slug = slug;
+
+        self
     }
 
     /// Set the optional `where` JSON string from the gRPC request.
@@ -56,11 +67,24 @@ impl<'a> FilterBuilder<'a> {
             Vec::new()
         };
 
+        // Reject user-supplied filters on system columns (`_*`). The bulk
+        // handlers call `query::find` directly rather than going through the
+        // service layer, so we validate here before any internal filter
+        // injection (draft filter, access constraints) is added to the list.
+        validate_user_filters(&filters).map_err(|e| Status::invalid_argument(e.to_string()))?;
+
         // Normalize dot notation: group dots → __, array/block/rel dots preserved
         normalize_filter_fields(&mut filters, self.fields);
 
-        // Merge access constraint filters
+        // Merge access constraint filters. Validate system-column filters
+        // against the same allow-list the service layer uses: `_status` is
+        // only allowed when the builder is about to inject `_status = published`
+        // itself; `_deleted_at` is never allowed on this path (bulk ops do not
+        // operate on trash).
         if let AccessResult::Constrained(constraint_filters) = &self.access_result {
+            let injecting_status = self.has_drafts && self.include_published_only;
+            validate_access_constraints(constraint_filters, false, injecting_status, self.slug)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
             filters.extend(constraint_filters.iter().cloned());
         }
 
@@ -140,6 +164,58 @@ mod tests {
             .build()
             .unwrap();
         assert!(filters.is_empty());
+    }
+
+    /// Access-hook filter tables that reference a forbidden system column must
+    /// be rejected with an InvalidArgument — bulk handlers call `query::find`
+    /// directly, so if the builder silently extended the filter list the
+    /// access-hook typo would leak past the validator.
+    #[test]
+    fn bulk_update_access_hook_returning_underscore_filter_is_rejected() {
+        let fields: Vec<FieldDefinition> = Vec::new();
+        let constraint = vec![FilterClause::Single(Filter {
+            field: "_ref_count".to_string(),
+            op: FilterOp::Equals("0".to_string()),
+        })];
+        let access = AccessResult::Constrained(constraint);
+
+        let err = FilterBuilder::new(&fields, &access)
+            .slug("articles")
+            .build()
+            .unwrap_err();
+
+        let msg = err.message();
+        assert!(
+            msg.contains("_ref_count"),
+            "error should name the forbidden field, got: {msg}"
+        );
+        assert!(
+            msg.contains("articles"),
+            "error should name the slug, got: {msg}"
+        );
+        assert!(
+            msg.contains("system column"),
+            "error should call out the system column, got: {msg}"
+        );
+    }
+
+    /// When the builder itself injects `_status = published`, an access-hook
+    /// filter on `_status` is acceptable (they combine into a single effective
+    /// `_status` filter).
+    #[test]
+    fn access_hook_status_filter_allowed_when_injecting_status() {
+        let fields: Vec<FieldDefinition> = Vec::new();
+        let constraint = vec![FilterClause::Single(Filter {
+            field: "_status".to_string(),
+            op: FilterOp::Equals("published".to_string()),
+        })];
+        let access = AccessResult::Constrained(constraint);
+
+        FilterBuilder::new(&fields, &access)
+            .slug("articles")
+            .draft_filter(true, true)
+            .build()
+            .expect("status constraint allowed when builder also injects _status");
     }
 
     #[test]

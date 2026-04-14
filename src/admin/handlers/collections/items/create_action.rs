@@ -57,7 +57,7 @@ fn handle_create_success(
     }
 
     state.hook_runner.publish_event(
-        &state.event_bus,
+        &state.event_transport,
         &def.hooks,
         def.live.as_ref(),
         PublishEventInput::builder(EventTarget::Collection, EventOperation::Create)

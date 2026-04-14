@@ -1,6 +1,6 @@
 //! `user create` — create a new user in an auth collection.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use dialoguer::{Input, Password};
 use std::collections::HashMap;
 
@@ -9,9 +9,23 @@ use crate::{
     config::PasswordPolicy,
     core::SharedRegistry,
     db::{DbPool, query},
+    hooks::lifecycle::is_valid_email_format,
 };
 
 use super::helpers::{load_auth_collection, prompt_required_fields};
+
+/// Validate an email address string for CLI input.
+/// Returns a human-readable error referencing the offending email.
+fn validate_email_input(email: &str) -> Result<()> {
+    if is_valid_email_format(email) {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "invalid email address '{}': must contain '@', non-empty local and domain parts, and a dot in the domain",
+        email
+    ))
+}
 
 /// Create a new user in an auth collection.
 #[cfg(not(tarpaulin_include))]
@@ -27,6 +41,8 @@ pub fn user_create(
     let def = load_auth_collection(registry, collection)?;
 
     let email = resolve_email(email)?;
+    validate_email_input(&email)?;
+
     let password = resolve_password(password)?;
 
     password_policy.validate(&password)?;
@@ -76,5 +92,29 @@ fn resolve_password(password: Option<String>) -> Result<String> {
             .with_confirmation("Confirm password", "Passwords do not match")
             .interact()
             .context("Failed to read password"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_email_input;
+
+    #[test]
+    fn cli_user_create_rejects_malformed_email() {
+        let err = validate_email_input("not-an-email").unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not-an-email"),
+            "error should reference offending value: {msg}"
+        );
+        assert!(
+            msg.contains("invalid email"),
+            "error should say invalid email: {msg}"
+        );
+
+        assert!(validate_email_input("user@nodot").is_err());
+        assert!(validate_email_input("@nolocal.com").is_err());
+        assert!(validate_email_input("user@").is_err());
+        assert!(validate_email_input("user@example.com").is_ok());
     }
 }

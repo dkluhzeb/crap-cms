@@ -49,7 +49,7 @@ fn parse_relationship_table(
         )));
     }
 
-    let has_many = get_bool(rel_tbl, "has_many", false);
+    let has_many = get_bool(rel_tbl, "has_many", false)?;
     let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
 
     let mut rc = RelationshipConfig::new(collection, has_many);
@@ -73,7 +73,7 @@ fn parse_legacy_relation_to(field_tbl: &Table) -> LuaResult<Option<RelationshipC
          Use 'relationship = {{ collection = \"{collection}\" }}' instead."
     );
 
-    let has_many = get_bool(field_tbl, "has_many", false);
+    let has_many = get_bool(field_tbl, "has_many", false)?;
 
     Ok(Some(RelationshipConfig::new(collection, has_many)))
 }

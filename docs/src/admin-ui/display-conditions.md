@@ -122,3 +122,14 @@ Display conditions work on fields in any position, including sidebar fields (`ad
 - If a condition function throws an error, the field remains **visible** (safe default)
 - If the condition returns `nil`, the field remains **visible**
 - On page load, fields are hidden server-side before rendering (no flash)
+
+## Complexity Limits
+
+There are **no built-in depth, length, or array-size limits** on condition tables returned from Lua. The evaluator (`evaluate_condition_table`) recurses through arrays of conditions until it bottoms out, and each leaf object is a single AND clause.
+
+In practice, keep condition tables small and flat:
+
+- A single object (one operator, one field), or
+- An array of objects (AND-combined).
+
+Deeply nested or runaway-large tables will be evaluated in full both server-side (initial render) and client-side (on every form change) — so keeping them simple is a performance and readability choice, not a hard requirement. Conditions that need richer logic (loops, lookups, multi-field reasoning) are better expressed as boolean condition functions.

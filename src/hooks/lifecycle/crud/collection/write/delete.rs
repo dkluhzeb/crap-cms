@@ -7,7 +7,7 @@ use crate::{
     config::LocaleConfig,
     core::{SharedRegistry, upload},
     hooks::lifecycle::{
-        LuaStorage,
+        LuaInvalidationTransport, LuaStorage,
         crud::{get_tx_conn, helpers::*},
     },
     service::{LuaWriteHooks, ServiceContext, delete_document_core},
@@ -30,12 +30,20 @@ fn delete_document(
     let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
     let run_hooks = get_opt_bool(&opts, "hooks", true)?;
     let force_hard_delete = get_opt_bool(&opts, "forceHardDelete", false)?;
-    let def = resolve_collection(reg, &collection)?;
+    let mut def = resolve_collection(reg, &collection)?;
+
+    // `force_hard_delete` on a soft-delete collection must flip the def so
+    // `delete_document_core` treats it as a hard delete. Mirrors the pattern
+    // in gRPC handlers and Lua bulk `delete_many`. Without this, the option
+    // was silently ignored and rows were soft-deleted regardless.
+    if force_hard_delete && def.soft_delete {
+        def.soft_delete = false;
+    }
 
     // Collection-level access check is handled inside service::delete_document_core
     // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
-    let is_hard = !def.soft_delete || force_hard_delete;
+    let is_hard = !def.soft_delete;
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "delete");
 
@@ -49,11 +57,16 @@ fn delete_document(
         .hooks_enabled(hooks_enabled)
         .build();
 
+    let invalidation_transport = lua
+        .app_data_ref::<LuaInvalidationTransport>()
+        .map(|t| t.0.clone());
+
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(override_access)
+        .invalidation_transport(invalidation_transport)
         .build();
 
     let result = delete_document_core(&ctx, &id, Some(lc))

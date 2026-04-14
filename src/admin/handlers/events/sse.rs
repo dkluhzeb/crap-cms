@@ -20,23 +20,29 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use serde_json::{Map, Value, json};
-use tokio_stream::{
-    Stream, StreamExt,
-    wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
-};
+use tokio::{sync::mpsc, time::timeout};
+use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tokio_util::sync::WaitForCancellationFutureOwned;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::{
     admin::AdminState,
     core::{
         AuthUser, Document, Registry, Slug,
         collection::LiveMode,
-        event::{EventOperation, EventTarget, MutationEvent},
+        event::{
+            EventOperation, EventReceiver, EventTarget, InvalidationReceiver, MutationEvent,
+            RecvError,
+        },
     },
     db::{AccessResult, FilterClause, query::filter::memory},
     hooks::HookRunner,
 };
+
+/// Outbound channel capacity per subscriber. Kept small — the pumping task uses
+/// `send_timeout` and drops the subscriber on backpressure, so there is no point
+/// queuing large numbers of events.
+const SUBSCRIBER_CHANNEL_CAPACITY: usize = 16;
 
 /// RAII guard that decrements the SSE connection counter on drop.
 struct SseConnectionGuard {
@@ -180,15 +186,18 @@ fn build_allowed_slugs(state: &AdminState, user_doc: Option<&Document>) -> SseAc
     access
 }
 
-/// Convert a mutation event to an SSE Event, applying access control, after_read hooks,
-/// and field stripping to match normal read operations.
-fn event_to_sse(
+/// Build the JSON payload for an SSE event, applying access control, after_read hooks,
+/// and field stripping. Returns `None` when the subscriber should not receive this event.
+///
+/// Separated from [`event_to_sse`] so it can be unit-tested without depending on
+/// axum's opaque `sse::Event` body representation.
+fn build_event_payload(
     event: &MutationEvent,
     access: &SseAccess,
     hook_runner: &HookRunner,
     registry: &Registry,
     user_doc: Option<&Document>,
-) -> Option<Event> {
+) -> Option<Value> {
     let allowed = match event.target {
         EventTarget::Collection => access.collections.contains(&event.collection),
         EventTarget::Global => access.globals.contains(&event.collection),
@@ -252,7 +261,7 @@ fn event_to_sse(
         Map::new() // metadata mode: no data
     };
 
-    let payload = json!({
+    Some(json!({
         "sequence": event.sequence,
         "timestamp": event.timestamp,
         "target": target_str,
@@ -261,7 +270,19 @@ fn event_to_sse(
         "document_id": event.document_id,
         "edited_by": event.edited_by,
         "data": data,
-    });
+    }))
+}
+
+/// Convert a mutation event to an SSE Event, applying access control, after_read hooks,
+/// and field stripping to match normal read operations.
+fn event_to_sse(
+    event: &MutationEvent,
+    access: &SseAccess,
+    hook_runner: &HookRunner,
+    registry: &Registry,
+    user_doc: Option<&Document>,
+) -> Option<Event> {
+    let payload = build_event_payload(event, access, hook_runner, registry, user_doc)?;
 
     Some(
         Event::default()
@@ -269,6 +290,116 @@ fn event_to_sse(
             .id(event.sequence.to_string())
             .data(payload.to_string()),
     )
+}
+
+/// Context captured for each SSE pumping task.
+struct PumpCtx {
+    access: SseAccess,
+    hook_runner: HookRunner,
+    registry: Arc<Registry>,
+    user_doc: Option<Document>,
+    user_id: Option<String>,
+    send_timeout: Duration,
+}
+
+/// Pump one event into the outbound channel with a timeout. Returns `Err(())`
+/// if the subscriber should be dropped (timeout, channel closed).
+async fn forward_event(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    event: Event,
+    send_timeout_dur: Duration,
+) -> Result<(), ()> {
+    match timeout(send_timeout_dur, tx.send(Ok(event))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(()), // receiver dropped — client disconnected
+        Err(_) => {
+            warn!("SSE subscriber send timed out — dropping slow client");
+            Err(())
+        }
+    }
+}
+
+/// Handle one event recv result. Returns `Err(())` if the subscriber should
+/// be dropped.
+async fn handle_broadcast_recv(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    ctx: &PumpCtx,
+    recv: Result<MutationEvent, RecvError>,
+) -> Result<(), ()> {
+    match recv {
+        Ok(event) => {
+            let Some(sse_event) = event_to_sse(
+                &event,
+                &ctx.access,
+                &ctx.hook_runner,
+                &ctx.registry,
+                ctx.user_doc.as_ref(),
+            ) else {
+                return Ok(());
+            };
+
+            forward_event(tx, sse_event, ctx.send_timeout).await
+        }
+        Err(RecvError::Lagged(n)) => {
+            warn!(
+                "SSE subscriber lagged by {} events — dropping client (forces reconnect)",
+                n
+            );
+            Err(())
+        }
+        Err(RecvError::Closed) => Err(()),
+    }
+}
+
+/// Handle a user-invalidation signal. Returns `Err(())` if it matches this
+/// subscriber's user.
+fn handle_invalidation(ctx: &PumpCtx, recv: Result<String, RecvError>) -> Result<(), ()> {
+    match recv {
+        Ok(user_id) => {
+            let Some(my_id) = ctx.user_id.as_deref() else {
+                return Ok(());
+            };
+
+            if user_id == my_id {
+                warn!("SSE subscriber invalidated — user session revoked");
+                return Err(());
+            }
+
+            Ok(())
+        }
+        // On lag or closed we treat as "stay connected" — missing a stale
+        // invalidation signal is harmless; the session still gets dropped on
+        // the next one. `Closed` is unreachable in practice (bus lives as long
+        // as the process).
+        Err(_) => Ok(()),
+    }
+}
+
+/// Spawn the per-subscriber pumping task. It forwards filtered events to `tx`
+/// and exits (dropping `tx`, closing the stream) on timeout, lag, or
+/// user-invalidation.
+fn spawn_pump(
+    mut event_rx: EventReceiver,
+    mut invalidation_rx: InvalidationReceiver,
+    tx: mpsc::Sender<Result<Event, Infallible>>,
+    ctx: PumpCtx,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                recv = event_rx.recv() => {
+                    if handle_broadcast_recv(&tx, &ctx, recv).await.is_err() {
+                        break;
+                    }
+                }
+                recv = invalidation_rx.recv() => {
+                    if handle_invalidation(&ctx, recv).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// SSE handler — streams mutation events to authenticated admin users.
@@ -289,11 +420,11 @@ pub async fn sse_handler(
         counter: state.sse_connections.clone(),
     };
 
-    let event_bus = state.event_bus.clone();
+    let event_transport = state.event_transport.clone();
     let shutdown = state.shutdown.clone();
 
     let user_doc = auth_user.as_ref().map(|ext| &ext.0.user_doc);
-    let access = if event_bus.is_some() {
+    let access = if event_transport.is_some() {
         build_allowed_slugs(&state, user_doc)
     } else {
         SseAccess {
@@ -308,30 +439,31 @@ pub async fn sse_handler(
     let hook_runner = state.hook_runner.clone();
     let registry = state.registry.clone();
     let subscriber_user_doc = auth_user.as_ref().map(|ext| ext.0.user_doc.clone());
+    let subscriber_user_id = auth_user.as_ref().map(|ext| ext.0.claims.sub.to_string());
+    let send_timeout = Duration::from_millis(state.subscriber_send_timeout_ms);
+    let invalidation_rx = state.invalidation_transport.subscribe();
 
-    let stream = if let Some(bus) = event_bus {
-        let rx = bus.subscribe();
+    let stream: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
+        match event_transport {
+            Some(transport) => {
+                let event_rx = transport.subscribe();
+                let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
 
-        let filtered = BroadcastStream::new(rx).filter_map(move |result| match result {
-            Ok(event) => event_to_sse(
-                &event,
-                &access,
-                &hook_runner,
-                &registry,
-                subscriber_user_doc.as_ref(),
-            )
-            .map(Ok::<_, Infallible>),
-            Err(BroadcastStreamRecvError::Lagged(n)) => {
-                error!("SSE stream lagged by {} events — client missed updates", n);
-                None
+                let ctx = PumpCtx {
+                    access,
+                    hook_runner,
+                    registry,
+                    user_doc: subscriber_user_doc,
+                    user_id: subscriber_user_id,
+                    send_timeout,
+                };
+
+                spawn_pump(event_rx, invalidation_rx, tx, ctx);
+
+                Box::pin(ReceiverStream::new(rx))
             }
-        });
-
-        Box::pin(filtered) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
-    } else {
-        Box::pin(tokio_stream::empty())
-            as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
-    };
+            None => Box::pin(tokio_stream::empty()),
+        };
 
     let stream = CancellableStream {
         inner: stream,
@@ -345,6 +477,17 @@ pub async fn sse_handler(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value as JsonValue, json};
+
+    use crate::{
+        config::CrapConfig,
+        core::{
+            DocumentId,
+            collection::{Access, CollectionDefinition},
+            field::{FieldAccess, FieldDefinition, FieldType},
+        },
+    };
+
     use super::*;
 
     #[test]
@@ -376,5 +519,159 @@ mod tests {
         }
         assert!(!try_acquire_sse_slot(&counter, 3));
         assert_eq!(counter.load(Ordering::Relaxed), 3);
+    }
+
+    /// Build a posts collection with one field that has field-level read access
+    /// denied for everyone. Field stripping in `event_to_sse` (Full mode) must
+    /// remove this field per-subscriber before emission.
+    fn make_posts_with_secret_field() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.live_mode = LiveMode::Full;
+        def.access = Access::default();
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition {
+                name: "secret".to_string(),
+                field_type: FieldType::Text,
+                access: FieldAccess {
+                    read: Some("hooks.access.field_read_deny".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ];
+        def
+    }
+
+    fn make_event(slug: &str, data: HashMap<String, JsonValue>) -> MutationEvent {
+        MutationEvent {
+            sequence: 1,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            target: EventTarget::Collection,
+            operation: EventOperation::Create,
+            collection: Slug::new(slug),
+            document_id: DocumentId::new("doc-1"),
+            data,
+            edited_by: None,
+        }
+    }
+
+    fn fixture_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
+    }
+
+    fn build_runner_and_registry() -> (HookRunner, Arc<Registry>, CollectionDefinition) {
+        let config_dir = fixture_dir();
+        let config = CrapConfig::test_default();
+
+        // init_lua loads the fixture's collections + hooks into a SharedRegistry.
+        let shared = crate::hooks::init_lua(&config_dir, &config).expect("init lua");
+
+        // Replace the registered "articles" with a stripped-down posts collection
+        // that has the field-level read deny we need for this test.
+        {
+            let mut reg = shared.write().unwrap();
+            reg.register_collection(make_posts_with_secret_field());
+        }
+
+        let runner = HookRunner::builder()
+            .config_dir(&config_dir)
+            .registry(shared.clone())
+            .config(&config)
+            .build()
+            .expect("build runner");
+
+        let posts = shared
+            .read()
+            .unwrap()
+            .get_collection("posts")
+            .unwrap()
+            .clone();
+        let registry_snapshot = Registry::snapshot(&shared);
+
+        (runner, registry_snapshot, posts)
+    }
+
+    #[test]
+    fn sse_full_mode_strips_field_read_denied_fields() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        // Build SseAccess that mirrors what `build_allowed_slugs` would compute
+        // for an anonymous user against this posts collection.
+        let mut denied_fields: HashMap<String, Vec<String>> = HashMap::new();
+        denied_fields.insert("posts".to_string(), vec!["secret".to_string()]);
+
+        let mut modes: HashMap<String, LiveMode> = HashMap::new();
+        modes.insert("posts".to_string(), LiveMode::Full);
+
+        let mut collections = HashSet::new();
+        collections.insert(Slug::new("posts"));
+
+        let access = SseAccess {
+            collections,
+            globals: HashSet::new(),
+            denied_fields,
+            constraints: HashMap::new(),
+            modes,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), json!("Hello"));
+        data.insert("secret".to_string(), json!("redacted-please"));
+        let event = make_event("posts", data);
+
+        let payload = build_event_payload(&event, &access, &runner, &registry, None)
+            .expect("payload should be produced for allowed collection");
+
+        let data_obj = payload
+            .get("data")
+            .and_then(|v| v.as_object())
+            .expect("data field should be a JSON object");
+
+        assert_eq!(
+            data_obj.get("title"),
+            Some(&json!("Hello")),
+            "title must be present in Full mode"
+        );
+        assert!(
+            !data_obj.contains_key("secret"),
+            "denied field 'secret' must be stripped; got: {data_obj:?}"
+        );
+    }
+
+    #[test]
+    fn sse_metadata_mode_omits_data_entirely() {
+        let (runner, registry, _posts) = build_runner_and_registry();
+
+        let mut modes: HashMap<String, LiveMode> = HashMap::new();
+        modes.insert("posts".to_string(), LiveMode::Metadata);
+
+        let mut collections = HashSet::new();
+        collections.insert(Slug::new("posts"));
+
+        let access = SseAccess {
+            collections,
+            globals: HashSet::new(),
+            denied_fields: HashMap::new(),
+            constraints: HashMap::new(),
+            modes,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), json!("Hello"));
+        data.insert("secret".to_string(), json!("redacted-please"));
+        let event = make_event("posts", data);
+
+        let payload = build_event_payload(&event, &access, &runner, &registry, None)
+            .expect("payload yielded");
+
+        let data_obj = payload
+            .get("data")
+            .and_then(|v| v.as_object())
+            .expect("data object present");
+        assert!(
+            data_obj.is_empty(),
+            "metadata mode must emit empty data object; got {data_obj:?}"
+        );
     }
 }

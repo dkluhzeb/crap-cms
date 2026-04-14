@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tracing::info;
 
 use crate::{
-    core::Registry,
+    core::{Registry, event::SharedInvalidationTransport},
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, delete_document},
@@ -20,6 +20,7 @@ pub(in crate::mcp::tools) fn exec_delete(
     registry: &Arc<Registry>,
     pool: &DbPool,
     runner: &HookRunner,
+    invalidation_transport: Option<SharedInvalidationTransport>,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -34,6 +35,7 @@ pub(in crate::mcp::tools) fn exec_delete(
         .pool(pool)
         .runner(runner)
         .override_access(true)
+        .invalidation_transport(invalidation_transport)
         .build();
     delete_document(&ctx, id, None, None)?;
 

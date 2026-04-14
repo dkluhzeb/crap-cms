@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`[live] transport = "redis"` for cross-node event fan-out** — new
+  config key that pipes live-update mutation events and user-invalidation
+  signals through Redis pub/sub instead of the default in-process
+  `tokio::sync::broadcast` channel. Required for multi-node deployments
+  so subscribers on any node see events published by any other node.
+  Reuses `[cache] redis_url` (single source of truth); requires
+  `--features redis` at build time. With the default `transport =
+  "memory"`, a write on node A still only reaches subscribers connected
+  to node A — fine for single-node or sticky-load-balanced setups, not
+  for round-robin.
+
 - **Rust typegen proto conversion** — `crap-cms typegen -l rs --proto <module>`
   generates `generated_proto.rs` with `from_document()` impls that extract
   fields directly from `prost_types::Struct` — no JSON intermediate, no
@@ -34,13 +45,431 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   through the service layer with proper `ServiceError::AccessDenied`
   handling.
 
+- **Configurable session cookie SameSite attribute** — new `[auth]
+  session_cookie_samesite` key in `crap.toml` accepts `"lax"` (default),
+  `"strict"`, or `"none"` (reserved; currently falls back to `Lax` with
+  a runtime warning). Set to `"strict"` for hardened CSRF protection at
+  the cost of breaking cross-site navigation (clicks from emails, external
+  links, etc. will require re-login). The CSRF cookie itself remains
+  hard-coded to `SameSite=Strict` regardless of this setting.
+
+- **`crap.crypto.constant_time_eq(a, b)`** — new Lua-side helper that
+  compares two strings in time independent of where (or whether) they
+  differ, backed by the `subtle` crate. Required for verifying HMAC tags,
+  signatures, or any secret value — using Lua's `==` operator on HMAC
+  strings is timing-attack-vulnerable. The `crap.crypto.hmac_sha256`
+  docs now point to this helper as the only correct verification path.
+
+### Changed
+
+- **User-invalidation signals now fire from the service layer** —
+  `ServiceContext` carries an optional `invalidation_transport`; when
+  set, `service::auth::lock_user` and `service::write::delete_document_core`
+  (for hard-delete of auth collections) publish a user-invalidation
+  signal so any active live-update streams owned by that user are torn
+  down. Wired through admin handlers, gRPC handlers (lock, delete,
+  delete_many, upload delete), MCP delete tool, empty-trash, and Lua
+  CRUD (`crap.collections.delete` / `delete_many`). Lua VMs receive the
+  transport via `LuaInvalidationTransport` app-data set at `HookRunner`
+  build time. The previously-duplicated handler-side publishers in
+  admin + gRPC handlers have since been removed — the service-layer
+  chokepoint is now the single source of invalidation publishes.
+
+- **Cross-request populate cache dedup** — `FindDocumentsInput` and
+  `FindByIdInput` gained an optional `singleflight: Option<
+  SharedPopulateSingleflight>` field plumbed through
+  `PostProcessOpts` into `post_process`. gRPC find / find_by_id
+  handlers thread the process-wide `Arc<Singleflight>` from
+  `ContentServiceDeps` / `AdminState`. Lua CRUD paths read the shared
+  singleflight from `LuaPopulateSingleflight` app-data. Combined with
+  the `override_access` guardrail (see Fixed section), this closes
+  the last gap on SEC-F: concurrent requests across the process
+  dedupe populate cache misses, while override-access fetches stay
+  isolated. MCP tools hardcode `override_access = true` so the
+  guardrail always bypasses their threading — intentionally skipped.
+
+- **Docs + LuaLS annotations for `list_versions` / `restore_version`** —
+  both functions are now documented in `docs/src/lua-api/collections.md`
+  and typed in `types/crap.lua` (plus `example/types/crap.lua`) with the
+  `crap.VersionSummary` shape and their `overrideAccess` opt. See the
+  corresponding Fixed entry for the behaviour change.
+
+- **BREAKING: filters on system columns (`_*`) are now rejected** —
+  User-supplied `where` filters targeting field paths starting with `_`
+  (e.g. `_deleted_at`, `_status`, `_ref_count`, `_password_hash`,
+  `_locked`) now error with `InvalidArgument` / `HookError` instead of
+  silently ANDing against automatically-injected exclusions or falling
+  through. Applies to gRPC, Lua, admin URL query params, and MCP. Use
+  the typed request flags (`trash = true`, `draft = true`) to access the
+  data those columns represent. Previously, such filters could silently
+  produce empty results (for drafts-enabled collections without the
+  `draft` flag) or — in Lua bulk ops and gRPC bulk — bypass validation
+  entirely. Validation moved into the service layer so all surfaces
+  enforce the same rule. The allow-list for service-internal injection
+  (`_status = "published"` when filtering to non-drafts, `_deleted_at
+  EXISTS` when listing trash) is applied post-validation.
+
+- **BREAKING: `AccessResult::Constrained` filter tables from write
+  access hooks now enforce row-level matches** — An access hook for
+  `update` / `delete` / `undelete` / `unpublish` that returns a filter
+  table (e.g. `return { author_id = ctx.user.id }`) now causes the
+  target row to be checked against those filters; the operation is
+  denied if the row does not match. Previously the filter was silently
+  dropped and the write proceeded unchecked — operators writing the
+  natural "users can only modify their own rows" idiom were getting a
+  no-op. This restores the intuitive semantic across reads + writes.
+  On `create`, filter tables are now rejected with a clear error
+  (`create` has no target row to match); use boolean returns with
+  explicit `ctx.data` checks instead. On globals (single-row) and jobs
+  (trigger-only), filter tables are likewise rejected with an
+  operator-facing error. Version `restore` enforces against the parent
+  document id.
+
+- **BREAKING: relationship population omits soft-deleted / missing
+  targets** — At `depth >= 1`, a has-one relationship whose target is
+  soft-deleted or absent now resolves to `null` instead of leaking the
+  raw ID string. Has-many relationships drop soft-deleted / absent
+  entries from the array. Cycle-protection paths, malformed polymorphic
+  refs, and unknown-collection refs still keep the original string.
+  Applies to both single-doc and batch population, polymorphic and
+  non-polymorphic.
+
+- **Slow / lagged subscribers are dropped (SEC-D)** — Live-update
+  streams (gRPC Subscribe and admin SSE) now drop a subscriber when a
+  per-event send takes longer than `subscriber_send_timeout_ms` (new
+  `[live]` key, default `1000`). Subscribers that fall further behind
+  than `channel_capacity` are also dropped on their next read; the
+  previous behavior of holding lagged subscribers open with warnings
+  masked silent event loss. Healthy subscribers are unaffected; dropped
+  clients see a closed stream and must reconnect.
+
+- **BREAKING: filter comparison operators are field-type-aware** —
+  Comparison operators (`greater_than`, `less_than`, `gt`, `lt`, etc.)
+  now bind their values as the field's actual SQL type (`INTEGER` /
+  `REAL` / `TEXT`) instead of always `TEXT`. Number fields correctly
+  compare numerically (previous lexicographic `"1000" < "50"` ordering
+  is gone). Checkbox fields accept `"true"`/`"false"`/`"1"`/`"0"` and
+  bind as integer. Date fields stay `TEXT` (ISO strings compare
+  lexicographically). Text-only operators (`contains`, `starts_with`,
+  `regex`) remain text. Invalid numeric inputs fall back to text with a
+  runtime warning rather than panicking.
+
+- **`search_documents` now mirrors `find_documents` draft-inclusion
+  semantics** — `SearchDocumentsInput` gained an `include_drafts:
+  bool` field. When `false` (default) on a drafts-enabled collection,
+  the service injects `_status = "published"` so only published rows
+  are returned — matching `find_documents`. The admin relationship
+  picker passes `include_drafts = true` so operators can link to
+  work-in-progress content. Previously search hard-coded a "permit
+  `_status` Constrained filter" flag but never actually injected,
+  producing inconsistent behaviour between find and search.
+
+- **Cache stampede fix — singleflight on populate** — relationship
+  population deduplicates concurrent cache-miss fetches for the same
+  `(collection, id, locale)` key. Previously N concurrent requests
+  for the same target each independently ran `find_by_id`; now the
+  first arriver runs the query and later arrivers block on a shared
+  slot, collapsing N DB hits to 1 under thundering-herd load.
+  Dashmap-backed, sync-blocking. See the follow-up plumbing for
+  cross-request dedup in the Changed section.
+
 ### Fixed
+
+- **[SECURITY] SEC-G Join field population bypassed target-collection
+  read access** — `populate_join_docs` was running raw `query::find`
+  on the joined collection, skipping its `access.read` hook. A user
+  allowed to read `post` but denied `author` reads could still see
+  `author` data by inspecting the post's join field. Populate now
+  checks the target collection's read access via a new
+  `JoinAccessCheck` trait: `Denied` → empty array; `Constrained(...)`
+  → validated and merged into the subquery; `Allowed` → proceeds. The
+  guard is wired from `post_process` for every find/find_by_id result.
+
+- **[SECURITY] Shared populate cache + singleflight leak across
+  `override_access = true` boundaries** — Lua CRUD paths and MCP tools
+  can set `override_access = true` to bypass access hooks. With the
+  cross-request singleflight share landed in this release, a bypass
+  fetch could write documents into the shared cache that another
+  user's request would then read without their own access
+  re-evaluation. Added a single-chokepoint guardrail at
+  `service::read::post_process`: when `ctx.override_access == true`,
+  both the populate cache and the singleflight are forced to `None`
+  regardless of what the input carries. Override-access fetches still
+  deduplicate within their own call via a fresh per-call singleflight,
+  but never write to or read from shared state.
+
+- **[SECURITY] Live-update streams not torn down on lock / hard-delete
+  (SEC-E)** — When a user was locked or hard-deleted via the service
+  layer, their existing gRPC Subscribe and admin SSE streams kept
+  receiving events with the original snapshotted access until the
+  client disconnected on its own. Both surfaces now publish a
+  per-user invalidation that closes affected streams immediately with
+  `PermissionDenied`; the client must reconnect with a fresh token.
+  Anonymous subscribers are not affected.
+
+- **[SECURITY] Lua `list_versions` / `restore_version` bypassed
+  collection access** — both functions hardcoded `override_access =
+  true`, silently bypassing the collection's `read` / `update` access
+  hooks. Now opt-in via `opts.overrideAccess` with a default of
+  `false`, matching every other Lua CRUD method. Lua callers respect
+  the configured access rules by default; trusted internal code
+  (jobs, migrations) can still opt in explicitly.
 
 - **`admin.access` gate not enforced at login** — Users who failed the
   `admin.access` check could still log in and receive a session cookie,
   only to see a 403 on every subsequent page. The access gate is now
   checked in the login handler before issuing the session. Denied users
   see the 403 immediately at login without a cookie being set.
+
+- **ref_count race: dangling reference after concurrent hard-delete** —
+  When a write incremented the reference count on a target document that
+  had been hard-deleted concurrently, the increment silently failed
+  (0 rows affected) and the caller's transaction committed with a
+  dangling reference. Now the increment produces a hard error and the
+  caller's transaction rolls back. Decrement-on-missing remains a
+  tolerated no-op (the target is already gone; nothing to decrement).
+
+- **Custom auth strategy errors silently swallowed** — If a custom
+  authentication strategy hook returned an error (DB outage, bad config,
+  Lua panic), the login flow silently fell through to the next strategy
+  with no log output. Errors are now logged at `ERROR` level with the
+  strategy reference and collection slug, then iteration continues.
+
+- **[SECURITY] Email header injection via CRLF in `crap.email.send`** —
+  `subject`, `to`, `from`, `cc`, `bcc`, and `reply_to` values are now
+  rejected if they contain `\r`, `\n`, or NUL. Previously, a Lua hook
+  that interpolated user-controlled data into `subject` could inject
+  arbitrary SMTP headers (e.g., `subject = user .. "\r\nBcc: attacker"`
+  silently BCC'd the attacker on every mail). The same validation is
+  applied at the queued-email insertion point as defense-in-depth.
+
+- **[SECURITY] HTTP SSRF blocklist no longer leaks internal IPs** —
+  When `crap.http.request` is blocked by the SSRF policy, the Lua error
+  is now a generic "Target resolves to a blocked address; see server
+  logs for details". The resolved IP + blocklist class continue to be
+  logged at `warn!` level for operators. Previously the error message
+  named the IP, which allowed a caller to enumerate internal topology
+  via the error channel.
+
+- **MCP HTTP `api_key` empty behavior clarified** — when `mcp.http =
+  true` but `api_key` is empty, the server still starts and registers
+  the route, but every request to `POST /mcp` is rejected with 401. The
+  previous docs claimed the server would refuse to start — that was
+  wrong. The per-request check is still defense-in-depth; operators
+  should verify the key is set before enabling HTTP.
+
+- **Lua `crap.collections.delete` ignored `forceHardDelete` on
+  soft-delete collections** — the option was parsed but never flipped
+  `def.soft_delete = false` before calling the service layer, so
+  `forceHardDelete = true` silently soft-deleted rows regardless.
+  Fixed to mirror the existing pattern in gRPC single/bulk delete
+  and admin empty-trash.
+
+- **Configuration parser silently accepted unknown TOML keys** —
+  config structs lacked `#[serde(deny_unknown_fields)]`, so typos
+  like `[servr]` or `admin_prot = 3000` passed silently and operators
+  would spend hours debugging "why isn't my setting applying". Added
+  `deny_unknown_fields` to 20 config structs across `src/config/`;
+  startup now fails fast on unrecognised keys with an error that
+  names the offending key.
+
+- **Parser integer overflow in filesize / duration / trash-purge
+  inputs** — `parse_filesize_string` / `parse_duration_string` /
+  `parse_older_than` multiplied without checked arithmetic; absurd
+  inputs (e.g. `"10000000GB"`, `"99999999999999999999d"`) silently
+  overflowed to small or negative values, changing pool sizes,
+  timeouts, or purge windows. All three now use `checked_mul` and
+  return a clear error on overflow.
+
+- **Field-definition parsing silently accepted duplicate field
+  names** — two fields with the same name at the same nesting level
+  produced a single column in the generated DDL (the second
+  overwrote the first). Parse-time validation now errors with the
+  offending name; the check flattens through transparent layout
+  wrappers (`Row`, `Collapsible`, `Tabs`) so a sibling field and a
+  nested-in-Row field with the same name also collide.
+
+- **Field-config `get_bool` helper silently defaulted on wrong type** —
+  a Lua typo like `required = "yes"` (string) parsed as `false`
+  instead of erroring. Now returns `LuaResult<bool>` with a clear
+  type-mismatch error naming the key and the offending type.
+
+- **Hook / access references validated at startup, not at first
+  call** — misspelled refs like `hooks.article.auto_slug` used to
+  surface only when a user triggered the corresponding request.
+  Startup now walks every collection + global + field-level
+  `hooks.*` / `access.*` string and fails fast with a line-by-line
+  report of unresolved refs. Job handlers, auth strategies,
+  richtext attribute hooks, and dynamic `crap.hooks.register`
+  registrations are intentionally out of scope (they have separate
+  resolvers or are runtime-dynamic).
+
+- **`crap-cms user create` accepted malformed email addresses** —
+  the CLI wrote whatever string the operator supplied into the auth
+  collection, breaking downstream password-reset and email-verify
+  flows. Now validates format via the same helper used by the
+  `email` field type.
+
+- **Config file world-readable warning** — on startup, if `crap.toml`
+  contains a non-empty secret (`auth.secret`, `email.smtp_pass`,
+  `upload.s3.secret_key`) AND the file's Unix permissions allow
+  world-read or world-write, a `warn!` is emitted recommending
+  `chmod 600`. Windows: skipped.
+
+- **Null-byte injection in text / textarea / email fields** — user
+  input containing `\0` reached SQLite TEXT storage and broke
+  downstream display / log handling. Text, textarea, and email
+  coercion paths now reject `\0` with a clear per-field error
+  naming the offending field.
+
+- **Locale-suffix field-name collision detection** — a literal field
+  named `title__en` defined while `en` is an enabled locale would
+  collide with the generated localized column for `title`. Startup
+  now walks every field (including nested groups / blocks / tabs)
+  against the configured locales and fails fast with a clear error.
+
+- **`crap-cms backup` errored mid-run on read-only output dir** —
+  the backup started `VACUUM INTO` then failed on the manifest
+  write, leaving a partial backup the operator had to clean up. Now
+  probes the output directory with a temp file before any long-
+  running work; fails early with a clear message.
+
+- **`SIGTERM` shutdown exit code** — the detached-mode serve process
+  called `std::process::exit(0)` unconditionally after cleanup, so
+  Kubernetes / systemd saw "success" even when WAL checkpoint or
+  pool-get failed. Shutdown cleanup now collects errors and the
+  process exits with `1` when any cleanup step failed.
+
+- **Version restore silently dropped unknown snapshot keys** — if a
+  collection field was deleted after a version was created,
+  restoring that version inserted the snapshot without warning about
+  the dropped keys. Now emits a `warn!` per unknown key naming the
+  collection, version, and key — silent-drop behavior preserved
+  so the restore still succeeds, just with visibility.
+
+- **Retention auto-purge ran on every node without dedup** — with
+  multiple scheduler instances (multi-server), the soft-delete
+  retention purge fired on each node. Now claims a cron window via
+  `try_claim_cron_window` (the same mechanism cron jobs use) so only
+  one node runs the purge per window.
+
+- **`_ref_count` could double-increment on has-many with duplicate
+  IDs** — `extract_has_many_refs` walked the raw JSON input array
+  without deduplication, so `tags = ["a", "a", "b"]` incremented
+  target `a`'s ref_count twice before the junction-table UNIQUE
+  constraint rejected the second row. Now dedupes the ID list first;
+  `collect_has_many_refs` also uses `SELECT DISTINCT` as
+  defense-in-depth against any pre-existing dirty junction rows.
+
+- **Localized filter on array sub-field routed to the wrong column** —
+  a dot-notation filter like `links.label` where `label` is a
+  localized sub-field inside an array field did not route to the
+  `_locale`-suffixed column and did not add a `_locale = ?`
+  constraint to the EXISTS subquery. A locale-scoped filter under
+  `Single("de")` matched documents whose value only appeared in `en`.
+  Now threaded through `resolve_filter` → `build_subquery_sql`:
+  `ResolvedFilter::Subquery` carries a `locale_constraint` that the
+  SQL builder appends when set.
+
+### Documentation
+
+- `crap.auth.user()` now documented in `lua-api/auth.md` with return
+  shape, nil conditions, and usage examples.
+- `before_broadcast` and `before_render` hook events now documented in
+  `hooks/lifecycle-events.md` with fire sites, context shapes, return
+  value semantics, and examples.
+- Decompression-bomb protection (100-megapixel hard limit for image
+  uploads) documented in `uploads/image-processing.md`.
+- Filter-operator docs rewritten to reflect the field-type-aware
+  coercion landed in this release (previously claimed all values were
+  coerced to strings).
+- HTTP TLS verification (always on, no opt-out) noted in
+  `lua-api/http.md`.
+- JSON integer-precision caveat (>2^53 loses precision) + recursion
+  depth limits noted in `lua-api/json.md`.
+- `crap.config` snapshot-per-VM lifecycle clarified in
+  `lua-api/config.md`.
+- Custom `richtext.register_node` render functions explicitly
+  documented as NOT sanitized — operators must escape interpolated
+  user data themselves. Added safe / unsafe pattern examples.
+- Plugin load order (collections → globals → jobs → init.lua,
+  alphabetical within each) explicitly documented in
+  `plugins/overview.md`.
+- Field-level access denial is silent (no client-facing error) —
+  documented in `access-control/field-level.md`.
+- Job retry backoff schedule (exponential, capped at 5 min) documented
+  in `jobs/overview.md`.
+- **Missing gRPC RPCs documented** — `Validate`, `LockAccount`,
+  `UnlockAccount`, `VerifyAccount`, and `UnverifyAccount` are now
+  covered in `grpc-api/rpcs.md` with request/response shapes,
+  `grpcurl` examples, and access requirements. They were defined in
+  `proto/content.proto` and live in the running server but were absent
+  from the public reference.
+- **`live` metadata-mode hook overhead claim corrected** — The live
+  updates overview previously claimed `metadata` mode had "zero hook
+  overhead". In reality, `before_broadcast` (and the `live` filter
+  function, when configured) still run; only the per-subscriber
+  `after_read` hooks and field-level read-access stripping on the
+  event payload are skipped. Documentation now reflects this.
+
+- **Plugin load order clarification** — documentation now explicitly
+  describes the file load order (`collections/` → `globals/` →
+  `jobs/` → `init.lua`, all alphabetical within each kind) and the fact
+  that plugin `require()` order in `init.lua` is operator-controlled.
+
+- **Job retry backoff documented** — the exponential backoff formula
+  (`min(2^(attempt - 1) * 5, 300)` seconds, capped at 5 minutes) is now
+  visible in the docs instead of being a runtime surprise.
+
+- **Multi-node file storage corrected** — `deployment/multi-server.md`
+  previously listed shared filesystems (NFS / EFS) as a viable option
+  for multi-node file storage. They are **not supported** — `storage =
+  "local"` assumes a single writer and the code is not tested against
+  networked-filesystem fsync / locking semantics. S3-compatible object
+  storage (AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc.) is the
+  only supported multi-node option.
+
+- **Multi-node rate limiting promoted to required** — shared Redis
+  rate limits were previously framed as "recommended for performance".
+  They are now documented as a **security requirement**: without them,
+  per-IP login rate limits are per-node counters, and an attacker who
+  round-robins across nodes multiplies their allowance by the node
+  count (e.g. a 5-attempt limit across 3 nodes becomes 15 attempts).
+
+- **Multi-node live updates rewritten** — `deployment/multi-server.md`
+  now documents both `transport = "memory"` (default, single-node or
+  sticky-LB) and `transport = "redis"` (cross-node fan-out), with the
+  trade-offs for each. Cross-links to `live-updates/overview.md`.
+
+- **Load-balancer stickiness requirements documented** — gRPC Subscribe
+  / Admin SSE streams are long-lived and benefit from sticky sessions;
+  regular HTTP / gRPC unary calls can round-robin freely. Even with
+  `transport = "redis"`, reconnects to a different node lose the
+  in-flight subscription context and the client must re-subscribe.
+
+- **PostgreSQL backend visibility** — `database/overview.md` now leads
+  with both SQLite and PostgreSQL as first-class backends instead of
+  treating PostgreSQL as a footnote. Feature parity (FTS, schema sync,
+  migrations, ref_count, soft delete) is called out explicitly.
+
+- **Redis auth / TLS documented** — `internals/cache.md` now describes
+  how to encode credentials and TLS into the Redis URL (`redis://user:
+  pass@host`, `rediss://` for TLS, ACL user syntax for Redis 6+).
+  There is no separate `[cache] password` or `[cache] tls` key.
+
+- **Single-server log path + rotation documented** —
+  `deployment/single-server.md` now explains that `--detach` auto-
+  enables file logging (since the child has no terminal), gives the
+  default log location (`<config_dir>/data/logs/`), rotation policy
+  (daily, 30-file retention), and how to read logs (`crap-cms logs`
+  or tail the files). Notes `--json` for structured output.
+
+- **Cache stampede known-limitation note** — `internals/cache.md`
+  documents the cache-miss coalescing behaviour operators should
+  expect now that singleflight is active: cache-miss load on the
+  same key under heavy concurrency collapses to a single DB query;
+  later arrivers block on a shared slot. Also documents the
+  override-access isolation invariant.
 
 ## [0.1.0-alpha.4] — 2026-04-11
 

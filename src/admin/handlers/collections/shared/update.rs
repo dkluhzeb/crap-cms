@@ -66,7 +66,7 @@ fn handle_update_success(
     }
 
     state.hook_runner.publish_event(
-        &state.event_bus,
+        &state.event_transport,
         &def.hooks,
         def.live.as_ref(),
         PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
@@ -100,6 +100,7 @@ async fn spawn_update(
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
+    let invalidation_bus = state.invalidation_transport.clone();
     let slug_owned = slug.to_string();
     let id_owned = id.to_string();
     let def_owned = def.clone();
@@ -141,7 +142,10 @@ async fn spawn_update(
             let should_lock =
                 locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
             let conn = pool.get().context("DB connection for lock update")?;
-            let ctx = ServiceContext::slug_only(&slug_owned).conn(&conn).build();
+            let ctx = ServiceContext::slug_only(&slug_owned)
+                .conn(&conn)
+                .invalidation_transport(Some(invalidation_bus))
+                .build();
 
             if should_lock {
                 lock_user(&ctx, &id_owned)?;

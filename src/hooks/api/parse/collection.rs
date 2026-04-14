@@ -19,9 +19,9 @@ use super::{
 };
 
 /// Parse the `admin` subtable from a Lua config table.
-fn parse_admin_config(config: &Table) -> AdminConfig {
+fn parse_admin_config(config: &Table) -> Result<AdminConfig> {
     let Ok(admin_tbl) = get_table(config, "admin") else {
-        return AdminConfig::default();
+        return Ok(AdminConfig::default());
     };
 
     let list_searchable_fields = if let Ok(tbl) = get_table(&admin_tbl, "list_searchable_fields") {
@@ -32,12 +32,12 @@ fn parse_admin_config(config: &Table) -> AdminConfig {
         Vec::new()
     };
 
-    AdminConfig::builder()
+    Ok(AdminConfig::builder()
         .use_as_title(get_string(&admin_tbl, "use_as_title"))
         .default_sort(get_string(&admin_tbl, "default_sort"))
-        .hidden(get_bool(&admin_tbl, "hidden", false))
+        .hidden(get_bool(&admin_tbl, "hidden", false)?)
         .list_searchable_fields(list_searchable_fields)
-        .build()
+        .build())
 }
 
 /// If auth is enabled and no email field exists, inject one at index 0.
@@ -70,16 +70,16 @@ pub fn parse_collection_definition(
     query::validate_slug(slug)?;
 
     let labels = parse_labels(config);
-    let timestamps = get_bool(config, "timestamps", true);
-    let admin = parse_admin_config(config);
+    let timestamps = get_bool(config, "timestamps", true)?;
+    let admin = parse_admin_config(config)?;
     let mut fields = parse_fields_section(config)?;
     let hooks = parse_hooks_section(config)?;
-    let auth = parse_collection_auth(config);
-    let upload = parse_collection_upload(config);
+    let auth = parse_collection_auth(config)?;
+    let upload = parse_collection_upload(config)?;
     let access = parse_access_config(config);
     let live = parse_live_setting(config);
-    let versions = parse_versions_config(config);
-    let indexes = parse_indexes(config);
+    let versions = parse_versions_config(config)?;
+    let indexes = parse_indexes(config)?;
     let mcp = parse_mcp_section(config);
 
     warn_deep_nesting("Collection", slug, &fields);
@@ -92,7 +92,7 @@ pub fn parse_collection_definition(
     }
 
     // Parse soft delete config
-    let soft_delete = get_bool(config, "soft_delete", false);
+    let soft_delete = get_bool(config, "soft_delete", false)?;
     let soft_delete_retention = if soft_delete {
         get_string(config, "soft_delete_retention")
     } else {

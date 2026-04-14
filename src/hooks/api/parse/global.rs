@@ -20,7 +20,7 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
     let hooks = parse_hooks_section(config)?;
     let access = parse_access_config(config);
     let live = parse_live_setting(config);
-    let versions = parse_versions_config(config);
+    let versions = parse_versions_config(config)?;
     let mcp = parse_mcp_section(config);
 
     warn_deep_nesting("Global", slug, &fields);

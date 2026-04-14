@@ -20,11 +20,17 @@ use crate::{
         },
         cache::create_cache,
         email::create_email_provider,
-        event::EventBus,
+        event::{
+            SharedEventTransport, SharedInvalidationTransport, create_event_transport,
+            create_invalidation_transport,
+        },
         rate_limit::{LoginRateLimiter, RateLimitBackend, create_rate_limit_backend},
         upload::{create_storage, format_filesize},
     },
-    db::{DbConnection, DbPool, migrate, pool},
+    db::{
+        DbConnection, DbPool, migrate, pool,
+        query::{SharedPopulateSingleflight, Singleflight},
+    },
     hooks,
     hooks::HookRunner,
     scheduler, typegen,
@@ -266,19 +272,16 @@ fn create_rate_limiters(cfg: &CrapConfig) -> Result<RateLimiters> {
     ))
 }
 
-/// Create the event bus if live updates are enabled.
-fn create_event_bus(cfg: &CrapConfig) -> Option<EventBus> {
-    if cfg.live.enabled {
-        let bus = EventBus::new(cfg.live.channel_capacity);
-        info!(
-            "Live event streaming enabled (capacity: {})",
-            cfg.live.channel_capacity
-        );
-        Some(bus)
-    } else {
-        info!("Live event streaming disabled");
-        None
-    }
+/// Build event + invalidation transports from config. The Redis URL is shared
+/// with the cache backend (same `[cache] redis_url`).
+fn create_live_transports(
+    cfg: &CrapConfig,
+) -> Result<(Option<SharedEventTransport>, SharedInvalidationTransport)> {
+    let redis_url = &cfg.cache.redis_url;
+    let event_transport = create_event_transport(&cfg.live, redis_url)?;
+    let invalidation_transport = create_invalidation_transport(&cfg.live, redis_url)?;
+
+    Ok((event_transport, invalidation_transport))
 }
 
 /// Log which components will start based on the serve mode.
@@ -302,19 +305,43 @@ fn log_component_status(
     }
 }
 
+/// Compute the process exit code for the shutdown path.
+///
+/// Returns `0` iff every cleanup step succeeded; `1` if any step errored.
+/// Orchestrators like Kubernetes rely on this to distinguish graceful shutdown
+/// from partial-failure shutdown (e.g. a WAL checkpoint that never ran).
+pub(crate) fn compute_shutdown_exit_code(cleanup_errors: &[anyhow::Error]) -> i32 {
+    if cleanup_errors.is_empty() { 0 } else { 1 }
+}
+
 /// Perform post-shutdown cleanup: WAL checkpoint, PID file removal.
-fn shutdown_cleanup(config_dir: &Path, pool: &DbPool) {
+/// Returns the errors encountered so the caller can select the exit code.
+fn shutdown_cleanup(config_dir: &Path, pool: &DbPool) -> Vec<anyhow::Error> {
+    let mut errors: Vec<anyhow::Error> = Vec::new();
+
     remove_pid_file(config_dir);
 
-    // Checkpoint WAL before exit — process::exit() skips destructors
-    if let Ok(conn) = pool.get()
-        && conn.kind() == "sqlite"
-        && let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-    {
-        warn!("WAL checkpoint failed: {}", e);
+    // Checkpoint WAL before exit — process::exit() skips destructors.
+    match pool.get() {
+        Ok(conn) if conn.kind() == "sqlite" => {
+            if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+                warn!("WAL checkpoint failed: {}", e);
+                errors.push(anyhow!("WAL checkpoint failed: {}", e));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!(
+                "Failed to obtain DB connection for shutdown checkpoint: {}",
+                e
+            );
+            errors.push(anyhow!("shutdown DB connection: {}", e));
+        }
     }
 
     info!("All servers stopped. Goodbye.");
+
+    errors
 }
 
 /// Start the admin UI and gRPC servers.
@@ -338,10 +365,25 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
+    // Build the live transports first so the HookRunner VMs can carry the
+    // invalidation transport as app_data — this lets Lua delete/lock paths
+    // publish user-invalidation signals through the service layer.
+    let (event_transport, invalidation_transport) = create_live_transports(&cfg)?;
+
+    // Process-wide populate singleflight, shared by both the gRPC
+    // ContentService and the HookRunner VMs so cache-miss fetches dedup
+    // across concurrent requests (regardless of whether the originating
+    // call tree starts in gRPC or in a Lua hook). The service layer's
+    // access-leak guardrail discards this Arc for override-access callers
+    // (MCP, Lua `opts.overrideAccess = true`).
+    let populate_singleflight: SharedPopulateSingleflight = Arc::new(Singleflight::new());
+
     let hook_runner = HookRunner::builder()
         .config_dir(&config_dir)
         .registry(registry.clone())
         .config(&cfg)
+        .invalidation_transport(invalidation_transport.clone())
+        .populate_singleflight(populate_singleflight.clone())
         .build()?;
 
     run_on_init_hooks(&cfg, &pool, &hook_runner)?;
@@ -352,7 +394,6 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     log_security_warnings(&cfg);
 
     let registry_snapshot = Registry::snapshot(&registry);
-    let event_bus = create_event_bus(&cfg);
     let storage = create_storage(&config_dir, &cfg.upload)?;
     let cache = create_cache(&cfg.cache)?;
     let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new(&jwt_secret));
@@ -391,7 +432,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .registry(registry_snapshot.clone())
                     .hook_runner(hook_runner.clone())
                     .jwt_secret(jwt_secret.clone())
-                    .event_bus(event_bus.clone())
+                    .event_transport(event_transport.clone())
                     .login_limiter(login_limiter.clone())
                     .ip_login_limiter(ip_login_limiter.clone())
                     .forgot_password_limiter(forgot_password_limiter.clone())
@@ -399,6 +440,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .storage(storage.clone())
                     .token_provider(token_provider.clone())
                     .password_provider(password_provider.clone())
+                    .invalidation_transport(invalidation_transport.clone())
                     .build(),
                 shutdown.clone(),
             )
@@ -419,7 +461,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .jwt_secret(jwt_secret.clone())
                     .config(cfg.clone())
                     .config_dir(config_dir.clone())
-                    .event_bus(event_bus.clone())
+                    .event_transport(event_transport.clone())
                     .login_limiter(login_limiter.clone())
                     .ip_login_limiter(ip_login_limiter.clone())
                     .forgot_password_limiter(forgot_password_limiter.clone())
@@ -429,6 +471,8 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .token_provider(token_provider.clone())
                     .password_provider(password_provider.clone())
                     .rate_limit_backend(rl_backend)
+                    .invalidation_transport(invalidation_transport.clone())
+                    .populate_singleflight(populate_singleflight.clone())
                     .build(),
                 shutdown.clone(),
             )
@@ -466,12 +510,13 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         e
     })?;
 
-    shutdown_cleanup(&config_dir, &pool);
+    let cleanup_errors = shutdown_cleanup(&config_dir, &pool);
+    let exit_code = compute_shutdown_exit_code(&cleanup_errors);
 
     // Force-exit: the tokio runtime's blocking pool shutdown waits indefinitely
     // for any lingering spawn_blocking threads (e.g. image processing, Lua hooks).
     // All business logic is complete at this point — let the OS reclaim resources.
-    process::exit(0);
+    process::exit(exit_code);
 }
 
 #[cfg(test)]
@@ -538,6 +583,23 @@ mod tests {
         // No file should be written when config provides the secret
         let secret_path = tmp.path().join("data").join(".jwt_secret");
         assert!(!secret_path.exists());
+    }
+
+    #[test]
+    fn compute_shutdown_exit_code_empty_is_zero() {
+        assert_eq!(compute_shutdown_exit_code(&[]), 0);
+    }
+
+    #[test]
+    fn compute_shutdown_exit_code_one_err_is_one() {
+        let errs = vec![anyhow!("WAL checkpoint failed")];
+        assert_eq!(compute_shutdown_exit_code(&errs), 1);
+    }
+
+    #[test]
+    fn compute_shutdown_exit_code_many_errs_is_one() {
+        let errs = vec![anyhow!("WAL checkpoint failed"), anyhow!("pool closed")];
+        assert_eq!(compute_shutdown_exit_code(&errs), 1);
     }
 
     #[test]

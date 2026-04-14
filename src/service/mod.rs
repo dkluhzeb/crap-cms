@@ -24,7 +24,7 @@ pub mod write;
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, CountDocumentsInputBuilder, FindByIdInput, FindByIdInputBuilder,
+    CountDocumentsInput, CountDocumentsInputBuilder, Def, FindByIdInput, FindByIdInputBuilder,
     FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput, ListVersionsInput,
     PaginatedResult, PersistOptions, PersistOptionsBuilder, SearchDocumentsInput, ServiceContext,
     ServiceContextBuilder, WriteInput, WriteInputBuilder, WriteResult,
@@ -39,14 +39,14 @@ pub use globals::{unpublish_global_document, update_global_core, update_global_d
 pub(crate) use helpers::{build_hook_data, run_after_change_hooks};
 pub use hooks::{
     LuaReadHooks, LuaReadHooksBuilder, LuaWriteHooks, LuaWriteHooksBuilder, ReadHooks,
-    RunnerReadHooks, RunnerWriteHooks, WriteHooks,
+    ReadHooksJoinGuard, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
 };
 pub use persist::{
     persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
 };
 pub use read::{
     ReadOptions, ReadOptionsBuilder, count_documents, find_document_by_id, find_documents,
-    get_global_document, search_documents,
+    get_global_document, search_documents, validate_access_constraints, validate_user_filters,
 };
 pub(crate) use versions::restore_collection_version_core;
 pub use versions::unpublish_with_snapshot;

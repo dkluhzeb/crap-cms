@@ -21,71 +21,113 @@ fn build_filter_sql(
     f: &Filter,
     slug: &str,
     fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
-    let resolved = resolve_filter(conn, &f.field, slug, fields)?;
+    let resolved = resolve_filter(conn, &f.field, slug, fields, locale_ctx)?;
     match resolved {
-        ResolvedFilter::Column(col) => build_filter_condition(
+        ResolvedFilter::Column { col, field_type } => build_filter_condition(
             conn,
             &Filter {
                 field: col,
                 op: f.op.clone(),
             },
+            field_type.as_ref(),
             params,
         ),
         ResolvedFilter::Subquery {
             ref join_table,
             ref parent_table,
             ref condition,
-        } => build_subquery_sql(conn, join_table, parent_table, condition, &f.op, params),
+            ref locale_constraint,
+        } => build_subquery_sql(
+            conn,
+            join_table,
+            parent_table,
+            condition,
+            locale_constraint.as_deref(),
+            &f.op,
+            params,
+        ),
     }
 }
 
 /// Generate an `EXISTS (SELECT 1 FROM … WHERE …)` clause for a subquery filter.
+///
+/// When `locale_constraint` is `Some(locale)`, an extra `"{join_table}"._locale = ?`
+/// clause is appended so filters on localized junction tables (arrays, blocks,
+/// has-many relationships whose parent is localized) only match rows belonging
+/// to the active locale.
 fn build_subquery_sql(
     conn: &dyn DbConnection,
     join_table: &str,
     parent_table: &str,
     condition: &SubqueryCondition,
+    locale_constraint: Option<&str>,
     op: &FilterOp,
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
     match condition {
-        SubqueryCondition::Column(col) => {
+        SubqueryCondition::Column { col, field_type } => {
             if !is_valid_identifier(col) {
                 bail!("Invalid column name '{}' in subquery", col);
             }
-            let cond = build_op_condition(conn, col, op, params);
+            let cond = build_op_condition(conn, col, op, field_type.as_ref(), params);
+            let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {})",
-                join_table, parent_table, cond
+                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {}{})",
+                join_table, parent_table, cond, locale_sql
             ))
         }
         SubqueryCondition::BlockType => {
-            let cond = build_op_condition(conn, "_block_type", op, params);
+            let cond = build_op_condition(conn, "_block_type", op, Some(&FieldType::Text), params);
+            let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {})",
-                join_table, parent_table, cond
+                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {}{})",
+                join_table, parent_table, cond, locale_sql
             ))
         }
         SubqueryCondition::Json {
             each_joins,
             extract_expr,
+            field_type,
         } => {
             let mut from_parts = vec![format!("\"{}\"", join_table)];
             for (source, alias) in each_joins {
                 from_parts.push(conn.json_each_source(source, alias));
             }
-            let cond = build_op_condition(conn, extract_expr, op, params);
+            let cond = build_op_condition(conn, extract_expr, op, field_type.as_ref(), params);
+            let locale_sql = append_locale_clause(conn, join_table, locale_constraint, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE \"{}\".parent_id = \"{}\".id AND {})",
+                "EXISTS (SELECT 1 FROM {} WHERE \"{}\".parent_id = \"{}\".id AND {}{})",
                 from_parts.join(", "),
                 join_table,
                 parent_table,
-                cond
+                cond,
+                locale_sql
             ))
         }
     }
+}
+
+/// Produce the trailing `AND "{join_table}"._locale = ?` fragment and push
+/// the locale bind parameter, or return `""` when no locale constraint applies.
+fn append_locale_clause(
+    conn: &dyn DbConnection,
+    join_table: &str,
+    locale_constraint: Option<&str>,
+    params: &mut Vec<DbValue>,
+) -> String {
+    let Some(locale) = locale_constraint else {
+        return String::new();
+    };
+
+    params.push(DbValue::Text(locale.to_string()));
+    format!(
+        " AND \"{}\"._locale = {}",
+        join_table,
+        conn.placeholder(params.len())
+    )
 }
 
 // ── WHERE clause building ────────────────────────────────────────────────
@@ -107,6 +149,7 @@ pub fn build_where_clause(
     filters: &[FilterClause],
     slug: &str,
     fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
     params: &mut Vec<DbValue>,
 ) -> Result<String> {
     if filters.is_empty() {
@@ -117,20 +160,31 @@ pub fn build_where_clause(
     for clause in filters {
         match clause {
             FilterClause::Single(f) => {
-                conditions.push(build_filter_sql(conn, f, slug, fields, params)?);
+                conditions.push(build_filter_sql(conn, f, slug, fields, locale_ctx, params)?);
             }
             FilterClause::Or(groups) => {
                 if groups.len() == 1 && groups[0].len() == 1 {
-                    conditions.push(build_filter_sql(conn, &groups[0][0], slug, fields, params)?);
+                    conditions.push(build_filter_sql(
+                        conn,
+                        &groups[0][0],
+                        slug,
+                        fields,
+                        locale_ctx,
+                        params,
+                    )?);
                 } else {
                     let mut or_parts = Vec::new();
                     for group in groups {
                         if group.len() == 1 {
-                            or_parts.push(build_filter_sql(conn, &group[0], slug, fields, params)?);
+                            or_parts.push(build_filter_sql(
+                                conn, &group[0], slug, fields, locale_ctx, params,
+                            )?);
                         } else {
                             let and_parts: Vec<String> = group
                                 .iter()
-                                .map(|f| build_filter_sql(conn, f, slug, fields, params))
+                                .map(|f| {
+                                    build_filter_sql(conn, f, slug, fields, locale_ctx, params)
+                                })
                                 .collect::<Result<_, _>>()?;
                             or_parts.push(format!("({})", and_parts.join(" AND ")));
                         }
@@ -351,7 +405,7 @@ mod tests {
     fn where_clause_empty_filters() {
         let (_dir, conn) = test_conn();
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &[], "test", &[], &mut params).unwrap();
+        let sql = build_where_clause(&conn, &[], "test", &[], None, &mut params).unwrap();
         assert_eq!(sql, "");
         assert_eq!(params.len(), 0);
     }
@@ -364,7 +418,7 @@ mod tests {
             op: FilterOp::Equals("active".into()),
         })];
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         assert_eq!(sql, " WHERE status = ?1");
         assert_eq!(params.len(), 1);
     }
@@ -383,7 +437,7 @@ mod tests {
             }),
         ];
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         assert_eq!(sql, " WHERE status = ?1 AND role = ?2");
         assert_eq!(params.len(), 2);
     }
@@ -408,7 +462,7 @@ mod tests {
             ],
         ])];
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         assert_eq!(sql, " WHERE (a = ?1 OR (b = ?2 AND c = ?3))");
         assert_eq!(params.len(), 3);
     }
@@ -421,7 +475,7 @@ mod tests {
             op: FilterOp::Equals("1".into()),
         }]])];
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        let sql = build_where_clause(&conn, &filters, "test", &[], None, &mut params).unwrap();
         // Single-item OR should simplify to just the condition
         assert_eq!(sql, " WHERE a = ?1");
     }
@@ -446,7 +500,7 @@ mod tests {
             }),
         ];
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
+        let sql = build_where_clause(&conn, &filters, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             " WHERE status = ?1 AND EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?2)"
@@ -472,7 +526,7 @@ mod tests {
             }],
         ])];
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
+        let sql = build_where_clause(&conn, &filters, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?2))"
@@ -494,7 +548,7 @@ mod tests {
             op: FilterOp::Equals("X".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?1)"
@@ -511,7 +565,7 @@ mod tests {
             op: FilterOp::Equals("image".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             "EXISTS (SELECT 1 FROM \"posts_content\" WHERE parent_id = \"posts\".id AND _block_type = ?1)"
@@ -534,7 +588,7 @@ mod tests {
             op: FilterOp::Contains("hello".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             "EXISTS (SELECT 1 FROM \"posts_content\" WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
@@ -560,7 +614,7 @@ mod tests {
             op: FilterOp::Equals("hi".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             "EXISTS (SELECT 1 FROM \"posts_content\", json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(j0.value, '$.text') = ?1)"
@@ -576,7 +630,7 @@ mod tests {
             op: FilterOp::Equals("tag1".into()),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?1)"
@@ -593,7 +647,7 @@ mod tests {
             op: FilterOp::In(vec!["a".into(), "b".into()]),
         };
         let mut params: Vec<DbValue> = Vec::new();
-        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, None, &mut params).unwrap();
         assert_eq!(
             sql,
             "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id IN (?1, ?2))"

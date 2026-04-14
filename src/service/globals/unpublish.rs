@@ -38,6 +38,13 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        )));
+    }
+
     let gtable = global_table(ctx.slug);
 
     let doc = query::get_global(&tx, ctx.slug, def, None)?;

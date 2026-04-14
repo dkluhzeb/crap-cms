@@ -19,6 +19,37 @@ HMAC-SHA256 of data with a key, returned as hex.
 local mac = crap.crypto.hmac_sha256("message", "secret-key")
 ```
 
+> **Security:** Always compare HMACs (and any other secret-derived bytes) with
+> `crap.crypto.constant_time_eq(...)`, **not** with `==`. Lua's `==` on strings
+> short-circuits on the first differing byte, which leaks information about
+> where the mismatch occurred through response timing and lets an attacker
+> recover the expected tag byte-by-byte. Example:
+>
+> ```lua
+> local expected = crap.crypto.hmac_sha256(body, secret)
+>
+> if crap.crypto.constant_time_eq(expected, incoming_signature) then
+>     -- verified, safe to proceed
+> end
+> ```
+
+## crap.crypto.constant_time_eq(a, b)
+
+Constant-time byte-string equality check. Returns `true` iff the two inputs
+are byte-identical. Runs in time that does not depend on where (or whether)
+the bytes differ, so the caller cannot learn anything about the expected
+value from response timing.
+
+Length mismatches and content mismatches are indistinguishable from the
+return value — both yield `false`.
+
+```lua
+local ok = crap.crypto.constant_time_eq(expected_tag, provided_tag)
+```
+
+Use this for comparing HMAC tags, session tokens, API keys, signed cookies,
+webhook signatures, or any other secret-derived bytes.
+
 ## crap.crypto.base64_encode(str) / crap.crypto.base64_decode(str)
 
 Base64 encoding and decoding.

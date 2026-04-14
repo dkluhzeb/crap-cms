@@ -36,8 +36,13 @@ fn parse_where_key(key: &str, value: &str) -> Option<(String, String, String)> {
 
 /// Parse `where[field][op]=value` parameters from a raw query string.
 /// Returns empty vec for malformed/invalid params. Best-effort parsing.
+///
+/// This function does NOT filter out system columns. The service-layer read
+/// entrypoints ([`find_documents`](crate::service::find_documents) /
+/// [`count_documents`](crate::service::count_documents)) apply the
+/// `_*`-column rejection uniformly across every read surface.
 pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) -> Vec<FilterClause> {
-    let system_cols = ["id", "created_at", "updated_at", "_status"];
+    let known_cols = ["id", "created_at", "updated_at"];
 
     raw_query
         .split('&')
@@ -46,7 +51,7 @@ pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) ->
             let (field, op_str, value) = parse_where_key(key, value)?;
 
             let field_valid =
-                system_cols.contains(&field.as_str()) || def.fields.iter().any(|f| f.name == field);
+                known_cols.contains(&field.as_str()) || def.fields.iter().any(|f| f.name == field);
 
             if !field_valid {
                 return None;
@@ -131,6 +136,7 @@ mod tests {
     #[test]
     fn parse_where_system_column() {
         let def = test_def();
+        // `created_at` is a known timestamp column (not underscore-prefixed) and is still filterable
         let result = parse_where_params("where[created_at][gt]=2024-01-01", &def);
         assert_eq!(result.len(), 1);
     }

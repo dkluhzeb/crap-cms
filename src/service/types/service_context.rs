@@ -5,7 +5,10 @@ use anyhow::{Context as _, anyhow};
 use std::borrow::Cow;
 
 use crate::{
-    core::{CollectionDefinition, Document, FieldDefinition, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, Document, FieldDefinition, collection::GlobalDefinition,
+        event::SharedInvalidationTransport,
+    },
     db::{BoxedConnection, DbConnection, DbPool, query::helpers::global_table},
     hooks::HookRunner,
     service::{
@@ -44,6 +47,9 @@ pub struct ServiceContext<'a> {
     pub user: Option<&'a Document>,
     /// Bypass all access checks (MCP, Lua `overrideAccess`).
     pub override_access: bool,
+    /// Transport for publishing user-invalidation signals (live-stream
+    /// tear-down on lock / hard-delete). `None` = publishing is a no-op.
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
     /// Collection or global slug.
     pub slug: &'a str,
     /// Collection or global definition.
@@ -140,6 +146,18 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
+    /// Publish a user-invalidation signal if an invalidation transport is
+    /// configured. Fire-and-forget — no-op when no transport is attached.
+    ///
+    /// Called from the service layer (e.g. `lock_user`, `delete_document_core`
+    /// for hard-delete of auth collections) so every surface that routes
+    /// through the service layer gets live-stream tear-down for free.
+    pub fn publish_user_invalidation(&self, user_id: &str) {
+        if let Some(transport) = &self.invalidation_transport {
+            transport.publish(user_id.to_string());
+        }
+    }
+
     fn def_variant(&self) -> &'static str {
         match &self.def {
             Def::Collection(_) => "Collection",
@@ -175,6 +193,7 @@ pub struct ServiceContextBuilder<'a> {
     write_hooks: Option<&'a dyn WriteHooks>,
     user: Option<&'a Document>,
     override_access: bool,
+    invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
 impl<'a> ServiceContextBuilder<'a> {
@@ -189,6 +208,7 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: None,
             user: None,
             override_access: false,
+            invalidation_transport: None,
         }
     }
 
@@ -227,6 +247,17 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach a user-invalidation transport. When set, service-layer
+    /// operations that revoke user sessions (lock, hard-delete of auth
+    /// documents) will publish a tear-down signal.
+    pub fn invalidation_transport(
+        mut self,
+        transport: Option<SharedInvalidationTransport>,
+    ) -> Self {
+        self.invalidation_transport = transport;
+        self
+    }
+
     pub fn build(self) -> ServiceContext<'a> {
         ServiceContext {
             pool: self.pool,
@@ -236,8 +267,58 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: self.write_hooks,
             user: self.user,
             override_access: self.override_access,
+            invalidation_transport: self.invalidation_transport,
             slug: self.slug,
             def: self.def,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::core::{
+        CollectionDefinition,
+        event::{InProcessInvalidationBus, SharedInvalidationTransport},
+    };
+
+    use super::*;
+
+    #[test]
+    fn publish_user_invalidation_is_noop_without_transport() {
+        let def = CollectionDefinition::new("users");
+        let ctx = ServiceContext::collection("users", &def).build();
+
+        // No transport attached — must not panic and must complete silently.
+        ctx.publish_user_invalidation("user-123");
+        assert!(ctx.invalidation_transport.is_none());
+    }
+
+    #[tokio::test]
+    async fn publish_user_invalidation_publishes_when_transport_set() {
+        let bus = Arc::new(InProcessInvalidationBus::new());
+        let transport: SharedInvalidationTransport = bus.clone();
+        let mut rx = transport.subscribe();
+
+        let def = CollectionDefinition::new("users");
+        let ctx = ServiceContext::collection("users", &def)
+            .invalidation_transport(Some(transport))
+            .build();
+
+        ctx.publish_user_invalidation("user-123");
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("expected an invalidation signal");
+        assert_eq!(received, "user-123");
+    }
+
+    #[test]
+    fn builder_default_transport_is_none() {
+        let def = CollectionDefinition::new("users");
+        let ctx = ServiceContext::collection("users", &def).build();
+        assert!(ctx.invalidation_transport.is_none());
     }
 }

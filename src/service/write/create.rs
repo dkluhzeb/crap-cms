@@ -33,6 +33,17 @@ pub fn create_document_core(
         return Err(ServiceError::AccessDenied("Create access denied".into()));
     }
 
+    // `Constrained` returns make no sense for create: there is no target row
+    // to match against, and evaluating the filter against the incoming data
+    // would conflate access control with validation. Operators should return
+    // true/false based on `ctx.data` instead.
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for '{}.create' returned a filter table; filter-table returns are only valid for update/delete/undelete/unpublish (where a target row exists). Return true/false based on the incoming 'data' in ctx.",
+            ctx.slug
+        )));
+    }
+
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();
 

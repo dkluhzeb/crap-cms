@@ -2,7 +2,7 @@
 
 use crate::{
     core::{Registry, cache::CacheBackend},
-    db::{FilterClause, FindQuery, LocaleContext},
+    db::{FilterClause, FindQuery, LocaleContext, query::SharedPopulateSingleflight},
     service::read::post_process::PostProcessOpts,
 };
 
@@ -15,14 +15,26 @@ pub struct FindDocumentsInput<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
     pub registry: Option<&'a Registry>,
     pub cache: Option<&'a dyn CacheBackend>,
-    pub use_draft: bool,
+    /// When `true`, the caller wants drafts in the result set, so the service
+    /// does NOT inject `_status = "published"`. When `false` (default) and the
+    /// collection has drafts, the service injects the published-only filter
+    /// post-validation. Callers never push `_status` into `query.filters`
+    /// themselves.
+    pub include_drafts: bool,
     pub access_constraints: Option<Vec<FilterClause>>,
     /// Whether cursor-based pagination is enabled (from config).
     /// When true, PaginationResult uses cursor mode; when false, page mode.
     pub cursor_enabled: bool,
-    /// When true, use `access.trash` (or fallback `access.update`) instead of
-    /// `access.read` for the access check. Used for trash/soft-delete queries.
+    /// When true, return only soft-deleted documents (trash view). The service
+    /// flips `include_deleted = true` and injects `_deleted_at EXISTS`
+    /// post-validation, and routes the access check through `access.trash`.
+    /// Callers never push `_deleted_at` into `query.filters` themselves.
     pub trash: bool,
+    /// Optional process-wide singleflight for deduplicating concurrent
+    /// populate cache-miss fetches across requests. When `None`, the service
+    /// layer falls back to a fresh per-call singleflight (dedup still works
+    /// within a single populate tree, but not across concurrent populates).
+    pub singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> FindDocumentsInput<'a> {
@@ -40,10 +52,11 @@ pub struct FindDocumentsInputBuilder<'a> {
     locale_ctx: Option<&'a LocaleContext>,
     registry: Option<&'a Registry>,
     cache: Option<&'a dyn CacheBackend>,
-    use_draft: bool,
+    include_drafts: bool,
     access_constraints: Option<Vec<FilterClause>>,
     cursor_enabled: bool,
     trash: bool,
+    singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> FindDocumentsInputBuilder<'a> {
@@ -56,10 +69,11 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             locale_ctx: None,
             registry: None,
             cache: None,
-            use_draft: false,
+            include_drafts: false,
             access_constraints: None,
             cursor_enabled: false,
             trash: false,
+            singleflight: None,
         }
     }
 
@@ -93,8 +107,8 @@ impl<'a> FindDocumentsInputBuilder<'a> {
         self
     }
 
-    pub fn use_draft(mut self, use_draft: bool) -> Self {
-        self.use_draft = use_draft;
+    pub fn include_drafts(mut self, include_drafts: bool) -> Self {
+        self.include_drafts = include_drafts;
         self
     }
 
@@ -113,6 +127,13 @@ impl<'a> FindDocumentsInputBuilder<'a> {
         self
     }
 
+    /// Attach a process-wide singleflight so populate cache-miss fetches
+    /// dedup across concurrent requests.
+    pub fn singleflight(mut self, singleflight: Option<SharedPopulateSingleflight>) -> Self {
+        self.singleflight = singleflight;
+        self
+    }
+
     pub fn build(self) -> FindDocumentsInput<'a> {
         FindDocumentsInput {
             query: self.query,
@@ -122,10 +143,11 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             locale_ctx: self.locale_ctx,
             registry: self.registry,
             cache: self.cache,
-            use_draft: self.use_draft,
+            include_drafts: self.include_drafts,
             access_constraints: self.access_constraints,
             cursor_enabled: self.cursor_enabled,
             trash: self.trash,
+            singleflight: self.singleflight,
         }
     }
 }
@@ -151,5 +173,47 @@ impl PostProcessOpts for FindDocumentsInput<'_> {
     }
     fn cache(&self) -> Option<&dyn CacheBackend> {
         self.cache
+    }
+    fn singleflight(&self) -> Option<&SharedPopulateSingleflight> {
+        self.singleflight.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    use crate::db::query::Singleflight;
+
+    /// Regression: `FindDocumentsInput::builder().singleflight(..)` must plumb
+    /// the Arc through to the built input so post-processing can share one
+    /// singleflight across concurrent populates.
+    #[test]
+    fn builder_threads_singleflight_through() {
+        let fq = FindQuery::new();
+        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
+        let before = Arc::strong_count(&sf);
+
+        let input = FindDocumentsInput::builder(&fq)
+            .singleflight(Some(sf.clone()))
+            .build();
+
+        assert!(input.singleflight.is_some());
+        // Arc::clone bumped strong count by 1 (builder) then moved into input.
+        assert_eq!(Arc::strong_count(&sf), before + 1);
+
+        // PostProcessOpts hands out a borrow of the same Arc.
+        let via_trait = PostProcessOpts::singleflight(&input).expect("singleflight present");
+        assert!(Arc::ptr_eq(via_trait, &sf));
+    }
+
+    #[test]
+    fn builder_singleflight_defaults_to_none() {
+        let fq = FindQuery::new();
+        let input = FindDocumentsInput::builder(&fq).build();
+        assert!(input.singleflight.is_none());
+        assert!(PostProcessOpts::singleflight(&input).is_none());
     }
 }

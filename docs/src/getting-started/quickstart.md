@@ -28,11 +28,15 @@ my-project/
 ├── init.lua
 ├── .luarc.json
 ├── .gitignore
+├── stylua.toml
 ├── collections/
 │   ├── users.lua
 │   └── media.lua
 ├── globals/
 ├── hooks/
+├── access/
+├── jobs/
+├── plugins/
 ├── migrations/
 ├── templates/
 ├── static/

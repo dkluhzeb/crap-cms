@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use crap_cms::config::CrapConfig;
+use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, Labels};
 use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
+use crap_cms::db::query::{LocaleContext, LocaleMode};
 use crap_cms::db::{migrate, ops, pool, query};
 use serde_json::json;
 
@@ -994,4 +995,394 @@ fn filter_array_group_subfield() {
     let docs2 = ops::find_documents(&pool, "products", &def, &q2, None).unwrap();
     assert_eq!(docs2.len(), 1);
     assert_eq!(docs2[0].get_str("name"), Some("Gadget"));
+}
+
+// ── Regression: type-aware filter value binding ──────────────────────────
+
+/// Regression for the `DbValue::Text` bug on numeric comparisons.
+///
+/// Before the fix, `gt`/`lt`/`gte`/`lte` on a `Number` field bound the
+/// operand as `DbValue::Text(v)`, and SQLite's implicit text→number
+/// coercion papered over the mismatch. This test populates a table with
+/// actual numeric values and asserts the filter returns the right rows
+/// when bound correctly — it stays green on SQLite but also guards the
+/// contract for backends (e.g. Postgres) that don't silently coerce.
+#[test]
+fn numeric_greater_than_with_actual_integers_in_db() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    let pool = pool::create_pool(tmp.path(), &config).expect("pool");
+
+    let mut def = CollectionDefinition::new("scores");
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("label", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("value", FieldType::Number).build(),
+    ];
+
+    let registry = Registry::shared();
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
+
+    let rows: Vec<(&str, &str)> = vec![
+        ("one", "1"),
+        ("ten", "10"),
+        ("hundred", "100"),
+        ("thousand", "1000"),
+    ];
+    for (label, val) in &rows {
+        let mut data = HashMap::new();
+        data.insert("label".to_string(), label.to_string());
+        data.insert("value".to_string(), val.to_string());
+        let mut conn = pool.get().expect("conn");
+        let tx = conn.transaction().expect("tx");
+        query::create(&tx, "scores", &def, &data, None).expect("create");
+        tx.commit().expect("commit");
+    }
+
+    // gt 50 must return "hundred" and "thousand" — not "one" or "ten".
+    // If the value were bound as Text, "9" > "50" lexicographically would
+    // flip this result. (Our inputs are chosen so text/numeric ordering
+    // would diverge for "1000" vs "50": text "1000" < "50", numeric
+    // 1000 > 50.) The fix binds as Real, which is unambiguously correct.
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "value".to_string(),
+        op: query::FilterOp::GreaterThan("50".to_string()),
+    })];
+    let docs = ops::find_documents(&pool, "scores", &def, &q, None).expect("find");
+    let labels: Vec<_> = docs.iter().filter_map(|d| d.get_str("label")).collect();
+    assert_eq!(labels.len(), 2, "expected 2 rows > 50, got {:?}", labels);
+    assert!(labels.contains(&"hundred"));
+    assert!(labels.contains(&"thousand"));
+
+    // lt 50 returns "one" and "ten".
+    let mut q2 = query::FindQuery::new();
+    q2.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "value".to_string(),
+        op: query::FilterOp::LessThan("50".to_string()),
+    })];
+    let docs2 = ops::find_documents(&pool, "scores", &def, &q2, None).expect("find");
+    let labels2: Vec<_> = docs2.iter().filter_map(|d| d.get_str("label")).collect();
+    assert_eq!(labels2.len(), 2, "expected 2 rows < 50, got {:?}", labels2);
+    assert!(labels2.contains(&"one"));
+    assert!(labels2.contains(&"ten"));
+
+    // Regression: a text-shaped input that doesn't parse as a number must
+    // fall back to Text comparison (and thus match 0 rows here, not error).
+    let mut q3 = query::FindQuery::new();
+    q3.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "value".to_string(),
+        op: query::FilterOp::GreaterThan("not-a-number".to_string()),
+    })];
+    let docs3 = ops::find_documents(&pool, "scores", &def, &q3, None).expect("find");
+    assert_eq!(docs3.len(), 0);
+}
+
+// ── Localized array sub-field filter (dot notation) ─────────────────────────
+
+fn locale_config_en_de() -> LocaleConfig {
+    LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    }
+}
+
+fn make_localized_array_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("l10n_articles");
+    def.timestamps = true;
+
+    // `links` is a localized array — rows are stored per-locale.
+    let links_field = FieldDefinition {
+        name: "links".to_string(),
+        field_type: FieldType::Array,
+        localized: true,
+        fields: vec![
+            make_field("url", FieldType::Text),
+            make_field("label", FieldType::Text),
+        ],
+        ..Default::default()
+    };
+
+    def.fields = vec![make_field("slug_field", FieldType::Text), links_field];
+    def
+}
+
+/// Regression: filtering on `array_field.sub_field` while scoped to a single
+/// locale must only match rows belonging to that locale. Previously the
+/// EXISTS subquery did not add a `_locale = ?` constraint, so a filter in
+/// the `de` locale would still match documents that only had the value in
+/// their `en` rows.
+#[test]
+fn filter_localized_field_in_array_routes_to_locale_column() {
+    let (_tmp, pool) = create_test_pool();
+    let registry = Registry::shared();
+    let def = make_localized_array_def();
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+
+    let locale_config = locale_config_en_de();
+    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+
+    let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
+
+    // Doc A: label "Shared" only in the EN locale.
+    // Doc B: label "Shared" only in the DE locale.
+    let mut conn = pool.get().expect("conn");
+    let tx = conn.transaction().expect("tx");
+
+    let mut data_a = HashMap::new();
+    data_a.insert("slug_field".to_string(), "a".to_string());
+    let doc_a = query::create(&tx, "l10n_articles", &def, &data_a, None).expect("create a");
+
+    let mut data_b = HashMap::new();
+    data_b.insert("slug_field".to_string(), "b".to_string());
+    let doc_b = query::create(&tx, "l10n_articles", &def, &data_b, None).expect("create b");
+
+    let a_en = vec![HashMap::from([
+        ("url".to_string(), "https://a-en".to_string()),
+        ("label".to_string(), "Shared".to_string()),
+    ])];
+    let a_de = vec![HashMap::from([
+        ("url".to_string(), "https://a-de".to_string()),
+        ("label".to_string(), "A-German-Only".to_string()),
+    ])];
+    let b_en = vec![HashMap::from([
+        ("url".to_string(), "https://b-en".to_string()),
+        ("label".to_string(), "B-English-Only".to_string()),
+    ])];
+    let b_de = vec![HashMap::from([
+        ("url".to_string(), "https://b-de".to_string()),
+        ("label".to_string(), "Shared".to_string()),
+    ])];
+
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc_a.id,
+        &a_en,
+        &links_field.fields,
+        Some("en"),
+    )
+    .expect("set a en");
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc_a.id,
+        &a_de,
+        &links_field.fields,
+        Some("de"),
+    )
+    .expect("set a de");
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc_b.id,
+        &b_en,
+        &links_field.fields,
+        Some("en"),
+    )
+    .expect("set b en");
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc_b.id,
+        &b_de,
+        &links_field.fields,
+        Some("de"),
+    )
+    .expect("set b de");
+
+    tx.commit().expect("commit");
+
+    let de_ctx = LocaleContext {
+        mode: LocaleMode::Single("de".into()),
+        config: locale_config.clone(),
+    };
+
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "links.label".to_string(),
+        op: query::FilterOp::Equals("Shared".to_string()),
+    })];
+
+    let docs =
+        ops::find_documents(&pool, "l10n_articles", &def, &q, Some(&de_ctx)).expect("find de");
+
+    let ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
+
+    assert_eq!(
+        ids.len(),
+        1,
+        "filtering links.label=Shared in DE must match exactly one doc (doc B), got: {ids:?}"
+    );
+    assert_eq!(
+        ids[0],
+        doc_b.id.as_ref(),
+        "the matching doc must be the one whose DE rows contain 'Shared'"
+    );
+}
+
+/// Seed the `l10n_articles` fixture with docs A and B each carrying distinct
+/// `label` values in EN and DE rows of the localized `links` array.
+///
+/// Returns `(tmp_dir, pool, def, doc_a_id, doc_b_id, locale_config)` — the
+/// `tmp_dir` must be kept alive for the pool to remain usable.
+fn seed_l10n_articles_fixture() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+    String,
+    String,
+    LocaleConfig,
+) {
+    let (tmp, pool) = create_test_pool();
+    let registry = Registry::shared();
+    let def = make_localized_array_def();
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+
+    let locale_config = locale_config_en_de();
+    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+
+    let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
+
+    let mut conn = pool.get().expect("conn");
+    let tx = conn.transaction().expect("tx");
+
+    let mut data_a = HashMap::new();
+    data_a.insert("slug_field".to_string(), "a".to_string());
+    let doc_a = query::create(&tx, "l10n_articles", &def, &data_a, None).expect("create a");
+
+    let mut data_b = HashMap::new();
+    data_b.insert("slug_field".to_string(), "b".to_string());
+    let doc_b = query::create(&tx, "l10n_articles", &def, &data_b, None).expect("create b");
+
+    let a_en = vec![HashMap::from([
+        ("url".to_string(), "https://a-en".to_string()),
+        ("label".to_string(), "Shared".to_string()),
+    ])];
+    let a_de = vec![HashMap::from([
+        ("url".to_string(), "https://a-de".to_string()),
+        ("label".to_string(), "A-German-Only".to_string()),
+    ])];
+    let b_en = vec![HashMap::from([
+        ("url".to_string(), "https://b-en".to_string()),
+        ("label".to_string(), "B-English-Only".to_string()),
+    ])];
+    let b_de = vec![HashMap::from([
+        ("url".to_string(), "https://b-de".to_string()),
+        ("label".to_string(), "Shared".to_string()),
+    ])];
+
+    let seed_rows = [
+        (&doc_a.id, &a_en, "en"),
+        (&doc_a.id, &a_de, "de"),
+        (&doc_b.id, &b_en, "en"),
+        (&doc_b.id, &b_de, "de"),
+    ];
+    for (doc_id, rows, loc) in seed_rows {
+        query::set_array_rows(
+            &tx,
+            "l10n_articles",
+            "links",
+            doc_id,
+            rows,
+            &links_field.fields,
+            Some(loc),
+        )
+        .unwrap_or_else(|e| panic!("set {loc} for {doc_id}: {e}"));
+    }
+
+    tx.commit().expect("commit");
+
+    (
+        tmp,
+        pool,
+        def,
+        doc_a.id.to_string(),
+        doc_b.id.to_string(),
+        locale_config,
+    )
+}
+
+/// Regression: `LocaleMode::All` must NOT add a `_locale = ?` constraint —
+/// the same filter should match BOTH docs (one in EN, one in DE).
+#[test]
+fn filter_localized_field_in_array_with_all_locale_matches_any() {
+    let (_tmp, pool, def, doc_a_id, doc_b_id, locale_config) = seed_l10n_articles_fixture();
+
+    let all_ctx = LocaleContext {
+        mode: LocaleMode::All,
+        config: locale_config,
+    };
+
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "links.label".to_string(),
+        op: query::FilterOp::Equals("Shared".to_string()),
+    })];
+
+    let docs =
+        ops::find_documents(&pool, "l10n_articles", &def, &q, Some(&all_ctx)).expect("find all");
+
+    let mut ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
+    ids.sort();
+
+    let mut expected = vec![doc_a_id.as_str(), doc_b_id.as_str()];
+    expected.sort();
+
+    assert_eq!(
+        ids, expected,
+        "filtering links.label=Shared with LocaleMode::All must match both docs"
+    );
+}
+
+/// Regression: `LocaleMode::Default` (no explicit locale) must use the
+/// default locale (`en`) — the filter should match doc A only, whose EN
+/// row has `label = 'Shared'`.
+#[test]
+fn filter_localized_field_in_array_with_default_locale_uses_default() {
+    let (_tmp, pool, def, doc_a_id, _doc_b_id, locale_config) = seed_l10n_articles_fixture();
+
+    let default_ctx = LocaleContext {
+        mode: LocaleMode::Default,
+        config: locale_config,
+    };
+
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "links.label".to_string(),
+        op: query::FilterOp::Equals("Shared".to_string()),
+    })];
+
+    let docs = ops::find_documents(&pool, "l10n_articles", &def, &q, Some(&default_ctx))
+        .expect("find default");
+
+    let ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
+
+    assert_eq!(
+        ids.len(),
+        1,
+        "filtering links.label=Shared under LocaleMode::Default must match exactly doc A, got: {ids:?}"
+    );
+    assert_eq!(
+        ids[0], doc_a_id,
+        "the matching doc must be doc A (whose EN rows contain 'Shared')"
+    );
 }

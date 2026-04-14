@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::{ServiceError, helpers::strip_denied_fields};
-use crate::service::helpers::collect_hidden_field_names;
+use crate::service::helpers::{collect_hidden_field_names, enforce_access_constraints};
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -36,6 +36,10 @@ pub fn update_document_core(
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
+
+    // When the hook returned Constrained filters (e.g. "only rows where
+    // author_id = me"), enforce the row-level match before writing.
+    enforce_access_constraints(ctx, id, &access, "Update", false)?;
 
     let is_draft = input.draft && def.has_drafts();
     let ui_locale = input.ui_locale.as_deref();

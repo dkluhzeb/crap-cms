@@ -54,7 +54,7 @@ return M
 | `handler` | string | (required) | Lua function ref (e.g., `"jobs.cleanup.run"`) |
 | `schedule` | string | nil | Cron expression for automatic scheduling |
 | `queue` | string | `"default"` | Queue name for grouping |
-| `retries` | integer | 0 | Max retry attempts on failure |
+| `retries` | integer | 0 | Max retry attempts on failure (see [Retry Backoff](#retry-backoff) below) |
 | `timeout` | integer | 60 | Seconds before job is marked failed |
 | `concurrency` | integer | 1 | Max concurrent runs of this job |
 | `skip_if_running` | boolean | true | Skip cron trigger if previous run still active |
@@ -100,6 +100,26 @@ job result (JSON). If it errors, the job is marked failed (and retried if attemp
 ## Error Handling
 
 Job execution is fully isolated. If a job handler panics, the panic is caught and logged — it does not crash the server or affect other jobs. The job is marked as failed and retried if attempts remain.
+
+### Retry Backoff
+
+Failed jobs with remaining `retries` are re-queued with an **exponential backoff** before the next attempt:
+
+```
+delay = min(2^(attempt - 1) * 5, 300)  // seconds, capped at 5 minutes
+```
+
+| Attempt (1-based) | Delay before retry |
+|-------------------|---------------------|
+| 1 (first failure) | 5 s   |
+| 2                 | 10 s  |
+| 3                 | 20 s  |
+| 4                 | 40 s  |
+| 5                 | 80 s  |
+| 6                 | 160 s |
+| 7 or later        | 300 s (cap) |
+
+This is fixed and not currently configurable per-job. Plan your `retries` budget knowing that attempt 6+ is at least ~5 minutes out, not a handful of seconds.
 
 ## Crash Recovery
 

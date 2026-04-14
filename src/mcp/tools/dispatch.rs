@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     config::McpConfig,
-    core::Registry,
+    core::{Registry, event::SharedInvalidationTransport},
     db::DbPool,
     hooks::HookRunner,
     mcp::{
@@ -332,6 +332,11 @@ pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
 }
 
 /// Execute a tool call and return the result as JSON text.
+// Grew to 8 args after SEC-E follow-up added `invalidation_transport`. The
+// argument list is stable (each is a distinct shared service handle) and
+// bundling into a struct would just move boilerplate to call sites. A param
+// struct is the right follow-up when the shape grows again.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_tool(
     name: &str,
     args: &Value,
@@ -340,6 +345,7 @@ pub fn execute_tool(
     runner: &HookRunner,
     config_dir: &Path,
     config: &crate::config::CrapConfig,
+    invalidation_transport: Option<SharedInvalidationTransport>,
 ) -> Result<String> {
     // Static tools first
     match name {
@@ -376,7 +382,14 @@ pub fn execute_tool(
             ToolOp::Count => exec_count(args, &parsed.slug, registry, pool, runner),
             ToolOp::Create => exec_create(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Update => exec_update(args, &parsed.slug, registry, pool, runner, config),
-            ToolOp::Delete => exec_delete(args, &parsed.slug, registry, pool, runner),
+            ToolOp::Delete => exec_delete(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                invalidation_transport,
+            ),
             ToolOp::Undelete => exec_undelete(args, &parsed.slug, registry, pool, runner),
             ToolOp::Unpublish => exec_unpublish(args, &parsed.slug, registry, pool, runner),
             ToolOp::ListVersions => exec_list_versions(args, &parsed.slug, registry, pool, runner),

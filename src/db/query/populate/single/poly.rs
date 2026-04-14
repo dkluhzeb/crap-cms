@@ -14,38 +14,45 @@ use crate::{
     db::query::read::{find_by_id, find_by_ids},
 };
 
-use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
+use crate::db::query::populate::helpers::{CacheOrFetch, cache_or_fetch_doc, cache_set_doc};
+
+/// Outcome of resolving a single polymorphic reference.
+enum PolyResolution {
+    /// Successfully populated to a JSON object.
+    Populated(Value),
+    /// Could not resolve (malformed, visited, unknown collection): keep original string.
+    KeepAsString(String),
+    /// DB miss (soft-deleted or truly missing): drop from array / null for has-one.
+    Missing,
+}
 
 /// Resolve a single polymorphic ref string to its populated value.
-/// Returns the original string if resolution fails (missing collection, visited, etc.).
 fn resolve_poly_item(
     ctx: &PopulateCtx<'_>,
     item: &str,
     fetched_map: &mut HashMap<String, HashMap<String, Document>>,
     visited: &mut HashSet<(String, String)>,
-) -> Result<Value> {
-    let (col, id) = match parse_poly_ref(item) {
-        Some(pair) => pair,
-        None => return Ok(Value::String(item.to_string())),
+) -> Result<PolyResolution> {
+    let Some((col, id)) = parse_poly_ref(item) else {
+        return Ok(PolyResolution::KeepAsString(item.to_string()));
     };
 
     if visited.contains(&(col.clone(), id.clone())) {
-        return Ok(Value::String(item.to_string()));
+        return Ok(PolyResolution::KeepAsString(item.to_string()));
     }
 
-    let col_map = match fetched_map.get_mut(&col) {
-        Some(m) => m,
-        None => return Ok(Value::String(item.to_string())),
+    let Some(col_map) = fetched_map.get_mut(&col) else {
+        return Ok(PolyResolution::KeepAsString(item.to_string()));
     };
 
-    let item_def = match ctx.registry.get_collection(&col) {
-        Some(d) => d.clone(),
-        None => return Ok(Value::String(item.to_string())),
+    let Some(item_def) = ctx.registry.get_collection(&col) else {
+        return Ok(PolyResolution::KeepAsString(item.to_string()));
     };
+    let item_def = item_def.clone();
 
-    let mut rd = match col_map.remove(&id) {
-        Some(d) => d,
-        None => return Ok(Value::String(item.to_string())),
+    // DB miss (soft-deleted or truly missing): signal omission.
+    let Some(mut rd) = col_map.remove(&id) else {
+        return Ok(PolyResolution::Missing);
     };
 
     if let Some(ref uc) = item_def.upload
@@ -67,6 +74,8 @@ fn resolve_poly_item(
             depth: ctx.effective_depth - 1,
             select: None,
             locale_ctx: ctx.locale_ctx,
+            join_access: None,
+            user: None,
         },
         ctx.cache,
     )?;
@@ -75,7 +84,7 @@ fn resolve_poly_item(
     let key = populate_cache_key(&col, rd.id.as_ref(), locale_key.as_deref());
     let _ = cache_set_doc(ctx.cache, &key, &rd);
 
-    Ok(document_to_json(&rd, &col))
+    Ok(PolyResolution::Populated(document_to_json(&rd, &col)))
 }
 
 /// Populate a polymorphic has-many field.
@@ -115,11 +124,15 @@ pub(super) fn populate_poly_has_many(
         }
     }
 
-    // Reassemble in original order
+    // Reassemble in original order; drop Missing entries so soft-deleted / vanished
+    // targets do not leak as raw IDs into the populated output.
     let mut populated = Vec::new();
     for item in &items {
-        let resolved = resolve_poly_item(ctx, item, &mut fetched_map, visited)?;
-        populated.push(resolved);
+        match resolve_poly_item(ctx, item, &mut fetched_map, visited)? {
+            PolyResolution::Populated(v) => populated.push(v),
+            PolyResolution::KeepAsString(s) => populated.push(Value::String(s)),
+            PolyResolution::Missing => {}
+        }
     }
 
     doc.fields
@@ -155,14 +168,22 @@ pub(super) fn populate_poly_has_one(
     let locale_key = locale_cache_key(ctx.locale_ctx);
     let key = populate_cache_key(&col, &id, locale_key.as_deref());
 
-    if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
-        doc.fields
-            .insert(field_name.to_string(), document_to_json(&cached, &col));
-        return Ok(());
-    }
-
-    let Some(mut rd) = find_by_id(ctx.conn, &col, &item_def, &id, ctx.locale_ctx)? else {
-        return Ok(());
+    let mut rd = match cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
+        find_by_id(ctx.conn, &col, &item_def, &id, ctx.locale_ctx)
+            .ok()
+            .flatten()
+    }) {
+        CacheOrFetch::Hit(cached) => {
+            doc.fields
+                .insert(field_name.to_string(), document_to_json(&cached, &col));
+            return Ok(());
+        }
+        CacheOrFetch::Fresh(Some(d)) => d,
+        CacheOrFetch::Fresh(None) => {
+            // DB miss (soft-deleted or truly missing): set field to null.
+            doc.fields.insert(field_name.to_string(), Value::Null);
+            return Ok(());
+        }
     };
 
     if let Some(ref uc) = item_def.upload
@@ -184,6 +205,8 @@ pub(super) fn populate_poly_has_one(
             depth: ctx.effective_depth - 1,
             select: None,
             locale_ctx: ctx.locale_ctx,
+            join_access: None,
+            user: None,
         },
         ctx.cache,
     )?;
@@ -238,6 +261,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -285,6 +310,8 @@ mod tests {
                 depth: 0,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -343,6 +370,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -396,6 +425,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -451,6 +482,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -499,6 +532,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -546,6 +581,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -597,6 +634,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -610,6 +649,115 @@ mod tests {
             arr[0].as_str(),
             Some("articles/a1"),
             "visited poly ref should remain as composite string during reassembly"
+        );
+    }
+
+    #[test]
+    fn populate_poly_has_many_soft_deleted_target_dropped() {
+        let conn = setup_polymorphic_populate_db();
+        // Add _deleted_at column to articles and soft-delete a1
+        conn.execute_batch(
+            "ALTER TABLE articles ADD COLUMN _deleted_at TEXT;
+             UPDATE articles SET _deleted_at = '2024-02-01' WHERE id = 'a1';
+             INSERT INTO entries_refs (parent_id, related_id, related_collection, _order)
+                VALUES ('e1', 'a1', 'articles', 0), ('e1', 'pg1', 'pages', 1);",
+        )
+        .unwrap();
+
+        let entries_def = make_entries_def_poly_has_many();
+        let mut articles_def =
+            make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        articles_def.soft_delete = true;
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        // Hydrate first to build composite strings from the junction table
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("title".to_string(), json!("Entry"));
+        join::hydrate_document(&conn, "entries", &entries_def.fields, &mut doc, None, None)
+            .unwrap();
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "entries",
+                def: &entries_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let refs = doc.fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 1, "soft-deleted poly target should be dropped");
+        assert!(arr[0].is_object(), "remaining ref should be populated");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("pg1"));
+    }
+
+    #[test]
+    fn populate_poly_has_one_soft_deleted_target_null() {
+        let conn = setup_polymorphic_populate_db();
+        conn.execute_batch(
+            "ALTER TABLE articles ADD COLUMN _deleted_at TEXT;
+             UPDATE articles SET _deleted_at = '2024-02-01' WHERE id = 'a1';",
+        )
+        .unwrap();
+
+        let entries_def = make_entries_def_poly_has_one();
+        let mut articles_def =
+            make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        articles_def.soft_delete = true;
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields
+            .insert("related".to_string(), json!("articles/a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "entries",
+                def: &entries_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            doc.fields.get("related"),
+            Some(&serde_json::Value::Null),
+            "soft-deleted poly has-one target should be null"
         );
     }
 
@@ -646,6 +794,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )

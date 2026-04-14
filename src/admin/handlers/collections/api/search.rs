@@ -115,6 +115,11 @@ pub async fn search_collection(
         query: &fq,
         locale_ctx: locale_ctx.as_ref(),
         cursor_enabled: false,
+        // Admins picking a related document should see drafts too — they
+        // often need to link to work-in-progress content. The underlying
+        // access hook still decides whether to return Constrained (e.g.
+        // `published_or_author`): that filter continues to apply.
+        include_drafts: true,
     };
 
     let result = match service::search_documents(&ctx, &search_input) {

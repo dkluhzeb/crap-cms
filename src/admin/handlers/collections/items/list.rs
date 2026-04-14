@@ -27,7 +27,7 @@ use crate::{
         CollectionDefinition, Document,
         auth::{AuthUser, Claims},
     },
-    db::query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
+    db::query::{self, FilterClause, FindQuery, LocaleContext},
     service::{
         FindDocumentsInput, PaginatedResult, RunnerReadHooks, ServiceContext, ServiceError,
         find_documents, user_settings::get_user_settings,
@@ -35,33 +35,48 @@ use crate::{
 };
 
 /// Fetch documents via the shared service layer read lifecycle.
-fn fetch_list_documents(
-    state: &AdminState,
-    slug: &str,
-    def: &CollectionDefinition,
-    find_query: &FindQuery,
-    locale_ctx: Option<&query::LocaleContext>,
-    auth_user: &Option<Extension<AuthUser>>,
+///
+/// `is_trash` is a presentation flag from the request — the service layer
+/// injects `_deleted_at EXISTS` and flips `include_deleted` itself. The admin
+/// list view always wants to see drafts alongside published rows (admins
+/// manage both), so `include_drafts` is set unconditionally.
+/// Arguments for [`fetch_list_documents`]. All fields are required; constructed
+/// at the single call site in [`list_items`] — plain struct literal per
+/// CLAUDE.md's "single call site" exception to the builder rule.
+struct FetchListArgs<'a> {
+    state: &'a AdminState,
+    slug: &'a str,
+    def: &'a CollectionDefinition,
+    find_query: &'a FindQuery,
+    locale_ctx: Option<&'a query::LocaleContext>,
+    auth_user: &'a Option<Extension<AuthUser>>,
     cursor_enabled: bool,
-) -> Result<PaginatedResult<Document>, ServiceError> {
-    let conn = state.pool.get().map_err(ServiceError::Internal)?;
-    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    is_trash: bool,
+}
 
-    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(&state.pool)
+fn fetch_list_documents(
+    args: FetchListArgs<'_>,
+) -> Result<PaginatedResult<Document>, ServiceError> {
+    let conn = args.state.pool.get().map_err(ServiceError::Internal)?;
+    let user_doc = args
+        .auth_user
+        .as_ref()
+        .map(|Extension(au)| au.user_doc.clone());
+
+    let hooks = RunnerReadHooks::new(&args.state.hook_runner, &conn);
+    let ctx = ServiceContext::collection(args.slug, args.def)
+        .pool(&args.state.pool)
         .conn(&conn)
         .read_hooks(&hooks)
         .user(user_doc.as_ref())
         .build();
 
-    let is_trash = find_query.include_deleted;
-
-    let input = FindDocumentsInput::builder(find_query)
+    let input = FindDocumentsInput::builder(args.find_query)
         .hydrate(false)
-        .locale_ctx(locale_ctx)
-        .cursor_enabled(cursor_enabled)
-        .trash(is_trash)
+        .locale_ctx(args.locale_ctx)
+        .cursor_enabled(args.cursor_enabled)
+        .trash(args.is_trash)
+        .include_drafts(true)
         .build();
 
     find_documents(&ctx, &input)
@@ -142,31 +157,22 @@ fn build_list_pagination(
     }
 }
 
-/// Build the FindQuery from pagination, filters, sort, and search params.
+/// Build the FindQuery from pagination, user filters, sort, and search params.
+///
+/// Produces a *user* query — system filters (`_deleted_at`, `_status`) are
+/// injected by `service::find_documents` based on the typed flags. The trash
+/// default sort (`-_deleted_at`) is set by the caller as a presentation choice.
 fn build_find_query(
     pagination: &query::FindPagination,
     url_filters: &[FilterClause],
-    is_trash: bool,
     order_by: Option<String>,
     search: Option<&str>,
 ) -> FindQuery {
-    let mut filters: Vec<FilterClause> = Vec::new();
-
-    filters.extend(url_filters.iter().cloned());
-
-    if is_trash {
-        filters.push(FilterClause::Single(Filter {
-            field: "_deleted_at".to_string(),
-            op: FilterOp::Exists,
-        }));
-    }
-
     let has_cursor = pagination.has_cursor();
 
     let mut fq = FindQuery::new();
-    fq.filters = filters;
+    fq.filters = url_filters.to_vec();
     fq.order_by = order_by;
-    fq.include_deleted = is_trash;
     fq.limit = Some(pagination.limit);
     fq.offset = if has_cursor {
         None
@@ -253,7 +259,6 @@ pub async fn list_items(
     let find_query = build_find_query(
         &pagination,
         &url_filters,
-        is_trash,
         order_by.clone(),
         search.as_deref(),
     );
@@ -269,15 +274,16 @@ pub async fn list_items(
     let auth_user_clone = auth_user.clone();
 
     let read_result = tokio::task::spawn_blocking(move || {
-        fetch_list_documents(
-            &state_clone,
-            &slug_owned,
-            &def_owned,
-            &find_query,
-            locale_ctx.as_ref(),
-            &auth_user_clone,
+        fetch_list_documents(FetchListArgs {
+            state: &state_clone,
+            slug: &slug_owned,
+            def: &def_owned,
+            find_query: &find_query,
+            locale_ctx: locale_ctx.as_ref(),
+            auth_user: &auth_user_clone,
             cursor_enabled,
-        )
+            is_trash,
+        })
     })
     .await;
 

@@ -6,9 +6,11 @@ use serde_json::Value;
 
 use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
-    db::{DbConnection, FindQuery, query},
+    db::{
+        AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
+    },
     hooks::{HookContext, HookEvent},
-    service::{AfterChangeInput, hooks::WriteHooks},
+    service::{AfterChangeInput, ServiceContext, ServiceError, hooks::WriteHooks},
 };
 
 /// Build the hook data map from form data + structured join data.
@@ -88,6 +90,64 @@ pub(crate) fn collect_hidden_field_names(fields: &[FieldDefinition], prefix: &st
     }
 
     hidden
+}
+
+/// Enforce a write-access `Constrained` result against a specific target row.
+///
+/// When a write access hook returns [`AccessResult::Constrained(filters)`],
+/// operators expect the extra filters to scope the write to matching rows
+/// (e.g. "users can only update their own rows"). The write paths have no
+/// in-memory filter evaluator, so this helper piggybacks on the query layer:
+/// it counts rows matching `filters AND id = <id>` and rejects the write
+/// (returns [`ServiceError::AccessDenied`]) when zero rows match.
+///
+/// Non-`Constrained` variants are a no-op — callers handle `Allowed`/`Denied`
+/// themselves before the write. `locale_ctx` is passed as `None` because
+/// access-hook constraints are almost always locale-independent identity
+/// filters (`author_id = X`), and the target row exists in some locale.
+///
+/// `include_deleted` must be true for undelete (the target row is in the
+/// trash) and false everywhere else. `operation` is used only for the error
+/// message ("Update access denied", "Delete access denied", …).
+pub(crate) fn enforce_access_constraints(
+    ctx: &ServiceContext,
+    id: &str,
+    access: &AccessResult,
+    operation: &str,
+    include_deleted: bool,
+) -> Result<(), ServiceError> {
+    let AccessResult::Constrained(extra) = access else {
+        return Ok(());
+    };
+
+    let conn = ctx.resolve_conn()?;
+    let conn = conn.as_ref();
+    let def = ctx.collection_def();
+
+    let mut filters: Vec<FilterClause> = extra.clone();
+    filters.push(FilterClause::Single(Filter {
+        field: "id".to_string(),
+        op: FilterOp::Equals(id.to_string()),
+    }));
+
+    let locale_ctx: Option<&LocaleContext> = None;
+    let matched = query::count_with_search(
+        conn,
+        ctx.slug,
+        def,
+        &filters,
+        locale_ctx,
+        None,
+        include_deleted,
+    )?;
+
+    if matched == 0 {
+        return Err(ServiceError::AccessDenied(format!(
+            "{operation} access denied"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Build a `PaginationResult` from query state, supporting both cursor and page modes.

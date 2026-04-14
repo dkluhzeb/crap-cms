@@ -42,7 +42,9 @@ pub(super) fn batch_nonpoly_has_many(
 
     let doc_map = batch_fetch_single_collection(ctx, rel_collection, rel_def, &all_ids)?;
 
-    // Distribute back to each document preserving order
+    // Distribute back to each document preserving order.
+    // DB misses (soft-deleted / vanished targets) are dropped from the array;
+    // visited IDs (cycle protection) remain as raw strings.
     for doc in docs.iter_mut() {
         let ids: Vec<String> = match doc.fields.get(field_name) {
             Some(Value::Array(arr)) => arr
@@ -54,11 +56,15 @@ pub(super) fn batch_nonpoly_has_many(
         let mut populated = Vec::new();
 
         for id in &ids {
-            if let Some(cached_doc) = doc_map.get(id) {
-                populated.push(document_to_json(cached_doc, rel_collection));
-            } else {
+            if visited.contains(&(rel_collection.to_string(), id.clone())) {
                 populated.push(Value::String(id.clone()));
+                continue;
             }
+
+            let Some(cached_doc) = doc_map.get(id) else {
+                continue;
+            };
+            populated.push(document_to_json(cached_doc, rel_collection));
         }
         doc.fields
             .insert(field_name.to_string(), Value::Array(populated));
@@ -91,19 +97,26 @@ pub(super) fn batch_nonpoly_has_one(
 
     let doc_map = batch_fetch_single_collection(ctx, rel_collection, rel_def, &all_ids)?;
 
-    // Distribute back
+    // Distribute back. DB miss (soft-deleted / vanished target) sets the field
+    // to null; visited IDs (cycle protection) remain as raw strings.
     for doc in docs.iter_mut() {
         let id = match doc.fields.get(field_name) {
             Some(Value::String(s)) if !s.is_empty() => s.clone(),
             _ => continue,
         };
 
-        if let Some(cached_doc) = doc_map.get(&id) {
-            doc.fields.insert(
-                field_name.to_string(),
-                document_to_json(cached_doc, rel_collection),
-            );
+        if visited.contains(&(rel_collection.to_string(), id.clone())) {
+            continue;
         }
+
+        let Some(cached_doc) = doc_map.get(&id) else {
+            doc.fields.insert(field_name.to_string(), Value::Null);
+            continue;
+        };
+        doc.fields.insert(
+            field_name.to_string(),
+            document_to_json(cached_doc, rel_collection),
+        );
     }
     Ok(())
 }
@@ -162,6 +175,8 @@ pub(super) fn batch_fetch_single_collection(
                     depth: ctx.effective_depth - 1,
                     select: None,
                     locale_ctx: ctx.locale_ctx,
+                    join_access: None,
+                    user: None,
                 },
                 ctx.cache,
             )?;
@@ -244,6 +259,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -337,6 +354,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -392,6 +411,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -459,6 +480,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -510,6 +533,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -519,6 +544,241 @@ mod tests {
         assert_eq!(
             docs[0].fields.get("author").and_then(|v| v.as_str()),
             Some("a1")
+        );
+    }
+
+    // ── Regression: missing targets are dropped (has-many) / nulled (has-one) ──
+
+    #[test]
+    fn batch_has_many_missing_related_dropped() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO categories VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');
+             INSERT INTO posts VALUES ('p1', 'Post 1', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig::new("categories", true));
+        let posts_def = make_collection_def(
+            "posts",
+            vec![make_field("title", FieldType::Text), tags_field],
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            // Mix: existing + missing — missing should be dropped.
+            d.fields
+                .insert("tags".to_string(), json!(["missing1", "c1", "missing2"]));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let tags = docs[0].fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be array");
+        assert_eq!(arr.len(), 1, "missing has-many targets should be dropped");
+        assert!(arr[0].is_object(), "remaining tag should be populated");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("c1"));
+    }
+
+    #[test]
+    fn batch_has_many_soft_deleted_target_dropped() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, _deleted_at TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO categories (id, name, _deleted_at, created_at, updated_at)
+                VALUES ('c1', 'Tech', NULL, '2024-01-01', '2024-01-01');
+             INSERT INTO categories (id, name, _deleted_at, created_at, updated_at)
+                VALUES ('c2', 'Science', '2024-02-01', '2024-01-01', '2024-01-01');
+             INSERT INTO posts VALUES ('p1', 'Post 1', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let mut cats_def =
+            make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
+        cats_def.soft_delete = true;
+
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig::new("categories", true));
+        let posts_def = make_collection_def(
+            "posts",
+            vec![make_field("title", FieldType::Text), tags_field],
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("tags".to_string(), json!(["c1", "c2"]));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let tags = docs[0].fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be array");
+        assert_eq!(arr.len(), 1, "soft-deleted target should be dropped");
+        assert_eq!(arr[0].get("name").and_then(|v| v.as_str()), Some("Tech"));
+    }
+
+    #[test]
+    fn batch_has_one_soft_deleted_target_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (id TEXT PRIMARY KEY, name TEXT, _deleted_at TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO authors (id, name, _deleted_at, created_at, updated_at)
+                VALUES ('a1', 'Alice', '2024-02-01', '2024-01-01', '2024-01-01');
+             INSERT INTO posts VALUES ('p1', 'Post', 'a1', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let mut authors_def =
+            make_collection_def("authors", vec![make_field("name", FieldType::Text)]);
+        authors_def.soft_delete = true;
+
+        let mut author_field = make_field("author", FieldType::Relationship);
+        author_field.relationship = Some(RelationshipConfig::new("authors", false));
+        let posts_def = make_collection_def(
+            "posts",
+            vec![make_field("title", FieldType::Text), author_field],
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(authors_def);
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("author".to_string(), json!("a1"));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            docs[0].fields.get("author"),
+            Some(&serde_json::Value::Null),
+            "soft-deleted has-one target should be null"
+        );
+    }
+
+    // ── Regression: visited cycle protection still keeps as ID string ─────────
+
+    #[test]
+    fn batch_has_many_visited_kept_as_string() {
+        // Self-referential: a category tagged with itself. The dispatcher
+        // pre-seeds visited with (ctx.collection_slug, doc.id), so
+        // ("categories", "c1") is visited — the tag "c1" must stay as a raw
+        // string (NOT dropped, NOT populated).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO categories VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig::new("categories", true));
+        let cats_def = make_collection_def(
+            "categories",
+            vec![make_field("name", FieldType::Text), tags_field],
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(cats_def.clone());
+
+        let mut docs = vec![{
+            let mut d = Document::new("c1".to_string());
+            d.fields.insert("tags".to_string(), json!(["c1"]));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "categories",
+                def: &cats_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 2,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let tags = docs[0].fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(
+            arr[0].as_str(),
+            Some("c1"),
+            "visited cycle ref should stay as string, not be dropped"
         );
     }
 
@@ -558,6 +818,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )

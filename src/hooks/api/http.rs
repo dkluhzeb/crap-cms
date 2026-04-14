@@ -10,7 +10,7 @@ use std::{
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use reqwest::{Method, blocking::Client, redirect};
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 const MAX_REDIRECTS: u8 = 10;
@@ -28,6 +28,7 @@ pub(super) fn register_http(
     }
 
     let t = lua.create_table()?;
+
     t.set(
         "request",
         lua.create_function(move |lua, opts: Table| {
@@ -194,12 +195,15 @@ fn build_response_table(
             headers_out.set(name.as_str(), v)?;
         }
     }
+
     result.set("headers", headers_out)?;
 
     let mut body_buf = String::new();
+
     resp.take(max_bytes)
         .read_to_string(&mut body_buf)
         .map_err(|e| RuntimeError(format!("failed to read response body: {e}")))?;
+
     result.set("body", body_buf)?;
 
     Ok(result)
@@ -235,15 +239,31 @@ fn validate_url(url_str: &str) -> StdResult<(String, SocketAddr), String> {
         return Ok((host, addr));
     }
 
-    // All addresses were private — report the first one in the error
+    // All addresses were private. Log the concrete reason for operators,
+    // but return a redacted error to the Lua caller — the caller could be
+    // attacker-controlled and would otherwise enumerate internal IP
+    // topology from these messages (see SEC-C).
     if let Some(addr) = addrs.first() {
         let ip = addr.ip();
+        let class = if ip.is_loopback() {
+            "loopback"
+        } else if ip.is_unspecified() {
+            "unspecified"
+        } else {
+            "private"
+        };
 
-        if ip.is_loopback() || ip.is_unspecified() {
-            return Err(format!("requests to {ip} are blocked"));
-        }
+        warn!(
+            url = %url_str,
+            host = %host,
+            resolved_ip = %ip,
+            class = class,
+            "crap.http: blocking request — target resolves to non-public address"
+        );
 
-        return Err(format!("requests to private network {ip} are blocked"));
+        return Err(
+            "Target resolves to a blocked address; see server logs for details".to_string(),
+        );
     }
 
     Err("DNS resolution returned no addresses".to_string())
@@ -302,19 +322,56 @@ mod tests {
     #[test]
     fn validate_url_rejects_private_10() {
         let err = validate_url("http://10.0.0.1/foo").unwrap_err();
-        assert!(err.contains("private network"), "unexpected: {err}");
+        assert!(err.contains("blocked"), "unexpected: {err}");
     }
 
     #[test]
     fn validate_url_rejects_private_192() {
         let err = validate_url("http://192.168.1.1/foo").unwrap_err();
-        assert!(err.contains("private network"), "unexpected: {err}");
+        assert!(err.contains("blocked"), "unexpected: {err}");
     }
 
     #[test]
     fn validate_url_rejects_link_local() {
         let err = validate_url("http://169.254.0.1/foo").unwrap_err();
-        assert!(err.contains("private network"), "unexpected: {err}");
+        assert!(err.contains("blocked"), "unexpected: {err}");
+    }
+
+    // SEC-C regression: the Lua-visible error must NOT leak the resolved IP
+    // or any information about which private-network class was hit. Operators
+    // still get the full detail via `tracing::warn!` in validate_url.
+    #[test]
+    fn ssrf_error_message_does_not_leak_ip() {
+        for url in [
+            "http://127.0.0.1/foo",
+            "http://10.0.0.1/foo",
+            "http://192.168.1.1/foo",
+            "http://169.254.0.1/foo",
+            "http://172.16.0.1/foo",
+        ] {
+            let err = validate_url(url).unwrap_err();
+
+            // No IP literal.
+            assert!(
+                !err.contains("127.0.0.1")
+                    && !err.contains("10.0.0.1")
+                    && !err.contains("192.168.1.1")
+                    && !err.contains("169.254.0.1")
+                    && !err.contains("172.16.0.1"),
+                "error leaks IP for {url}: {err}"
+            );
+
+            // No class hint ("private network", "loopback", etc.) either —
+            // those also narrow the search space for an attacker.
+            let lc = err.to_ascii_lowercase();
+            assert!(
+                !lc.contains("private network")
+                    && !lc.contains("loopback")
+                    && !lc.contains("link-local")
+                    && !lc.contains("unspecified"),
+                "error leaks address class for {url}: {err}"
+            );
+        }
     }
 
     #[test]

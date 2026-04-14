@@ -11,7 +11,7 @@ use crate::{
     core::{
         DocumentId, Slug,
         collection::{Hooks, LiveSetting},
-        event::{EventBus, EventOperation, EventTarget, EventUser},
+        event::{EventOperation, EventTarget, EventUser, MutationEventInput, SharedEventTransport},
     },
     hooks::{
         HookContext, HookEvent, HookRunner, api,
@@ -36,6 +36,18 @@ impl PublishEventInput {
     /// Create a builder with the required target and operation.
     pub fn builder(target: EventTarget, operation: EventOperation) -> PublishEventInputBuilder {
         PublishEventInputBuilder::new(target, operation)
+    }
+
+    /// Convert into the transport-facing [`MutationEventInput`].
+    fn into_transport_input(self) -> MutationEventInput {
+        MutationEventInput {
+            target: self.target,
+            operation: self.operation,
+            collection: self.collection,
+            document_id: self.document_id,
+            data: self.data,
+            edited_by: self.edited_by,
+        }
     }
 }
 
@@ -174,19 +186,19 @@ impl HookRunner {
         }
     }
 
-    /// Publish a mutation event: check live setting → run before_broadcast hooks → EventBus.publish().
+    /// Publish a mutation event: check live setting → run before_broadcast hooks → transport.publish().
     /// Spawns into a background task (non-blocking, like fire_after_event).
     /// Untestable: spawns tokio::task::spawn_blocking for async event dispatch.
     #[cfg(not(tarpaulin_include))]
     pub fn publish_event(
         &self,
-        event_bus: &Option<EventBus>,
+        event_transport: &Option<SharedEventTransport>,
         hooks: &Hooks,
         live_setting: Option<&LiveSetting>,
         input: PublishEventInput,
     ) {
-        let bus = match event_bus {
-            Some(b) => b.clone(),
+        let transport = match event_transport {
+            Some(t) => t.clone(),
             None => return,
         };
 
@@ -194,16 +206,16 @@ impl HookRunner {
             let runner = self.clone();
             let hooks = hooks.clone();
             let live = live_setting.cloned();
-            move || publish_event_blocking(runner, bus, hooks, live, input)
+            move || publish_event_blocking(runner, transport, hooks, live, input)
         });
     }
 }
 
 /// Background worker for [`HookRunner::publish_event`]:
-/// check live setting → run before_broadcast hooks → EventBus.publish().
+/// check live setting → run before_broadcast hooks → transport.publish().
 fn publish_event_blocking(
     runner: HookRunner,
-    bus: EventBus,
+    transport: SharedEventTransport,
     hooks: Hooks,
     live: Option<LiveSetting>,
     input: PublishEventInput,
@@ -243,12 +255,15 @@ fn publish_event_blocking(
         }
     };
 
-    bus.publish(
+    let transport_input = PublishEventInput {
         target,
         operation,
         collection,
         document_id,
-        broadcast_data,
+        data: broadcast_data,
         edited_by,
-    );
+    }
+    .into_transport_input();
+
+    transport.publish(transport_input);
 }

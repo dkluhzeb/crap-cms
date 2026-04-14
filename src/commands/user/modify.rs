@@ -8,7 +8,7 @@ use crate::{
     config::{LocaleConfig, PasswordPolicy},
     core::SharedRegistry,
     db::{DbPool, query},
-    service::ServiceContext,
+    service::{self, ServiceContext},
 };
 
 use super::helpers::{get_user_email, require_verify_email, resolve_user};
@@ -38,6 +38,7 @@ pub fn user_delete(
 
         if !proceed {
             cli::info("Aborted.");
+
             return Ok(());
         }
     }
@@ -82,8 +83,10 @@ pub fn user_lock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
+
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-    crate::service::auth::lock_user(&ctx, &doc.id)
+
+    service::auth::lock_user(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to lock user")?;
 
@@ -109,8 +112,10 @@ pub fn user_unlock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
+
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-    crate::service::auth::unlock_user(&ctx, &doc.id)
+
+    service::auth::unlock_user(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to unlock user")?;
 
@@ -137,8 +142,10 @@ pub fn user_verify(
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
+
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-    crate::service::auth::mark_verified(&ctx, &doc.id)
+
+    service::auth::mark_verified(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to verify user")?;
 
@@ -162,11 +169,14 @@ pub fn user_unverify(
     id: Option<String>,
 ) -> Result<()> {
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+
     require_verify_email(&def, collection)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
+
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-    crate::service::auth::mark_unverified(&ctx, &doc.id)
+
+    service::auth::mark_unverified(&ctx, &doc.id)
         .map_err(|e| e.into_anyhow())
         .context("Failed to unverify user")?;
 

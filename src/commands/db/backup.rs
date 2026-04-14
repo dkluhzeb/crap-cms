@@ -29,6 +29,16 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         bail!("Database file not found: {}", db_path.display());
     }
 
+    // Pre-flight: confirm the chosen output directory exists (or can be created)
+    // and is writable BEFORE we perform a long-running VACUUM INTO snapshot.
+    let backup_base = output.clone().unwrap_or_else(|| config_dir.join("backups"));
+    preflight_writable(&backup_base).with_context(|| {
+        format!(
+            "Backup output directory not writable: {}",
+            backup_base.display()
+        )
+    })?;
+
     let backup_dir = create_backup_dir(&config_dir, output)?;
     let db_size = backup_database(&config_dir, &cfg, &backup_dir)?;
 
@@ -48,6 +58,26 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
     )?;
 
     cli::success(&format!("Backup complete: {}", backup_dir.display()));
+
+    Ok(())
+}
+
+/// Verify the backup output directory exists (or can be created) and accepts
+/// new files. Avoids partial backups that would only fail mid-way at manifest
+/// write time. We create the directory if missing, then write+delete a probe
+/// file via a uniquely named path.
+fn preflight_writable(base: &Path) -> Result<()> {
+    fs::create_dir_all(base)
+        .with_context(|| format!("Failed to create backup base directory: {}", base.display()))?;
+
+    let probe = base.join(format!(".crap-backup-probe-{}", std::process::id()));
+
+    // Create + immediately drop. If the directory is read-only, this errors.
+    fs::File::create(&probe)
+        .with_context(|| format!("Failed to write probe file in {}", base.display()))?;
+
+    // Best-effort cleanup; ignore failure (dir may be sticky etc).
+    let _ = fs::remove_file(&probe);
 
     Ok(())
 }
@@ -168,4 +198,44 @@ fn write_backup_manifest(
         serde_json::to_string_pretty(&manifest)?,
     )
     .context("Failed to write manifest.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preflight_writable;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn preflight_succeeds_on_new_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("new-backups");
+        preflight_writable(&sub).expect("should create + write");
+        assert!(sub.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_errors_early_on_read_only_output_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ro = tmp.path().join("ro-out");
+        fs::create_dir(&ro).unwrap();
+
+        // Mode 0o555: readable/executable but NOT writable.
+        fs::set_permissions(&ro, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let err = preflight_writable(&ro).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.to_lowercase().contains("permission")
+                || msg.contains("probe")
+                || msg.contains("Failed"),
+            "expected a clear write-failure message: {msg}"
+        );
+
+        // Restore perms for cleanup.
+        fs::set_permissions(&ro, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }

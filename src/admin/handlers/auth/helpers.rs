@@ -17,7 +17,7 @@ use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
-        handlers::auth::{append_cookies, session_cookies},
+        handlers::auth::{append_cookies, session_cookies, session_same_site},
     },
     core::{Document, Registry, Slug, auth::ClaimsBuilder, email},
 };
@@ -220,10 +220,18 @@ pub(in crate::admin::handlers) fn create_session_token(
 
 /// Build a redirect-to-/admin response with session cookies set.
 pub(in crate::admin::handlers) fn session_redirect(
+    state: &AdminState,
     session: &SessionToken,
-    dev_mode: bool,
 ) -> Response {
-    let cookies = session_cookies(&session.token, session.expiry, session.exp, dev_mode);
+    let dev_mode = state.config.admin.dev_mode;
+    let same_site = session_same_site(state);
+    let cookies = session_cookies(
+        &session.token,
+        session.expiry,
+        session.exp,
+        dev_mode,
+        same_site,
+    );
     let mut response = Redirect::to("/admin").into_response();
 
     append_cookies(&mut response, &cookies);

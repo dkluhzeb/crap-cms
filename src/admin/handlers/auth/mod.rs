@@ -53,5 +53,5 @@ pub(super) use helpers::{
 };
 pub(super) use session::{
     append_cookies, clear_mfa_pending_cookie, clear_session_cookies, mfa_pending_cookie,
-    session_cookies,
+    session_cookies, session_same_site,
 };

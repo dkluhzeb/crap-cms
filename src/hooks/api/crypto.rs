@@ -6,6 +6,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use rand::RngCore;
 use ring::{digest, hmac};
+use subtle::ConstantTimeEq;
 
 /// Register `crap.crypto` — sha256, hmac, base64, AES-GCM encrypt/decrypt, random_bytes.
 pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Result<()> {
@@ -18,6 +19,10 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     t.set(
         "hmac_sha256",
         lua.create_function(|_, (data, key): (String, String)| hmac_sha256(&data, &key))?,
+    )?;
+    t.set(
+        "constant_time_eq",
+        lua.create_function(|_, (a, b): (String, String)| constant_time_eq(&a, &b))?,
     )?;
     t.set(
         "base64_encode",
@@ -61,6 +66,27 @@ fn hmac_sha256(data: &str, key: &str) -> LuaResult<String> {
     let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
 
     Ok(hex_encode(hmac::sign(&k, data.as_bytes()).as_ref()))
+}
+
+/// Constant-time byte-string equality.
+///
+/// Use this — never `==` — to compare HMAC tags, tokens, or any secret
+/// value: Lua's `==` on strings short-circuits on the first differing byte
+/// and leaks the match length through timing. The `subtle` crate's
+/// `ConstantTimeEq` runs in time independent of where (or whether) the
+/// bytes differ.
+///
+/// Length-mismatch is treated the same as content-mismatch (both return
+/// `false`) so the caller cannot distinguish them via return value.
+fn constant_time_eq(a: &str, b: &str) -> LuaResult<bool> {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+
+    if a_bytes.len() != b_bytes.len() {
+        return Ok(false);
+    }
+
+    Ok(a_bytes.ct_eq(b_bytes).into())
 }
 
 /// Base64-encode a string.
@@ -348,6 +374,48 @@ mod tests {
             result,
             "6e9ef29b75fffc5b7abae527d58fdadb2fe42e7219011976917343065f58ed4a"
         );
+    }
+
+    // --- constant_time_eq ---
+
+    #[test]
+    fn constant_time_eq_true_on_equal() {
+        let lua = setup_lua("s");
+        let result: bool = lua
+            .load(r#"return crap.crypto.constant_time_eq("abcdef", "abcdef")"#)
+            .eval()
+            .unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn constant_time_eq_false_on_different_length() {
+        let lua = setup_lua("s");
+        let result: bool = lua
+            .load(r#"return crap.crypto.constant_time_eq("abc", "abcdef")"#)
+            .eval()
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn constant_time_eq_false_on_different_content() {
+        let lua = setup_lua("s");
+        let result: bool = lua
+            .load(r#"return crap.crypto.constant_time_eq("abcdef", "abcxef")"#)
+            .eval()
+            .unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn constant_time_eq_true_on_empty() {
+        let lua = setup_lua("s");
+        let result: bool = lua
+            .load(r#"return crap.crypto.constant_time_eq("", "")"#)
+            .eval()
+            .unwrap();
+        assert!(result);
     }
 
     #[test]

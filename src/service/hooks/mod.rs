@@ -4,5 +4,7 @@ mod read_hooks;
 pub(crate) mod richtext;
 mod write_hooks;
 
-pub use read_hooks::{LuaReadHooks, LuaReadHooksBuilder, ReadHooks, RunnerReadHooks};
+pub use read_hooks::{
+    LuaReadHooks, LuaReadHooksBuilder, ReadHooks, ReadHooksJoinGuard, RunnerReadHooks,
+};
 pub use write_hooks::{LuaWriteHooks, LuaWriteHooksBuilder, RunnerWriteHooks, WriteHooks};

@@ -550,6 +550,15 @@ fn make_posts_with_category() -> CollectionDefinition {
                 rc
             })
             .build(),
+        // field with max_depth = 1 cap — populates one hop but the nested
+        // `parent` relationship on the target must NOT populate further.
+        FieldDefinition::builder("capped_cat", FieldType::Relationship)
+            .relationship({
+                let mut rc = RelationshipConfig::new("categories", false);
+                rc.max_depth = Some(1);
+                rc
+            })
+            .build(),
     ];
     def
 }
@@ -741,7 +750,10 @@ fn populate_circular_ref_stops() {
 }
 
 #[test]
-fn populate_missing_related_doc() {
+fn populate_missing_related_doc_becomes_null() {
+    // Regression: a has-one relationship whose target is missing (soft-deleted or
+    // truly absent) used to silently remain as the original ID string. It now
+    // becomes Value::Null so the caller can detect the dangling reference.
     let (_tmp, pool, registry, posts_def, _cats_def) = setup_posts_categories();
 
     let mut conn = pool.get().expect("DB connection");
@@ -763,8 +775,17 @@ fn populate_missing_related_doc() {
     )
     .expect("Populate should handle missing");
 
-    // Category should remain as a string ID (not populated)
-    assert_eq!(post.get_str("category"), Some("nonexistent-cat-id"));
+    // Category should be Value::Null, not a string ID.
+    assert_eq!(
+        post.fields.get("category"),
+        Some(&serde_json::Value::Null),
+        "missing has-one target must become Value::Null"
+    );
+    assert_eq!(
+        post.get_str("category"),
+        None,
+        "get_str on null field returns None"
+    );
 }
 
 #[test]
@@ -798,6 +819,76 @@ fn populate_respects_field_max_depth() {
 
     // limited_cat should remain as string ID (max_depth=0 prevents population)
     assert_eq!(post.get_str("limited_cat"), Some(cat.id.as_ref()));
+}
+
+#[test]
+fn populate_respects_field_max_depth_1_stops_nested_relations() {
+    // With `max_depth = 1` on `capped_cat`, the cat itself must be hydrated,
+    // but the nested `parent` relationship on the hydrated category must NOT
+    // be populated further — even when the caller requests depth=3.
+    let (_tmp, pool, registry, posts_def, cats_def) = setup_posts_categories();
+
+    let mut conn = pool.get().expect("DB connection");
+    let tx = conn.transaction().expect("Start transaction");
+
+    // Create parent category
+    let mut parent_data = HashMap::new();
+    parent_data.insert("name".to_string(), "Parent".to_string());
+    let parent =
+        query::create(&tx, "categories", &cats_def, &parent_data, None).expect("Create parent");
+
+    // Child category with parent set
+    let mut child_data = HashMap::new();
+    child_data.insert("name".to_string(), "Child".to_string());
+    child_data.insert("parent".to_string(), parent.id.to_string());
+    let child =
+        query::create(&tx, "categories", &cats_def, &child_data, None).expect("Create child");
+
+    let mut post_data = HashMap::new();
+    post_data.insert("title".to_string(), "Post".to_string());
+    post_data.insert("capped_cat".to_string(), child.id.to_string());
+    let mut post =
+        query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
+    tx.commit().expect("Commit");
+
+    let conn = pool.get().expect("DB connection");
+    let mut visited = HashSet::new();
+    // Request depth=3 — but `capped_cat` has max_depth = 1, so the cap wins.
+    query::populate_relationships(
+        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &mut post,
+        &mut visited,
+        &query::PopulateOpts::new(3),
+    )
+    .expect("Populate failed");
+
+    // capped_cat must be a hydrated object (one hop consumed).
+    let capped = post.get("capped_cat").expect("capped_cat should exist");
+    assert!(
+        capped.is_object(),
+        "capped_cat should be hydrated at depth 1, got: {:?}",
+        capped
+    );
+    assert_eq!(
+        capped.get("name").and_then(|v| v.as_str()),
+        Some("Child"),
+        "capped_cat should hydrate to the child category"
+    );
+
+    // The nested `parent` on the hydrated child must still be an ID string,
+    // because max_depth = 1 capped effective_depth to 1 → nested call had
+    // effective_depth - 1 = 0, which short-circuits further population.
+    let nested_parent = capped.get("parent").expect("nested parent should exist");
+    assert!(
+        nested_parent.is_string(),
+        "nested parent should stay as ID (max_depth=1 caps), got: {:?}",
+        nested_parent
+    );
+    assert_eq!(
+        nested_parent.as_str(),
+        Some(parent.id.as_ref()),
+        "nested parent ID should match the parent we created"
+    );
 }
 
 // Regression: populate_relationships with localized fields on the related collection

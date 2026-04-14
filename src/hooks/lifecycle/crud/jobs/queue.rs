@@ -49,11 +49,18 @@ fn queue_job_inner(
         if matches!(result, AccessResult::Denied) {
             return Err(RuntimeError("Trigger access denied".to_string()));
         }
+
+        if matches!(result, AccessResult::Constrained(_)) {
+            return Err(RuntimeError(format!(
+                "Access hook for job '{slug}' returned a filter table; job access is trigger-only — return true/false based on ctx.user fields instead."
+            )));
+        }
     }
 
     let data_json = match data {
         Some(tbl) => {
             let json_val = api::lua_to_json(lua, &Value::Table(tbl))?;
+
             serde_json::to_string(&json_val)
                 .map_err(|e| RuntimeError(format!("JSON error: {e:#}")))?
         }
@@ -83,6 +90,8 @@ pub(crate) fn register_jobs_queue(
     let queue_fn = lua.create_function(move |lua, (slug, data): (String, Option<Table>)| {
         queue_job_inner(lua, &registry, slug, data)
     })?;
+
     table.set("queue", queue_fn)?;
+
     Ok(())
 }

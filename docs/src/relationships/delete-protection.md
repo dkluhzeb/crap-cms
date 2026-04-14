@@ -32,7 +32,9 @@ Soft-deleting a document does **not** adjust ref counts. The outgoing references
 
 Only **hard deletion** (permanent) decrements ref counts on the targets.
 
-Soft-deleted documents that are referenced by other documents can still be trashed — the ref count check only blocks deletion of the *target* document.
+The ref count check only blocks **deletion of a target**: a document can always be soft-deleted regardless of how many others reference it.
+
+When a referenced document is soft-deleted, it is **omitted** from relationship population on read — it does not appear as an ID string or as a populated object. Has-one fields resolve to `null`; has-many fields have the soft-deleted entry dropped from the array. Restore the document to make it appear again.
 
 ## Admin UI
 

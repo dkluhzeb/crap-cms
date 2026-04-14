@@ -1,0 +1,2 @@
+-- Row-enforcement test fixture — init.lua
+-- Collections and hooks are auto-loaded from their directories.

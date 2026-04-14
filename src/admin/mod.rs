@@ -30,11 +30,11 @@ use crate::{
         auth::{SharedPasswordProvider, SharedTokenProvider},
         email::EmailRenderer,
         email::SharedEmailProvider,
-        event::EventBus,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
-    db::DbPool,
+    db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
 };
 
@@ -60,8 +60,9 @@ pub struct AdminState {
     pub email_renderer: Arc<EmailRenderer>,
     /// The email provider for sending emails.
     pub email_provider: SharedEmailProvider,
-    /// The event bus for asynchronous event handling, if enabled.
-    pub event_bus: Option<EventBus>,
+    /// The event transport for live updates (in-process or Redis). None when
+    /// live updates are disabled.
+    pub event_transport: Option<SharedEventTransport>,
     /// The rate limiter for login attempts (per-email).
     pub login_limiter: Arc<LoginRateLimiter>,
     /// The rate limiter for login attempts (per-IP).
@@ -88,6 +89,14 @@ pub struct AdminState {
     pub token_provider: SharedTokenProvider,
     /// The password provider for hashing and verification.
     pub password_provider: SharedPasswordProvider,
+    /// Per-subscriber SSE send timeout in milliseconds.
+    pub subscriber_send_timeout_ms: u64,
+    /// Transport for signalling user revocation to active live-update subscribers.
+    pub invalidation_transport: SharedInvalidationTransport,
+    /// Process-wide singleflight for deduplicating concurrent populate
+    /// cache-miss DB fetches across requests. Plumbed into populate contexts
+    /// that opt in via the service layer.
+    pub populate_singleflight: SharedPopulateSingleflight,
 }
 
 impl AdminState {

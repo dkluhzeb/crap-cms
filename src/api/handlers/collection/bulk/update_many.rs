@@ -92,8 +92,13 @@ impl ContentService {
                     return Err(Status::permission_denied("Read access denied"));
                 }
 
-                let filters =
-                    build_bulk_filters(&def_owned, &read_access, req_where.as_deref(), !draft)?;
+                let filters = build_bulk_filters(
+                    &collection,
+                    &def_owned,
+                    &read_access,
+                    req_where.as_deref(),
+                    !draft,
+                )?;
 
                 let tx = conn
                     .transaction_immediate()

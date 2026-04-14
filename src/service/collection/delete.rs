@@ -42,6 +42,7 @@ pub fn delete_document(
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .invalidation_transport(ctx.invalidation_transport.clone())
         .build();
 
     let result = delete_document_core(&inner_ctx, id, locale_config)?;

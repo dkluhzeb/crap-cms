@@ -5,7 +5,12 @@ use std::{path::PathBuf, sync::Arc};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, from_value, json, to_value};
 
-use crate::{config::CrapConfig, core::Registry, db::DbPool, hooks::HookRunner};
+use crate::{
+    config::CrapConfig,
+    core::{Registry, event::SharedInvalidationTransport},
+    db::DbPool,
+    hooks::HookRunner,
+};
 
 use super::protocol::{
     INTERNAL_ERROR, INVALID_PARAMS, InitializeParams, JsonRpcRequest, JsonRpcResponse,
@@ -20,6 +25,9 @@ pub struct McpServer {
     pub runner: HookRunner,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
+    /// Transport for publishing user-invalidation signals on hard-delete
+    /// of auth documents. `None` = no-op (MCP built in isolation / tests).
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
 /// Parse required JSON-RPC params, returning an error response on failure.
@@ -120,6 +128,7 @@ impl McpServer {
             &self.runner,
             &self.config_dir,
             &self.config,
+            self.invalidation_transport.clone(),
         );
 
         match result {

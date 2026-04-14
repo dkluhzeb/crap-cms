@@ -110,6 +110,8 @@ pub(super) async fn mcp_http_handler(
         runner: state.hook_runner.clone(),
         config: state.config.clone(),
         config_dir: state.config_dir.clone(),
+        // Thread the transport so MCP hard-delete tears down live streams.
+        invalidation_transport: Some(state.invalidation_transport.clone()),
     };
 
     let response = match task::spawn_blocking(move || server.handle_message(rpc_request)).await {

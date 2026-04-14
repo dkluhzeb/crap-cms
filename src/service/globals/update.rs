@@ -55,6 +55,13 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        )));
+    }
+
     let is_draft = input.draft && def.has_drafts();
     let gtable = global_table(ctx.slug);
     let ui_locale = input.ui_locale.as_deref();
