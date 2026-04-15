@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -188,7 +188,7 @@
 <li><strong>Rate limiting</strong> — login endpoints enforce per-email rate limiting (configurable max attempts and lockout window).</li>
 <li><strong>Timing-safe</strong> — login always performs a password hash comparison, even when the user doesn’t exist, to prevent timing-based email enumeration.</li>
 <li><strong>CSRF protection</strong> — admin UI forms and HTMX requests are protected with double-submit cookie tokens.</li>
-<li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>).</li>
+<li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>). The cookie’s <code>SameSite</code> attribute defaults to <code>Lax</code>; set <code>[auth] session_cookie_samesite = "strict"</code> in <code>crap.toml</code> for stricter CSRF protection at the cost of breaking cross-site navigation (clicks from emails, external links, etc. will require re-login).</li>
 <li><strong><code>_password_hash</code></strong> — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.</li>
 <li><strong><code>_locked</code></strong> — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See <a href="auth-collections.html#account-locking">Auth Collections</a>.</li>
 <li><strong>Token/Password providers</strong> — <code>TokenProvider</code> (JWT) and <code>PasswordProvider</code> (Argon2id) traits abstract token and password primitives. Rarely swapped.</li>

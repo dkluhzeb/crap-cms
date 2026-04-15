@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -183,24 +183,34 @@
 <ul>
 <li><strong>gRPC Server Streaming</strong> (<code>Subscribe</code> RPC) for API consumers</li>
 <li><strong>SSE</strong> (<code>GET /admin/events</code>) for the admin UI</li>
-<li><strong>Internal bus</strong>: <code>tokio::sync::broadcast</code> channel</li>
+<li><strong>Transport</strong>: pluggable. Default is in-process (<code>tokio::sync::broadcast</code>); behind <code>--features redis</code> you can switch to Redis pub/sub for cross-node fanout — see <a href="../deployment/multi-server.html">Multi-Server Deployment</a>.</li>
 </ul>
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <p>In <code>crap.toml</code>:</p>
 <pre><code class="language-toml">[live]
 enabled = true              # default: true
 default_mode = "metadata"   # default: "metadata" — global default for all collections
+transport = "memory"        # default: "memory" — in-process; set to "redis" for multi-node fanout
 channel_capacity = 1024     # default: 1024
 # max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000 # drop slow subscribers after this many ms (default: 1000)
 </code></pre>
+<p><code>transport = "redis"</code> uses the same Redis URL as <code>[cache] redis_url</code> (single source of truth). When the binary isn’t built with <code>--features redis</code>, selecting <code>"redis"</code> aborts startup with a clear error.</p>
 <p>Set <code>enabled = false</code> to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.</p>
 <p>Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive <code>503 Service Unavailable</code> and new gRPC Subscribe calls receive <code>UNAVAILABLE</code> status. Existing connections are not affected.</p>
+<h3 id="subscriber-lifecycle"><a class="header" href="#subscriber-lifecycle">Subscriber lifecycle</a></h3>
+<p>Live-update subscribers (gRPC Subscribe or admin SSE) can be terminated by the server in three cases — all surface to the client as a closed stream and require a reconnect:</p>
+<ul>
+<li><strong>Send timeout (SEC-D)</strong> — if forwarding an event to a specific subscriber takes longer than <code>subscriber_send_timeout_ms</code> (default 1000 ms), that subscriber is dropped. Healthy subscribers are unaffected.</li>
+<li><strong>Lag drop (SEC-D)</strong> — if the broadcast channel overflows for a particular subscriber (it fell behind by more than <code>channel_capacity</code> events), that subscriber is dropped on its next read. Previously such subscribers were kept alive with a warning, which masked silent event loss; they are now closed deterministically.</li>
+<li><strong>User session revocation (SEC-E)</strong> — when a user is locked or hard-deleted via the service layer, every active stream owned by that user is immediately torn down with <code>PermissionDenied</code>. Anonymous subscribers are unaffected.</li>
+</ul>
 <h2 id="event-delivery-modes"><a class="header" href="#event-delivery-modes">Event Delivery Modes</a></h2>
 <p>Each collection can control what data events carry:</p>
 <ul>
 <li>
-<p><strong><code>metadata</code></strong> (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data, no <code>after_read</code> hooks. Clients re-fetch via <code>FindByID</code> if needed. Fast, safe, zero hook overhead.</p>
+<p><strong><code>metadata</code></strong> (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data is included. Metadata mode skips the per-subscriber <code>after_read</code> hooks and field-level read-access stripping on the event payload, because there is no payload to transform. The <code>before_broadcast</code> hook <strong>still runs</strong> (once per event, pre-dispatch) and the collection’s <code>live</code> filter function still gates whether the event is broadcast at all. Clients re-fetch via <code>FindByID</code> if they need document data.</p>
 </li>
 <li>
 <p><strong><code>full</code></strong> — events carry complete document data, processed through <code>after_read</code> hooks and field-level access stripping — the same data a <code>Find</code> or <code>FindByID</code> call would return. Opt-in per collection.</p>

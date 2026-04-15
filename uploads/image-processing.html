@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -265,6 +265,16 @@ crap-cms -C ./my-project images purge --older-than 7d  # clean up old entries
 <li><strong>Format variants</strong> — each sized image is also saved as WebP and/or AVIF (if configured)</li>
 </ol>
 <p>Non-image files (PDFs, etc.) skip steps 2-4.</p>
+<h2 id="decompression-bomb-protection"><a class="header" href="#decompression-bomb-protection">Decompression Bomb Protection</a></h2>
+<p>Before any resizing or format conversion, image dimensions are checked against a hard
+limit of <strong>100 megapixels</strong> total (<code>width × height</code>). Images exceeding this limit are
+rejected with an error like <code>Image too large: 12000x9000 exceeds pixel limit</code>.</p>
+<p>This protects the server from “decompression bomb” inputs — small, highly compressed
+files that decode into enormous bitmaps (e.g. a 50 KB PNG decoding to a 50,000 × 50,000
+canvas), which would otherwise consume gigabytes of RAM during resizing.</p>
+<p>The limit is fixed at 100 megapixels and is not configurable. For reference: a 12,000 ×
+8,000 pixel image (96 MP) is accepted; a 12,000 × 9,000 image (108 MP) is rejected.
+File-size and MIME-type checks are independent and run alongside this check.</p>
 <h2 id="admin-thumbnail"><a class="header" href="#admin-thumbnail">Admin Thumbnail</a></h2>
 <p>Set <code>admin_thumbnail</code> to the name of an image size to display it in admin list views:</p>
 <pre><code class="language-lua">upload = {

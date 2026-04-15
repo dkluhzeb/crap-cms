@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -198,6 +198,9 @@
 <p>Click the palette icon in the admin header to open the theme picker. The selected theme is persisted in <code>localStorage</code> and restored on page load (no flash of unstyled content).</p>
 <h2 id="how-themes-work"><a class="header" href="#how-themes-work">How Themes Work</a></h2>
 <p>The default Light theme is defined in <code>:root</code> CSS custom properties in <code>styles.css</code>. Additional themes live in <code>themes.css</code> and override these variables using <code>html[data-theme="&lt;name&gt;"]</code> selectors.</p>
+<blockquote>
+<p><strong>Theme values are static CSS.</strong> Every theme’s custom-property values are hardcoded in CSS files — either the built-in <code>themes.css</code> or an operator-supplied stylesheet under <code>&lt;config_dir&gt;/static/</code>. Crap CMS does <strong>not</strong> read theme values from the database, <code>crap.toml</code>, or any other operator input and inject them into the stylesheet. There is no template/string interpolation in the theme pipeline, so there is no CSS-injection surface from operator configuration.</p>
+</blockquote>
 <pre><code class="language-css">/* Default light theme (styles.css) */
 :root {
   color-scheme: light;

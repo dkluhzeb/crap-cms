@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -252,6 +252,15 @@ end
 </tbody>
 </table>
 </div>
+<h3 id="session-refresh-endpoint"><a class="header" href="#session-refresh-endpoint">Session Refresh Endpoint</a></h3>
+<p><code>POST /admin/api/session-refresh</code> reissues the admin session cookie when the user is about to be logged out by token expiry.</p>
+<ul>
+<li><strong>Triggered by the client.</strong> The <code>&lt;crap-session-guard&gt;</code> web component (<code>static/components/session-guard.js</code>) shows a pre-expiry warning toast and POSTs here when the operator clicks “Stay signed in”. It is <strong>not</strong> polled on a fixed interval — only fired in response to the warning.</li>
+<li><strong>Authentication required.</strong> The handler reads <code>Claims</code> from request extensions (populated by the admin auth middleware), so an unauthenticated request returns <code>401 Unauthorized</code> before any work is done. CSRF is enforced via the <code>X-CSRF-Token</code> header / <code>crap_csrf</code> cookie like the rest of the admin POST routes.</li>
+<li><strong>Re-validates the user before reissuing.</strong> It checks that the user still exists, is not <code>_locked</code>, and that the token’s <code>session_version</code> matches the current value in the auth collection (so a password change or session-version bump invalidates older tokens). Any failure returns <code>401</code>; a deleted user can’t silently keep refreshing.</li>
+<li><strong>Behavior on success.</strong> Issues a fresh JWT, sets <code>crap_session</code> (and the matching expiry cookie) with the same <code>SameSite</code>/<code>Secure</code> flags as login, and returns <code>204 No Content</code>. The body is empty — the client treats the new cookie as the success signal.</li>
+<li><strong>No explicit rate limit.</strong> The endpoint is not separately rate-limited, but it requires a valid existing session (so it can’t be abused unauthenticated) and the cost is one DB read plus a JWT sign.</li>
+</ul>
 <h2 id="versioning--drafts-workflow"><a class="header" href="#versioning--drafts-workflow">Versioning &amp; Drafts Workflow</a></h2>
 <p>For collections with <code>versions = { drafts = true }</code>, the admin UI provides a draft/publish workflow:</p>
 <p><strong>List view:</strong></p>

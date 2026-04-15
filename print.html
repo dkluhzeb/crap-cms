@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9b101746.js";
+            window.path_to_searchindex_js = "searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-70c0d16d.js"></script>
@@ -238,8 +238,58 @@
 </div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
-<h2 id="static-binary"><a class="header" href="#static-binary">Static Binary</a></h2>
-<p>Pre-built static binaries are attached to each <a href="https://github.com/dkluhzeb/crap-cms/releases">GitHub Release</a>. No runtime dependencies required.</p>
+<h2 id="quick-install-linux"><a class="header" href="#quick-install-linux">Quick Install (Linux)</a></h2>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh | bash
+</code></pre>
+<p>The installer auto-detects your architecture (x86_64 or aarch64), downloads the matching release, verifies its SHA256, and lays out a version store under <code>~/.local/share/crap-cms/</code>:</p>
+<pre><code>~/.local/share/crap-cms/
+├── versions/
+│   └── v0.1.0-alpha.5/crap-cms
+└── current -&gt; versions/v0.1.0-alpha.5/crap-cms
+
+~/.local/bin/crap-cms -&gt; ~/.local/share/crap-cms/current
+</code></pre>
+<p>After install, make sure <code>~/.local/bin</code> is on your <code>PATH</code> — the installer prints the exact <code>export PATH=…</code> line to add to <code>~/.bashrc</code> / <code>~/.zshrc</code> if it isn’t.</p>
+<h3 id="verify-before-running"><a class="header" href="#verify-before-running">Verify before running</a></h3>
+<p>If you don’t want to pipe straight into <code>bash</code>:</p>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh -o install.sh
+less install.sh                  # audit the script
+sha256sum install.sh             # compare against scripts/install.sh in the repo
+bash install.sh                  # run once satisfied
+</code></pre>
+<p>Pin to a specific tag for a reproducible install:</p>
+<pre><code class="language-bash">curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/v0.1.0-alpha.5/scripts/install.sh | bash
+</code></pre>
+<p>Override the locations via environment variables:</p>
+<pre><code class="language-bash">XDG_DATA_HOME=/opt/crap-cms BIN_DIR=/usr/local/bin \
+  curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh | bash
+</code></pre>
+<h2 id="managing-versions"><a class="header" href="#managing-versions">Managing Versions</a></h2>
+<p>Once the binary is installed via the script, <code>crap-cms update</code> acts as a built-in version manager — similar to <code>rustup</code> or <code>nvm</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crap-cms update check</code></td><td>Compare the running version to the latest GitHub release. Exit 0 if up-to-date, 1 otherwise. Caches the result for 24h.</td></tr>
+<tr><td><code>crap-cms update list</code></td><td>List all remote release tags. Installed versions are marked <code>(installed)</code>; the active one is marked <code>*</code>.</td></tr>
+<tr><td><code>crap-cms update install &lt;version&gt;</code></td><td>Download + verify + stage a specific version in the store (does not switch).</td></tr>
+<tr><td><code>crap-cms update use &lt;version&gt;</code></td><td>Switch the <code>current</code> symlink to an installed version. Atomic.</td></tr>
+<tr><td><code>crap-cms update uninstall &lt;version&gt;</code></td><td>Remove an installed version. Refuses the active one.</td></tr>
+<tr><td><code>crap-cms update where</code></td><td>Print the resolved path of the currently active binary.</td></tr>
+<tr><td><code>crap-cms update</code></td><td>Install latest + switch to it. Prompts for confirmation (skip with <code>-y</code>).</td></tr>
+</tbody>
+</table>
+</div>
+<p>On <code>crap-cms serve</code> startup, a one-line notice prints when a newer release is in the cache. Silence it via <code>crap.toml</code>:</p>
+<pre><code class="language-toml">[update]
+check_on_startup = false
+</code></pre>
+<p><strong>Distro-managed installs refuse self-update.</strong> If the running binary lives under <code>/usr/</code>, <code>/opt/</code>, or <code>/nix/</code>, <code>crap-cms update</code> refuses with a message telling you to update via your package manager. Use <code>--force</code> to bypass.</p>
+<p><strong>Windows.</strong> <code>crap-cms update install</code> / <code>use</code> / the bare <code>crap-cms update</code> are not supported on Windows yet — the version-store layout uses symlinks, which require Developer Mode or admin privileges on Windows. The read-only subcommands (<code>check</code>, <code>list</code>, <code>where</code>) still work. Windows users should download <code>crap-cms-windows-x86_64.exe</code> manually from the <a href="https://github.com/dkluhzeb/crap-cms/releases/latest">releases page</a> and replace their binary to upgrade.</p>
+<h2 id="direct-download"><a class="header" href="#direct-download">Direct Download</a></h2>
+<p>Prefer to install manually? Grab a binary straight from <a href="https://github.com/dkluhzeb/crap-cms/releases">GitHub Releases</a>. No runtime dependencies:</p>
 <pre><code class="language-bash">curl -L -o crap-cms \
   https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
 chmod +x crap-cms
@@ -258,6 +308,7 @@ sudo mv crap-cms /usr/local/bin/
 </tbody>
 </table>
 </div>
+<p>Binaries installed to <code>/usr/local/bin</code> this way cannot be self-updated via <code>crap-cms update</code> (same rule as distro packages). Use the quick installer if you want version management.</p>
 <h2 id="docker"><a class="header" href="#docker">Docker</a></h2>
 <pre><code class="language-bash">docker run -p 3000:3000 -p 50051:50051 \
   ghcr.io/dkluhzeb/crap-cms:latest serve -C /example
@@ -298,11 +349,15 @@ cargo build --release
 ├── init.lua
 ├── .luarc.json
 ├── .gitignore
+├── stylua.toml
 ├── collections/
 │   ├── users.lua
 │   └── media.lua
 ├── globals/
 ├── hooks/
+├── access/
+├── jobs/
+├── plugins/
 ├── migrations/
 ├── templates/
 ├── static/
@@ -370,6 +425,7 @@ cargo build --release
 ├── init.lua               # Runs at startup (register global hooks, etc.)
 ├── .luarc.json            # LuaLS config for IDE support
 ├── .gitignore             # Ignores data/, uploads/, types/ by default
+├── stylua.toml            # StyLua formatter config for Lua files
 ├── collections/           # One .lua file per collection
 │   ├── posts.lua
 │   ├── users.lua
@@ -379,11 +435,14 @@ cargo build --release
 ├── hooks/                 # Lua modules referenced by hook strings
 │   ├── posts.lua
 │   └── access.lua
+├── access/                # Reusable access-control Lua modules
+├── jobs/                  # Job handler Lua modules (see `jobs` feature)
+├── plugins/               # Plugin Lua modules (see `plugins` feature)
 ├── migrations/            # Custom SQL migrations (see `migrate` command)
 ├── templates/             # Handlebars overrides for admin UI
 │   └── fields/
 │       └── custom.hbs
-├── translations/          # Admin UI translation overrides (JSON per locale)
+├── translations/          # (optional, user-created) Admin UI translation overrides (JSON per locale)
 │   └── de.json
 ├── static/                # Static file overrides (CSS, JS, fonts)
 ├── data/                  # Runtime data (auto-created)
@@ -396,6 +455,7 @@ cargo build --release
     ├── crap.lua           # API surface types (crap.* functions)
     └── generated.lua      # Per-collection types (data, doc, hook, filters)
 </code></pre>
+<p>The <code>access/</code>, <code>jobs/</code>, <code>plugins/</code>, <code>migrations/</code>, <code>templates/</code>, and <code>static/</code> directories are created empty by <code>crap-cms init</code> — populate them as needed. The <code>translations/</code> directory is not scaffolded; create it yourself when you want to override admin UI strings (see <a href="#localization">Localization</a>).</p>
 <h2 id="file-loading-order"><a class="header" href="#file-loading-order">File Loading Order</a></h2>
 <ol>
 <li><code>crap.toml</code> is loaded first (or defaults are used if absent)</li>
@@ -612,9 +672,11 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
+transport = "memory"     # Event transport: "memory" (default, in-process) or "redis" (cross-node fanout)
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000 # Drop subscribers whose outbound send exceeds this (ms)
 
 [locale]
 default_locale = "en"    # Default locale code
@@ -749,6 +811,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><td><code>reset_token_expiry</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>Password reset token expiry. The “Forgot password” email link expires after this duration. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>max_forgot_password_attempts</code></td><td>integer</td><td><code>3</code></td><td>Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email.</td></tr>
 <tr><td><code>forgot_password_window_seconds</code></td><td>integer/string</td><td><code>900</code> (<code>"15m"</code>)</td><td>Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>session_cookie_samesite</code></td><td>string</td><td><code>"lax"</code></td><td><code>SameSite</code> attribute for the <code>crap_session</code> admin cookie. Accepts <code>"lax"</code> (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), <code>"strict"</code> (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or <code>"none"</code> (reserved; currently falls back to <code>"lax"</code> at runtime).</td></tr>
 </tbody>
 </table>
 </div>
@@ -895,9 +958,11 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tbody>
 <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable live event streaming (SSE + gRPC Subscribe).</td></tr>
 <tr><td><code>default_mode</code></td><td>string</td><td><code>"metadata"</code></td><td>Default event delivery mode. <code>"metadata"</code> sends only event type, collection, and document ID. <code>"full"</code> sends the complete document payload.</td></tr>
+<tr><td><code>transport</code></td><td>string</td><td><code>"memory"</code></td><td>Event transport. <code>"memory"</code> keeps events in-process (does not cross nodes). <code>"redis"</code> fans events out across all servers subscribed to the same Redis instance — requires the <code>redis</code> feature and reuses <code>[cache] redis_url</code>.</td></tr>
 <tr><td><code>channel_capacity</code></td><td>integer</td><td><code>1024</code></td><td>Internal broadcast channel buffer size. Increase if subscribers lag.</td></tr>
 <tr><td><code>max_sse_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent SSE connections. When reached, new connections receive <code>503 Service Unavailable</code>. <code>0</code> = unlimited.</td></tr>
 <tr><td><code>max_subscribe_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive <code>UNAVAILABLE</code> status. <code>0</code> = unlimited.</td></tr>
+<tr><td><code>subscriber_send_timeout_ms</code></td><td>integer</td><td><code>1000</code></td><td>Per-subscriber outbound send timeout (ms). If forwarding an event to a specific live-update client (SSE or gRPC) takes longer than this, that subscriber is dropped to protect other subscribers from head-of-line blocking.</td></tr>
 </tbody>
 </table>
 </div>
@@ -1706,7 +1771,7 @@ crap-cms export -c posts -o posts.json
 crap-cms import backup.json -c posts
 </code></pre>
 <h3 id="typegen--generate-typed-definitions"><a class="header" href="#typegen--generate-typed-definitions"><code>typegen</code> — Generate typed definitions</a></h3>
-<pre><code class="language-bash">crap-cms typegen [-l &lt;LANG&gt;] [-o &lt;DIR&gt;]
+<pre><code class="language-bash">crap-cms typegen [-l &lt;LANG&gt;] [-o &lt;DIR&gt;] [--proto &lt;MODULE_PATH&gt;]
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -1716,12 +1781,16 @@ crap-cms import backup.json -c posts
 <tbody>
 <tr><td><code>--lang</code></td><td><code>-l</code></td><td><code>lua</code></td><td>Output language: <code>lua</code>, <code>ts</code>, <code>go</code>, <code>py</code>, <code>rs</code>, <code>all</code></td></tr>
 <tr><td><code>--output</code></td><td><code>-o</code></td><td><code>&lt;config&gt;/types/</code></td><td>Output directory for generated files</td></tr>
+<tr><td><code>--proto</code></td><td>—</td><td>—</td><td>(Rust only) Generate <code>From&lt;proto::Document&gt;</code> conversions alongside <code>generated.rs</code>. The value is the Rust module path to the prost-generated proto types (e.g. <code>"crate::proto"</code>). Writes <code>generated_proto.rs</code> next to <code>generated.rs</code>.</td></tr>
 </tbody>
 </table>
 </div>
 <pre><code class="language-bash">crap-cms typegen
 crap-cms typegen -l all
 crap-cms typegen -l ts -o ./client/src/types
+
+# Rust + proto conversions
+crap-cms typegen -l rs --proto "crate::proto"
 </code></pre>
 <h3 id="proto--export-proto-file"><a class="header" href="#proto--export-proto-file"><code>proto</code> — Export proto file</a></h3>
 <pre><code class="language-bash">crap-cms proto [-o &lt;PATH&gt;]
@@ -1962,6 +2031,61 @@ crap-cms images stats
 crap-cms images retry --id abc123
 crap-cms images retry --all -y
 crap-cms images purge --older-than 30d
+</code></pre>
+<h3 id="trash--manage-soft-deleted-documents"><a class="header" href="#trash--manage-soft-deleted-documents"><code>trash</code> — Manage soft-deleted documents</a></h3>
+<p>Inspect, restore, and purge documents in the trash (only for collections with <code>soft_delete = true</code>). See <a href="#soft-deletes">Soft Deletes</a> for details on the soft-delete model.</p>
+<h4 id="trash-list"><a class="header" href="#trash-list"><code>trash list</code></a></h4>
+<pre><code class="language-bash">crap-cms trash list [-c &lt;COLLECTION&gt;]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--collection</code></td><td><code>-c</code></td><td>Filter by collection slug (default: all collections with soft delete)</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="trash-restore"><a class="header" href="#trash-restore"><code>trash restore</code></a></h4>
+<pre><code class="language-bash">crap-cms trash restore &lt;COLLECTION&gt; &lt;ID&gt;
+</code></pre>
+<p>Restore a single trashed document back to the active list. Both <code>COLLECTION</code> and <code>ID</code> are positional arguments.</p>
+<h4 id="trash-purge"><a class="header" href="#trash-purge"><code>trash purge</code></a></h4>
+<pre><code class="language-bash">crap-cms trash purge [-c &lt;COLLECTION&gt;] [--older-than &lt;DURATION&gt;] [--dry-run]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--collection</code></td><td><code>-c</code></td><td>—</td><td>Filter by collection slug (default: all soft-delete collections)</td></tr>
+<tr><td><code>--older-than</code></td><td>—</td><td><code>all</code></td><td>Purge documents deleted more than this ago (e.g. <code>30d</code>, <code>24h</code>, <code>30m</code>), or <code>all</code> for every trashed document</td></tr>
+<tr><td><code>--dry-run</code></td><td>—</td><td>—</td><td>Print what would be deleted without actually deleting</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="trash-empty"><a class="header" href="#trash-empty"><code>trash empty</code></a></h4>
+<pre><code class="language-bash">crap-cms trash empty &lt;COLLECTION&gt; [-y]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--confirm</code></td><td><code>-y</code></td><td>Required — confirms the destructive operation</td></tr>
+</tbody>
+</table>
+</div>
+<p>Permanently delete every trashed document in the given collection.</p>
+<pre><code class="language-bash">crap-cms trash list
+crap-cms trash list -c posts
+crap-cms trash restore posts abc123
+crap-cms trash purge --older-than 7d
+crap-cms trash purge -c posts --dry-run
+crap-cms trash empty posts -y
 </code></pre>
 <h3 id="mcp--start-the-mcp-server-stdio"><a class="header" href="#mcp--start-the-mcp-server-stdio"><code>mcp</code> — Start the MCP server (stdio)</a></h3>
 <p>Start an MCP (Model Context Protocol) server over stdio for AI assistant integration.</p>
@@ -2620,6 +2744,30 @@ DeleteRequest { collection: "posts", id: "abc", force_hard_delete: true }
 rpc Undelete (UndeleteRequest) returns (UndeleteResponse);
 </code></pre>
 <p>The <code>DeleteResponse</code> includes a <code>soft_deleted</code> boolean indicating whether the deletion was soft or hard.</p>
+<h4 id="querying-trashed-documents"><a class="header" href="#querying-trashed-documents">Querying trashed documents</a></h4>
+<p>Use <code>trash = true</code> on <code>Find</code> and <code>FindByID</code> to access soft-deleted documents:</p>
+<pre><code class="language-bash"># List all trashed posts (sorted by deletion date, most recent first)
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "trash": true
+}' localhost:50051 crap.ContentAPI/Find
+
+# Find a specific trashed document by ID
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "id": "abc123",
+    "trash": true
+}' localhost:50051 crap.ContentAPI/FindByID
+</code></pre>
+<p>When <code>trash = true</code>:</p>
+<ul>
+<li>Only documents with a <code>_deleted_at</code> timestamp are returned</li>
+<li>Default sort is <code>-_deleted_at</code> (most recently deleted first)</li>
+<li><code>access.trash</code> is evaluated (falls back to <code>access.update</code>, same as
+delete/undelete operations). This means users who can only read but not
+trash/update cannot browse the trash.</li>
+<li>Ignored if the collection does not have <code>soft_delete = true</code></li>
+</ul>
 <h3 id="lua"><a class="header" href="#lua">Lua</a></h3>
 <pre><code class="language-lua">-- Soft delete (moves to trash)
 crap.collections.delete("posts", id)
@@ -2634,25 +2782,25 @@ crap.collections.undelete("posts", id)
 <p>MCP delete tools automatically use soft delete when the collection has it enabled.</p>
 <h3 id="cli"><a class="header" href="#cli">CLI</a></h3>
 <pre><code class="language-bash"># List all trashed documents
-crap trash list
+crap-cms trash list
 
 # List trashed documents in a specific collection
-crap trash list --collection posts
+crap-cms trash list --collection posts
 
 # Restore a document from trash
-crap trash restore posts abc123
+crap-cms trash restore posts abc123
 
 # Purge all expired documents (respects soft_delete_retention)
-crap trash purge
+crap-cms trash purge
 
 # Purge documents older than 7 days
-crap trash purge --older-than 7d
+crap-cms trash purge --older-than 7d
 
 # Dry run — show what would be purged without deleting
-crap trash purge --dry-run
+crap-cms trash purge --dry-run
 
 # Empty all trash in a collection (requires --confirm)
-crap trash empty posts --confirm
+crap-cms trash empty posts --confirm
 </code></pre>
 <h2 id="database-schema"><a class="header" href="#database-schema">Database Schema</a></h2>
 <p>When <code>soft_delete = true</code>, a <code>_deleted_at TEXT</code> column is added to the collection table. The value is <code>NULL</code> for active documents and an ISO 8601 timestamp for soft-deleted documents.</p>
@@ -2707,6 +2855,7 @@ crap trash empty posts --confirm
 <tr><td><code>localized</code></td><td>boolean</td><td><code>false</code></td><td>Enable per-locale values. Requires <a href="#localization">localization</a> to be configured.</td></tr>
 <tr><td><code>validate</code></td><td>string</td><td><code>nil</code></td><td>Lua function ref for custom validation (see below).</td></tr>
 <tr><td><code>default_value</code></td><td>any</td><td><code>nil</code></td><td>Default value applied on create if no value provided.</td></tr>
+<tr><td><code>hidden</code></td><td>boolean</td><td><code>false</code></td><td>Strip from all read responses (gRPC, Lua, MCP, admin JSON, REST) and skip in the admin form. Writes are not stripped — internal hooks/Lua can still write the column. For admin-form-only hiding (value still returned by API), use <code>admin.hidden</code> instead.</td></tr>
 <tr><td><code>admin</code></td><td>table</td><td><code>{}</code></td><td>Admin UI display options.</td></tr>
 <tr><td><code>hooks</code></td><td>table</td><td><code>{}</code></td><td>Per-field lifecycle hooks.</td></tr>
 <tr><td><code>access</code></td><td>table</td><td><code>{}</code></td><td>Per-field access control.</td></tr>
@@ -2750,7 +2899,7 @@ crap trash empty posts --confirm
 <tr><td><code>label</code></td><td>string | table</td><td><code>nil</code></td><td>UI label (defaults to title-cased field name). Supports <a href="#admin-label-localization">localized strings</a>.</td></tr>
 <tr><td><code>placeholder</code></td><td>string | table</td><td><code>nil</code></td><td>Input placeholder text. Supports <a href="#admin-label-localization">localized strings</a>.</td></tr>
 <tr><td><code>description</code></td><td>string | table</td><td><code>nil</code></td><td>Help text displayed below the input. Supports <a href="#admin-label-localization">localized strings</a>.</td></tr>
-<tr><td><code>hidden</code></td><td>boolean</td><td><code>false</code></td><td>Hide from admin UI forms</td></tr>
+<tr><td><code>hidden</code></td><td>boolean</td><td><code>false</code></td><td>Hide from the admin edit form. The field’s value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it. For full API stripping, use the top-level <code>hidden</code> field property instead.</td></tr>
 <tr><td><code>readonly</code></td><td>boolean</td><td><code>false</code></td><td>Display but don’t allow editing</td></tr>
 <tr><td><code>width</code></td><td>string</td><td><code>nil</code></td><td>Field width: <code>"full"</code> (default), <code>"half"</code>, or <code>"third"</code></td></tr>
 <tr><td><code>position</code></td><td>string</td><td><code>"main"</code></td><td>Form layout position: <code>"main"</code> or <code>"sidebar"</code></td></tr>
@@ -4169,7 +4318,9 @@ return {
 <pre><code class="language-lua">-- drawer is the default for upload fields — no need to set it explicitly
 crap.fields.upload({
     name = "featured_image",
-    relation_to = "media",
+    relationship = {
+        collection = "media",
+    },
 })
 </code></pre>
 <ul>
@@ -4625,7 +4776,7 @@ grpcurl -plaintext -d '{
 <pre><code class="language-json">{ "tags": ["tag_1", "tag_2", "tag_3"] }
 </code></pre>
 <p>Order is preserved via the <code>_order</code> column in the junction table.</p>
-<p>On write, all existing junction table rows for the parent are deleted and replaced. This is a full replacement.</p>
+<p>When a has-many field <strong>is included</strong> in the update payload, all existing junction rows for the parent are deleted and replaced with the new list — a full replacement of that field’s targets.</p>
 <h2 id="partial-updates"><a class="header" href="#partial-updates">Partial Updates</a></h2>
 <p>For has-many fields, if the field is <strong>absent</strong> from the update data, the junction table is <strong>not modified</strong>. This supports partial updates — only explicitly included fields are changed.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -4660,7 +4811,8 @@ grpcurl -plaintext -d '{
 <li>Trashed documents still “own” their references in the database</li>
 </ul>
 <p>Only <strong>hard deletion</strong> (permanent) decrements ref counts on the targets.</p>
-<p>Soft-deleted documents that are referenced by other documents can still be trashed — the ref count check only blocks deletion of the <em>target</em> document.</p>
+<p>The ref count check only blocks <strong>deletion of a target</strong>: a document can always be soft-deleted regardless of how many others reference it.</p>
+<p>When a referenced document is soft-deleted, it is <strong>omitted</strong> from relationship population on read — it does not appear as an ID string or as a populated object. Has-one fields resolve to <code>null</code>; has-many fields have the soft-deleted entry dropped from the array. Restore the document to make it appear again.</p>
 <h2 id="admin-ui-3"><a class="header" href="#admin-ui-3">Admin UI</a></h2>
 <p>The delete confirmation page shows a warning when a document has <code>_ref_count &gt; 0</code>:</p>
 <blockquote>
@@ -4830,6 +4982,9 @@ max_age_secs = 60        # Optional: periodic full cache clear (default: 0 = off
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="query--filters"><a class="header" href="#query--filters">Query &amp; Filters</a></h1>
 <p>Unified reference for querying documents across both the Lua API and gRPC API.</p>
+<blockquote>
+<p><strong>Note on soft-deleted rows</strong>: collections with <code>soft_delete = true</code> automatically exclude rows where <code>_deleted_at IS NOT NULL</code> from <code>Find</code>, <code>Count</code>, and populate. Filters on system columns (names starting with <code>_</code>) are rejected. Use the request-level <code>trash = true</code> / <code>draft = true</code> flags to reach internally-scoped data.</p>
+</blockquote>
 <h2 id="filter-operators"><a class="header" href="#filter-operators">Filter Operators</a></h2>
 <div class="table-wrapper">
 <table>
@@ -5076,11 +5231,7 @@ grpcurl -plaintext -d '{"collection": "articles", "draft": true}' \
 grpcurl -plaintext -d '{"collection": "articles", "id": "abc123", "draft": true}' \
     localhost:50051 crap.ContentAPI/FindByID
 </code></pre>
-<p>You can also filter directly on <code>_status</code>:</p>
-<pre><code class="language-lua">crap.collections.find("articles", {
-    where = { _status = "draft" },
-})
-</code></pre>
+<p>Filters on system columns (field paths starting with <code>_</code>, e.g. <code>_status</code>, <code>_deleted_at</code>) are rejected. Use the <code>draft = true</code> request flag to include drafts, and <code>trash = true</code> to reach soft-deleted rows — these are the supported entry points.</p>
 <p>See <a href="#versions--drafts">Versions &amp; Drafts</a> for the full workflow.</p>
 <h2 id="nested-field-filters-dot-notation"><a class="header" href="#nested-field-filters-dot-notation">Nested Field Filters (Dot Notation)</a></h2>
 <p>You can filter on sub-fields of group, array, blocks, and has-many relationship fields using dot notation.</p>
@@ -5202,8 +5353,8 @@ crap.collections.find("posts", {
 <li><code>id</code></li>
 <li><code>created_at</code> (if timestamps enabled)</li>
 <li><code>updated_at</code> (if timestamps enabled)</li>
-<li><code>_status</code> (if <code>versions.drafts</code> enabled)</li>
 </ul>
+<p>System columns (names starting with <code>_</code>, such as <code>_status</code>, <code>_deleted_at</code>, <code>_ref_count</code>, <code>_locked</code>, <code>_password_hash</code>) are engine-internal and cannot be filtered on directly. Reach their data via typed request flags (<code>draft = true</code>, <code>trash = true</code>) instead.</p>
 <p>Additionally, you can filter on sub-fields using dot notation:</p>
 <ul>
 <li><strong>Group sub-fields:</strong> <code>group_name.sub_field</code> (syntactic sugar for <code>group_name__sub_field</code>)</li>
@@ -5367,6 +5518,54 @@ return M
 8. before_broadcast hooks (background, no CRUD)
 9. EventBus publish (if not suppressed)
 </code></pre>
+<h2 id="before_broadcast"><a class="header" href="#before_broadcast"><code>before_broadcast</code></a></h2>
+<p>Fires after a <code>create</code>, <code>update</code>, or <code>delete</code> has been committed and the live setting
+check has passed, but <strong>before</strong> the event is dispatched on the EventBus to live
+subscribers (SSE, gRPC <code>Subscribe</code>). Runs in a background <code>spawn_blocking</code> task — never
+blocks the response to the originating request.</p>
+<p><strong>No CRUD access</strong> (the transaction is already closed).</p>
+<p>The hook receives a context table with <code>collection</code>, <code>operation</code> (<code>"create"</code>,
+<code>"update"</code>, or <code>"delete"</code>), and <code>data</code> (the document payload that would be broadcast).</p>
+<p><strong>Return values:</strong></p>
+<ul>
+<li>A table — broadcast continues with the (possibly mutated) <code>data</code>.</li>
+<li><code>nil</code> or <code>false</code> — the broadcast is <strong>suppressed</strong> for this subscriber wave; no
+event is dispatched.</li>
+</ul>
+<pre><code class="language-lua">crap.hooks.register("before_broadcast", function(ctx)
+    -- Don't broadcast drafts
+    if ctx.data.status == "draft" then
+        return nil
+    end
+
+    -- Strip a sensitive field from the broadcast payload only
+    ctx.data.internal_notes = nil
+    return ctx
+end)
+</code></pre>
+<p>Collection-level <code>before_broadcast</code> hook refs run before global registered hooks. A
+suppression at any stage stops the rest of the chain.</p>
+<h2 id="before_render"><a class="header" href="#before_render"><code>before_render</code></a></h2>
+<p>Fires before an admin page template is rendered. The hook receives the full template
+context (the JSON object passed to the template engine) as a Lua table, and may return
+a modified table to inject globals, sidebar items, or additional template variables.</p>
+<p><strong>No CRUD access</strong>, <strong>global hooks only</strong> (no collection-level refs). Errors, non-table
+returns, and conversion failures log a warning and fall back to the unmodified context.</p>
+<p><strong>Return values:</strong></p>
+<ul>
+<li>A table — the new template context.</li>
+<li><code>nil</code> — the original context is preserved (no-op).</li>
+<li>Anything else — logged as a warning, ignored.</li>
+</ul>
+<pre><code class="language-lua">crap.hooks.register("before_render", function(ctx)
+    -- Inject a banner shown in the admin layout
+    ctx.banner_message = "Maintenance window 02:00 UTC tonight"
+    return ctx
+end)
+</code></pre>
+<p>Fires from every admin page handler (dashboard, list, edit, delete confirm, version
+list/restore, login, forgot/reset password, etc.). Inspect <code>ctx</code> to branch on the page
+being rendered.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="execution-order"><a class="header" href="#execution-order">Execution Order</a></h1>
 <p>At each lifecycle stage, hooks run in this order:</p>
@@ -5907,7 +6106,7 @@ return M
 <tr><td><code>handler</code></td><td>string</td><td>(required)</td><td>Lua function ref (e.g., <code>"jobs.cleanup.run"</code>)</td></tr>
 <tr><td><code>schedule</code></td><td>string</td><td>nil</td><td>Cron expression for automatic scheduling</td></tr>
 <tr><td><code>queue</code></td><td>string</td><td><code>"default"</code></td><td>Queue name for grouping</td></tr>
-<tr><td><code>retries</code></td><td>integer</td><td>0</td><td>Max retry attempts on failure</td></tr>
+<tr><td><code>retries</code></td><td>integer</td><td>0</td><td>Max retry attempts on failure (see <a href="#retry-backoff">Retry Backoff</a> below)</td></tr>
 <tr><td><code>timeout</code></td><td>integer</td><td>60</td><td>Seconds before job is marked failed</td></tr>
 <tr><td><code>concurrency</code></td><td>integer</td><td>1</td><td>Max concurrent runs of this job</td></tr>
 <tr><td><code>skip_if_running</code></td><td>boolean</td><td>true</td><td>Skip cron trigger if previous run still active</td></tr>
@@ -5944,6 +6143,27 @@ job result (JSON). If it errors, the job is marked failed (and retried if attemp
 </ul>
 <h2 id="error-handling-1"><a class="header" href="#error-handling-1">Error Handling</a></h2>
 <p>Job execution is fully isolated. If a job handler panics, the panic is caught and logged — it does not crash the server or affect other jobs. The job is marked as failed and retried if attempts remain.</p>
+<h3 id="retry-backoff"><a class="header" href="#retry-backoff">Retry Backoff</a></h3>
+<p>Failed jobs with remaining <code>retries</code> are re-queued with an <strong>exponential backoff</strong> before the next attempt:</p>
+<pre><code>delay = min(2^(attempt - 1) * 5, 300)  // seconds, capped at 5 minutes
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attempt (1-based)</th><th>Delay before retry</th></tr>
+</thead>
+<tbody>
+<tr><td>1 (first failure)</td><td>5 s</td></tr>
+<tr><td>2</td><td>10 s</td></tr>
+<tr><td>3</td><td>20 s</td></tr>
+<tr><td>4</td><td>40 s</td></tr>
+<tr><td>5</td><td>80 s</td></tr>
+<tr><td>6</td><td>160 s</td></tr>
+<tr><td>7 or later</td><td>300 s (cap)</td></tr>
+</tbody>
+</table>
+</div>
+<p>This is fixed and not currently configurable per-job. Plan your <code>retries</code> budget knowing that attempt 6+ is at least ~5 minutes out, not a handful of seconds.</p>
 <h2 id="crash-recovery"><a class="header" href="#crash-recovery">Crash Recovery</a></h2>
 <p>On startup, the scheduler marks any previously-running jobs as stale (the server was
 restarted while they were executing). Jobs with remaining retry attempts are re-queued.</p>
@@ -5986,6 +6206,30 @@ registered collection or global.</li>
 </ol>
 <p>This works because <code>crap.collections.define()</code> and <code>crap.globals.define()</code> overwrite —
 calling either twice for the same slug replaces the first definition with the second.</p>
+<h2 id="load-order"><a class="header" href="#load-order">Load Order</a></h2>
+<p>Files are loaded in this fixed order at server start:</p>
+<ol>
+<li><code>collections/*.lua</code> — <strong>alphabetical by filename</strong></li>
+<li><code>globals/*.lua</code> — alphabetical</li>
+<li><code>jobs/*.lua</code> — alphabetical</li>
+<li><code>init.lua</code> — last</li>
+</ol>
+<p>Plugins live outside these three directories and are picked up only when <code>init.lua</code>
+calls <code>require("plugin_name")</code>. <strong>The order of those <code>require()</code> calls controls
+plugin execution order</strong> — there is no automatic dependency resolution.</p>
+<p>If plugin A depends on collections, fields, or hooks added by plugin B, require B
+first:</p>
+<pre><code class="language-lua">-- init.lua
+require("my_plugins.base").install()        -- adds audit fields to all collections
+require("my_plugins.workflow").install()    -- reads those audit fields
+</code></pre>
+<p>Getting the order wrong produces silent runtime failures — the earlier plugin sees
+collections without the later plugin’s fields, and any hook that depends on those
+fields fires on incomplete data without warning. Keep the <code>require()</code> block in
+<code>init.lua</code> explicit and well-commented.</p>
+<p>Two plugins that register the same collection slug silently overwrite each other
+(last call wins). Log output includes a <code>debug!</code> message but no warning. Pick slugs
+carefully and review any plugin you adopt from a third party.</p>
 <h2 id="writing-a-plugin"><a class="header" href="#writing-a-plugin">Writing a Plugin</a></h2>
 <p>A plugin is a Lua module that returns a table with an <code>install()</code> function:</p>
 <pre><code class="language-lua">-- plugins/audit_log.lua
@@ -6138,7 +6382,7 @@ require("plugins.seo_defaults").install() -- sets default values on seo fields
 <li><strong>Rate limiting</strong> — login endpoints enforce per-email rate limiting (configurable max attempts and lockout window).</li>
 <li><strong>Timing-safe</strong> — login always performs a password hash comparison, even when the user doesn’t exist, to prevent timing-based email enumeration.</li>
 <li><strong>CSRF protection</strong> — admin UI forms and HTMX requests are protected with double-submit cookie tokens.</li>
-<li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>).</li>
+<li><strong>Secure cookies</strong> — the <code>crap_session</code> cookie includes the <code>Secure</code> flag in production (when <code>dev_mode = false</code>). The cookie’s <code>SameSite</code> attribute defaults to <code>Lax</code>; set <code>[auth] session_cookie_samesite = "strict"</code> in <code>crap.toml</code> for stricter CSRF protection at the cost of breaking cross-site navigation (clicks from emails, external links, etc. will require re-login).</li>
 <li><strong><code>_password_hash</code></strong> — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.</li>
 <li><strong><code>_locked</code></strong> — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See <a href="#account-locking">Auth Collections</a>.</li>
 <li><strong>Token/Password providers</strong> — <code>TokenProvider</code> (JWT) and <code>PasswordProvider</code> (Argon2id) traits abstract token and password primitives. Rarely swapped.</li>
@@ -6872,6 +7116,9 @@ return M
 <li>On create: denied fields get their default value (or NULL)</li>
 <li>On update: denied fields keep their current value</li>
 </ul>
+<blockquote>
+<p><strong>This is silent.</strong> Stripping happens before validation and before any hook sees the data — the client gets no error or warning that fields were dropped, and the returned document reflects the stored state. If a client reports “I set field X but it didn’t save”, check whether field-level access is denying their role for that field.</p>
+</blockquote>
 <h3 id="read-access"><a class="header" href="#read-access">Read Access</a></h3>
 <p>After a query, denied fields are <strong>stripped from the response</strong>. The field still exists in the database, but the user doesn’t see it.</p>
 <p>Fields with <code>admin.hidden = true</code> are also stripped from all API responses, regardless of access rules.</p>
@@ -7003,20 +7250,23 @@ end
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Field</th><th>Type</th><th>Hidden</th><th>Description</th></tr>
+<tr><th>Field</th><th>Type</th><th>Admin form</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>filename</code></td><td>text</td><td>No (readonly)</td><td>Sanitized filename with unique prefix</td></tr>
-<tr><td><code>mime_type</code></td><td>text</td><td>Yes</td><td>MIME type of the uploaded file</td></tr>
-<tr><td><code>filesize</code></td><td>number</td><td>Yes</td><td>File size in bytes</td></tr>
-<tr><td><code>width</code></td><td>number</td><td>Yes</td><td>Image width (images only)</td></tr>
-<tr><td><code>height</code></td><td>number</td><td>Yes</td><td>Image height (images only)</td></tr>
-<tr><td><code>url</code></td><td>text</td><td>Yes</td><td>URL path to the original file</td></tr>
-<tr><td><code>focal_x</code></td><td>number</td><td>Yes</td><td>Focal point X coordinate (0.0–1.0, default center)</td></tr>
-<tr><td><code>focal_y</code></td><td>number</td><td>Yes</td><td>Focal point Y coordinate (0.0–1.0, default center)</td></tr>
+<tr><td><code>filename</code></td><td>text</td><td>Visible (readonly)</td><td>Sanitized filename with unique prefix</td></tr>
+<tr><td><code>mime_type</code></td><td>text</td><td>Hidden</td><td>MIME type of the uploaded file</td></tr>
+<tr><td><code>filesize</code></td><td>number</td><td>Hidden</td><td>File size in bytes</td></tr>
+<tr><td><code>width</code></td><td>number</td><td>Hidden</td><td>Image width (images only)</td></tr>
+<tr><td><code>height</code></td><td>number</td><td>Hidden</td><td>Image height (images only)</td></tr>
+<tr><td><code>url</code></td><td>text</td><td>Hidden</td><td>URL path to the original file</td></tr>
+<tr><td><code>focal_x</code></td><td>number</td><td>Hidden</td><td>Focal point X coordinate (0.0–1.0, default center)</td></tr>
+<tr><td><code>focal_y</code></td><td>number</td><td>Hidden</td><td>Focal point Y coordinate (0.0–1.0, default center)</td></tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p>All auto-injected fields are <strong>always returned in API responses</strong> (gRPC, Lua, MCP, REST, admin JSON). They use <code>admin.hidden = true</code> only — that flag suppresses standard form rendering because the upload preview widget and focal-point selector render these values directly. Consumers (and the admin’s own preview widget) need them to display thumbnails, focal crops, and image variants.</p>
+</blockquote>
 <p>For each image size, additional fields are injected:</p>
 <div class="table-wrapper">
 <table>
@@ -7273,6 +7523,16 @@ crap-cms -C ./my-project images purge --older-than 7d  # clean up old entries
 <li><strong>Format variants</strong> — each sized image is also saved as WebP and/or AVIF (if configured)</li>
 </ol>
 <p>Non-image files (PDFs, etc.) skip steps 2-4.</p>
+<h2 id="decompression-bomb-protection"><a class="header" href="#decompression-bomb-protection">Decompression Bomb Protection</a></h2>
+<p>Before any resizing or format conversion, image dimensions are checked against a hard
+limit of <strong>100 megapixels</strong> total (<code>width × height</code>). Images exceeding this limit are
+rejected with an error like <code>Image too large: 12000x9000 exceeds pixel limit</code>.</p>
+<p>This protects the server from “decompression bomb” inputs — small, highly compressed
+files that decode into enormous bitmaps (e.g. a 50 KB PNG decoding to a 50,000 × 50,000
+canvas), which would otherwise consume gigabytes of RAM during resizing.</p>
+<p>The limit is fixed at 100 megapixels and is not configurable. For reference: a 12,000 ×
+8,000 pixel image (96 MP) is accepted; a 12,000 × 9,000 image (108 MP) is rejected.
+File-size and MIME-type checks are independent and run alongside this check.</p>
 <h2 id="admin-thumbnail"><a class="header" href="#admin-thumbnail">Admin Thumbnail</a></h2>
 <p>Set <code>admin_thumbnail</code> to the name of an image size to display it in admin list views:</p>
 <pre><code class="language-lua">upload = {
@@ -7909,6 +8169,71 @@ local result = crap.collections.update_many("posts", {
 </div>
 <h3 id="data-3rd-argument"><a class="header" href="#data-3rd-argument">Data (3rd argument)</a></h3>
 <p>The <code>data</code> table contains fields to update on all matched documents (partial update).</p>
+<h2 id="crapcollectionslist_versionscollection-id-opts"><a class="header" href="#crapcollectionslist_versionscollection-id-opts">crap.collections.list_versions(collection, id, opts?)</a></h2>
+<p>List version snapshots for a document, newest first. Returns a table with <code>docs</code> (an array of version summaries) and <code>pagination</code> metadata matching the standard pagination shape. Only available on collections with <code>versions</code> enabled.</p>
+<p><strong>Only available inside hooks with transaction context.</strong></p>
+<pre><code class="language-lua">-- List the 10 most recent versions for a document
+local result = crap.collections.list_versions("posts", "abc123", { limit = 10 })
+for _, v in ipairs(result.docs) do
+    print(v.version, v.status, v.created_at, v.latest)
+end
+
+-- Paginate
+local page2 = crap.collections.list_versions("posts", "abc123", { limit = 10, offset = 10 })
+
+-- Internal listing that must ignore collection-level read access (e.g. a migration)
+local all = crap.collections.list_versions("posts", "abc123", { overrideAccess = true })
+</code></pre>
+<h3 id="options-4"><a class="header" href="#options-4">Options</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>limit</code></td><td>integer</td><td><code>nil</code></td><td>Maximum number of versions to return. Nil = all remaining.</td></tr>
+<tr><td><code>offset</code></td><td>integer</td><td><code>0</code></td><td>Number of versions to skip (offset pagination).</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to <code>true</code> — it is now opt-in.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="version-summary-shape"><a class="header" href="#version-summary-shape">Version summary shape</a></h3>
+<p>Each entry in <code>result.docs</code> has:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>id</code></td><td>string</td><td>Version row ID (not the parent document ID).</td></tr>
+<tr><td><code>version</code></td><td>integer</td><td>Monotonically-increasing version number, newest first.</td></tr>
+<tr><td><code>status</code></td><td>string</td><td>Version status (e.g. <code>"published"</code>, <code>"draft"</code>).</td></tr>
+<tr><td><code>latest</code></td><td>boolean</td><td><code>true</code> for the newest version.</td></tr>
+<tr><td><code>created_at</code></td><td>string?</td><td>ISO 8601 timestamp the snapshot was taken (nil if unset).</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="crapcollectionsrestore_versioncollection-id-version_id-opts"><a class="header" href="#crapcollectionsrestore_versioncollection-id-version_id-opts">crap.collections.restore_version(collection, id, version_id, opts?)</a></h2>
+<p>Restore a previous version: copies the snapshot data back onto the parent document and writes a new version row. Returns the restored document. Only available on collections with <code>versions</code> enabled.</p>
+<p><strong>Only available inside hooks with transaction context.</strong></p>
+<pre><code class="language-lua">-- Restore version "v2-abc" of document "post-1"
+local doc = crap.collections.restore_version("posts", "post-1", "v2-abc")
+print(doc.title)
+
+-- Internal restore bypassing per-user access (e.g. automated rollback job)
+crap.collections.restore_version("posts", "post-1", "v2-abc", { overrideAccess = true })
+</code></pre>
+<h3 id="options-5"><a class="header" href="#options-5">Options</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to <code>true</code> — it is now opt-in.</td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="crapcollectionsdelete_manycollection-query-opts"><a class="header" href="#crapcollectionsdelete_manycollection-query-opts">crap.collections.delete_many(collection, query, opts?)</a></h2>
 <p>Delete multiple documents matching a query. Returns <code>{ deleted = N, skipped = N }</code>. For upload collections, associated files are automatically cleaned up from disk for each deleted document. Documents that are still referenced by other documents are skipped (hard delete only) and reported in <code>skipped</code>.</p>
 <p><strong>All-or-nothing semantics:</strong> finds all matching documents, checks delete access for each (if <code>overrideAccess = false</code>), and only proceeds if all pass.</p>
@@ -8003,7 +8328,7 @@ end
 </tbody>
 </table>
 </div>
-<h3 id="options-4"><a class="header" href="#options-4">Options</a></h3>
+<h3 id="options-6"><a class="header" href="#options-6">Options</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -8213,6 +8538,12 @@ print(data.count)  -- 42
 </tbody>
 </table>
 </div>
+<h2 id="notes-6"><a class="header" href="#notes-6">Notes</a></h2>
+<ul>
+<li><strong>Integer precision</strong> — JSON numbers are decoded into Lua number (<code>f64</code> under the hood). Integers larger than 2^53 (~9 × 10^15) lose precision. If you need to preserve large IDs exactly, encode them as strings before serializing.</li>
+<li><strong>Nesting depth</strong> — encoder rejects tables nested more than 64 levels deep to guard against runaway recursion. A self-referential Lua table (<code>t.a = t</code>) will exceed this limit and error rather than looping forever.</li>
+<li><strong>Decode of untrusted input</strong> — decoding is permissive and does not currently enforce a maximum depth on the input side. Keep that in mind when processing large attacker-controlled payloads.</li>
+</ul>
 <h2 id="common-patterns"><a class="header" href="#common-patterns">Common Patterns</a></h2>
 <h3 id="webhook-payload"><a class="header" href="#webhook-payload">Webhook Payload</a></h3>
 <pre><code class="language-lua">crap.http.request({
@@ -8439,7 +8770,42 @@ if valid then
     crap.log.info("Password matches")
 end
 </code></pre>
-<h2 id="notes-6"><a class="header" href="#notes-6">Notes</a></h2>
+<h3 id="crapauthuser"><a class="header" href="#crapauthuser"><code>crap.auth.user()</code></a></h3>
+<p>Return the currently authenticated user document for the in-flight request, or <code>nil</code>.</p>
+<p><strong>Returns:</strong> <code>crap.Document?</code> — The user document (a Lua table containing the user’s
+fields, including <code>id</code>, <code>email</code>, and any custom fields), or <code>nil</code> if no user is set.</p>
+<p>The function returns <code>nil</code> in any of these cases:</p>
+<ul>
+<li>Called from <code>init.lua</code> (no request context).</li>
+<li>The request is unauthenticated (anonymous public traffic).</li>
+<li>Called outside a hook (no <code>UserContext</code> is registered on the Lua VM).</li>
+</ul>
+<p>The user is populated from the request’s session/JWT and made available to all hooks
+that fire for that request (CRUD lifecycle hooks, access control functions, validation
+hooks, <code>before_render</code>, etc.).</p>
+<pre><code class="language-lua">crap.hooks.register("before_change", function(ctx)
+    local user = crap.auth.user()
+
+    if user then
+        ctx.data.last_edited_by = user.id
+    end
+
+    return ctx
+end)
+</code></pre>
+<pre><code class="language-lua">-- Skip a hook for anonymous traffic
+crap.hooks.register("after_read", function(ctx)
+    local user = crap.auth.user()
+    if not user then
+        return ctx
+    end
+
+    -- ...user-specific personalization...
+
+    return ctx
+end)
+</code></pre>
+<h2 id="notes-7"><a class="header" href="#notes-7">Notes</a></h2>
 <ul>
 <li>Available in both init.lua and hooks.</li>
 <li>Uses the same Argon2id implementation as the built-in auth system.</li>
@@ -8488,7 +8854,7 @@ crap.env.get("PATH")             -- nil
 crap.env.get("HOME")             -- nil
 crap.env.get("DATABASE_URL")     -- nil
 </code></pre>
-<h2 id="notes-7"><a class="header" href="#notes-7">Notes</a></h2>
+<h2 id="notes-8"><a class="header" href="#notes-8">Notes</a></h2>
 <ul>
 <li>Available in both init.lua and hooks.</li>
 <li>Returns <code>nil</code> for unset variables and for variables with disallowed prefixes (never errors).</li>
@@ -8539,11 +8905,12 @@ local resp = crap.http.request({
     timeout = 10,
 })
 </code></pre>
-<h2 id="notes-8"><a class="header" href="#notes-8">Notes</a></h2>
+<h2 id="notes-9"><a class="header" href="#notes-9">Notes</a></h2>
 <ul>
 <li>Uses <a href="https://docs.rs/reqwest">reqwest</a> (blocking HTTP client). Since Lua hooks run inside <code>spawn_blocking</code>, blocking I/O is correct and won’t stall the async runtime.</li>
 <li>Non-2xx responses are <strong>not</strong> errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.</li>
 <li>Available in both init.lua and hooks.</li>
+<li><strong>TLS certificate verification</strong> is always enabled (reqwest’s default with the <code>rustls-tls</code> feature). There is no opt-out — <code>crap.http.request</code> will not connect to servers with invalid or self-signed certificates. Use a proper CA-signed certificate on any HTTPS endpoint you call.</li>
 </ul>
 <h2 id="security-1"><a class="header" href="#security-1">Security</a></h2>
 <h3 id="private-network-blocking"><a class="header" href="#private-network-blocking">Private network blocking</a></h3>
@@ -8605,9 +8972,9 @@ local expiry = crap.config.get("auth.token_expiry")  -- 7200
 </table>
 </div>
 <p>All sections from <code>crap.toml</code> are available — this table is not exhaustive. The entire <code>CrapConfig</code> struct is serialized to Lua.</p>
-<h2 id="notes-9"><a class="header" href="#notes-9">Notes</a></h2>
+<h2 id="notes-10"><a class="header" href="#notes-10">Notes</a></h2>
 <ul>
-<li>Values are a <strong>read-only snapshot</strong> taken at VM creation time. Changes to <code>crap.toml</code> after startup won’t be reflected until the process restarts.</li>
+<li>Values are a <strong>read-only snapshot</strong> taken at the moment each Lua VM is created. The VM pool is built at startup; once a VM is alive, its <code>crap.config</code> view is frozen for its lifetime. Edits to <code>crap.toml</code> after startup are not picked up without a restart (or VM-pool recycle, which today only happens on process restart).</li>
 <li>Available in both init.lua and hooks.</li>
 <li>Returns <code>nil</code> for non-existent keys (never errors).</li>
 </ul>
@@ -8777,6 +9144,30 @@ end
 <p>HMAC-SHA256 of data with a key, returned as hex.</p>
 <pre><code class="language-lua">local mac = crap.crypto.hmac_sha256("message", "secret-key")
 </code></pre>
+<blockquote>
+<p><strong>Security:</strong> Always compare HMACs (and any other secret-derived bytes) with
+<code>crap.crypto.constant_time_eq(...)</code>, <strong>not</strong> with <code>==</code>. Lua’s <code>==</code> on strings
+short-circuits on the first differing byte, which leaks information about
+where the mismatch occurred through response timing and lets an attacker
+recover the expected tag byte-by-byte. Example:</p>
+<pre><code class="language-lua">local expected = crap.crypto.hmac_sha256(body, secret)
+
+if crap.crypto.constant_time_eq(expected, incoming_signature) then
+    -- verified, safe to proceed
+end
+</code></pre>
+</blockquote>
+<h2 id="crapcryptoconstant_time_eqa-b"><a class="header" href="#crapcryptoconstant_time_eqa-b">crap.crypto.constant_time_eq(a, b)</a></h2>
+<p>Constant-time byte-string equality check. Returns <code>true</code> iff the two inputs
+are byte-identical. Runs in time that does not depend on where (or whether)
+the bytes differ, so the caller cannot learn anything about the expected
+value from response timing.</p>
+<p>Length mismatches and content mismatches are indistinguishable from the
+return value — both yield <code>false</code>.</p>
+<pre><code class="language-lua">local ok = crap.crypto.constant_time_eq(expected_tag, provided_tag)
+</code></pre>
+<p>Use this for comparing HMAC tags, session tokens, API keys, signed cookies,
+webhook signatures, or any other secret-derived bytes.</p>
 <h2 id="crapcryptobase64_encodestr--crapcryptobase64_decodestr"><a class="header" href="#crapcryptobase64_encodestr--crapcryptobase64_decodestr">crap.crypto.base64_encode(str) / crap.crypto.base64_decode(str)</a></h2>
 <p>Base64 encoding and decoding.</p>
 <pre><code class="language-lua">local encoded = crap.crypto.base64_encode("hello")  -- "aGVsbG8="
@@ -8934,12 +9325,45 @@ a warning at registration time but do not error.</p>
 <p><strong>Returns:</strong> string — Rendered HTML.</p>
 <pre><code class="language-lua">local html = crap.richtext.render(doc.body)
 </code></pre>
-<h2 id="notes-10"><a class="header" href="#notes-10">Notes</a></h2>
+<h2 id="notes-11"><a class="header" href="#notes-11">Notes</a></h2>
 <ul>
 <li>Register nodes in <code>init.lua</code> so they’re available to all VMs.</li>
 <li>Custom nodes appear in the rich text editor toolbar for fields that include them.</li>
 <li>The <code>render</code> function is called during <code>crap.richtext.render()</code> to convert custom nodes to HTML.</li>
 </ul>
+<h2 id="render-output-is-not-sanitized"><a class="header" href="#render-output-is-not-sanitized">Render output is NOT sanitized</a></h2>
+<p>The string your <code>render</code> function returns is inserted directly into the HTML output —
+<strong>no escaping, no sanitization, no tag allowlist</strong>. Whatever you return becomes
+raw markup in the rendered page.</p>
+<p>This is by design: custom nodes exist precisely so operators can emit structured
+HTML. But the trust boundary is strict:</p>
+<ul>
+<li><code>render</code> is <strong>trusted code</strong>. It runs server-side inside Lua you wrote.</li>
+<li>Any user-supplied data you interpolate into the output string (node attrs,
+document content, etc.) <strong>must</strong> be escaped by you before concatenation.</li>
+</ul>
+<p>Safe pattern — escape the parts that came from user input:</p>
+<pre><code class="language-lua">local function escape_html(s)
+    s = s or ""
+    s = s:gsub("&amp;", "&amp;amp;"):gsub("&lt;", "&amp;lt;"):gsub("&gt;", "&amp;gt;")
+    s = s:gsub('"', "&amp;quot;"):gsub("'", "&amp;#39;")
+    return s
+end
+
+crap.richtext.register_node("callout", {
+    attrs = { crap.fields.text({ name = "body" }) },
+    render = function(attrs)
+        return '&lt;div class="callout"&gt;' .. escape_html(attrs.body) .. '&lt;/div&gt;'
+    end,
+})
+</code></pre>
+<p>Unsafe pattern — concatenating a user field directly produces stored XSS:</p>
+<pre><code class="language-lua">render = function(attrs)
+    return '&lt;div class="callout"&gt;' .. (attrs.body or "") .. '&lt;/div&gt;'  -- BAD
+end
+</code></pre>
+<p>Server-side richtext output is NOT passed through any sanitizer — there is no
+fallback. Treat every interpolation as a potential injection vector.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crapjobs"><a class="header" href="#crapjobs">crap.jobs</a></h1>
 <p>Background job definition and queuing.</p>
@@ -9162,9 +9586,39 @@ crap.collections.find("posts", {
 <p>Array and block filters use <code>EXISTS</code> subqueries — they match parent documents where <strong>at least one</strong> row matches. All filter operators work with dot notation paths.</p>
 <p>See <a href="#nested-field-filters-dot-notation">Query &amp; Filters</a> for the full reference.</p>
 <h2 id="value-types"><a class="header" href="#value-types">Value Types</a></h2>
-<p>Filter values are always converted to strings for SQL parameter binding. Numbers and booleans are stringified:</p>
-<pre><code class="language-lua">{ where = { count = 42 } }       -- equals "42"
-{ where = { active = true } }    -- equals "true"
+<p>Filter values are coerced to a SQL bind type based on the <strong>field’s declared type</strong>, so
+comparisons run on the right kind of column (REAL for numbers, INTEGER for booleans,
+TEXT for ISO date strings, etc.). Coercion only applies to comparison operators —
+text-pattern operators (<code>like</code>, <code>contains</code>, <code>starts_with</code>, <code>ends_with</code>, <code>regex</code>) always
+bind as TEXT regardless of the field type.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field type</th><th>Comparison bind type</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>number</code></td><td>REAL</td><td>Filter value is parsed as a 64-bit float. Invalid input (non-numeric, <code>NaN</code>, <code>Infinity</code>) falls back to TEXT and logs a warning — the query still runs and will typically return no rows.</td></tr>
+<tr><td><code>checkbox</code></td><td>INTEGER (<code>0</code> / <code>1</code>)</td><td>Accepts <code>"true"</code>, <code>"false"</code>, <code>"1"</code>, <code>"0"</code>, <code>"yes"</code>, <code>"no"</code>, <code>"on"</code>, <code>"off"</code>. Anything else falls back to TEXT with a warning.</td></tr>
+<tr><td><code>date</code></td><td>TEXT (normalized ISO)</td><td>Stored as ISO-8601 strings; the filter value is normalized via the date coercer (e.g. <code>"2024-01-15"</code> → <code>"2024-01-15T00:00:00.000Z"</code>) so lexicographic comparison aligns with stored values.</td></tr>
+<tr><td><code>text</code>, <code>textarea</code>, <code>email</code>, <code>select</code>, <code>radio</code>, <code>json</code>, <code>code</code>, <code>richtext</code></td><td>TEXT</td><td>Bound as-is.</td></tr>
+<tr><td>Field type unknown / not resolved</td><td>TEXT</td><td>Default fallback when the caller cannot determine the field type.</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-lua">-- Number field — bound as REAL, comparison is numeric
+crap.collections.find("products", {
+    where = { price = { greater_than = 9.99 } },
+})
+
+-- Checkbox field — bound as INTEGER 1
+crap.collections.find("posts", {
+    where = { published = true },
+})
+
+-- Text-only operator on a number field still binds as TEXT
+crap.collections.find("products", {
+    where = { sku = { contains = "42" } },
+})
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="mcp-model-context-protocol"><a class="header" href="#mcp-model-context-protocol">MCP (Model Context Protocol)</a></h1>
@@ -9204,8 +9658,9 @@ exclude_collections = []    # Blacklist (takes precedence over include)
 <p>When <code>mcp.http = true</code>, the admin server exposes a <code>POST /mcp</code> endpoint.
 Send JSON-RPC 2.0 requests as the request body.</p>
 <p>An <code>api_key</code> is <strong>required</strong> when HTTP transport is enabled. Requests must include
-an <code>Authorization: Bearer &lt;key&gt;</code> header. The server will refuse to start if
-<code>mcp.http = true</code> and <code>api_key</code> is empty.</p>
+an <code>Authorization: Bearer &lt;key&gt;</code> header. If <code>mcp.http = true</code> and <code>api_key</code> is empty,
+every request to <code>POST /mcp</code> is rejected with <code>401 Unauthorized</code> — the server still
+starts, but the endpoint is effectively inaccessible.</p>
 <h2 id="auto-generated-tools"><a class="header" href="#auto-generated-tools">Auto-Generated Tools</a></h2>
 <h3 id="content-crud-per-collection"><a class="header" href="#content-crud-per-collection">Content CRUD (per collection)</a></h3>
 <p>For each collection (e.g., <code>posts</code>), five tools are generated:</p>
@@ -9305,9 +9760,11 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 <ul>
 <li><strong>stdio:</strong> Access is controlled by who can run the process.</li>
 <li><strong>HTTP:</strong> Access is controlled by the <code>api_key</code> setting. An API key is <strong>required</strong>
-when <code>http = true</code> — the server will refuse to start without one. As a defense-in-depth
-measure, the HTTP endpoint also rejects all requests if the API key is somehow empty
-at runtime.</li>
+when <code>http = true</code> — set it in <code>[mcp]</code> in <code>crap.toml</code> before enabling HTTP. If
+<code>http = true</code> but <code>api_key</code> is empty, the server still starts and registers the
+route, but every request to <code>POST /mcp</code> is rejected with <code>401 Unauthorized</code>. The
+check is per-request, not at startup; operators should verify <code>api_key</code> is set
+before exposing the endpoint externally.</li>
 </ul>
 <p>To restrict which collections are accessible, use <code>include_collections</code> /
 <code>exclude_collections</code>. These filters are enforced both in tool listing (<code>tools/list</code>)
@@ -9478,6 +9935,7 @@ find_post_by_id abc123
   optional string after_cursor = 10;    // opaque forward cursor for cursor-based pagination
   optional string before_cursor = 11;   // opaque backward cursor for cursor-based pagination
   optional string search = 12;          // FTS5 full-text search query
+  optional bool trash = 13;             // true = return only soft-deleted documents
 }
 
 message PaginationInfo {
@@ -9518,6 +9976,7 @@ message FindResponse {
   optional string locale = 4;  // locale code for localized fields
   repeated string select = 5;  // fields to return (empty = all)
   optional bool draft = 6;   // true = return latest version (may be draft)
+  optional bool trash = 7;   // true = allow finding soft-deleted documents
 }
 
 message FindByIDResponse {
@@ -9614,7 +10073,7 @@ message UndeleteResponse {
 <pre><code class="language-bash">grpcurl -plaintext -d '{
     "collection": "posts",
     "id": "abc123"
-}' localhost:50051 crap.ContentAPI/Restore
+}' localhost:50051 crap.ContentAPI/Undelete
 </code></pre>
 <h2 id="count"><a class="header" href="#count">Count</a></h2>
 <p>Count documents matching an optional filter. Respects collection-level read access.</p>
@@ -9801,6 +10260,95 @@ message VerifyEmailResponse {
 }' localhost:50051 crap.ContentAPI/VerifyEmail
 </code></pre>
 <p>Only relevant for auth collections with <code>verify_email: true</code>.</p>
+<h2 id="validate"><a class="header" href="#validate">Validate</a></h2>
+<p>Check field data against collection rules without persisting. Runs field validation (required, unique, type checks, custom validators) but does not open a write transaction. Use this to preview validation errors before a <code>Create</code> or <code>Update</code> call.</p>
+<pre><code class="language-protobuf">message ValidateRequest {
+  string collection = 1;
+  google.protobuf.Struct data = 2;
+  optional bool draft = 3;              // relaxes required-field checks for draft collections
+  optional string locale = 4;           // locale code for localized field validation
+  optional string id = 5;               // when set, exclude this ID from unique checks (update path)
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  map&lt;string, string&gt; errors = 2;       // per-field error messages; empty when valid
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -d '{
+    "collection": "posts",
+    "data": { "title": "Hello", "slug": "hello" }
+}' localhost:50051 crap.ContentAPI/Validate
+</code></pre>
+<p><strong>Access:</strong> optional. If a Bearer token is present, the collection’s <code>create</code>/<code>update</code> access function is evaluated (<code>update</code> when <code>id</code> is set). Field-level write-denied fields are stripped before validation runs.</p>
+<h2 id="lockaccount"><a class="header" href="#lockaccount">LockAccount</a></h2>
+<p>Prevent a user from logging in. Only valid for auth-enabled collections. Any active live-update streams owned by the locked user are torn down with <code>PermissionDenied</code>.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;                // auth collection slug
+  string id = 2;                        // target user's nanoid ID
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/LockAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Returns <code>INVALID_ARGUMENT</code> if the collection is not an auth collection, <code>NOT_FOUND</code> if the user ID is missing, and <code>UNAUTHENTICATED</code> if no valid Bearer token is provided.</p>
+<h2 id="unlockaccount"><a class="header" href="#unlockaccount">UnlockAccount</a></h2>
+<p>Re-enable login for a previously locked account. Only valid for auth-enabled collections.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/UnlockAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Same error semantics as <code>LockAccount</code>.</p>
+<h2 id="verifyaccount"><a class="header" href="#verifyaccount">VerifyAccount</a></h2>
+<p>Mark a user’s email as verified without requiring the user to click the verification link. Only valid for auth-enabled collections.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/VerifyAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Same error semantics as <code>LockAccount</code>. See <code>VerifyEmail</code> for the token-based flow triggered by the user.</p>
+<h2 id="unverifyaccount"><a class="header" href="#unverifyaccount">UnverifyAccount</a></h2>
+<p>Mark a user’s email as unverified. Only valid for auth-enabled collections.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/UnverifyAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Same error semantics as <code>LockAccount</code>.</p>
 <h2 id="listcollections"><a class="header" href="#listcollections">ListCollections</a></h2>
 <p>List all collections and globals (lightweight overview).</p>
 <pre><code class="language-protobuf">message ListCollectionsRequest {}
@@ -10038,6 +10586,23 @@ grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
 <blockquote>
 <p><strong>Note:</strong> For <code>exists</code>/<code>not_exists</code>, the value is ignored — only the key matters. Field values must be strings or operator objects — numeric/boolean shorthand (e.g., <code>{"count": 42}</code>) is not supported in the gRPC JSON <code>where</code> clause (use <code>{"count": {"equals": "42"}}</code> instead).</p>
 </blockquote>
+<h2 id="field-type-aware-coercion"><a class="header" href="#field-type-aware-coercion">Field-Type-Aware Coercion</a></h2>
+<p>Even though filter values are always sent as JSON strings, they are <strong>coerced to the column’s SQL type before binding</strong> — so numeric comparisons are numeric, not lexicographic. Coercion is keyed off the field definition and the operator:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field type</th><th>Bound as</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td>Number</td><td><code>REAL</code> (f64)</td><td>Invalid / non-finite numbers fall back to <code>TEXT</code> with a runtime warning</td></tr>
+<tr><td>Checkbox</td><td><code>INTEGER</code></td><td>Accepts <code>"true"</code>/<code>"false"</code>/<code>"1"</code>/<code>"0"</code> (and <code>"yes"</code>/<code>"no"</code>/<code>"on"</code>/<code>"off"</code>); unknown values fall back to <code>TEXT</code></td></tr>
+<tr><td>Date</td><td><code>TEXT</code></td><td>Normalized via ISO so lexicographic comparison works</td></tr>
+<tr><td>Text-like fields</td><td><code>TEXT</code></td><td>Default for everything else</td></tr>
+<tr><td>Text-only operators (<code>like</code>, <code>contains</code>, <code>starts_with</code>, <code>ends_with</code>, <code>regex</code>)</td><td><code>TEXT</code></td><td>Always bound as text even on numeric columns</td></tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="#filter-operators-1">Filter Operators</a> for the full per-operator table — the same coercion rules apply to Lua, gRPC, admin URL query params, and MCP.</p>
 <h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
 <pre><code class="language-bash"># Published posts with "hello" in the title
 grpcurl -plaintext -d '{
@@ -10480,24 +11045,34 @@ def document_to_post(doc) -&gt; Post:
 <ul>
 <li><strong>gRPC Server Streaming</strong> (<code>Subscribe</code> RPC) for API consumers</li>
 <li><strong>SSE</strong> (<code>GET /admin/events</code>) for the admin UI</li>
-<li><strong>Internal bus</strong>: <code>tokio::sync::broadcast</code> channel</li>
+<li><strong>Transport</strong>: pluggable. Default is in-process (<code>tokio::sync::broadcast</code>); behind <code>--features redis</code> you can switch to Redis pub/sub for cross-node fanout — see <a href="#multi-server-deployment">Multi-Server Deployment</a>.</li>
 </ul>
 <h2 id="configuration-8"><a class="header" href="#configuration-8">Configuration</a></h2>
 <p>In <code>crap.toml</code>:</p>
 <pre><code class="language-toml">[live]
 enabled = true              # default: true
 default_mode = "metadata"   # default: "metadata" — global default for all collections
+transport = "memory"        # default: "memory" — in-process; set to "redis" for multi-node fanout
 channel_capacity = 1024     # default: 1024
 # max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000 # drop slow subscribers after this many ms (default: 1000)
 </code></pre>
+<p><code>transport = "redis"</code> uses the same Redis URL as <code>[cache] redis_url</code> (single source of truth). When the binary isn’t built with <code>--features redis</code>, selecting <code>"redis"</code> aborts startup with a clear error.</p>
 <p>Set <code>enabled = false</code> to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.</p>
 <p>Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive <code>503 Service Unavailable</code> and new gRPC Subscribe calls receive <code>UNAVAILABLE</code> status. Existing connections are not affected.</p>
+<h3 id="subscriber-lifecycle"><a class="header" href="#subscriber-lifecycle">Subscriber lifecycle</a></h3>
+<p>Live-update subscribers (gRPC Subscribe or admin SSE) can be terminated by the server in three cases — all surface to the client as a closed stream and require a reconnect:</p>
+<ul>
+<li><strong>Send timeout (SEC-D)</strong> — if forwarding an event to a specific subscriber takes longer than <code>subscriber_send_timeout_ms</code> (default 1000 ms), that subscriber is dropped. Healthy subscribers are unaffected.</li>
+<li><strong>Lag drop (SEC-D)</strong> — if the broadcast channel overflows for a particular subscriber (it fell behind by more than <code>channel_capacity</code> events), that subscriber is dropped on its next read. Previously such subscribers were kept alive with a warning, which masked silent event loss; they are now closed deterministically.</li>
+<li><strong>User session revocation (SEC-E)</strong> — when a user is locked or hard-deleted via the service layer, every active stream owned by that user is immediately torn down with <code>PermissionDenied</code>. Anonymous subscribers are unaffected.</li>
+</ul>
 <h2 id="event-delivery-modes"><a class="header" href="#event-delivery-modes">Event Delivery Modes</a></h2>
 <p>Each collection can control what data events carry:</p>
 <ul>
 <li>
-<p><strong><code>metadata</code></strong> (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data, no <code>after_read</code> hooks. Clients re-fetch via <code>FindByID</code> if needed. Fast, safe, zero hook overhead.</p>
+<p><strong><code>metadata</code></strong> (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data is included. Metadata mode skips the per-subscriber <code>after_read</code> hooks and field-level read-access stripping on the event payload, because there is no payload to transform. The <code>before_broadcast</code> hook <strong>still runs</strong> (once per event, pre-dispatch) and the collection’s <code>live</code> filter function still gates whether the event is broadcast at all. Clients re-fetch via <code>FindByID</code> if they need document data.</p>
 </li>
 <li>
 <p><strong><code>full</code></strong> — events carry complete document data, processed through <code>after_read</code> hooks and field-level access stripping — the same data a <code>Find</code> or <code>FindByID</code> call would return. Opt-in per collection.</p>
@@ -10654,7 +11229,11 @@ grpcurl -plaintext -d '{
 id: 42
 data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","edited_by":"user_456"}
 </code></pre>
-<p>The <code>data</code> payload is JSON with the same fields as the gRPC <code>MutationEvent</code> (excluding the full document <code>data</code> for efficiency), plus an <code>edited_by</code> field containing the user ID of the authenticated user who made the change (or <code>null</code> for unauthenticated operations).</p>
+<p>The <code>data</code> payload is JSON with the same fields as the gRPC <code>MutationEvent</code>, plus an <code>edited_by</code> field containing the user ID of the authenticated user who made the change (or <code>null</code> for unauthenticated operations). The payload’s own <code>data</code> field is always present:</p>
+<ul>
+<li><strong>metadata mode</strong> (default): <code>data</code> is an empty object (<code>{}</code>).</li>
+<li><strong>full mode</strong> (collection has <code>live = { mode = "full" }</code>): <code>data</code> contains the document with <code>after_read</code> hooks applied and field-level read-access stripping performed per subscriber — the same shape a <code>Find</code> or <code>FindByID</code> would return.</li>
+</ul>
 <h2 id="admin-ui-integration"><a class="header" href="#admin-ui-integration">Admin UI Integration</a></h2>
 <p>The admin UI automatically connects to the SSE endpoint on all authenticated pages. When a mutation event is received, a toast notification is shown via the <code>&lt;crap-toast&gt;</code> component.</p>
 <p>The SSE connection:</p>
@@ -10674,7 +11253,15 @@ data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","o
 <p>If you override the admin templates, the SSE listener is in <code>static/components/live-events.js</code>. You can customize or replace it by placing your own <code>static/components/live-events.js</code> in your config dir’s <code>static/</code> folder.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="live-update-hooks"><a class="header" href="#live-update-hooks">Live Update Hooks</a></h1>
-<h2 id="before_broadcast"><a class="header" href="#before_broadcast"><code>before_broadcast</code></a></h2>
+<h2 id="execution-order-3"><a class="header" href="#execution-order-3">Execution Order</a></h2>
+<p>For every mutation event, the live-update pipeline runs in this strict order — and short-circuits as soon as any step suppresses the event:</p>
+<ol>
+<li><strong><code>live</code> setting check</strong> — if <code>live = false</code>, the event is dropped immediately. If <code>live</code> is a function reference, it is called as a <strong>gate</strong>: returning <code>false</code>/<code>nil</code> drops the event and prevents <code>before_broadcast</code> from running at all.</li>
+<li><strong><code>before_broadcast</code> hooks</strong> — collection-level first, then global registered hooks. Any hook returning <code>false</code>/<code>nil</code> suppresses the event and stops the chain.</li>
+<li><strong>EventBus dispatch</strong> — the event is delivered to each matching subscriber, with per-subscriber access checks, <code>after_read</code> hooks (full mode only), and field stripping (full mode only).</li>
+</ol>
+<p>The <code>live</code> filter function and <code>before_broadcast</code> hooks both receive a context table with <code>{ collection, operation, data }</code> and have similar shapes, but they sit at different stages: <code>live</code> is the cheap gate, <code>before_broadcast</code> is the transformation/suppression stage.</p>
+<h2 id="before_broadcast-1"><a class="header" href="#before_broadcast-1"><code>before_broadcast</code></a></h2>
 <p>A lifecycle event that fires after the write transaction has committed, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.</p>
 <h3 id="collection-level-1"><a class="header" href="#collection-level-1">Collection-Level</a></h3>
 <pre><code class="language-lua">crap.collections.define("posts", {
@@ -10711,7 +11298,7 @@ crap.hooks.register("before_broadcast", function(ctx)
     return ctx
 end)
 </code></pre>
-<h3 id="execution-order-3"><a class="header" href="#execution-order-3">Execution Order</a></h3>
+<h3 id="hook-order-within-before_broadcast"><a class="header" href="#hook-order-within-before_broadcast">Hook Order Within <code>before_broadcast</code></a></h3>
 <ol>
 <li>Collection-level <code>before_broadcast</code> hooks (string refs from definition)</li>
 <li>Global registered <code>before_broadcast</code> hooks (<code>crap.hooks.register</code>)</li>
@@ -10719,6 +11306,8 @@ end)
 <p>If any hook returns <code>false</code>/<code>nil</code>, the event is suppressed and no further hooks run.</p>
 <h3 id="crud-access-2"><a class="header" href="#crud-access-2">CRUD Access</a></h3>
 <p><code>before_broadcast</code> hooks run after the transaction has committed and do <strong>not</strong> have CRUD access.</p>
+<h3 id="data-modifications-are-event-only"><a class="header" href="#data-modifications-are-event-only">Data Modifications Are Event-Only</a></h3>
+<p>Mutating <code>ctx.data</code> inside a <code>before_broadcast</code> hook affects <strong>only</strong> the broadcast event payload. The stored document is <strong>not</strong> updated — the hook fires post-commit, after the write transaction has already closed. Use this to redact fields, decorate the broadcast with computed values, or flatten internal structure for subscribers, but reach for <code>before_change</code> / <code>after_change</code> hooks if you actually need the change to land in the database.</p>
 <h2 id="live-setting-functions"><a class="header" href="#live-setting-functions"><code>live</code> Setting Functions</a></h2>
 <p>When <code>live</code> is a string (Lua function reference), the function is called before <code>before_broadcast</code> hooks:</p>
 <pre><code class="language-lua">crap.collections.define("posts", {
@@ -10730,7 +11319,7 @@ end)
     return ctx.data.status == "published"
 end
 </code></pre>
-<p>The function receives <code>{ collection, operation, data }</code> and returns <code>true</code>/<code>false</code>. This is a fast gate — <code>before_broadcast</code> hooks only run if the <code>live</code> check passes.</p>
+<p>The function receives <code>{ collection, operation, data }</code> and returns <code>true</code>/<code>false</code>. This is a fast gate — <code>before_broadcast</code> hooks only run if the <code>live</code> check passes. See <a href="#execution-order-3">Execution Order</a> above.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="admin-ui-5"><a class="header" href="#admin-ui-5">Admin UI</a></h1>
 <p>Crap CMS includes a built-in admin UI served via Axum with Handlebars templates and HTMX.</p>
@@ -10807,6 +11396,15 @@ end
 </tbody>
 </table>
 </div>
+<h3 id="session-refresh-endpoint"><a class="header" href="#session-refresh-endpoint">Session Refresh Endpoint</a></h3>
+<p><code>POST /admin/api/session-refresh</code> reissues the admin session cookie when the user is about to be logged out by token expiry.</p>
+<ul>
+<li><strong>Triggered by the client.</strong> The <code>&lt;crap-session-guard&gt;</code> web component (<code>static/components/session-guard.js</code>) shows a pre-expiry warning toast and POSTs here when the operator clicks “Stay signed in”. It is <strong>not</strong> polled on a fixed interval — only fired in response to the warning.</li>
+<li><strong>Authentication required.</strong> The handler reads <code>Claims</code> from request extensions (populated by the admin auth middleware), so an unauthenticated request returns <code>401 Unauthorized</code> before any work is done. CSRF is enforced via the <code>X-CSRF-Token</code> header / <code>crap_csrf</code> cookie like the rest of the admin POST routes.</li>
+<li><strong>Re-validates the user before reissuing.</strong> It checks that the user still exists, is not <code>_locked</code>, and that the token’s <code>session_version</code> matches the current value in the auth collection (so a password change or session-version bump invalidates older tokens). Any failure returns <code>401</code>; a deleted user can’t silently keep refreshing.</li>
+<li><strong>Behavior on success.</strong> Issues a fresh JWT, sets <code>crap_session</code> (and the matching expiry cookie) with the same <code>SameSite</code>/<code>Secure</code> flags as login, and returns <code>204 No Content</code>. The body is empty — the client treats the new cookie as the success signal.</li>
+<li><strong>No explicit rate limit.</strong> The endpoint is not separately rate-limited, but it requires a valid existing session (so it can’t be abused unauthenticated) and the cost is one DB read plus a JWT sign.</li>
+</ul>
 <h2 id="versioning--drafts-workflow"><a class="header" href="#versioning--drafts-workflow">Versioning &amp; Drafts Workflow</a></h2>
 <p>For collections with <code>versions = { drafts = true }</code>, the admin UI provides a draft/publish workflow:</p>
 <p><strong>List view:</strong></p>
@@ -10869,6 +11467,14 @@ end
 <h2 id="dev-mode"><a class="header" href="#dev-mode">Dev Mode</a></h2>
 <p>When <code>admin.dev_mode = true</code> in <code>crap.toml</code>, templates are reloaded from disk on every request. This enables live editing without restarting.</p>
 <p>When <code>dev_mode = false</code>, templates are cached after first load (production mode).</p>
+<h3 id="template-errors-in-dev-mode"><a class="header" href="#template-errors-in-dev-mode">Template Errors in Dev Mode</a></h3>
+<p>If an operator-provided template in <code>&lt;config_dir&gt;/templates/</code> has a Handlebars syntax error while <code>admin.dev_mode = true</code>, the request returns a <strong>500 Internal Server Error</strong>. Crap CMS does <strong>not</strong> automatically fall back to the compiled default template — once a file shadows a default, the override is authoritative.</p>
+<p>To recover:</p>
+<ul>
+<li>Fix the syntax error in your overlay template, or</li>
+<li>Delete (or rename) the file from <code>&lt;config_dir&gt;/templates/</code> to fall back to the compiled default.</li>
+</ul>
+<p>For deployments, prefer <code>dev_mode = false</code> so the overlay is registered and cached on startup rather than re-parsed (and potentially 500-ing) on every request.</p>
 <h2 id="template-inheritance"><a class="header" href="#template-inheritance">Template Inheritance</a></h2>
 <p>Templates use Handlebars partial inheritance:</p>
 <pre><code class="language-handlebars">{{#&gt; layout/base}}
@@ -11989,6 +12595,14 @@ end
 <li>If the condition returns <code>nil</code>, the field remains <strong>visible</strong></li>
 <li>On page load, fields are hidden server-side before rendering (no flash)</li>
 </ul>
+<h2 id="complexity-limits"><a class="header" href="#complexity-limits">Complexity Limits</a></h2>
+<p>There are <strong>no built-in depth, length, or array-size limits</strong> on condition tables returned from Lua. The evaluator (<code>evaluate_condition_table</code>) recurses through arrays of conditions until it bottoms out, and each leaf object is a single AND clause.</p>
+<p>In practice, keep condition tables small and flat:</p>
+<ul>
+<li>A single object (one operator, one field), or</li>
+<li>An array of objects (AND-combined).</li>
+</ul>
+<p>Deeply nested or runaway-large tables will be evaluated in full both server-side (initial render) and client-side (on every form change) — so keeping them simple is a performance and readability choice, not a hard requirement. Conditions that need richer logic (loops, lookups, multi-field reasoning) are better expressed as boolean condition functions.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="themes"><a class="header" href="#themes">Themes</a></h1>
 <p>The admin UI includes built-in theme support with multiple color schemes.</p>
@@ -12011,6 +12625,9 @@ end
 <p>Click the palette icon in the admin header to open the theme picker. The selected theme is persisted in <code>localStorage</code> and restored on page load (no flash of unstyled content).</p>
 <h2 id="how-themes-work"><a class="header" href="#how-themes-work">How Themes Work</a></h2>
 <p>The default Light theme is defined in <code>:root</code> CSS custom properties in <code>styles.css</code>. Additional themes live in <code>themes.css</code> and override these variables using <code>html[data-theme="&lt;name&gt;"]</code> selectors.</p>
+<blockquote>
+<p><strong>Theme values are static CSS.</strong> Every theme’s custom-property values are hardcoded in CSS files — either the built-in <code>themes.css</code> or an operator-supplied stylesheet under <code>&lt;config_dir&gt;/static/</code>. Crap CMS does <strong>not</strong> read theme values from the database, <code>crap.toml</code>, or any other operator input and inject them into the stylesheet. There is no template/string interpolation in the theme pipeline, so there is no CSS-injection surface from operator configuration.</p>
+</blockquote>
 <pre><code class="language-css">/* Default light theme (styles.css) */
 :root {
   color-scheme: light;
@@ -12156,7 +12773,17 @@ html[data-theme="tokyo-night"] {
 <p>Variables <strong>not</strong> typically overridden by themes (inherited from <code>:root</code>): <code>--radius-*</code>, <code>--space-*</code>, <code>--transition-*</code>, <code>--text-xs</code> through <code>--text-2xl</code>, <code>--sidebar-width</code>, <code>--input-height</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="database-1"><a class="header" href="#database-1">Database</a></h1>
-<p>Crap CMS uses SQLite as its database — zero configuration, single file, no server to manage.</p>
+<p>Crap CMS supports two first-class database backends:</p>
+<ul>
+<li><strong>SQLite (default)</strong> — zero configuration, single file, no server to manage, WAL mode for concurrent reads. The right choice for single-node deployments and the vast majority of workloads.</li>
+<li><strong>PostgreSQL</strong> — enabled via <code>--features postgres</code> at build time. Full feature parity with SQLite: schema sync, migrations, full-text search (via <code>tsvector</code>), <code>_ref_count</code> delete protection, soft delete, atomic job claiming (<code>FOR UPDATE SKIP LOCKED</code>), and all query operators. No feature degradation — pick whichever matches your operational model.</li>
+</ul>
+<p>The choice primarily comes down to your deployment topology:</p>
+<ul>
+<li>Single server, single writer → <strong>SQLite</strong> (simpler, one binary, one file to back up).</li>
+<li>Multi-server / high availability / dedicated job workers → <strong>PostgreSQL</strong> (shared writer across nodes).</li>
+</ul>
+<p>See <a href="#multi-server-deployment">Multi-Server Deployment</a> for the full multi-node setup. The rest of this page documents the schema conventions and sync behavior that apply to both backends; SQLite is used for the examples.</p>
 <h2 id="configuration-10"><a class="header" href="#configuration-10">Configuration</a></h2>
 <pre><code class="language-toml">[database]
 path = "data/crap.db"       # relative to config dir, or absolute
@@ -12164,9 +12791,11 @@ pool_max_size = 64           # connection pool size
 cache_size = -16384          # page cache in KB (16MB)
 mmap_size = 268435456        # memory-mapped I/O (256MB)
 </code></pre>
-<blockquote>
-<p>For <a href="#multi-server-deployment">multi-server deployments</a>, a PostgreSQL backend is available via <code>--features postgres</code>.</p>
-</blockquote>
+<p>For PostgreSQL:</p>
+<pre><code class="language-toml">[database]
+backend = "postgres"
+url = "host=db.example.com user=crap dbname=crap_cms"
+</code></pre>
 <h2 id="wal-mode-sqlite"><a class="header" href="#wal-mode-sqlite">WAL Mode (SQLite)</a></h2>
 <p>The database runs in WAL (Write-Ahead Logging) mode for better concurrent read performance. This is set automatically when the connection pool is created.</p>
 <h2 id="schema"><a class="header" href="#schema">Schema</a></h2>
@@ -12281,12 +12910,32 @@ max_age_secs = 60
 </code></pre>
 <p>Keys are automatically prefixed with <code>prefix</code> for namespace isolation. When <code>max_age_secs &gt; 0</code>, each key is set with a Redis TTL — expired keys are evicted by Redis automatically, and the periodic clear task also runs as a safety net.</p>
 <p><strong>When to use:</strong> Multi-server deployments where stale cache data across servers is unacceptable.</p>
+<h4 id="authentication--tls"><a class="header" href="#authentication--tls">Authentication &amp; TLS</a></h4>
+<p>Redis credentials and TLS are encoded directly into the connection URL — there is no separate <code>[cache] password</code> or <code>[cache] tls</code> key. The URL is passed straight through to the <code>redis</code> crate:</p>
+<ul>
+<li><strong>Plain TCP, no auth</strong>: <code>redis://host:6379</code></li>
+<li><strong>Plain TCP, password</strong>: <code>redis://:mypassword@host:6379</code> (note the leading colon for password-only)</li>
+<li><strong>ACL user (Redis 6+)</strong>: <code>redis://acl_user:acl_pass@host:6379</code></li>
+<li><strong>TLS</strong>: <code>rediss://user:pass@host:6380</code> (double <code>s</code> — <code>rediss</code>, not <code>redis</code>)</li>
+<li><strong>Specific DB</strong>: append <code>/&lt;db_number&gt;</code>, e.g. <code>redis://host:6379/1</code></li>
+</ul>
+<p>The same URL is reused by the rate-limit and live-update Redis backends unless they override it.</p>
 <h3 id="none"><a class="header" href="#none">None</a></h3>
 <p>No-op backend. Cache operations are silently ignored. Each request’s relationship population runs fresh queries with no cross-request sharing.</p>
 <pre><code class="language-toml">[cache]
 backend = "none"
 </code></pre>
 <p><strong>When to use:</strong> When the database is modified outside the API (direct SQL, external tools) and stale reads are unacceptable, or when debugging cache-related issues.</p>
+<h2 id="cache-stampede"><a class="header" href="#cache-stampede">Cache Stampede</a></h2>
+<p>There is no built-in singleflight / request coalescing on miss. Under concurrent load against a cold (or freshly-invalidated) key, every in-flight request independently hits the database until the first one completes and populates the cache. This is the classic “thundering herd” behavior.</p>
+<p><strong>Impact</strong>: CPU / DB spikes on cold-start, on cache flushes, and immediately after any write (since every write invalidates the cache globally).</p>
+<p><strong>Mitigations</strong>:</p>
+<ul>
+<li>Keep <code>max_age_secs</code> long enough that steady-state hit rates are high — short TTLs compound the effect.</li>
+<li>Put a CDN or front-proxy cache in front of public read endpoints so the origin isn’t the first line of defense.</li>
+<li>Rate-limit pathological clients at the edge (the load balancer or CDN), not the application, so stampedes can’t be induced externally.</li>
+</ul>
+<p>This is a <strong>known limitation</strong>. Singleflight / request coalescing is a candidate future enhancement; until then, the design assumes the DB can absorb the worst-case fan-out of one uncached fetch per concurrent reader per invalidation event.</p>
 <h2 id="cache-invalidation"><a class="header" href="#cache-invalidation">Cache Invalidation</a></h2>
 <p>The cache uses two invalidation strategies:</p>
 <ol>
@@ -12445,6 +13094,16 @@ crap-cms serve --status       # check if running
 crap-cms serve --stop         # graceful shutdown
 crap-cms serve --restart      # stop + start
 </code></pre>
+<h2 id="logs"><a class="header" href="#logs">Logs</a></h2>
+<p>When you run with <code>--detach</code>, file logging is auto-enabled — the child process no longer owns a terminal, so stdout / stderr are redirected to <code>/dev/null</code> and the log output instead goes to a rotating file in the log directory.</p>
+<ul>
+<li><strong>Location</strong>: <code>&lt;config_dir&gt;/data/logs/</code> by default (configurable via <code>[logging] path</code> in <code>crap.toml</code>; absolute paths are respected).</li>
+<li><strong>Rotation</strong>: daily by default (<code>[logging] rotation</code>: <code>"daily"</code> / <code>"hourly"</code> / <code>"never"</code>). Old files are pruned on startup based on <code>[logging] max_files</code> (default <code>30</code>).</li>
+<li><strong>Reading logs</strong>: <code>crap-cms logs</code> tails recent output, <code>crap-cms logs -f</code> follows in real time, <code>crap-cms logs clear</code> deletes rotated files. Or tail the files under <code>data/logs/</code> directly with any tool of your choice.</li>
+<li><strong>Structured output</strong>: pass <code>--json</code> to <code>crap-cms serve</code> (or set <code>CRAP_LOG_FORMAT=json</code>) for JSON lines suitable for log-aggregation pipelines (Loki, ELK, etc.).</li>
+</ul>
+<p>Foreground <code>crap-cms serve</code> (no <code>--detach</code>) keeps logs on stdout by default — set <code>[logging] file = true</code> in <code>crap.toml</code> to also write to a file.</p>
+<p>If the disk fills up, log writes silently fail; size the log directory to tolerate <code>max_files × typical_rotation_size</code> worst-case.</p>
 <h2 id="what-you-get"><a class="header" href="#what-you-get">What You Get</a></h2>
 <ul>
 <li><strong>Admin UI</strong> on port 3000</li>
@@ -12495,9 +13154,10 @@ crap-cms serve --restart      # stop + start
 <h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
 <ol>
 <li><strong>Shared database</strong> — PostgreSQL (build with <code>--features postgres</code>)</li>
-<li><strong>Shared file storage</strong> — S3-compatible (build with <code>--features s3-storage</code>) or shared filesystem (NFS/EFS)</li>
-<li><strong>Shared cache</strong> (recommended) — Redis (build with <code>--features redis</code>) for cross-server cache invalidation</li>
-<li><strong>Shared rate limits</strong> (recommended) — Redis for cross-server rate limit enforcement</li>
+<li><strong>Shared file storage</strong> — <strong>S3-compatible object storage only</strong> (build with <code>--features s3-storage</code>). Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, or any other S3-compatible backend. Shared filesystems (NFS, EFS, SMB) are <strong>NOT supported</strong> for multi-node — <code>storage = "local"</code> assumes a single writer and is not tested against the fsync / advisory-lock semantics of networked filesystems. Use object storage.</li>
+<li><strong>Shared rate limits</strong> (<strong>required</strong> for security) — Redis (build with <code>--features redis</code>). Without it, per-IP login rate limits are per-node counters: an attacker that round-robins across nodes multiplies their allowance by the node count (e.g. a 5-attempt limit across 3 nodes becomes 15 attempts before any node throttles). This is a throttling bypass, not a performance tweak.</li>
+<li><strong>Shared cache</strong> (recommended) — Redis for cross-server cache invalidation</li>
+<li><strong>Shared live-update transport</strong> (required if you rely on SSE or gRPC Subscribe across more than one node) — Redis pub/sub so mutation events and user-invalidation signals fan out to every server node. See <a href="#5-live-updates-sse--grpc-subscribe">Live Updates</a> below.</li>
 </ol>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <h3 id="1-database"><a class="header" href="#1-database">1. Database</a></h3>
@@ -12507,6 +13167,7 @@ backend = "postgres"
 url = "host=db.example.com user=crap dbname=crap_cms"
 </code></pre>
 <h3 id="2-file-storage"><a class="header" href="#2-file-storage">2. File Storage</a></h3>
+<p>S3-compatible object storage is the only supported multi-node option. <code>storage = "local"</code> is fine for single-node; across multiple nodes it breaks because each node writes to its own local disk. Do <strong>not</strong> substitute a shared filesystem (NFS, EFS, SMB) — the code isn’t tested against their fsync / locking semantics and silent data loss is the likely failure mode.</p>
 <pre><code class="language-toml">[upload]
 storage = "s3"
 
@@ -12516,6 +13177,7 @@ endpoint = "https://s3.amazonaws.com"
 access_key = "${AWS_ACCESS_KEY}"
 secret_key = "${AWS_SECRET_KEY}"
 </code></pre>
+<p>Any S3-compatible backend works — AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc. Point <code>endpoint</code> at the provider’s URL.</p>
 <h3 id="3-cache"><a class="header" href="#3-cache">3. Cache</a></h3>
 <p>Without a shared cache, each server maintains its own in-memory populate cache. Writes on one server won’t invalidate another’s cache. Use Redis for shared cache invalidation:</p>
 <pre><code class="language-toml">[cache]
@@ -12528,17 +13190,31 @@ prefix = "crap:"
 backend = "memory"
 max_age_secs = 10
 </code></pre>
-<h3 id="4-rate-limits"><a class="header" href="#4-rate-limits">4. Rate Limits</a></h3>
-<p>Without shared rate limits, each server tracks login attempts independently. Use Redis to enforce global rate limits:</p>
+<h3 id="4-rate-limits-required"><a class="header" href="#4-rate-limits-required">4. Rate Limits (required)</a></h3>
+<p>Without shared rate limits, each server tracks login attempts independently — an attacker who round-robins requests across nodes effectively multiplies their rate-limit budget by the node count. A 5-attempt-per-IP limit spread across 3 nodes means 15 attempts before any single node throttles. This is a <strong>security requirement</strong>, not a performance optimization: use Redis to enforce a global per-IP counter.</p>
 <pre><code class="language-toml">[auth]
 rate_limit_backend = "redis"
 # rate_limit_redis_url defaults to cache.redis_url if empty
 </code></pre>
-<h3 id="5-app-servers"><a class="header" href="#5-app-servers">5. App Servers</a></h3>
+<h3 id="5-live-updates-sse--grpc-subscribe"><a class="header" href="#5-live-updates-sse--grpc-subscribe">5. Live Updates (SSE / gRPC Subscribe)</a></h3>
+<p>Two transports are available:</p>
+<ul>
+<li><strong><code>transport = "memory"</code></strong> (default) — events are broadcast on an in-process <code>tokio::sync::broadcast</code> channel. A write on node A reaches only subscribers connected to node A. Acceptable for sticky-load-balanced setups where every subscriber is pinned to the node that serves every write they care about; insufficient for round-robin balancing or for a pure reader node watching writes from elsewhere.</li>
+<li><strong><code>transport = "redis"</code></strong> — mutation events and user-invalidation signals (<code>PermissionDenied</code> on lock / hard-delete) are published to Redis pub/sub and fan out to every node. Any subscriber on any node sees every event, regardless of which node published it. This is the correct choice as soon as you have more than one node.</li>
+</ul>
+<pre><code class="language-toml">[live]
+transport = "redis"
+# Reuses [cache] redis_url — no duplicate configuration
+</code></pre>
+<p>Both transports use the same Redis URL configured under <code>[cache] redis_url</code> (single source of truth — no separate <code>[live] redis_url</code> key). <code>transport = "redis"</code> requires <code>--features redis</code> at build time; if the feature is missing, startup aborts with an explicit error.</p>
+<p>Events are JSON-encoded and published to the <code>crap:events</code> / <code>crap:invalidations</code> channels. The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can’t keep up is force-dropped with <code>RecvError::Lagged</code>.</p>
+<p>Sticky load balancing is still recommended for SSE and gRPC Subscribe streams even with <code>transport = "redis"</code>: reconnects to a different node lose the in-flight subscription context (sequence position, filter state) and the client has to re-subscribe. See the <a href="#load-balancer-stickiness">Load Balancer Stickiness</a> section below.</p>
+<p>See also <a href="#live-updates">Live Updates Overview</a> for the transport-selection rationale and caveats.</p>
+<h3 id="6-app-servers"><a class="header" href="#6-app-servers">6. App Servers</a></h3>
 <p>Run without the scheduler — job processing is handled by dedicated workers.</p>
 <pre><code class="language-bash">crap-cms serve --no-scheduler
 </code></pre>
-<h3 id="6-workers"><a class="header" href="#6-workers">6. Workers</a></h3>
+<h3 id="7-workers"><a class="header" href="#7-workers">7. Workers</a></h3>
 <p>One or more dedicated job workers process queues.</p>
 <pre><code class="language-bash"># General worker (all queues)
 crap-cms work --detach
@@ -12579,6 +13255,21 @@ webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
 queue_retries = 5
 queue_concurrency = 10
 </code></pre>
+<h2 id="load-balancer-stickiness"><a class="header" href="#load-balancer-stickiness">Load Balancer Stickiness</a></h2>
+<p>Not every request benefits from sticky sessions, and not every route can tolerate reconnects:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Traffic</th><th>Stickiness</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td>gRPC unary / regular HTTP (find, create, update, login, admin pages)</td><td>Not required</td><td>Each request is stateless. Round-robin freely.</td></tr>
+<tr><td>gRPC Subscribe / Admin SSE (long-lived streams)</td><td><strong>Recommended</strong></td><td>Reconnects to a different node lose the in-flight subscription state (sequence cursor, filter context). The client has to re-subscribe, which may miss events in the gap.</td></tr>
+</tbody>
+</table>
+</div>
+<p>With <code>transport = "redis"</code> for live updates, a reconnecting subscriber on a different node will still see all future events — but the state that was held on the original node (current sequence position, any pending-but-undelivered events buffered in the broadcast channel) is gone. Sticky sessions keep that state warm across the connection’s lifetime.</p>
+<p>A reasonable default is sticky sessions for <code>/api/*</code> streaming routes and the admin SSE endpoint, round-robin for everything else.</p>
 
                     </main>
 

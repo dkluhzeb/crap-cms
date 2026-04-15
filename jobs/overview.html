@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -229,7 +229,7 @@ return M
 <tr><td><code>handler</code></td><td>string</td><td>(required)</td><td>Lua function ref (e.g., <code>"jobs.cleanup.run"</code>)</td></tr>
 <tr><td><code>schedule</code></td><td>string</td><td>nil</td><td>Cron expression for automatic scheduling</td></tr>
 <tr><td><code>queue</code></td><td>string</td><td><code>"default"</code></td><td>Queue name for grouping</td></tr>
-<tr><td><code>retries</code></td><td>integer</td><td>0</td><td>Max retry attempts on failure</td></tr>
+<tr><td><code>retries</code></td><td>integer</td><td>0</td><td>Max retry attempts on failure (see <a href="#retry-backoff">Retry Backoff</a> below)</td></tr>
 <tr><td><code>timeout</code></td><td>integer</td><td>60</td><td>Seconds before job is marked failed</td></tr>
 <tr><td><code>concurrency</code></td><td>integer</td><td>1</td><td>Max concurrent runs of this job</td></tr>
 <tr><td><code>skip_if_running</code></td><td>boolean</td><td>true</td><td>Skip cron trigger if previous run still active</td></tr>
@@ -266,6 +266,27 @@ job result (JSON). If it errors, the job is marked failed (and retried if attemp
 </ul>
 <h2 id="error-handling"><a class="header" href="#error-handling">Error Handling</a></h2>
 <p>Job execution is fully isolated. If a job handler panics, the panic is caught and logged — it does not crash the server or affect other jobs. The job is marked as failed and retried if attempts remain.</p>
+<h3 id="retry-backoff"><a class="header" href="#retry-backoff">Retry Backoff</a></h3>
+<p>Failed jobs with remaining <code>retries</code> are re-queued with an <strong>exponential backoff</strong> before the next attempt:</p>
+<pre><code>delay = min(2^(attempt - 1) * 5, 300)  // seconds, capped at 5 minutes
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attempt (1-based)</th><th>Delay before retry</th></tr>
+</thead>
+<tbody>
+<tr><td>1 (first failure)</td><td>5 s</td></tr>
+<tr><td>2</td><td>10 s</td></tr>
+<tr><td>3</td><td>20 s</td></tr>
+<tr><td>4</td><td>40 s</td></tr>
+<tr><td>5</td><td>80 s</td></tr>
+<tr><td>6</td><td>160 s</td></tr>
+<tr><td>7 or later</td><td>300 s (cap)</td></tr>
+</tbody>
+</table>
+</div>
+<p>This is fixed and not currently configurable per-job. Plan your <code>retries</code> budget knowing that attempt 6+ is at least ~5 minutes out, not a handful of seconds.</p>
 <h2 id="crash-recovery"><a class="header" href="#crash-recovery">Crash Recovery</a></h2>
 <p>On startup, the scheduler marks any previously-running jobs as stale (the server was
 restarted while they were executing). Jobs with remaining retry attempts are re-queued.</p>

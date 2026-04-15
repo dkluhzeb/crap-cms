@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -189,6 +189,14 @@
 <h2 id="dev-mode"><a class="header" href="#dev-mode">Dev Mode</a></h2>
 <p>When <code>admin.dev_mode = true</code> in <code>crap.toml</code>, templates are reloaded from disk on every request. This enables live editing without restarting.</p>
 <p>When <code>dev_mode = false</code>, templates are cached after first load (production mode).</p>
+<h3 id="template-errors-in-dev-mode"><a class="header" href="#template-errors-in-dev-mode">Template Errors in Dev Mode</a></h3>
+<p>If an operator-provided template in <code>&lt;config_dir&gt;/templates/</code> has a Handlebars syntax error while <code>admin.dev_mode = true</code>, the request returns a <strong>500 Internal Server Error</strong>. Crap CMS does <strong>not</strong> automatically fall back to the compiled default template — once a file shadows a default, the override is authoritative.</p>
+<p>To recover:</p>
+<ul>
+<li>Fix the syntax error in your overlay template, or</li>
+<li>Delete (or rename) the file from <code>&lt;config_dir&gt;/templates/</code> to fall back to the compiled default.</li>
+</ul>
+<p>For deployments, prefer <code>dev_mode = false</code> so the overlay is registered and cached on startup rather than re-parsed (and potentially 500-ing) on every request.</p>
 <h2 id="template-inheritance"><a class="header" href="#template-inheritance">Template Inheritance</a></h2>
 <p>Templates use Handlebars partial inheritance:</p>
 <pre><code class="language-handlebars">{{#&gt; layout/base}}

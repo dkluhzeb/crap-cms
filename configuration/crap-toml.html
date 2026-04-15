@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -369,9 +369,11 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
+transport = "memory"     # Event transport: "memory" (default, in-process) or "redis" (cross-node fanout)
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000 # Drop subscribers whose outbound send exceeds this (ms)
 
 [locale]
 default_locale = "en"    # Default locale code
@@ -506,6 +508,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tr><td><code>reset_token_expiry</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>Password reset token expiry. The “Forgot password” email link expires after this duration. Accepts seconds or human-readable.</td></tr>
 <tr><td><code>max_forgot_password_attempts</code></td><td>integer</td><td><code>3</code></td><td>Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email.</td></tr>
 <tr><td><code>forgot_password_window_seconds</code></td><td>integer/string</td><td><code>900</code> (<code>"15m"</code>)</td><td>Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>session_cookie_samesite</code></td><td>string</td><td><code>"lax"</code></td><td><code>SameSite</code> attribute for the <code>crap_session</code> admin cookie. Accepts <code>"lax"</code> (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), <code>"strict"</code> (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or <code>"none"</code> (reserved; currently falls back to <code>"lax"</code> at runtime).</td></tr>
 </tbody>
 </table>
 </div>
@@ -652,9 +655,11 @@ connect_src = ["'self'", "https://analytics.example.com"]
 <tbody>
 <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable live event streaming (SSE + gRPC Subscribe).</td></tr>
 <tr><td><code>default_mode</code></td><td>string</td><td><code>"metadata"</code></td><td>Default event delivery mode. <code>"metadata"</code> sends only event type, collection, and document ID. <code>"full"</code> sends the complete document payload.</td></tr>
+<tr><td><code>transport</code></td><td>string</td><td><code>"memory"</code></td><td>Event transport. <code>"memory"</code> keeps events in-process (does not cross nodes). <code>"redis"</code> fans events out across all servers subscribed to the same Redis instance — requires the <code>redis</code> feature and reuses <code>[cache] redis_url</code>.</td></tr>
 <tr><td><code>channel_capacity</code></td><td>integer</td><td><code>1024</code></td><td>Internal broadcast channel buffer size. Increase if subscribers lag.</td></tr>
 <tr><td><code>max_sse_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent SSE connections. When reached, new connections receive <code>503 Service Unavailable</code>. <code>0</code> = unlimited.</td></tr>
 <tr><td><code>max_subscribe_connections</code></td><td>integer</td><td><code>1000</code></td><td>Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive <code>UNAVAILABLE</code> status. <code>0</code> = unlimited.</td></tr>
+<tr><td><code>subscriber_send_timeout_ms</code></td><td>integer</td><td><code>1000</code></td><td>Per-subscriber outbound send timeout (ms). If forwarding an event to a specific live-update client (SSE or gRPC) takes longer than this, that subscriber is dropped to protect other subscribers from head-of-line blocking.</td></tr>
 </tbody>
 </table>
 </div>

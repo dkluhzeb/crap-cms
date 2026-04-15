@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -202,6 +202,41 @@
 if valid then
     crap.log.info("Password matches")
 end
+</code></pre>
+<h3 id="crapauthuser"><a class="header" href="#crapauthuser"><code>crap.auth.user()</code></a></h3>
+<p>Return the currently authenticated user document for the in-flight request, or <code>nil</code>.</p>
+<p><strong>Returns:</strong> <code>crap.Document?</code> — The user document (a Lua table containing the user’s
+fields, including <code>id</code>, <code>email</code>, and any custom fields), or <code>nil</code> if no user is set.</p>
+<p>The function returns <code>nil</code> in any of these cases:</p>
+<ul>
+<li>Called from <code>init.lua</code> (no request context).</li>
+<li>The request is unauthenticated (anonymous public traffic).</li>
+<li>Called outside a hook (no <code>UserContext</code> is registered on the Lua VM).</li>
+</ul>
+<p>The user is populated from the request’s session/JWT and made available to all hooks
+that fire for that request (CRUD lifecycle hooks, access control functions, validation
+hooks, <code>before_render</code>, etc.).</p>
+<pre><code class="language-lua">crap.hooks.register("before_change", function(ctx)
+    local user = crap.auth.user()
+
+    if user then
+        ctx.data.last_edited_by = user.id
+    end
+
+    return ctx
+end)
+</code></pre>
+<pre><code class="language-lua">-- Skip a hook for anonymous traffic
+crap.hooks.register("after_read", function(ctx)
+    local user = crap.auth.user()
+    if not user then
+        return ctx
+    end
+
+    -- ...user-specific personalization...
+
+    return ctx
+end)
 </code></pre>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
 <ul>

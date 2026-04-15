@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -233,7 +233,7 @@ local expiry = crap.config.get("auth.token_expiry")  -- 7200
 <p>All sections from <code>crap.toml</code> are available — this table is not exhaustive. The entire <code>CrapConfig</code> struct is serialized to Lua.</p>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
 <ul>
-<li>Values are a <strong>read-only snapshot</strong> taken at VM creation time. Changes to <code>crap.toml</code> after startup won’t be reflected until the process restarts.</li>
+<li>Values are a <strong>read-only snapshot</strong> taken at the moment each Lua VM is created. The VM pool is built at startup; once a VM is alive, its <code>crap.config</code> view is frozen for its lifetime. Edits to <code>crap.toml</code> after startup are not picked up without a restart (or VM-pool recycle, which today only happens on process restart).</li>
 <li>Available in both init.lua and hooks.</li>
 <li>Returns <code>nil</code> for non-existent keys (never errors).</li>
 </ul>

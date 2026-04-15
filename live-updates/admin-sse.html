@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -189,7 +189,11 @@
 id: 42
 data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","edited_by":"user_456"}
 </code></pre>
-<p>The <code>data</code> payload is JSON with the same fields as the gRPC <code>MutationEvent</code> (excluding the full document <code>data</code> for efficiency), plus an <code>edited_by</code> field containing the user ID of the authenticated user who made the change (or <code>null</code> for unauthenticated operations).</p>
+<p>The <code>data</code> payload is JSON with the same fields as the gRPC <code>MutationEvent</code>, plus an <code>edited_by</code> field containing the user ID of the authenticated user who made the change (or <code>null</code> for unauthenticated operations). The payload’s own <code>data</code> field is always present:</p>
+<ul>
+<li><strong>metadata mode</strong> (default): <code>data</code> is an empty object (<code>{}</code>).</li>
+<li><strong>full mode</strong> (collection has <code>live = { mode = "full" }</code>): <code>data</code> contains the document with <code>after_read</code> hooks applied and field-level read-access stripping performed per subscriber — the same shape a <code>Find</code> or <code>FindByID</code> would return.</li>
+</ul>
 <h2 id="admin-ui-integration"><a class="header" href="#admin-ui-integration">Admin UI Integration</a></h2>
 <p>The admin UI automatically connects to the SSE endpoint on all authenticated pages. When a mutation event is received, a toast notification is shown via the <code>&lt;crap-toast&gt;</code> component.</p>
 <p>The SSE connection:</p>

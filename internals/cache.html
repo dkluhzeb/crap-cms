@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -197,12 +197,32 @@ max_age_secs = 60
 </code></pre>
 <p>Keys are automatically prefixed with <code>prefix</code> for namespace isolation. When <code>max_age_secs &gt; 0</code>, each key is set with a Redis TTL — expired keys are evicted by Redis automatically, and the periodic clear task also runs as a safety net.</p>
 <p><strong>When to use:</strong> Multi-server deployments where stale cache data across servers is unacceptable.</p>
+<h4 id="authentication--tls"><a class="header" href="#authentication--tls">Authentication &amp; TLS</a></h4>
+<p>Redis credentials and TLS are encoded directly into the connection URL — there is no separate <code>[cache] password</code> or <code>[cache] tls</code> key. The URL is passed straight through to the <code>redis</code> crate:</p>
+<ul>
+<li><strong>Plain TCP, no auth</strong>: <code>redis://host:6379</code></li>
+<li><strong>Plain TCP, password</strong>: <code>redis://:mypassword@host:6379</code> (note the leading colon for password-only)</li>
+<li><strong>ACL user (Redis 6+)</strong>: <code>redis://acl_user:acl_pass@host:6379</code></li>
+<li><strong>TLS</strong>: <code>rediss://user:pass@host:6380</code> (double <code>s</code> — <code>rediss</code>, not <code>redis</code>)</li>
+<li><strong>Specific DB</strong>: append <code>/&lt;db_number&gt;</code>, e.g. <code>redis://host:6379/1</code></li>
+</ul>
+<p>The same URL is reused by the rate-limit and live-update Redis backends unless they override it.</p>
 <h3 id="none"><a class="header" href="#none">None</a></h3>
 <p>No-op backend. Cache operations are silently ignored. Each request’s relationship population runs fresh queries with no cross-request sharing.</p>
 <pre><code class="language-toml">[cache]
 backend = "none"
 </code></pre>
 <p><strong>When to use:</strong> When the database is modified outside the API (direct SQL, external tools) and stale reads are unacceptable, or when debugging cache-related issues.</p>
+<h2 id="cache-stampede"><a class="header" href="#cache-stampede">Cache Stampede</a></h2>
+<p>There is no built-in singleflight / request coalescing on miss. Under concurrent load against a cold (or freshly-invalidated) key, every in-flight request independently hits the database until the first one completes and populates the cache. This is the classic “thundering herd” behavior.</p>
+<p><strong>Impact</strong>: CPU / DB spikes on cold-start, on cache flushes, and immediately after any write (since every write invalidates the cache globally).</p>
+<p><strong>Mitigations</strong>:</p>
+<ul>
+<li>Keep <code>max_age_secs</code> long enough that steady-state hit rates are high — short TTLs compound the effect.</li>
+<li>Put a CDN or front-proxy cache in front of public read endpoints so the origin isn’t the first line of defense.</li>
+<li>Rate-limit pathological clients at the edge (the load balancer or CDN), not the application, so stampedes can’t be induced externally.</li>
+</ul>
+<p>This is a <strong>known limitation</strong>. Singleflight / request coalescing is a candidate future enhancement; until then, the design assumes the DB can absorb the worst-case fan-out of one uncached fetch per concurrent reader per invalidation event.</p>
 <h2 id="cache-invalidation"><a class="header" href="#cache-invalidation">Cache Invalidation</a></h2>
 <p>The cache uses two invalidation strategies:</p>
 <ol>

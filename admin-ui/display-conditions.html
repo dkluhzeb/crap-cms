@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -284,6 +284,14 @@ end
 <li>If the condition returns <code>nil</code>, the field remains <strong>visible</strong></li>
 <li>On page load, fields are hidden server-side before rendering (no flash)</li>
 </ul>
+<h2 id="complexity-limits"><a class="header" href="#complexity-limits">Complexity Limits</a></h2>
+<p>There are <strong>no built-in depth, length, or array-size limits</strong> on condition tables returned from Lua. The evaluator (<code>evaluate_condition_table</code>) recurses through arrays of conditions until it bottoms out, and each leaf object is a single AND clause.</p>
+<p>In practice, keep condition tables small and flat:</p>
+<ul>
+<li>A single object (one operator, one field), or</li>
+<li>An array of objects (AND-combined).</li>
+</ul>
+<p>Deeply nested or runaway-large tables will be evaluated in full both server-side (initial render) and client-side (on every form change) — so keeping them simple is a performance and readability choice, not a hard requirement. Conditions that need richer logic (loops, lookups, multi-field reasoning) are better expressed as boolean condition functions.</p>
 
                     </main>
 

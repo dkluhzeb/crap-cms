@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -188,6 +188,30 @@
 <p>HMAC-SHA256 of data with a key, returned as hex.</p>
 <pre><code class="language-lua">local mac = crap.crypto.hmac_sha256("message", "secret-key")
 </code></pre>
+<blockquote>
+<p><strong>Security:</strong> Always compare HMACs (and any other secret-derived bytes) with
+<code>crap.crypto.constant_time_eq(...)</code>, <strong>not</strong> with <code>==</code>. Lua’s <code>==</code> on strings
+short-circuits on the first differing byte, which leaks information about
+where the mismatch occurred through response timing and lets an attacker
+recover the expected tag byte-by-byte. Example:</p>
+<pre><code class="language-lua">local expected = crap.crypto.hmac_sha256(body, secret)
+
+if crap.crypto.constant_time_eq(expected, incoming_signature) then
+    -- verified, safe to proceed
+end
+</code></pre>
+</blockquote>
+<h2 id="crapcryptoconstant_time_eqa-b"><a class="header" href="#crapcryptoconstant_time_eqa-b">crap.crypto.constant_time_eq(a, b)</a></h2>
+<p>Constant-time byte-string equality check. Returns <code>true</code> iff the two inputs
+are byte-identical. Runs in time that does not depend on where (or whether)
+the bytes differ, so the caller cannot learn anything about the expected
+value from response timing.</p>
+<p>Length mismatches and content mismatches are indistinguishable from the
+return value — both yield <code>false</code>.</p>
+<pre><code class="language-lua">local ok = crap.crypto.constant_time_eq(expected_tag, provided_tag)
+</code></pre>
+<p>Use this for comparing HMAC tags, session tokens, API keys, signed cookies,
+webhook signatures, or any other secret-derived bytes.</p>
 <h2 id="crapcryptobase64_encodestr--crapcryptobase64_decodestr"><a class="header" href="#crapcryptobase64_encodestr--crapcryptobase64_decodestr">crap.crypto.base64_encode(str) / crap.crypto.base64_decode(str)</a></h2>
 <p>Base64 encoding and decoding.</p>
 <pre><code class="language-lua">local encoded = crap.crypto.base64_encode("hello")  -- "aGVsbG8="

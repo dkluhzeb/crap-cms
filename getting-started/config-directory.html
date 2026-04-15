@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -185,6 +185,7 @@
 ├── init.lua               # Runs at startup (register global hooks, etc.)
 ├── .luarc.json            # LuaLS config for IDE support
 ├── .gitignore             # Ignores data/, uploads/, types/ by default
+├── stylua.toml            # StyLua formatter config for Lua files
 ├── collections/           # One .lua file per collection
 │   ├── posts.lua
 │   ├── users.lua
@@ -194,11 +195,14 @@
 ├── hooks/                 # Lua modules referenced by hook strings
 │   ├── posts.lua
 │   └── access.lua
+├── access/                # Reusable access-control Lua modules
+├── jobs/                  # Job handler Lua modules (see `jobs` feature)
+├── plugins/               # Plugin Lua modules (see `plugins` feature)
 ├── migrations/            # Custom SQL migrations (see `migrate` command)
 ├── templates/             # Handlebars overrides for admin UI
 │   └── fields/
 │       └── custom.hbs
-├── translations/          # Admin UI translation overrides (JSON per locale)
+├── translations/          # (optional, user-created) Admin UI translation overrides (JSON per locale)
 │   └── de.json
 ├── static/                # Static file overrides (CSS, JS, fonts)
 ├── data/                  # Runtime data (auto-created)
@@ -211,6 +215,7 @@
     ├── crap.lua           # API surface types (crap.* functions)
     └── generated.lua      # Per-collection types (data, doc, hook, filters)
 </code></pre>
+<p>The <code>access/</code>, <code>jobs/</code>, <code>plugins/</code>, <code>migrations/</code>, <code>templates/</code>, and <code>static/</code> directories are created empty by <code>crap-cms init</code> — populate them as needed. The <code>translations/</code> directory is not scaffolded; create it yourself when you want to override admin UI strings (see <a href="../locale/overview.html">Localization</a>).</p>
 <h2 id="file-loading-order"><a class="header" href="#file-loading-order">File Loading Order</a></h2>
 <ol>
 <li><code>crap.toml</code> is loaded first (or defaults are used if absent)</li>

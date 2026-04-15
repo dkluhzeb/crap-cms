@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -234,7 +234,7 @@
 <pre><code class="language-json">{ "tags": ["tag_1", "tag_2", "tag_3"] }
 </code></pre>
 <p>Order is preserved via the <code>_order</code> column in the junction table.</p>
-<p>On write, all existing junction table rows for the parent are deleted and replaced. This is a full replacement.</p>
+<p>When a has-many field <strong>is included</strong> in the update payload, all existing junction rows for the parent are deleted and replaced with the new list — a full replacement of that field’s targets.</p>
 <h2 id="partial-updates"><a class="header" href="#partial-updates">Partial Updates</a></h2>
 <p>For has-many fields, if the field is <strong>absent</strong> from the update data, the junction table is <strong>not modified</strong>. This supports partial updates — only explicitly included fields are changed.</p>
 

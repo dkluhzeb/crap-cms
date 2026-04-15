@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -212,6 +212,23 @@
 <blockquote>
 <p><strong>Note:</strong> For <code>exists</code>/<code>not_exists</code>, the value is ignored — only the key matters. Field values must be strings or operator objects — numeric/boolean shorthand (e.g., <code>{"count": 42}</code>) is not supported in the gRPC JSON <code>where</code> clause (use <code>{"count": {"equals": "42"}}</code> instead).</p>
 </blockquote>
+<h2 id="field-type-aware-coercion"><a class="header" href="#field-type-aware-coercion">Field-Type-Aware Coercion</a></h2>
+<p>Even though filter values are always sent as JSON strings, they are <strong>coerced to the column’s SQL type before binding</strong> — so numeric comparisons are numeric, not lexicographic. Coercion is keyed off the field definition and the operator:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field type</th><th>Bound as</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td>Number</td><td><code>REAL</code> (f64)</td><td>Invalid / non-finite numbers fall back to <code>TEXT</code> with a runtime warning</td></tr>
+<tr><td>Checkbox</td><td><code>INTEGER</code></td><td>Accepts <code>"true"</code>/<code>"false"</code>/<code>"1"</code>/<code>"0"</code> (and <code>"yes"</code>/<code>"no"</code>/<code>"on"</code>/<code>"off"</code>); unknown values fall back to <code>TEXT</code></td></tr>
+<tr><td>Date</td><td><code>TEXT</code></td><td>Normalized via ISO so lexicographic comparison works</td></tr>
+<tr><td>Text-like fields</td><td><code>TEXT</code></td><td>Default for everything else</td></tr>
+<tr><td>Text-only operators (<code>like</code>, <code>contains</code>, <code>starts_with</code>, <code>ends_with</code>, <code>regex</code>)</td><td><code>TEXT</code></td><td>Always bound as text even on numeric columns</td></tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="../lua-api/filter-operators.html">Filter Operators</a> for the full per-operator table — the same coercion rules apply to Lua, gRPC, admin URL query params, and MCP.</p>
 <h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
 <pre><code class="language-bash"># Published posts with "hello" in the title
 grpcurl -plaintext -d '{

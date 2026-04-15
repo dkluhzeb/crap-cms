@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -212,6 +212,12 @@ print(data.count)  -- 42
 </tbody>
 </table>
 </div>
+<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
+<ul>
+<li><strong>Integer precision</strong> — JSON numbers are decoded into Lua number (<code>f64</code> under the hood). Integers larger than 2^53 (~9 × 10^15) lose precision. If you need to preserve large IDs exactly, encode them as strings before serializing.</li>
+<li><strong>Nesting depth</strong> — encoder rejects tables nested more than 64 levels deep to guard against runaway recursion. A self-referential Lua table (<code>t.a = t</code>) will exceed this limit and error rather than looping forever.</li>
+<li><strong>Decode of untrusted input</strong> — decoding is permissive and does not currently enforce a maximum depth on the input side. Keep that in mind when processing large attacker-controlled payloads.</li>
+</ul>
 <h2 id="common-patterns"><a class="header" href="#common-patterns">Common Patterns</a></h2>
 <h3 id="webhook-payload"><a class="header" href="#webhook-payload">Webhook Payload</a></h3>
 <pre><code class="language-lua">crap.http.request({

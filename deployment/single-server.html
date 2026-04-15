@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -189,6 +189,16 @@ crap-cms serve --status       # check if running
 crap-cms serve --stop         # graceful shutdown
 crap-cms serve --restart      # stop + start
 </code></pre>
+<h2 id="logs"><a class="header" href="#logs">Logs</a></h2>
+<p>When you run with <code>--detach</code>, file logging is auto-enabled — the child process no longer owns a terminal, so stdout / stderr are redirected to <code>/dev/null</code> and the log output instead goes to a rotating file in the log directory.</p>
+<ul>
+<li><strong>Location</strong>: <code>&lt;config_dir&gt;/data/logs/</code> by default (configurable via <code>[logging] path</code> in <code>crap.toml</code>; absolute paths are respected).</li>
+<li><strong>Rotation</strong>: daily by default (<code>[logging] rotation</code>: <code>"daily"</code> / <code>"hourly"</code> / <code>"never"</code>). Old files are pruned on startup based on <code>[logging] max_files</code> (default <code>30</code>).</li>
+<li><strong>Reading logs</strong>: <code>crap-cms logs</code> tails recent output, <code>crap-cms logs -f</code> follows in real time, <code>crap-cms logs clear</code> deletes rotated files. Or tail the files under <code>data/logs/</code> directly with any tool of your choice.</li>
+<li><strong>Structured output</strong>: pass <code>--json</code> to <code>crap-cms serve</code> (or set <code>CRAP_LOG_FORMAT=json</code>) for JSON lines suitable for log-aggregation pipelines (Loki, ELK, etc.).</li>
+</ul>
+<p>Foreground <code>crap-cms serve</code> (no <code>--detach</code>) keeps logs on stdout by default — set <code>[logging] file = true</code> in <code>crap.toml</code> to also write to a file.</p>
+<p>If the disk fills up, log writes silently fail; size the log directory to tolerate <code>max_files × typical_rotation_size</code> worst-case.</p>
 <h2 id="what-you-get"><a class="header" href="#what-you-get">What You Get</a></h2>
 <ul>
 <li><strong>Admin UI</strong> on port 3000</li>

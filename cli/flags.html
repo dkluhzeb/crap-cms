@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -624,7 +624,7 @@ crap-cms export -c posts -o posts.json
 crap-cms import backup.json -c posts
 </code></pre>
 <h3 id="typegen--generate-typed-definitions"><a class="header" href="#typegen--generate-typed-definitions"><code>typegen</code> — Generate typed definitions</a></h3>
-<pre><code class="language-bash">crap-cms typegen [-l &lt;LANG&gt;] [-o &lt;DIR&gt;]
+<pre><code class="language-bash">crap-cms typegen [-l &lt;LANG&gt;] [-o &lt;DIR&gt;] [--proto &lt;MODULE_PATH&gt;]
 </code></pre>
 <div class="table-wrapper">
 <table>
@@ -634,12 +634,16 @@ crap-cms import backup.json -c posts
 <tbody>
 <tr><td><code>--lang</code></td><td><code>-l</code></td><td><code>lua</code></td><td>Output language: <code>lua</code>, <code>ts</code>, <code>go</code>, <code>py</code>, <code>rs</code>, <code>all</code></td></tr>
 <tr><td><code>--output</code></td><td><code>-o</code></td><td><code>&lt;config&gt;/types/</code></td><td>Output directory for generated files</td></tr>
+<tr><td><code>--proto</code></td><td>—</td><td>—</td><td>(Rust only) Generate <code>From&lt;proto::Document&gt;</code> conversions alongside <code>generated.rs</code>. The value is the Rust module path to the prost-generated proto types (e.g. <code>"crate::proto"</code>). Writes <code>generated_proto.rs</code> next to <code>generated.rs</code>.</td></tr>
 </tbody>
 </table>
 </div>
 <pre><code class="language-bash">crap-cms typegen
 crap-cms typegen -l all
 crap-cms typegen -l ts -o ./client/src/types
+
+# Rust + proto conversions
+crap-cms typegen -l rs --proto "crate::proto"
 </code></pre>
 <h3 id="proto--export-proto-file"><a class="header" href="#proto--export-proto-file"><code>proto</code> — Export proto file</a></h3>
 <pre><code class="language-bash">crap-cms proto [-o &lt;PATH&gt;]
@@ -880,6 +884,61 @@ crap-cms images stats
 crap-cms images retry --id abc123
 crap-cms images retry --all -y
 crap-cms images purge --older-than 30d
+</code></pre>
+<h3 id="trash--manage-soft-deleted-documents"><a class="header" href="#trash--manage-soft-deleted-documents"><code>trash</code> — Manage soft-deleted documents</a></h3>
+<p>Inspect, restore, and purge documents in the trash (only for collections with <code>soft_delete = true</code>). See <a href="../collections/soft-deletes.html">Soft Deletes</a> for details on the soft-delete model.</p>
+<h4 id="trash-list"><a class="header" href="#trash-list"><code>trash list</code></a></h4>
+<pre><code class="language-bash">crap-cms trash list [-c &lt;COLLECTION&gt;]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--collection</code></td><td><code>-c</code></td><td>Filter by collection slug (default: all collections with soft delete)</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="trash-restore"><a class="header" href="#trash-restore"><code>trash restore</code></a></h4>
+<pre><code class="language-bash">crap-cms trash restore &lt;COLLECTION&gt; &lt;ID&gt;
+</code></pre>
+<p>Restore a single trashed document back to the active list. Both <code>COLLECTION</code> and <code>ID</code> are positional arguments.</p>
+<h4 id="trash-purge"><a class="header" href="#trash-purge"><code>trash purge</code></a></h4>
+<pre><code class="language-bash">crap-cms trash purge [-c &lt;COLLECTION&gt;] [--older-than &lt;DURATION&gt;] [--dry-run]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--collection</code></td><td><code>-c</code></td><td>—</td><td>Filter by collection slug (default: all soft-delete collections)</td></tr>
+<tr><td><code>--older-than</code></td><td>—</td><td><code>all</code></td><td>Purge documents deleted more than this ago (e.g. <code>30d</code>, <code>24h</code>, <code>30m</code>), or <code>all</code> for every trashed document</td></tr>
+<tr><td><code>--dry-run</code></td><td>—</td><td>—</td><td>Print what would be deleted without actually deleting</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="trash-empty"><a class="header" href="#trash-empty"><code>trash empty</code></a></h4>
+<pre><code class="language-bash">crap-cms trash empty &lt;COLLECTION&gt; [-y]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--confirm</code></td><td><code>-y</code></td><td>Required — confirms the destructive operation</td></tr>
+</tbody>
+</table>
+</div>
+<p>Permanently delete every trashed document in the given collection.</p>
+<pre><code class="language-bash">crap-cms trash list
+crap-cms trash list -c posts
+crap-cms trash restore posts abc123
+crap-cms trash purge --older-than 7d
+crap-cms trash purge -c posts --dry-run
+crap-cms trash empty posts -y
 </code></pre>
 <h3 id="mcp--start-the-mcp-server-stdio"><a class="header" href="#mcp--start-the-mcp-server-stdio"><code>mcp</code> — Start the MCP server (stdio)</a></h3>
 <p>Start an MCP (Model Context Protocol) server over stdio for AI assistant integration.</p>

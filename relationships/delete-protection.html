@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -208,7 +208,8 @@
 <li>Trashed documents still “own” their references in the database</li>
 </ul>
 <p>Only <strong>hard deletion</strong> (permanent) decrements ref counts on the targets.</p>
-<p>Soft-deleted documents that are referenced by other documents can still be trashed — the ref count check only blocks deletion of the <em>target</em> document.</p>
+<p>The ref count check only blocks <strong>deletion of a target</strong>: a document can always be soft-deleted regardless of how many others reference it.</p>
+<p>When a referenced document is soft-deleted, it is <strong>omitted</strong> from relationship population on read — it does not appear as an ID string or as a populated object. Has-one fields resolve to <code>null</code>; has-many fields have the soft-deleted entry dropped from the array. Restore the document to make it appear again.</p>
 <h2 id="admin-ui"><a class="header" href="#admin-ui">Admin UI</a></h2>
 <p>The delete confirmation page shows a warning when a document has <code>_ref_count &gt; 0</code>:</p>
 <blockquote>

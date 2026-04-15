@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -250,7 +250,9 @@
 <pre><code class="language-lua">-- drawer is the default for upload fields — no need to set it explicitly
 crap.fields.upload({
     name = "featured_image",
-    relation_to = "media",
+    relationship = {
+        collection = "media",
+    },
 })
 </code></pre>
 <ul>

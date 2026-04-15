@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -209,9 +209,10 @@
 <h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
 <ol>
 <li><strong>Shared database</strong> — PostgreSQL (build with <code>--features postgres</code>)</li>
-<li><strong>Shared file storage</strong> — S3-compatible (build with <code>--features s3-storage</code>) or shared filesystem (NFS/EFS)</li>
-<li><strong>Shared cache</strong> (recommended) — Redis (build with <code>--features redis</code>) for cross-server cache invalidation</li>
-<li><strong>Shared rate limits</strong> (recommended) — Redis for cross-server rate limit enforcement</li>
+<li><strong>Shared file storage</strong> — <strong>S3-compatible object storage only</strong> (build with <code>--features s3-storage</code>). Works with AWS S3, MinIO, Cloudflare R2, Backblaze B2, or any other S3-compatible backend. Shared filesystems (NFS, EFS, SMB) are <strong>NOT supported</strong> for multi-node — <code>storage = "local"</code> assumes a single writer and is not tested against the fsync / advisory-lock semantics of networked filesystems. Use object storage.</li>
+<li><strong>Shared rate limits</strong> (<strong>required</strong> for security) — Redis (build with <code>--features redis</code>). Without it, per-IP login rate limits are per-node counters: an attacker that round-robins across nodes multiplies their allowance by the node count (e.g. a 5-attempt limit across 3 nodes becomes 15 attempts before any node throttles). This is a throttling bypass, not a performance tweak.</li>
+<li><strong>Shared cache</strong> (recommended) — Redis for cross-server cache invalidation</li>
+<li><strong>Shared live-update transport</strong> (required if you rely on SSE or gRPC Subscribe across more than one node) — Redis pub/sub so mutation events and user-invalidation signals fan out to every server node. See <a href="#5-live-updates-sse--grpc-subscribe">Live Updates</a> below.</li>
 </ol>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <h3 id="1-database"><a class="header" href="#1-database">1. Database</a></h3>
@@ -221,6 +222,7 @@ backend = "postgres"
 url = "host=db.example.com user=crap dbname=crap_cms"
 </code></pre>
 <h3 id="2-file-storage"><a class="header" href="#2-file-storage">2. File Storage</a></h3>
+<p>S3-compatible object storage is the only supported multi-node option. <code>storage = "local"</code> is fine for single-node; across multiple nodes it breaks because each node writes to its own local disk. Do <strong>not</strong> substitute a shared filesystem (NFS, EFS, SMB) — the code isn’t tested against their fsync / locking semantics and silent data loss is the likely failure mode.</p>
 <pre><code class="language-toml">[upload]
 storage = "s3"
 
@@ -230,6 +232,7 @@ endpoint = "https://s3.amazonaws.com"
 access_key = "${AWS_ACCESS_KEY}"
 secret_key = "${AWS_SECRET_KEY}"
 </code></pre>
+<p>Any S3-compatible backend works — AWS S3, MinIO, Cloudflare R2, Backblaze B2, etc. Point <code>endpoint</code> at the provider’s URL.</p>
 <h3 id="3-cache"><a class="header" href="#3-cache">3. Cache</a></h3>
 <p>Without a shared cache, each server maintains its own in-memory populate cache. Writes on one server won’t invalidate another’s cache. Use Redis for shared cache invalidation:</p>
 <pre><code class="language-toml">[cache]
@@ -242,17 +245,31 @@ prefix = "crap:"
 backend = "memory"
 max_age_secs = 10
 </code></pre>
-<h3 id="4-rate-limits"><a class="header" href="#4-rate-limits">4. Rate Limits</a></h3>
-<p>Without shared rate limits, each server tracks login attempts independently. Use Redis to enforce global rate limits:</p>
+<h3 id="4-rate-limits-required"><a class="header" href="#4-rate-limits-required">4. Rate Limits (required)</a></h3>
+<p>Without shared rate limits, each server tracks login attempts independently — an attacker who round-robins requests across nodes effectively multiplies their rate-limit budget by the node count. A 5-attempt-per-IP limit spread across 3 nodes means 15 attempts before any single node throttles. This is a <strong>security requirement</strong>, not a performance optimization: use Redis to enforce a global per-IP counter.</p>
 <pre><code class="language-toml">[auth]
 rate_limit_backend = "redis"
 # rate_limit_redis_url defaults to cache.redis_url if empty
 </code></pre>
-<h3 id="5-app-servers"><a class="header" href="#5-app-servers">5. App Servers</a></h3>
+<h3 id="5-live-updates-sse--grpc-subscribe"><a class="header" href="#5-live-updates-sse--grpc-subscribe">5. Live Updates (SSE / gRPC Subscribe)</a></h3>
+<p>Two transports are available:</p>
+<ul>
+<li><strong><code>transport = "memory"</code></strong> (default) — events are broadcast on an in-process <code>tokio::sync::broadcast</code> channel. A write on node A reaches only subscribers connected to node A. Acceptable for sticky-load-balanced setups where every subscriber is pinned to the node that serves every write they care about; insufficient for round-robin balancing or for a pure reader node watching writes from elsewhere.</li>
+<li><strong><code>transport = "redis"</code></strong> — mutation events and user-invalidation signals (<code>PermissionDenied</code> on lock / hard-delete) are published to Redis pub/sub and fan out to every node. Any subscriber on any node sees every event, regardless of which node published it. This is the correct choice as soon as you have more than one node.</li>
+</ul>
+<pre><code class="language-toml">[live]
+transport = "redis"
+# Reuses [cache] redis_url — no duplicate configuration
+</code></pre>
+<p>Both transports use the same Redis URL configured under <code>[cache] redis_url</code> (single source of truth — no separate <code>[live] redis_url</code> key). <code>transport = "redis"</code> requires <code>--features redis</code> at build time; if the feature is missing, startup aborts with an explicit error.</p>
+<p>Events are JSON-encoded and published to the <code>crap:events</code> / <code>crap:invalidations</code> channels. The same send-timeout / lagged-subscriber drop semantics apply as for the in-process transport — a Redis reader that can’t keep up is force-dropped with <code>RecvError::Lagged</code>.</p>
+<p>Sticky load balancing is still recommended for SSE and gRPC Subscribe streams even with <code>transport = "redis"</code>: reconnects to a different node lose the in-flight subscription context (sequence position, filter state) and the client has to re-subscribe. See the <a href="#load-balancer-stickiness">Load Balancer Stickiness</a> section below.</p>
+<p>See also <a href="../live-updates/overview.html">Live Updates Overview</a> for the transport-selection rationale and caveats.</p>
+<h3 id="6-app-servers"><a class="header" href="#6-app-servers">6. App Servers</a></h3>
 <p>Run without the scheduler — job processing is handled by dedicated workers.</p>
 <pre><code class="language-bash">crap-cms serve --no-scheduler
 </code></pre>
-<h3 id="6-workers"><a class="header" href="#6-workers">6. Workers</a></h3>
+<h3 id="7-workers"><a class="header" href="#7-workers">7. Workers</a></h3>
 <p>One or more dedicated job workers process queues.</p>
 <pre><code class="language-bash"># General worker (all queues)
 crap-cms work --detach
@@ -293,6 +310,21 @@ webhook_headers = { Authorization = "Bearer ${SENDGRID_API_KEY}" }
 queue_retries = 5
 queue_concurrency = 10
 </code></pre>
+<h2 id="load-balancer-stickiness"><a class="header" href="#load-balancer-stickiness">Load Balancer Stickiness</a></h2>
+<p>Not every request benefits from sticky sessions, and not every route can tolerate reconnects:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Traffic</th><th>Stickiness</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td>gRPC unary / regular HTTP (find, create, update, login, admin pages)</td><td>Not required</td><td>Each request is stateless. Round-robin freely.</td></tr>
+<tr><td>gRPC Subscribe / Admin SSE (long-lived streams)</td><td><strong>Recommended</strong></td><td>Reconnects to a different node lose the in-flight subscription state (sequence cursor, filter context). The client has to re-subscribe, which may miss events in the gap.</td></tr>
+</tbody>
+</table>
+</div>
+<p>With <code>transport = "redis"</code> for live updates, a reconnecting subscriber on a different node will still see all future events — but the state that was held on the original node (current sequence position, any pending-but-undelivered events buffered in the broadcast channel) is gone. Sticky sessions keep that state warm across the connection’s lifetime.</p>
+<p>A reasonable default is sticky sessions for <code>/api/*</code> streaming routes and the admin SSE endpoint, round-robin for everything else.</p>
 
                     </main>
 

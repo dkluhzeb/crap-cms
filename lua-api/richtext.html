@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -250,6 +250,39 @@ a warning at registration time but do not error.</p>
 <li>Custom nodes appear in the rich text editor toolbar for fields that include them.</li>
 <li>The <code>render</code> function is called during <code>crap.richtext.render()</code> to convert custom nodes to HTML.</li>
 </ul>
+<h2 id="render-output-is-not-sanitized"><a class="header" href="#render-output-is-not-sanitized">Render output is NOT sanitized</a></h2>
+<p>The string your <code>render</code> function returns is inserted directly into the HTML output —
+<strong>no escaping, no sanitization, no tag allowlist</strong>. Whatever you return becomes
+raw markup in the rendered page.</p>
+<p>This is by design: custom nodes exist precisely so operators can emit structured
+HTML. But the trust boundary is strict:</p>
+<ul>
+<li><code>render</code> is <strong>trusted code</strong>. It runs server-side inside Lua you wrote.</li>
+<li>Any user-supplied data you interpolate into the output string (node attrs,
+document content, etc.) <strong>must</strong> be escaped by you before concatenation.</li>
+</ul>
+<p>Safe pattern — escape the parts that came from user input:</p>
+<pre><code class="language-lua">local function escape_html(s)
+    s = s or ""
+    s = s:gsub("&amp;", "&amp;amp;"):gsub("&lt;", "&amp;lt;"):gsub("&gt;", "&amp;gt;")
+    s = s:gsub('"', "&amp;quot;"):gsub("'", "&amp;#39;")
+    return s
+end
+
+crap.richtext.register_node("callout", {
+    attrs = { crap.fields.text({ name = "body" }) },
+    render = function(attrs)
+        return '&lt;div class="callout"&gt;' .. escape_html(attrs.body) .. '&lt;/div&gt;'
+    end,
+})
+</code></pre>
+<p>Unsafe pattern — concatenating a user field directly produces stored XSS:</p>
+<pre><code class="language-lua">render = function(attrs)
+    return '&lt;div class="callout"&gt;' .. (attrs.body or "") .. '&lt;/div&gt;'  -- BAD
+end
+</code></pre>
+<p>Server-side richtext output is NOT passed through any sanitizer — there is no
+fallback. Treat every interpolation as a potential injection vector.</p>
 
                     </main>
 

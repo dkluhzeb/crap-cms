@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -179,6 +179,9 @@
                     <main>
                         <h1 id="query--filters"><a class="header" href="#query--filters">Query &amp; Filters</a></h1>
 <p>Unified reference for querying documents across both the Lua API and gRPC API.</p>
+<blockquote>
+<p><strong>Note on soft-deleted rows</strong>: collections with <code>soft_delete = true</code> automatically exclude rows where <code>_deleted_at IS NOT NULL</code> from <code>Find</code>, <code>Count</code>, and populate. Filters on system columns (names starting with <code>_</code>) are rejected. Use the request-level <code>trash = true</code> / <code>draft = true</code> flags to reach internally-scoped data.</p>
+</blockquote>
 <h2 id="filter-operators"><a class="header" href="#filter-operators">Filter Operators</a></h2>
 <div class="table-wrapper">
 <table>
@@ -425,11 +428,7 @@ grpcurl -plaintext -d '{"collection": "articles", "draft": true}' \
 grpcurl -plaintext -d '{"collection": "articles", "id": "abc123", "draft": true}' \
     localhost:50051 crap.ContentAPI/FindByID
 </code></pre>
-<p>You can also filter directly on <code>_status</code>:</p>
-<pre><code class="language-lua">crap.collections.find("articles", {
-    where = { _status = "draft" },
-})
-</code></pre>
+<p>Filters on system columns (field paths starting with <code>_</code>, e.g. <code>_status</code>, <code>_deleted_at</code>) are rejected. Use the <code>draft = true</code> request flag to include drafts, and <code>trash = true</code> to reach soft-deleted rows — these are the supported entry points.</p>
 <p>See <a href="../collections/versions.html">Versions &amp; Drafts</a> for the full workflow.</p>
 <h2 id="nested-field-filters-dot-notation"><a class="header" href="#nested-field-filters-dot-notation">Nested Field Filters (Dot Notation)</a></h2>
 <p>You can filter on sub-fields of group, array, blocks, and has-many relationship fields using dot notation.</p>
@@ -551,8 +550,8 @@ crap.collections.find("posts", {
 <li><code>id</code></li>
 <li><code>created_at</code> (if timestamps enabled)</li>
 <li><code>updated_at</code> (if timestamps enabled)</li>
-<li><code>_status</code> (if <code>versions.drafts</code> enabled)</li>
 </ul>
+<p>System columns (names starting with <code>_</code>, such as <code>_status</code>, <code>_deleted_at</code>, <code>_ref_count</code>, <code>_locked</code>, <code>_password_hash</code>) are engine-internal and cannot be filtered on directly. Reach their data via typed request flags (<code>draft = true</code>, <code>trash = true</code>) instead.</p>
 <p>Additionally, you can filter on sub-fields using dot notation:</p>
 <ul>
 <li><strong>Group sub-fields:</strong> <code>group_name.sub_field</code> (syntactic sugar for <code>group_name__sub_field</code>)</li>

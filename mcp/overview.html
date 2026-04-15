@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -214,8 +214,9 @@ exclude_collections = []    # Blacklist (takes precedence over include)
 <p>When <code>mcp.http = true</code>, the admin server exposes a <code>POST /mcp</code> endpoint.
 Send JSON-RPC 2.0 requests as the request body.</p>
 <p>An <code>api_key</code> is <strong>required</strong> when HTTP transport is enabled. Requests must include
-an <code>Authorization: Bearer &lt;key&gt;</code> header. The server will refuse to start if
-<code>mcp.http = true</code> and <code>api_key</code> is empty.</p>
+an <code>Authorization: Bearer &lt;key&gt;</code> header. If <code>mcp.http = true</code> and <code>api_key</code> is empty,
+every request to <code>POST /mcp</code> is rejected with <code>401 Unauthorized</code> — the server still
+starts, but the endpoint is effectively inaccessible.</p>
 <h2 id="auto-generated-tools"><a class="header" href="#auto-generated-tools">Auto-Generated Tools</a></h2>
 <h3 id="content-crud-per-collection"><a class="header" href="#content-crud-per-collection">Content CRUD (per collection)</a></h3>
 <p>For each collection (e.g., <code>posts</code>), five tools are generated:</p>
@@ -315,9 +316,11 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 <ul>
 <li><strong>stdio:</strong> Access is controlled by who can run the process.</li>
 <li><strong>HTTP:</strong> Access is controlled by the <code>api_key</code> setting. An API key is <strong>required</strong>
-when <code>http = true</code> — the server will refuse to start without one. As a defense-in-depth
-measure, the HTTP endpoint also rejects all requests if the API key is somehow empty
-at runtime.</li>
+when <code>http = true</code> — set it in <code>[mcp]</code> in <code>crap.toml</code> before enabling HTTP. If
+<code>http = true</code> but <code>api_key</code> is empty, the server still starts and registers the
+route, but every request to <code>POST /mcp</code> is rejected with <code>401 Unauthorized</code>. The
+check is per-request, not at startup; operators should verify <code>api_key</code> is set
+before exposing the endpoint externally.</li>
 </ul>
 <p>To restrict which collections are accessible, use <code>include_collections</code> /
 <code>exclude_collections</code>. These filters are enforced both in tool listing (<code>tools/list</code>)

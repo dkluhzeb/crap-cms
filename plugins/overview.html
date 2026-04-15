@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -190,6 +190,30 @@ registered collection or global.</li>
 </ol>
 <p>This works because <code>crap.collections.define()</code> and <code>crap.globals.define()</code> overwrite —
 calling either twice for the same slug replaces the first definition with the second.</p>
+<h2 id="load-order"><a class="header" href="#load-order">Load Order</a></h2>
+<p>Files are loaded in this fixed order at server start:</p>
+<ol>
+<li><code>collections/*.lua</code> — <strong>alphabetical by filename</strong></li>
+<li><code>globals/*.lua</code> — alphabetical</li>
+<li><code>jobs/*.lua</code> — alphabetical</li>
+<li><code>init.lua</code> — last</li>
+</ol>
+<p>Plugins live outside these three directories and are picked up only when <code>init.lua</code>
+calls <code>require("plugin_name")</code>. <strong>The order of those <code>require()</code> calls controls
+plugin execution order</strong> — there is no automatic dependency resolution.</p>
+<p>If plugin A depends on collections, fields, or hooks added by plugin B, require B
+first:</p>
+<pre><code class="language-lua">-- init.lua
+require("my_plugins.base").install()        -- adds audit fields to all collections
+require("my_plugins.workflow").install()    -- reads those audit fields
+</code></pre>
+<p>Getting the order wrong produces silent runtime failures — the earlier plugin sees
+collections without the later plugin’s fields, and any hook that depends on those
+fields fires on incomplete data without warning. Keep the <code>require()</code> block in
+<code>init.lua</code> explicit and well-commented.</p>
+<p>Two plugins that register the same collection slug silently overwrite each other
+(last call wins). Log output includes a <code>debug!</code> message but no warning. Pick slugs
+carefully and review any plugin you adopt from a third party.</p>
 <h2 id="writing-a-plugin"><a class="header" href="#writing-a-plugin">Writing a Plugin</a></h2>
 <p>A plugin is a Lua module that returns a table with an <code>install()</code> function:</p>
 <pre><code class="language-lua">-- plugins/audit_log.lua

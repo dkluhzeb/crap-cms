@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -218,6 +218,7 @@
 <tr><td><code>localized</code></td><td>boolean</td><td><code>false</code></td><td>Enable per-locale values. Requires <a href="../locale/overview.html">localization</a> to be configured.</td></tr>
 <tr><td><code>validate</code></td><td>string</td><td><code>nil</code></td><td>Lua function ref for custom validation (see below).</td></tr>
 <tr><td><code>default_value</code></td><td>any</td><td><code>nil</code></td><td>Default value applied on create if no value provided.</td></tr>
+<tr><td><code>hidden</code></td><td>boolean</td><td><code>false</code></td><td>Strip from all read responses (gRPC, Lua, MCP, admin JSON, REST) and skip in the admin form. Writes are not stripped — internal hooks/Lua can still write the column. For admin-form-only hiding (value still returned by API), use <code>admin.hidden</code> instead.</td></tr>
 <tr><td><code>admin</code></td><td>table</td><td><code>{}</code></td><td>Admin UI display options.</td></tr>
 <tr><td><code>hooks</code></td><td>table</td><td><code>{}</code></td><td>Per-field lifecycle hooks.</td></tr>
 <tr><td><code>access</code></td><td>table</td><td><code>{}</code></td><td>Per-field access control.</td></tr>
@@ -261,7 +262,7 @@
 <tr><td><code>label</code></td><td>string | table</td><td><code>nil</code></td><td>UI label (defaults to title-cased field name). Supports <a href="../locale/overview.html#admin-label-localization">localized strings</a>.</td></tr>
 <tr><td><code>placeholder</code></td><td>string | table</td><td><code>nil</code></td><td>Input placeholder text. Supports <a href="../locale/overview.html#admin-label-localization">localized strings</a>.</td></tr>
 <tr><td><code>description</code></td><td>string | table</td><td><code>nil</code></td><td>Help text displayed below the input. Supports <a href="../locale/overview.html#admin-label-localization">localized strings</a>.</td></tr>
-<tr><td><code>hidden</code></td><td>boolean</td><td><code>false</code></td><td>Hide from admin UI forms</td></tr>
+<tr><td><code>hidden</code></td><td>boolean</td><td><code>false</code></td><td>Hide from the admin edit form. The field’s value is still returned in API responses (gRPC, Lua, MCP, REST) so consumers and admin widgets (e.g. upload preview, focal-point selector) can read it. For full API stripping, use the top-level <code>hidden</code> field property instead.</td></tr>
 <tr><td><code>readonly</code></td><td>boolean</td><td><code>false</code></td><td>Display but don’t allow editing</td></tr>
 <tr><td><code>width</code></td><td>string</td><td><code>nil</code></td><td>Field width: <code>"full"</code> (default), <code>"half"</code>, or <code>"third"</code></td></tr>
 <tr><td><code>position</code></td><td>string</td><td><code>"main"</code></td><td>Form layout position: <code>"main"</code> or <code>"sidebar"</code></td></tr>

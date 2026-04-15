@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -248,6 +248,54 @@
 8. before_broadcast hooks (background, no CRUD)
 9. EventBus publish (if not suppressed)
 </code></pre>
+<h2 id="before_broadcast"><a class="header" href="#before_broadcast"><code>before_broadcast</code></a></h2>
+<p>Fires after a <code>create</code>, <code>update</code>, or <code>delete</code> has been committed and the live setting
+check has passed, but <strong>before</strong> the event is dispatched on the EventBus to live
+subscribers (SSE, gRPC <code>Subscribe</code>). Runs in a background <code>spawn_blocking</code> task — never
+blocks the response to the originating request.</p>
+<p><strong>No CRUD access</strong> (the transaction is already closed).</p>
+<p>The hook receives a context table with <code>collection</code>, <code>operation</code> (<code>"create"</code>,
+<code>"update"</code>, or <code>"delete"</code>), and <code>data</code> (the document payload that would be broadcast).</p>
+<p><strong>Return values:</strong></p>
+<ul>
+<li>A table — broadcast continues with the (possibly mutated) <code>data</code>.</li>
+<li><code>nil</code> or <code>false</code> — the broadcast is <strong>suppressed</strong> for this subscriber wave; no
+event is dispatched.</li>
+</ul>
+<pre><code class="language-lua">crap.hooks.register("before_broadcast", function(ctx)
+    -- Don't broadcast drafts
+    if ctx.data.status == "draft" then
+        return nil
+    end
+
+    -- Strip a sensitive field from the broadcast payload only
+    ctx.data.internal_notes = nil
+    return ctx
+end)
+</code></pre>
+<p>Collection-level <code>before_broadcast</code> hook refs run before global registered hooks. A
+suppression at any stage stops the rest of the chain.</p>
+<h2 id="before_render"><a class="header" href="#before_render"><code>before_render</code></a></h2>
+<p>Fires before an admin page template is rendered. The hook receives the full template
+context (the JSON object passed to the template engine) as a Lua table, and may return
+a modified table to inject globals, sidebar items, or additional template variables.</p>
+<p><strong>No CRUD access</strong>, <strong>global hooks only</strong> (no collection-level refs). Errors, non-table
+returns, and conversion failures log a warning and fall back to the unmodified context.</p>
+<p><strong>Return values:</strong></p>
+<ul>
+<li>A table — the new template context.</li>
+<li><code>nil</code> — the original context is preserved (no-op).</li>
+<li>Anything else — logged as a warning, ignored.</li>
+</ul>
+<pre><code class="language-lua">crap.hooks.register("before_render", function(ctx)
+    -- Inject a banner shown in the admin layout
+    ctx.banner_message = "Maintenance window 02:00 UTC tonight"
+    return ctx
+end)
+</code></pre>
+<p>Fires from every admin page handler (dashboard, list, edit, delete confirm, version
+list/restore, login, forgot/reset password, etc.). Inspect <code>ctx</code> to branch on the page
+being rendered.</p>
 
                     </main>
 

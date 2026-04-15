@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -194,6 +194,7 @@
   optional string after_cursor = 10;    // opaque forward cursor for cursor-based pagination
   optional string before_cursor = 11;   // opaque backward cursor for cursor-based pagination
   optional string search = 12;          // FTS5 full-text search query
+  optional bool trash = 13;             // true = return only soft-deleted documents
 }
 
 message PaginationInfo {
@@ -234,6 +235,7 @@ message FindResponse {
   optional string locale = 4;  // locale code for localized fields
   repeated string select = 5;  // fields to return (empty = all)
   optional bool draft = 6;   // true = return latest version (may be draft)
+  optional bool trash = 7;   // true = allow finding soft-deleted documents
 }
 
 message FindByIDResponse {
@@ -330,7 +332,7 @@ message UndeleteResponse {
 <pre><code class="language-bash">grpcurl -plaintext -d '{
     "collection": "posts",
     "id": "abc123"
-}' localhost:50051 crap.ContentAPI/Restore
+}' localhost:50051 crap.ContentAPI/Undelete
 </code></pre>
 <h2 id="count"><a class="header" href="#count">Count</a></h2>
 <p>Count documents matching an optional filter. Respects collection-level read access.</p>
@@ -517,6 +519,95 @@ message VerifyEmailResponse {
 }' localhost:50051 crap.ContentAPI/VerifyEmail
 </code></pre>
 <p>Only relevant for auth collections with <code>verify_email: true</code>.</p>
+<h2 id="validate"><a class="header" href="#validate">Validate</a></h2>
+<p>Check field data against collection rules without persisting. Runs field validation (required, unique, type checks, custom validators) but does not open a write transaction. Use this to preview validation errors before a <code>Create</code> or <code>Update</code> call.</p>
+<pre><code class="language-protobuf">message ValidateRequest {
+  string collection = 1;
+  google.protobuf.Struct data = 2;
+  optional bool draft = 3;              // relaxes required-field checks for draft collections
+  optional string locale = 4;           // locale code for localized field validation
+  optional string id = 5;               // when set, exclude this ID from unique checks (update path)
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  map&lt;string, string&gt; errors = 2;       // per-field error messages; empty when valid
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -d '{
+    "collection": "posts",
+    "data": { "title": "Hello", "slug": "hello" }
+}' localhost:50051 crap.ContentAPI/Validate
+</code></pre>
+<p><strong>Access:</strong> optional. If a Bearer token is present, the collection’s <code>create</code>/<code>update</code> access function is evaluated (<code>update</code> when <code>id</code> is set). Field-level write-denied fields are stripped before validation runs.</p>
+<h2 id="lockaccount"><a class="header" href="#lockaccount">LockAccount</a></h2>
+<p>Prevent a user from logging in. Only valid for auth-enabled collections. Any active live-update streams owned by the locked user are torn down with <code>PermissionDenied</code>.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;                // auth collection slug
+  string id = 2;                        // target user's nanoid ID
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/LockAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Returns <code>INVALID_ARGUMENT</code> if the collection is not an auth collection, <code>NOT_FOUND</code> if the user ID is missing, and <code>UNAUTHENTICATED</code> if no valid Bearer token is provided.</p>
+<h2 id="unlockaccount"><a class="header" href="#unlockaccount">UnlockAccount</a></h2>
+<p>Re-enable login for a previously locked account. Only valid for auth-enabled collections.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/UnlockAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Same error semantics as <code>LockAccount</code>.</p>
+<h2 id="verifyaccount"><a class="header" href="#verifyaccount">VerifyAccount</a></h2>
+<p>Mark a user’s email as verified without requiring the user to click the verification link. Only valid for auth-enabled collections.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/VerifyAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Same error semantics as <code>LockAccount</code>. See <code>VerifyEmail</code> for the token-based flow triggered by the user.</p>
+<h2 id="unverifyaccount"><a class="header" href="#unverifyaccount">UnverifyAccount</a></h2>
+<p>Mark a user’s email as unverified. Only valid for auth-enabled collections.</p>
+<pre><code class="language-protobuf">message AccountActionRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message AccountActionResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "collection": "users",
+    "id": "usr_abc123"
+}' localhost:50051 crap.ContentAPI/UnverifyAccount
+</code></pre>
+<p><strong>Access:</strong> authentication required. Same error semantics as <code>LockAccount</code>.</p>
 <h2 id="listcollections"><a class="header" href="#listcollections">ListCollections</a></h2>
 <p>List all collections and globals (lightweight overview).</p>
 <pre><code class="language-protobuf">message ListCollectionsRequest {}

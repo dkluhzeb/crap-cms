@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -225,6 +225,7 @@ local resp = crap.http.request({
 <li>Uses <a href="https://docs.rs/reqwest">reqwest</a> (blocking HTTP client). Since Lua hooks run inside <code>spawn_blocking</code>, blocking I/O is correct and won’t stall the async runtime.</li>
 <li>Non-2xx responses are <strong>not</strong> errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.</li>
 <li>Available in both init.lua and hooks.</li>
+<li><strong>TLS certificate verification</strong> is always enabled (reqwest’s default with the <code>rustls-tls</code> feature). There is no opt-out — <code>crap.http.request</code> will not connect to servers with invalid or self-signed certificates. Use a proper CA-signed certificate on any HTTPS endpoint you call.</li>
 </ul>
 <h2 id="security"><a class="header" href="#security">Security</a></h2>
 <h3 id="private-network-blocking"><a class="header" href="#private-network-blocking">Private network blocking</a></h3>

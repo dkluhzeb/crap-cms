@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -514,6 +514,71 @@ local result = crap.collections.update_many("posts", {
 </div>
 <h3 id="data-3rd-argument"><a class="header" href="#data-3rd-argument">Data (3rd argument)</a></h3>
 <p>The <code>data</code> table contains fields to update on all matched documents (partial update).</p>
+<h2 id="crapcollectionslist_versionscollection-id-opts"><a class="header" href="#crapcollectionslist_versionscollection-id-opts">crap.collections.list_versions(collection, id, opts?)</a></h2>
+<p>List version snapshots for a document, newest first. Returns a table with <code>docs</code> (an array of version summaries) and <code>pagination</code> metadata matching the standard pagination shape. Only available on collections with <code>versions</code> enabled.</p>
+<p><strong>Only available inside hooks with transaction context.</strong></p>
+<pre><code class="language-lua">-- List the 10 most recent versions for a document
+local result = crap.collections.list_versions("posts", "abc123", { limit = 10 })
+for _, v in ipairs(result.docs) do
+    print(v.version, v.status, v.created_at, v.latest)
+end
+
+-- Paginate
+local page2 = crap.collections.list_versions("posts", "abc123", { limit = 10, offset = 10 })
+
+-- Internal listing that must ignore collection-level read access (e.g. a migration)
+local all = crap.collections.list_versions("posts", "abc123", { overrideAccess = true })
+</code></pre>
+<h3 id="options-4"><a class="header" href="#options-4">Options</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>limit</code></td><td>integer</td><td><code>nil</code></td><td>Maximum number of versions to return. Nil = all remaining.</td></tr>
+<tr><td><code>offset</code></td><td>integer</td><td><code>0</code></td><td>Number of versions to skip (offset pagination).</td></tr>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to <code>true</code> — it is now opt-in.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="version-summary-shape"><a class="header" href="#version-summary-shape">Version summary shape</a></h3>
+<p>Each entry in <code>result.docs</code> has:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>id</code></td><td>string</td><td>Version row ID (not the parent document ID).</td></tr>
+<tr><td><code>version</code></td><td>integer</td><td>Monotonically-increasing version number, newest first.</td></tr>
+<tr><td><code>status</code></td><td>string</td><td>Version status (e.g. <code>"published"</code>, <code>"draft"</code>).</td></tr>
+<tr><td><code>latest</code></td><td>boolean</td><td><code>true</code> for the newest version.</td></tr>
+<tr><td><code>created_at</code></td><td>string?</td><td>ISO 8601 timestamp the snapshot was taken (nil if unset).</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="crapcollectionsrestore_versioncollection-id-version_id-opts"><a class="header" href="#crapcollectionsrestore_versioncollection-id-version_id-opts">crap.collections.restore_version(collection, id, version_id, opts?)</a></h2>
+<p>Restore a previous version: copies the snapshot data back onto the parent document and writes a new version row. Returns the restored document. Only available on collections with <code>versions</code> enabled.</p>
+<p><strong>Only available inside hooks with transaction context.</strong></p>
+<pre><code class="language-lua">-- Restore version "v2-abc" of document "post-1"
+local doc = crap.collections.restore_version("posts", "post-1", "v2-abc")
+print(doc.title)
+
+-- Internal restore bypassing per-user access (e.g. automated rollback job)
+crap.collections.restore_version("posts", "post-1", "v2-abc", { overrideAccess = true })
+</code></pre>
+<h3 id="options-5"><a class="header" href="#options-5">Options</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>overrideAccess</code></td><td>boolean</td><td><code>false</code></td><td>Bypass access control checks. Set to <code>true</code> in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to <code>true</code> — it is now opt-in.</td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="crapcollectionsdelete_manycollection-query-opts"><a class="header" href="#crapcollectionsdelete_manycollection-query-opts">crap.collections.delete_many(collection, query, opts?)</a></h2>
 <p>Delete multiple documents matching a query. Returns <code>{ deleted = N, skipped = N }</code>. For upload collections, associated files are automatically cleaned up from disk for each deleted document. Documents that are still referenced by other documents are skipped (hard delete only) and reported in <code>skipped</code>.</p>
 <p><strong>All-or-nothing semantics:</strong> finds all matching documents, checks delete access for each (if <code>overrideAccess = false</code>), and only proceeds if all pass.</p>

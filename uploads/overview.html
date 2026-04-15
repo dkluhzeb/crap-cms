@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9b101746.js";
+            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -220,20 +220,23 @@
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Field</th><th>Type</th><th>Hidden</th><th>Description</th></tr>
+<tr><th>Field</th><th>Type</th><th>Admin form</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>filename</code></td><td>text</td><td>No (readonly)</td><td>Sanitized filename with unique prefix</td></tr>
-<tr><td><code>mime_type</code></td><td>text</td><td>Yes</td><td>MIME type of the uploaded file</td></tr>
-<tr><td><code>filesize</code></td><td>number</td><td>Yes</td><td>File size in bytes</td></tr>
-<tr><td><code>width</code></td><td>number</td><td>Yes</td><td>Image width (images only)</td></tr>
-<tr><td><code>height</code></td><td>number</td><td>Yes</td><td>Image height (images only)</td></tr>
-<tr><td><code>url</code></td><td>text</td><td>Yes</td><td>URL path to the original file</td></tr>
-<tr><td><code>focal_x</code></td><td>number</td><td>Yes</td><td>Focal point X coordinate (0.0–1.0, default center)</td></tr>
-<tr><td><code>focal_y</code></td><td>number</td><td>Yes</td><td>Focal point Y coordinate (0.0–1.0, default center)</td></tr>
+<tr><td><code>filename</code></td><td>text</td><td>Visible (readonly)</td><td>Sanitized filename with unique prefix</td></tr>
+<tr><td><code>mime_type</code></td><td>text</td><td>Hidden</td><td>MIME type of the uploaded file</td></tr>
+<tr><td><code>filesize</code></td><td>number</td><td>Hidden</td><td>File size in bytes</td></tr>
+<tr><td><code>width</code></td><td>number</td><td>Hidden</td><td>Image width (images only)</td></tr>
+<tr><td><code>height</code></td><td>number</td><td>Hidden</td><td>Image height (images only)</td></tr>
+<tr><td><code>url</code></td><td>text</td><td>Hidden</td><td>URL path to the original file</td></tr>
+<tr><td><code>focal_x</code></td><td>number</td><td>Hidden</td><td>Focal point X coordinate (0.0–1.0, default center)</td></tr>
+<tr><td><code>focal_y</code></td><td>number</td><td>Hidden</td><td>Focal point Y coordinate (0.0–1.0, default center)</td></tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p>All auto-injected fields are <strong>always returned in API responses</strong> (gRPC, Lua, MCP, REST, admin JSON). They use <code>admin.hidden = true</code> only — that flag suppresses standard form rendering because the upload preview widget and focal-point selector render these values directly. Consumers (and the admin’s own preview widget) need them to display thumbnails, focal crops, and image variants.</p>
+</blockquote>
 <p>For each image size, additional fields are injected:</p>
 <div class="table-wrapper">
 <table>
