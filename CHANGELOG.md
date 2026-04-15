@@ -117,9 +117,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `ContentServiceDeps` / `AdminState`. Lua CRUD paths read the shared
   singleflight from `LuaPopulateSingleflight` app-data. Combined with
   the `override_access` guardrail (see Fixed section), this closes
-  the last gap on SEC-F: concurrent requests across the process
-  dedupe populate cache misses, while override-access fetches stay
-  isolated. MCP tools hardcode `override_access = true` so the
+  concurrent requests across the process dedupe populate cache misses,
+  while override-access fetches stay isolated. MCP tools hardcode `override_access = true` so the
   guardrail always bypasses their threading — intentionally skipped.
 
 - **Docs + LuaLS annotations for `list_versions` / `restore_version`** —
@@ -168,7 +167,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Applies to both single-doc and batch population, polymorphic and
   non-polymorphic.
 
-- **Slow / lagged subscribers are dropped (SEC-D)** — Live-update
+- **Slow / lagged subscribers are dropped** — Live-update
   streams (gRPC Subscribe and admin SSE) now drop a subscriber when a
   per-event send takes longer than `subscriber_send_timeout_ms` (new
   `[live]` key, default `1000`). Subscribers that fall further behind
@@ -224,7 +223,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   are restored to all API responses, fixing the missing image preview
   and unblocking gRPC/Lua/MCP consumers that need them.
 
-- **[SECURITY] SEC-G Join field population bypassed target-collection
+- **[SECURITY] Join field population bypassed target-collection
   read access** — `populate_join_docs` was running raw `query::find`
   on the joined collection, skipping its `access.read` hook. A user
   allowed to read `post` but denied `author` reads could still see
@@ -247,8 +246,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   deduplicate within their own call via a fresh per-call singleflight,
   but never write to or read from shared state.
 
-- **[SECURITY] Live-update streams not torn down on lock / hard-delete
-  (SEC-E)** — When a user was locked or hard-deleted via the service
+- **[SECURITY] Live-update streams not torn down on lock / hard-delete**
+  — When a user was locked or hard-deleted via the service
   layer, their existing gRPC Subscribe and admin SSE streams kept
   receiving events with the original snapshotted access until the
   client disconnected on its own. Both surfaces now publish a
