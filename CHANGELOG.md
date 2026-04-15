@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.1.0-alpha.5] — Unreleased
+## [0.1.0-alpha.5] — 2026-04-15
 
 ### Added
 
@@ -923,8 +923,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `queue_timeout` (default 30s) in `[email]` config. System email jobs
   (`_system_email`) execute directly in Rust without Lua VM overhead.
   `crap.email.send()` remains available for immediate blocking delivery.
-
-### Fixed
 
 - **Access control bypass in bulk delete and empty trash** — The gRPC
   `DeleteMany` handler and the admin "empty trash" handler created
@@ -2481,371 +2479,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   On Windows, `--stop`/`--restart`/`--status` return a clear
   "not supported on this platform" error.
 
-### Changed
-
-- **`overrideAccess` default changed to `false`** (BREAKING) — All Lua
-  CRUD functions (`find`, `find_by_id`, `create`, `update`, `delete`,
-  `count`, `update_many`, `delete_many`, `undelete`) now enforce access
-  control by default. Previously they bypassed access checks unless
-  explicitly set to `false`. This follows the principle of least
-  privilege — hooks that need unrestricted access must explicitly opt in
-  with `overrideAccess = true`. Collections without access functions are
-  unaffected (no restriction configured = allowed).
-
-- **Responsive breakpoint raised to 1024px** — The mobile layout
-  (hamburger sidebar, stacked edit layout, static headers) now activates
-  at 1024px instead of 768px/900px. Two-sidebar layouts (nav + edit
-  sidebar) were too cramped on tablets and small laptops.
-
-- **Sticky subheader simplified** — Removed duplicate `ResizeObserver`
-  (was in both `sticky-header.js` and `list-settings.js`), eliminated
-  the `--list-header-height` CSS variable (redundant with
-  `--sticky-header-bottom`), and removed direct inline style
-  manipulation fallback on the edit sidebar. The sticky subheader now
-  breaks out of `.main` padding with negative horizontal margins for
-  edge-to-edge coverage, fixing content bleed visible during scroll.
-  On mobile, headers revert to static document flow — no sticky
-  positioning, no overlap issues.
-
-- **Consistent chip styling** — Relationship chips and tag input chips
-  now use the same visual style: primary-tinted background, medium font
-  weight, rounded corners, and a remove button with red hover state.
-
-- **Hardcoded colors replaced with CSS variables** — Bare `#fff` and
-  `white` values in CSS and web components replaced with
-  `var(--text-on-primary)` or `var(--bg-elevated)` for proper theme
-  support.
-
-- **Button disabled state** — `.button:disabled` now shows 50% opacity
-  with `not-allowed` cursor. Input fields (`input:disabled`,
-  `select:disabled`, `textarea:disabled`) show dimmed text, grayed
-  background, and block pointer events.
-
-- **Missing i18n keys** — Seven JavaScript translation keys
-  (`search_to_add`, `search`, `are_you_sure`, `ok`, `documents`,
-  `error`, `no_details`) were used in web components but missing from
-  the `#crap-i18n` data island. Now included. Added `error` and
-  `no_details` keys to en/de translation files.
-
-- **Email template colors** — Password reset and email verification
-  templates updated from `#2563eb` to `#1677ff` to match the system
-  primary color.
-
-- **Delete protection expanded to all collections** — Previously only
-  upload/media collections were protected from deletion when referenced.
-  Now all collections are protected: attempting to delete a document with
-  `_ref_count > 0` is blocked. Bulk `delete_many` silently skips
-  referenced documents instead of failing.
-
-- **Delete confirmation page uses lazy-loaded details** — The delete
-  confirmation page now shows a fast "Referenced by N document(s)"
-  summary from the `_ref_count` column. A "Show details" button
-  lazy-loads the full back-reference list (which collections/fields
-  reference the document) via a new
-  `GET /admin/collections/{slug}/{id}/back-references` endpoint.
-
-- **Richtext node attrs now use the field system** — `register_node` attrs are now
-  defined with `crap.fields.*` factory functions instead of the old `{ name, type }`
-  table syntax. Supports all scalar field types (`text`, `number`, `textarea`, `select`,
-  `radio`, `checkbox`, `date`, `email`, `json`, `code`). Complex types are rejected at
-  registration time. Node edit modals now support `placeholder`, `description`, radio
-  groups, date pickers, email inputs, and monospace editors for code/json fields.
-
-- **Full field feature support for richtext node attrs:**
-  - Admin display hints: `hidden`, `readonly`, `width`, `step`, `rows`, `language`,
-    `min`/`max`, `min_length`/`max_length`, `min_date`/`max_date`, `picker_appearance`
-  - Server-side validation: `required`, `validate`, length/numeric/date bounds, email
-    format, option validity — errors reference node location (e.g. `content[cta#0].url`)
-  - `before_validate` hooks for normalizing attr values before validation
-  - Registration-time warnings for features that have no effect on node attrs
-    (`unique`, `index`, `localized`, `access`, `before_change`, `after_change`,
-    `after_read`, `has_many`, `mcp`, `admin.condition`)
-
-- **Scaffold `dev_mode`** defaults to `false` (was `true`). New projects start
-  secure by default.
-
-- **Admin templates**: Pagination variables now live exclusively under the
-  `pagination` object (e.g. `pagination.prev_url` instead of `prev_url`).
-  Templates using the `{{> components/pagination}}` partial work automatically.
-  Custom templates that referenced top-level pagination keys (`page`, `per_page`,
-  `total`, `total_pages`, `has_prev`, `has_next`, `prev_url`, `next_url`,
-  `has_pagination`) must update to use the `pagination.*` prefix. The
-  `has_pagination` key has been removed — use `{{#if pagination.has_prev}}`
-  / `{{#if pagination.has_next}}` directly. The `pagination` object is always
-  present when `with_pagination` is called, even on single-page results.
-
-- **MCP `find` response**: Pagination metadata is now nested under a
-  `"pagination"` key instead of being flat in the response object. The response
-  shape is now `{ "docs": [...], "pagination": { "totalDocs": ..., ... } }`.
-
-- **Admin templates**: The `items` context key for collection list pages is now
-  `docs`, matching the naming used by MCP and gRPC. Update custom templates:
-  `{{#if items}}` → `{{#if docs}}`, `{{#each items}}` → `{{#each docs}}`.
-
-- **Upload cleanup guard**: `process_upload` now returns an RAII `CleanupGuard`
-  that the caller must `.commit()` after their DB transaction succeeds. Prevents
-  orphaned files when the DB write fails after files are already on disk.
-
-- **CORS `max_age_seconds`** renamed to **`max_age`** for consistency with other
-  duration fields. Accepts integer seconds or human-readable (`"1h"`, `"30m"`).
-
-- **Scaffold CORS config** — `crap init` now outputs `max_age` instead of the
-  old `max_age_seconds` in the commented CORS section.
-
-### Security
-
-- **Lua sandbox escape via `load()` / `loadstring()`** (CRITICAL): The
-  Lua sandbox removed `loadfile` and `dofile` but not `load()` or
-  `loadstring()`. A malicious hook could compile and execute arbitrary
-  code with `load("os.execute('...')")()`, fully bypassing the sandbox.
-  Now removes `load`, `loadstring`, `loadfile`, and `dofile`. Regression
-  tests added for all four globals and a bypass attempt.
-
-- **XSS via `javascript:` protocol in richtext links** (CRITICAL): Link
-  marks in ProseMirror content rendered `href` attributes without URL
-  protocol validation. A `javascript:alert('xss')` href executed
-  arbitrary code when clicked. Now only allowlisted protocols (`http`,
-  `https`, `mailto`, `tel`, `ftp`, relative paths) are rendered; all
-  others are replaced with `#`.
-
-- **Unescaped node type in `<crap-node>` tags** (HIGH): Custom node
-  `data-type` attribute used `html_escape` (no quote escaping) instead
-  of `html_escape_attr`. A crafted node type with quotes could break
-  HTML attribute parsing. Fixed in both renderer and validation handler.
-
-- **Session refresh allowed deleted users** (HIGH): The session refresh
-  endpoint checked lock status and session version but never verified the
-  user document still exists. A deleted user's session could be
-  refreshed indefinitely. Now checks user existence first.
-
-- **Locked accounts could reset passwords** (MEDIUM): The password reset
-  flow did not check account lock status. A locked user could reset
-  their password and regain access. Now rejects reset attempts for
-  locked accounts.
-
-- **gRPC reset password used wrong rate limiter** (MEDIUM): The gRPC
-  password reset endpoint used `ip_login_limiter` instead of
-  `ip_forgot_password_limiter`, allowing rate limit pool pollution
-  between login and reset operations.
-
-- **Date string slicing panic on multi-byte UTF-8** (MEDIUM): Date field
-  value slicing used `&val[..10]` which panics if the byte offset falls
-  within a multi-byte character. Changed to `.get(..10).unwrap_or(val)`.
-
-- **String slicing panics on multi-byte UTF-8** (HIGH): Eight locations
-  across the codebase used `find()` + byte-offset slicing (`&s[..pos]`)
-  which panics when the offset falls within a multi-byte character.
-  Affected: polymorphic ref parsing (3 sites), form bracket parsing,
-  CLI key=value parsing, template path splitting, richtext attribute
-  extraction, and timestamp normalization. All converted to `split_once`
-  or guarded with `is_char_boundary`.
-
-- **gRPC Subscribe connection limit TOCTOU race** (MEDIUM): The
-  `fetch_add` + check pattern allowed concurrent requests to exceed the
-  configured `max_subscribe_connections`. Replaced with a
-  `compare_exchange_weak` CAS loop matching the SSE implementation.
-
-- **`url_decode` garbled multi-byte UTF-8** (HIGH): Percent-encoded multi-byte
-  sequences (e.g. `%C3%A9` for `é`, CJK, emoji) were decoded byte-by-byte as
-  individual `char`s, producing mojibake. Malformed `%XX` sequences silently
-  dropped characters. Rewritten to collect decoded bytes into `Vec<u8>` then
-  convert via `String::from_utf8_lossy`; malformed sequences are now preserved
-  literally.
-
-- **NaN/Infinity accepted in number fields** (HIGH): Submitting `"NaN"`,
-  `"inf"`, or `"-inf"` as a number field value parsed successfully and stored
-  non-finite floats in the database. Added `is_finite()` check — non-finite
-  values now coerce to `NULL`.
-
-- **Rate limiter bypass via unparseable XFF** (HIGH): When `trust_proxy = true`
-  and `X-Forwarded-For` contained a non-IP string, `client_ip()` used the raw
-  garbage string as the rate limiter key. Attackers could vary this per-request
-  to get unique rate limit buckets. Unparseable XFF now falls back to the TCP
-  socket address.
-
-- **SSE connection limit TOCTOU race** (HIGH): The SSE connection counter used
-  `fetch_add` + check + `fetch_sub`, allowing a race where concurrent requests
-  could exceed the configured `max_sse_connections`. Replaced with a
-  `compare_exchange_weak` loop for atomic slot acquisition.
-
-- **JSON template helper `</script>` breakout** (MEDIUM): The `{{{json ...}}}`
-  Handlebars helper did not escape `</` in serialized values. A value containing
-  `</script>` could break out of a `<script>` block in the admin UI. Now
-  replaces `</` with `<\/` after serialization.
-
-- **Pagination offset overflow** (MEDIUM): Extreme `page` values (near
-  `i64::MAX`) caused integer overflow in `(page - 1) * limit`. Changed to
-  `saturating_mul` to prevent panics.
-
-- **Content-Security-Policy** (NEW): Admin UI now sends a CSP header by default
-  with restrictive `default-src`, `frame-ancestors 'none'`, `form-action 'self'`,
-  and `base-uri 'self'`. Inline scripts/styles are allowed via `'unsafe-inline'`
-  (required for theme bootstrap, CSRF injection, and Shadow DOM components).
-
-- **X-Forwarded-For bypass** (HIGH): `client_ip()` no longer trusts XFF by
-  default. Without `trust_proxy = true`, the TCP socket address is used,
-  preventing attackers from spoofing IPs to bypass per-IP rate limits.
-
-- **Shared rate limiters** (MEDIUM): Admin and gRPC servers now share the same
-  `LoginRateLimiter` instances, preventing attackers from doubling their attempt
-  budget by targeting both servers.
-
-- **Richtext node attr XSS** (HIGH): Custom node attribute values were rendered
-  unescaped into `innerHTML` in the richtext editor modal and inline node
-  display. Values containing `<`, `>`, `"`, `'`, or `&` could break the DOM
-  or enable stored XSS. All interpolated values are now HTML-escaped. The
-  server-side `before_validate` hook output is also escaped when
-  reconstructing `<crap-node>` tags.
-
-- **SSRF DNS rebinding closed** (HIGH): `crap.http.request()` now resolves DNS
-  once, validates against the SSRF policy, and pins the validated IP via
-  `reqwest::ClientBuilder::resolve()`. No second DNS lookup occurs at connect
-  time — eliminates the TOCTOU DNS rebinding gap that existed with ureq.
-  Redirects are individually resolved, validated, and pinned before following.
-
-- **Migration concurrency** — `sync_all` now uses `transaction_immediate()` to
-  serialize concurrent DDL operations via SQLite's write lock + `busy_timeout`,
-  preventing schema corruption from concurrent startups.
-
-- **Version uniqueness constraint** — UNIQUE index on `(_parent, _version)` in
-  versions tables prevents duplicate version numbers from race conditions.
-
-- **SSRF IPv6-mapped IPv4 bypass** (HIGH): `is_private_ip()` did not check
-  IPv6-mapped IPv4 addresses (`::ffff:127.0.0.1`, `::ffff:10.0.0.1`, etc.).
-  These bypassed the SSRF filter entirely. Now extracts the inner v4 address
-  via `to_ipv4_mapped()` and re-checks it.
-
-- **Field access fail-open on VM pool exhaustion** (HIGH): `check_field_read_access`
-  and `check_field_write_access` returned empty denied lists (= allow all) when
-  the Lua VM pool failed to acquire. Changed to fail-closed — all
-  access-controlled fields are denied when the pool is unavailable.
-
-- **Rate limiter IPv6 bypass** (MEDIUM): With `trust_proxy = true`, the raw
-  `X-Forwarded-For` string was used as the rate limiter key. Different IPv6
-  representations of the same address (e.g., `2001:db8::1` vs
-  `2001:0db8:0:0:0:0:0:1`) got separate buckets. Now parsed as `IpAddr` and
-  re-serialized to canonical form.
-
-- **Logout CSRF** (LOW): The `/admin/logout` endpoint accepted GET requests,
-  allowing forced logout via `<img src="/admin/logout">`. Now POST-only.
-
-- **Upload serving path traversal hardening** (MEDIUM): The upload file
-  serving endpoint relied solely on string-based `..`/`/`/`\` checks.
-  Added canonicalization verification (`starts_with` on the canonical
-  uploads directory) as defense-in-depth against symlink or encoding-based
-  traversal vectors.
-
-- **Upload file deletion path traversal hardening** (LOW): `delete_upload_files`
-  joined document-stored URLs to the config directory without verifying the
-  resolved path stayed within the uploads directory. A corrupted database
-  record could cause arbitrary file deletion. Now canonicalizes and verifies
-  the path stays within the uploads directory.
-
-- **Lua package path injection** (MEDIUM): `setup_package_paths` interpolated
-  the config directory path into a Lua code string without escaping. A
-  directory name containing `"` or `\` could inject arbitrary Lua code.
-  Replaced string interpolation with direct Lua API calls (`Table::set`).
-
-- **PRAGMA table name validation** (LOW): `sqlite_get_table_columns` and
-  `sqlite_get_table_column_types` interpolated table names into `PRAGMA
-  table_info()` without validation. Added alphanumeric + underscore
-  validation before PRAGMA execution.
-
-- **MCP `safe_config_path` non-existent parent bypass** (LOW): When
-  writing a file with a non-existent parent directory, `safe_config_path`
-  skipped the canonicalization check entirely. Now walks up the parent
-  chain to find the nearest existing ancestor and verifies it stays within
-  the config directory.
-
-- **Sensitive form Debug redaction** (LOW): `LoginForm` and `ResetPasswordForm`
-  now redact passwords and tokens in their `Debug` output, preventing
-  accidental exposure in logs.
-
-- **UNIQUE constraint error leaks schema** (MEDIUM): gRPC error messages for
-  unique constraint violations included internal table names (e.g.,
-  `UNIQUE constraint failed: users.email`). Now sanitized to show only the
-  column name.
-
-- **MCP HTTP unauthenticated access** (HIGH): When `mcp.http = true` and
-  `api_key` was empty, the MCP HTTP endpoint accepted unauthenticated requests
-  with full CRUD access (MCP bypasses all access control). The server now
-  requires an API key when MCP HTTP is enabled (config validation error at
-  startup). The HTTP handler also rejects requests as a defense-in-depth guard.
-
-- **MCP `exclude_collections` bypass** (MEDIUM): `exclude_collections` and
-  `include_collections` only filtered the `tools/list` response — an attacker
-  who knew a collection slug could call `find_<slug>` directly via
-  `tools/call`. Collection filters are now enforced at execution time.
-
-- **Lua `update_many` skipped validation and hooks** (HIGH): The Lua
-  `crap.collections.update_many()` function only ran `BeforeChange` hooks and
-  discarded their return value. It skipped `BeforeValidate` hooks, field
-  validation (`required`, `unique`, custom `validate`), and field-level
-  `before_change`/`after_change` hooks. Now runs the full write lifecycle
-  matching the single `update` and gRPC `UpdateMany` paths.
-
-- **Lua `update_many` field write access bypass** (MEDIUM): When called with
-  `overrideAccess = false`, field-level write access checks were not applied.
-  Now strips denied fields before the DB write.
-
-- **IP rate limiter not cleared on successful login** (MEDIUM): The per-IP
-  rate limiter was never cleared on successful login (only the per-email
-  limiter was). Users behind shared IPs (NAT, VPN) could eventually get
-  locked out despite successful logins. Both limiters are now cleared on
-  success (admin and gRPC).
-
-- **Lua `delete`/`delete_many` orphaned upload files** (MEDIUM): Deleting
-  upload-collection documents via Lua hooks left files on disk. Now cleans up
-  upload files after successful deletion, matching the gRPC path.
-
-- **`sanitize_locale` empty string passes in release builds** (HIGH):
-  `sanitize_locale` used `debug_assert!` which only fires in debug builds.
-  An all-special-character locale string silently produced `""` in release,
-  which gets interpolated into SQL as an empty identifier. Now returns
-  `Result<String>` with a proper error, propagated through all callers.
-
-- **Non-existent locale silently accepted**: `LocaleContext::from_locale_string`
-  accepted any locale code without checking it exists in the config's locale
-  list. Requesting a non-existent locale (e.g. `"fr"` when only `"en"` and
-  `"de"` are configured) silently created a `Single("fr")` context. Now
-  returns `None` for unknown locale codes.
-
-- **Lua table conversion stack overflow** (HIGH): `lua_to_json` and
-  `json_to_lua` recursed into nested tables with no depth limit. A deeply
-  nested structure (65+ levels) caused stack overflow. Now capped at 64
-  levels with a clear error.
-
-- **Mixed-key Lua tables silently lost string keys** (HIGH): A Lua table
-  with both integer and string keys (e.g., `{1, 2, name="test"}`) was
-  treated as a JSON array, silently dropping string keys. Now detected
-  and serialized as a JSON object preserving all keys.
-
-- **Version table index name collision** (HIGH): Version table indexes
-  used names like `idx_{slug}_parent_latest` that could collide with
-  field-level indexes on fields named `parent_latest`. Namespaced to
-  `idx__ver_{slug}_*`.
-
-- **Polymorphic relationship upgrade left stale PRIMARY KEY** (HIGH):
-  Upgrading a junction table from non-polymorphic to polymorphic added
-  the `related_collection` column but didn't update the PRIMARY KEY
-  constraint. Now rebuilds the table with the correct composite PK.
-
-- **Silent NaN/Infinity and number overflow in gRPC conversion** (MEDIUM):
-  Non-finite floats silently became `null` and overflowing numbers
-  silently became `0.0` in protobuf conversion. Now logs warnings.
-
-- **Event publishing error silently swallowed** (MEDIUM): Collection
-  definition lookup failure during event publishing was discarded with
-  `.ok()`. Now logs a warning.
-
-- **Sessions not invalidated on password change** (HIGH): After a password
-  reset, existing JWTs remained valid until expiry. Added a
-  `_session_version` counter to auth tables that increments on password
-  change. The version is embedded in JWT claims and checked on every
-  authenticated request — stale tokens are rejected immediately.
-
-### Fixed
-
 - **Upload file cleanup silently swallowed DB errors** (HIGH): When
   deleting an upload-collection document, the pre-delete query to load
   file paths used `.ok().flatten()`, silently discarding database errors.
@@ -3235,6 +2868,369 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Removed dead `FieldHooks::is_empty()`**: Unused `#[allow(dead_code)]`
   method — individual Vec fields are checked directly at all call sites.
+
+### Changed
+
+- **`overrideAccess` default changed to `false`** (BREAKING) — All Lua
+  CRUD functions (`find`, `find_by_id`, `create`, `update`, `delete`,
+  `count`, `update_many`, `delete_many`, `undelete`) now enforce access
+  control by default. Previously they bypassed access checks unless
+  explicitly set to `false`. This follows the principle of least
+  privilege — hooks that need unrestricted access must explicitly opt in
+  with `overrideAccess = true`. Collections without access functions are
+  unaffected (no restriction configured = allowed).
+
+- **Responsive breakpoint raised to 1024px** — The mobile layout
+  (hamburger sidebar, stacked edit layout, static headers) now activates
+  at 1024px instead of 768px/900px. Two-sidebar layouts (nav + edit
+  sidebar) were too cramped on tablets and small laptops.
+
+- **Sticky subheader simplified** — Removed duplicate `ResizeObserver`
+  (was in both `sticky-header.js` and `list-settings.js`), eliminated
+  the `--list-header-height` CSS variable (redundant with
+  `--sticky-header-bottom`), and removed direct inline style
+  manipulation fallback on the edit sidebar. The sticky subheader now
+  breaks out of `.main` padding with negative horizontal margins for
+  edge-to-edge coverage, fixing content bleed visible during scroll.
+  On mobile, headers revert to static document flow — no sticky
+  positioning, no overlap issues.
+
+- **Consistent chip styling** — Relationship chips and tag input chips
+  now use the same visual style: primary-tinted background, medium font
+  weight, rounded corners, and a remove button with red hover state.
+
+- **Hardcoded colors replaced with CSS variables** — Bare `#fff` and
+  `white` values in CSS and web components replaced with
+  `var(--text-on-primary)` or `var(--bg-elevated)` for proper theme
+  support.
+
+- **Button disabled state** — `.button:disabled` now shows 50% opacity
+  with `not-allowed` cursor. Input fields (`input:disabled`,
+  `select:disabled`, `textarea:disabled`) show dimmed text, grayed
+  background, and block pointer events.
+
+- **Missing i18n keys** — Seven JavaScript translation keys
+  (`search_to_add`, `search`, `are_you_sure`, `ok`, `documents`,
+  `error`, `no_details`) were used in web components but missing from
+  the `#crap-i18n` data island. Now included. Added `error` and
+  `no_details` keys to en/de translation files.
+
+- **Email template colors** — Password reset and email verification
+  templates updated from `#2563eb` to `#1677ff` to match the system
+  primary color.
+
+- **Delete protection expanded to all collections** — Previously only
+  upload/media collections were protected from deletion when referenced.
+  Now all collections are protected: attempting to delete a document with
+  `_ref_count > 0` is blocked. Bulk `delete_many` silently skips
+  referenced documents instead of failing.
+
+- **Delete confirmation page uses lazy-loaded details** — The delete
+  confirmation page now shows a fast "Referenced by N document(s)"
+  summary from the `_ref_count` column. A "Show details" button
+  lazy-loads the full back-reference list (which collections/fields
+  reference the document) via a new
+  `GET /admin/collections/{slug}/{id}/back-references` endpoint.
+
+- **Richtext node attrs now use the field system** — `register_node` attrs are now
+  defined with `crap.fields.*` factory functions instead of the old `{ name, type }`
+  table syntax. Supports all scalar field types (`text`, `number`, `textarea`, `select`,
+  `radio`, `checkbox`, `date`, `email`, `json`, `code`). Complex types are rejected at
+  registration time. Node edit modals now support `placeholder`, `description`, radio
+  groups, date pickers, email inputs, and monospace editors for code/json fields.
+
+- **Full field feature support for richtext node attrs:**
+  - Admin display hints: `hidden`, `readonly`, `width`, `step`, `rows`, `language`,
+    `min`/`max`, `min_length`/`max_length`, `min_date`/`max_date`, `picker_appearance`
+  - Server-side validation: `required`, `validate`, length/numeric/date bounds, email
+    format, option validity — errors reference node location (e.g. `content[cta#0].url`)
+  - `before_validate` hooks for normalizing attr values before validation
+  - Registration-time warnings for features that have no effect on node attrs
+    (`unique`, `index`, `localized`, `access`, `before_change`, `after_change`,
+    `after_read`, `has_many`, `mcp`, `admin.condition`)
+
+- **Scaffold `dev_mode`** defaults to `false` (was `true`). New projects start
+  secure by default.
+
+- **Admin templates**: Pagination variables now live exclusively under the
+  `pagination` object (e.g. `pagination.prev_url` instead of `prev_url`).
+  Templates using the `{{> components/pagination}}` partial work automatically.
+  Custom templates that referenced top-level pagination keys (`page`, `per_page`,
+  `total`, `total_pages`, `has_prev`, `has_next`, `prev_url`, `next_url`,
+  `has_pagination`) must update to use the `pagination.*` prefix. The
+  `has_pagination` key has been removed — use `{{#if pagination.has_prev}}`
+  / `{{#if pagination.has_next}}` directly. The `pagination` object is always
+  present when `with_pagination` is called, even on single-page results.
+
+- **MCP `find` response**: Pagination metadata is now nested under a
+  `"pagination"` key instead of being flat in the response object. The response
+  shape is now `{ "docs": [...], "pagination": { "totalDocs": ..., ... } }`.
+
+- **Admin templates**: The `items` context key for collection list pages is now
+  `docs`, matching the naming used by MCP and gRPC. Update custom templates:
+  `{{#if items}}` → `{{#if docs}}`, `{{#each items}}` → `{{#each docs}}`.
+
+- **Upload cleanup guard**: `process_upload` now returns an RAII `CleanupGuard`
+  that the caller must `.commit()` after their DB transaction succeeds. Prevents
+  orphaned files when the DB write fails after files are already on disk.
+
+- **CORS `max_age_seconds`** renamed to **`max_age`** for consistency with other
+  duration fields. Accepts integer seconds or human-readable (`"1h"`, `"30m"`).
+
+- **Scaffold CORS config** — `crap init` now outputs `max_age` instead of the
+  old `max_age_seconds` in the commented CORS section.
+
+### Security
+
+- **Lua sandbox escape via `load()` / `loadstring()`** (CRITICAL): The
+  Lua sandbox removed `loadfile` and `dofile` but not `load()` or
+  `loadstring()`. A malicious hook could compile and execute arbitrary
+  code with `load("os.execute('...')")()`, fully bypassing the sandbox.
+  Now removes `load`, `loadstring`, `loadfile`, and `dofile`. Regression
+  tests added for all four globals and a bypass attempt.
+
+- **XSS via `javascript:` protocol in richtext links** (CRITICAL): Link
+  marks in ProseMirror content rendered `href` attributes without URL
+  protocol validation. A `javascript:alert('xss')` href executed
+  arbitrary code when clicked. Now only allowlisted protocols (`http`,
+  `https`, `mailto`, `tel`, `ftp`, relative paths) are rendered; all
+  others are replaced with `#`.
+
+- **Unescaped node type in `<crap-node>` tags** (HIGH): Custom node
+  `data-type` attribute used `html_escape` (no quote escaping) instead
+  of `html_escape_attr`. A crafted node type with quotes could break
+  HTML attribute parsing. Fixed in both renderer and validation handler.
+
+- **Session refresh allowed deleted users** (HIGH): The session refresh
+  endpoint checked lock status and session version but never verified the
+  user document still exists. A deleted user's session could be
+  refreshed indefinitely. Now checks user existence first.
+
+- **Locked accounts could reset passwords** (MEDIUM): The password reset
+  flow did not check account lock status. A locked user could reset
+  their password and regain access. Now rejects reset attempts for
+  locked accounts.
+
+- **gRPC reset password used wrong rate limiter** (MEDIUM): The gRPC
+  password reset endpoint used `ip_login_limiter` instead of
+  `ip_forgot_password_limiter`, allowing rate limit pool pollution
+  between login and reset operations.
+
+- **Date string slicing panic on multi-byte UTF-8** (MEDIUM): Date field
+  value slicing used `&val[..10]` which panics if the byte offset falls
+  within a multi-byte character. Changed to `.get(..10).unwrap_or(val)`.
+
+- **String slicing panics on multi-byte UTF-8** (HIGH): Eight locations
+  across the codebase used `find()` + byte-offset slicing (`&s[..pos]`)
+  which panics when the offset falls within a multi-byte character.
+  Affected: polymorphic ref parsing (3 sites), form bracket parsing,
+  CLI key=value parsing, template path splitting, richtext attribute
+  extraction, and timestamp normalization. All converted to `split_once`
+  or guarded with `is_char_boundary`.
+
+- **gRPC Subscribe connection limit TOCTOU race** (MEDIUM): The
+  `fetch_add` + check pattern allowed concurrent requests to exceed the
+  configured `max_subscribe_connections`. Replaced with a
+  `compare_exchange_weak` CAS loop matching the SSE implementation.
+
+- **`url_decode` garbled multi-byte UTF-8** (HIGH): Percent-encoded multi-byte
+  sequences (e.g. `%C3%A9` for `é`, CJK, emoji) were decoded byte-by-byte as
+  individual `char`s, producing mojibake. Malformed `%XX` sequences silently
+  dropped characters. Rewritten to collect decoded bytes into `Vec<u8>` then
+  convert via `String::from_utf8_lossy`; malformed sequences are now preserved
+  literally.
+
+- **NaN/Infinity accepted in number fields** (HIGH): Submitting `"NaN"`,
+  `"inf"`, or `"-inf"` as a number field value parsed successfully and stored
+  non-finite floats in the database. Added `is_finite()` check — non-finite
+  values now coerce to `NULL`.
+
+- **Rate limiter bypass via unparseable XFF** (HIGH): When `trust_proxy = true`
+  and `X-Forwarded-For` contained a non-IP string, `client_ip()` used the raw
+  garbage string as the rate limiter key. Attackers could vary this per-request
+  to get unique rate limit buckets. Unparseable XFF now falls back to the TCP
+  socket address.
+
+- **SSE connection limit TOCTOU race** (HIGH): The SSE connection counter used
+  `fetch_add` + check + `fetch_sub`, allowing a race where concurrent requests
+  could exceed the configured `max_sse_connections`. Replaced with a
+  `compare_exchange_weak` loop for atomic slot acquisition.
+
+- **JSON template helper `</script>` breakout** (MEDIUM): The `{{{json ...}}}`
+  Handlebars helper did not escape `</` in serialized values. A value containing
+  `</script>` could break out of a `<script>` block in the admin UI. Now
+  replaces `</` with `<\/` after serialization.
+
+- **Pagination offset overflow** (MEDIUM): Extreme `page` values (near
+  `i64::MAX`) caused integer overflow in `(page - 1) * limit`. Changed to
+  `saturating_mul` to prevent panics.
+
+- **Content-Security-Policy** (NEW): Admin UI now sends a CSP header by default
+  with restrictive `default-src`, `frame-ancestors 'none'`, `form-action 'self'`,
+  and `base-uri 'self'`. Inline scripts/styles are allowed via `'unsafe-inline'`
+  (required for theme bootstrap, CSRF injection, and Shadow DOM components).
+
+- **X-Forwarded-For bypass** (HIGH): `client_ip()` no longer trusts XFF by
+  default. Without `trust_proxy = true`, the TCP socket address is used,
+  preventing attackers from spoofing IPs to bypass per-IP rate limits.
+
+- **Shared rate limiters** (MEDIUM): Admin and gRPC servers now share the same
+  `LoginRateLimiter` instances, preventing attackers from doubling their attempt
+  budget by targeting both servers.
+
+- **Richtext node attr XSS** (HIGH): Custom node attribute values were rendered
+  unescaped into `innerHTML` in the richtext editor modal and inline node
+  display. Values containing `<`, `>`, `"`, `'`, or `&` could break the DOM
+  or enable stored XSS. All interpolated values are now HTML-escaped. The
+  server-side `before_validate` hook output is also escaped when
+  reconstructing `<crap-node>` tags.
+
+- **SSRF DNS rebinding closed** (HIGH): `crap.http.request()` now resolves DNS
+  once, validates against the SSRF policy, and pins the validated IP via
+  `reqwest::ClientBuilder::resolve()`. No second DNS lookup occurs at connect
+  time — eliminates the TOCTOU DNS rebinding gap that existed with ureq.
+  Redirects are individually resolved, validated, and pinned before following.
+
+- **Migration concurrency** — `sync_all` now uses `transaction_immediate()` to
+  serialize concurrent DDL operations via SQLite's write lock + `busy_timeout`,
+  preventing schema corruption from concurrent startups.
+
+- **Version uniqueness constraint** — UNIQUE index on `(_parent, _version)` in
+  versions tables prevents duplicate version numbers from race conditions.
+
+- **SSRF IPv6-mapped IPv4 bypass** (HIGH): `is_private_ip()` did not check
+  IPv6-mapped IPv4 addresses (`::ffff:127.0.0.1`, `::ffff:10.0.0.1`, etc.).
+  These bypassed the SSRF filter entirely. Now extracts the inner v4 address
+  via `to_ipv4_mapped()` and re-checks it.
+
+- **Field access fail-open on VM pool exhaustion** (HIGH): `check_field_read_access`
+  and `check_field_write_access` returned empty denied lists (= allow all) when
+  the Lua VM pool failed to acquire. Changed to fail-closed — all
+  access-controlled fields are denied when the pool is unavailable.
+
+- **Rate limiter IPv6 bypass** (MEDIUM): With `trust_proxy = true`, the raw
+  `X-Forwarded-For` string was used as the rate limiter key. Different IPv6
+  representations of the same address (e.g., `2001:db8::1` vs
+  `2001:0db8:0:0:0:0:0:1`) got separate buckets. Now parsed as `IpAddr` and
+  re-serialized to canonical form.
+
+- **Logout CSRF** (LOW): The `/admin/logout` endpoint accepted GET requests,
+  allowing forced logout via `<img src="/admin/logout">`. Now POST-only.
+
+- **Upload serving path traversal hardening** (MEDIUM): The upload file
+  serving endpoint relied solely on string-based `..`/`/`/`\` checks.
+  Added canonicalization verification (`starts_with` on the canonical
+  uploads directory) as defense-in-depth against symlink or encoding-based
+  traversal vectors.
+
+- **Upload file deletion path traversal hardening** (LOW): `delete_upload_files`
+  joined document-stored URLs to the config directory without verifying the
+  resolved path stayed within the uploads directory. A corrupted database
+  record could cause arbitrary file deletion. Now canonicalizes and verifies
+  the path stays within the uploads directory.
+
+- **Lua package path injection** (MEDIUM): `setup_package_paths` interpolated
+  the config directory path into a Lua code string without escaping. A
+  directory name containing `"` or `\` could inject arbitrary Lua code.
+  Replaced string interpolation with direct Lua API calls (`Table::set`).
+
+- **PRAGMA table name validation** (LOW): `sqlite_get_table_columns` and
+  `sqlite_get_table_column_types` interpolated table names into `PRAGMA
+  table_info()` without validation. Added alphanumeric + underscore
+  validation before PRAGMA execution.
+
+- **MCP `safe_config_path` non-existent parent bypass** (LOW): When
+  writing a file with a non-existent parent directory, `safe_config_path`
+  skipped the canonicalization check entirely. Now walks up the parent
+  chain to find the nearest existing ancestor and verifies it stays within
+  the config directory.
+
+- **Sensitive form Debug redaction** (LOW): `LoginForm` and `ResetPasswordForm`
+  now redact passwords and tokens in their `Debug` output, preventing
+  accidental exposure in logs.
+
+- **UNIQUE constraint error leaks schema** (MEDIUM): gRPC error messages for
+  unique constraint violations included internal table names (e.g.,
+  `UNIQUE constraint failed: users.email`). Now sanitized to show only the
+  column name.
+
+- **MCP HTTP unauthenticated access** (HIGH): When `mcp.http = true` and
+  `api_key` was empty, the MCP HTTP endpoint accepted unauthenticated requests
+  with full CRUD access (MCP bypasses all access control). The server now
+  requires an API key when MCP HTTP is enabled (config validation error at
+  startup). The HTTP handler also rejects requests as a defense-in-depth guard.
+
+- **MCP `exclude_collections` bypass** (MEDIUM): `exclude_collections` and
+  `include_collections` only filtered the `tools/list` response — an attacker
+  who knew a collection slug could call `find_<slug>` directly via
+  `tools/call`. Collection filters are now enforced at execution time.
+
+- **Lua `update_many` skipped validation and hooks** (HIGH): The Lua
+  `crap.collections.update_many()` function only ran `BeforeChange` hooks and
+  discarded their return value. It skipped `BeforeValidate` hooks, field
+  validation (`required`, `unique`, custom `validate`), and field-level
+  `before_change`/`after_change` hooks. Now runs the full write lifecycle
+  matching the single `update` and gRPC `UpdateMany` paths.
+
+- **Lua `update_many` field write access bypass** (MEDIUM): When called with
+  `overrideAccess = false`, field-level write access checks were not applied.
+  Now strips denied fields before the DB write.
+
+- **IP rate limiter not cleared on successful login** (MEDIUM): The per-IP
+  rate limiter was never cleared on successful login (only the per-email
+  limiter was). Users behind shared IPs (NAT, VPN) could eventually get
+  locked out despite successful logins. Both limiters are now cleared on
+  success (admin and gRPC).
+
+- **Lua `delete`/`delete_many` orphaned upload files** (MEDIUM): Deleting
+  upload-collection documents via Lua hooks left files on disk. Now cleans up
+  upload files after successful deletion, matching the gRPC path.
+
+- **`sanitize_locale` empty string passes in release builds** (HIGH):
+  `sanitize_locale` used `debug_assert!` which only fires in debug builds.
+  An all-special-character locale string silently produced `""` in release,
+  which gets interpolated into SQL as an empty identifier. Now returns
+  `Result<String>` with a proper error, propagated through all callers.
+
+- **Non-existent locale silently accepted**: `LocaleContext::from_locale_string`
+  accepted any locale code without checking it exists in the config's locale
+  list. Requesting a non-existent locale (e.g. `"fr"` when only `"en"` and
+  `"de"` are configured) silently created a `Single("fr")` context. Now
+  returns `None` for unknown locale codes.
+
+- **Lua table conversion stack overflow** (HIGH): `lua_to_json` and
+  `json_to_lua` recursed into nested tables with no depth limit. A deeply
+  nested structure (65+ levels) caused stack overflow. Now capped at 64
+  levels with a clear error.
+
+- **Mixed-key Lua tables silently lost string keys** (HIGH): A Lua table
+  with both integer and string keys (e.g., `{1, 2, name="test"}`) was
+  treated as a JSON array, silently dropping string keys. Now detected
+  and serialized as a JSON object preserving all keys.
+
+- **Version table index name collision** (HIGH): Version table indexes
+  used names like `idx_{slug}_parent_latest` that could collide with
+  field-level indexes on fields named `parent_latest`. Namespaced to
+  `idx__ver_{slug}_*`.
+
+- **Polymorphic relationship upgrade left stale PRIMARY KEY** (HIGH):
+  Upgrading a junction table from non-polymorphic to polymorphic added
+  the `related_collection` column but didn't update the PRIMARY KEY
+  constraint. Now rebuilds the table with the correct composite PK.
+
+- **Silent NaN/Infinity and number overflow in gRPC conversion** (MEDIUM):
+  Non-finite floats silently became `null` and overflowing numbers
+  silently became `0.0` in protobuf conversion. Now logs warnings.
+
+- **Event publishing error silently swallowed** (MEDIUM): Collection
+  definition lookup failure during event publishing was discarded with
+  `.ok()`. Now logs a warning.
+
+- **Sessions not invalidated on password change** (HIGH): After a password
+  reset, existing JWTs remained valid until expiry. Added a
+  `_session_version` counter to auth tables that increments on password
+  change. The version is embedded in JWT claims and checked on every
+  authenticated request — stale tokens are rejected immediately.
 
 ### Internal
 
