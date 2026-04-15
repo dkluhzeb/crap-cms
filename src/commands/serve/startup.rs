@@ -153,6 +153,32 @@ fn log_startup_info(registry: &SharedRegistry, cfg: &CrapConfig) -> Result<()> {
     Ok(())
 }
 
+/// Print a one-line nudge at startup if the cached update-check shows a
+/// newer release than the running binary. Reads from
+/// `$XDG_CACHE_HOME/crap-cms/update-check.json` (populated by
+/// `crap-cms update check`, 24h TTL). Never performs network I/O.
+fn log_update_notice(cfg: &CrapConfig) {
+    if !cfg.update.check_on_startup {
+        return;
+    }
+
+    let Some(path) = crate::commands::update::cache::default_path() else {
+        return;
+    };
+    let Some(latest) = crate::commands::update::cache::fresh_latest_at(&path, chrono::Utc::now())
+    else {
+        return;
+    };
+
+    let current = format!("v{}", env!("CARGO_PKG_VERSION"));
+    if latest != current {
+        info!(
+            "A newer crap-cms is available ({latest}, current {current}). \
+             Run `crap-cms update` to upgrade."
+        );
+    }
+}
+
 /// Log security warnings for common misconfigurations.
 fn log_security_warnings(cfg: &CrapConfig) {
     if cfg.server.grpc_rate_limit_requests == 0 {
@@ -392,6 +418,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     let jwt_secret = resolve_jwt_secret(&cfg.auth, &config_dir)?;
     log_startup_info(&registry, &cfg)?;
     log_security_warnings(&cfg);
+    log_update_notice(&cfg);
 
     let registry_snapshot = Registry::snapshot(&registry);
     let storage = create_storage(&config_dir, &cfg.upload)?;

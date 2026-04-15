@@ -16,7 +16,7 @@ use crap_cms::{
     cli::{self, crap_theme},
     commands::{
         self, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
-        MigrateAction, TemplatesAction, TrashAction, UserAction, serve::ServeMode,
+        MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction, serve::ServeMode,
     },
     config::{CrapConfig, LogRotation},
 };
@@ -253,6 +253,20 @@ enum Command {
 
         #[command(subcommand)]
         action: Option<LogsAction>,
+    },
+
+    /// Manage installed versions of crap-cms
+    Update {
+        /// Skip confirmation prompts (no-op for read-only subcommands).
+        #[arg(short = 'y', long, global = true)]
+        yes: bool,
+
+        /// Allow self-update even when the binary looks distro-managed.
+        #[arg(long, global = true)]
+        force: bool,
+
+        #[command(subcommand)]
+        action: Option<UpdateCmd>,
     },
 }
 
@@ -519,6 +533,14 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let config_dir = commands::resolve_config_dir(config_flag)?;
             commands::logs::run(&config_dir, action, follow, lines)
+        }
+        Command::Update { yes, force, action } => {
+            // Run on a blocking thread — `reqwest::blocking` spawns its own
+            // tokio runtime internally, and dropping that while inside
+            // `#[tokio::main]` panics. spawn_blocking isolates it.
+            tokio::task::spawn_blocking(move || commands::update::run(action, yes, force))
+                .await
+                .context("update task panicked")?
         }
     }
 }

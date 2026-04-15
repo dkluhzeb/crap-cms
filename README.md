@@ -16,15 +16,42 @@ docker run -p 3000:3000 -p 50051:50051 ghcr.io/dkluhzeb/crap-cms:latest serve -C
 
 Open [http://localhost:3000/admin](http://localhost:3000/admin) — login: `admin@crap.studio` / `admin123`
 
-Or download a [static binary](https://github.com/dkluhzeb/crap-cms/releases) (Linux x86_64, ARM64, Windows — no dependencies):
+Or install the latest release with the shell installer (Linux x86_64 / ARM64):
 
 ```bash
-curl -L -o crap-cms \
-  https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
-chmod +x crap-cms
-curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.tar.gz | tar xz
-./crap-cms serve -C ./example
+curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh | bash
 ```
+
+The installer downloads the matching binary, verifies it against `SHA256SUMS`, and places it under `~/.local/share/crap-cms/versions/<version>/`. It wires up a shim at `~/.local/bin/crap-cms` — add that directory to your `PATH` if it isn't already.
+
+<details>
+<summary>Inspect the script before running (recommended)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh -o install.sh
+less install.sh               # review
+sha256sum install.sh          # compare against the repo's scripts/install.sh
+bash install.sh               # run once you're satisfied
+```
+
+For a reproducible install, pin the URL to a tag: `…/crap-cms/v0.1.0-alpha.5/scripts/install.sh`.
+</details>
+
+Prefer a direct [release download](https://github.com/dkluhzeb/crap-cms/releases)? Grab `crap-cms-linux-x86_64` (or the arch you need), `chmod +x`, and run — no other dependencies.
+
+### Managing versions
+
+Once installed, the binary manages itself:
+
+```bash
+crap-cms update check           # is a newer release out?
+crap-cms update list            # remote releases, marked with (installed) and *
+crap-cms update install v0.1.0-alpha.5
+crap-cms update use v0.1.0-alpha.5
+crap-cms update                 # shortcut: install latest + switch to it
+```
+
+`crap-cms serve` prints a one-line nudge on startup when a newer release is cached (24h TTL, populated by `crap-cms update check`). Set `[update] check_on_startup = false` in `crap.toml` to silence it.
 
 ## Features
 

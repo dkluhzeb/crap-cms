@@ -17,7 +17,7 @@ use crate::config::{
     env::substitute_in_value,
     features::{
         AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
-        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
+        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UpdateConfig, UploadConfig,
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
@@ -62,6 +62,8 @@ pub struct CrapConfig {
     pub cache: CacheConfig,
     /// File-based logging settings.
     pub logging: LoggingConfig,
+    /// `crap-cms update` settings (startup nudge).
+    pub update: UpdateConfig,
 }
 
 /// True if the config contains any non-empty secret.

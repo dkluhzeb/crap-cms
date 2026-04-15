@@ -8,6 +8,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`crap-cms update` built-in version manager** — nvm-style CLI for
+  managing installed versions of the binary. Subcommands: `check`,
+  `list`, `install <version>`, `use <version>`, `uninstall <version>`,
+  `where`. Bare `crap-cms update` installs the latest release and
+  switches to it. Versions live under `~/.local/share/crap-cms/versions/`;
+  the `current` symlink flip is atomic (safe to switch while `serve` is
+  running). Release assets are verified against `SHA256SUMS` before
+  install. Distro-managed paths (`/usr/`, `/opt/`, `/nix/`) refuse
+  self-update with a pointer at the system package manager; `--force`
+  overrides. On `crap-cms serve` startup, a one-line notice prints
+  when the cached update-check (24h TTL) shows a newer release is
+  available — silenceable via `[update] check_on_startup = false` in
+  `crap.toml`. Windows self-update (`install`/`use`) is not supported
+  in this release — the version store uses symlinks. Windows users
+  should download new releases manually; `check`/`list`/`where` still
+  work.
+
+- **Official shell installer** at `scripts/install.sh` — auto-detects
+  platform (Linux x86_64 / aarch64), downloads the matching asset,
+  verifies SHA256, lays out the nvm-style version store under
+  `~/.local/share/crap-cms/`, wires up a shim at `~/.local/bin/crap-cms`,
+  and prints a PATH hint if needed. Install via
+  `curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh | bash`.
+
 - **Top-level `hidden` field flag** — new `hidden = true` on
   `crap.FieldDefinition` strips a field from all read responses (gRPC,
   Lua, MCP, admin JSON, REST) and skips it in the admin form. Writes
