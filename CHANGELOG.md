@@ -4,6 +4,60 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.6] — Unreleased
+
+### Added
+
+### Changed
+
+- **Default `[database] connection_timeout` raised from 5s to 30s** to
+  match `busy_timeout`. The pool-level timeout was firing before
+  SQLite's own WAL-writer retry loop had a chance to resolve write
+  contention, producing spurious `ServiceError::Transient` errors
+  under load (most visible on `find_deep` and bulk-write workloads).
+  The new default lets SQLite's busy handler do its job before the
+  outer pool gives up. Explicit config overrides still win.
+
+- **Postgres write path: `SELECT … FOR UPDATE` pre-lock removed from
+  ref-count handling.** Previously, every `create` and `update` on
+  postgres acquired a per-target `FOR UPDATE` row lock on each
+  referenced document before the main INSERT, then again before each
+  ref-count UPDATE — adding 1-2 round-trips per referenced doc on the
+  write hot path. The protection was redundant: the subsequent
+  `UPDATE _ref_count = _ref_count + 1 WHERE id = ?` already takes the
+  same row-level write lock implicitly, and the `affected == 0` check
+  introduced in alpha.5 already detects a concurrently-deleted target
+  and rolls back the enclosing transaction. SQLite was already a
+  no-op on this path (its `IMMEDIATE` transactions serialize all
+  writers at the DB level); SQLite behavior is unchanged. Multi-server
+  no-dangling-reference safety is preserved via `get_ref_count_locked`
+  on the delete side + the create side's `affected == 0` rollback.
+  **Subtle behavior change**: under a tight create-vs-hard-delete
+  race on the same target, the **delete now wins** instead of the
+  create — the create rolls back with a clear "cannot reference X:
+  target no longer exists" error. Both paths produce a consistent
+  database; only which side surfaces the error has shifted. Measured
+  postgres impact: `create @ c=10` p50 215ms → 85ms (-60%), throughput
+  53 → 76 req/s (+43%); `create @ c=50` throughput 59 → 73 req/s
+  (+24%), p50 909ms → 612ms (-33%).
+
+### Fixed
+
+- **N+1 query on join-field population** — `populate_join_fields` was
+  issuing one `find()` per parent document in a batch. A `find()`
+  returning 20 parent docs with a `comments` join field meant 20
+  follow-up queries. Replaced with a single batched
+  `find(on_field IN (…))` plus post-fetch bucketing by the `on_field`
+  value. Access-check semantics preserved: `Denied` still yields empty
+  arrays for every parent without querying the target collection, and
+  `Constrained` filters merge into the batched query just like they
+  did in the per-parent path. Measured on the `example/` schema
+  against `ContentAPI/Find` at `depth=2`, concurrency 50: throughput
+  went from 17 req/s (29% errors, p99 4.5 s) to **605 req/s (0.8%
+  errors, p99 153 ms)** — a 36× throughput gain and a 30× tail-latency
+  reduction. At `depth=5` the error rate fell from 50% to 0.7% with
+  57× more throughput.
+
 ## [0.1.0-alpha.5] — 2026-04-15
 
 ### Added

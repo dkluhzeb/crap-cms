@@ -110,7 +110,7 @@ host = "0.0.0.0"        # Bind address
 path = "data/crap.db"   # Relative to config dir, or absolute
 pool_max_size = 64       # Max connections in the pool
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
-connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+connection_timeout = 30  # Pool checkout timeout (seconds or "30s")
 cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
 mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
 wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
@@ -275,7 +275,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `mmap_size` | integer | `268435456` | SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable. |
 | `wal_autocheckpoint` | integer | `1000` | WAL auto-checkpoint threshold in pages. |
 | `busy_timeout` | duration | `30000` (`"30s"`) | SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (`"30s"`, `"1m"`). |
-| `connection_timeout` | duration | `5` | Pool checkout timeout in seconds. How long `pool.get()` waits for a free connection before returning an error. |
+| `connection_timeout` | duration | `30` | Pool checkout timeout in seconds. How long `pool.get()` waits for a free connection before returning an error. Should be >= `busy_timeout` so SQLite's WAL-writer retry loop resolves before the pool-level timeout fires. |
 
 ### `[admin]`
 
