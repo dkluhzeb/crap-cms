@@ -114,13 +114,16 @@ src/
 ├── lib.rs            # crate exports
 ├── config/           # crap.toml loading + defaults
 ├── core/             # collection, field, document types
-├── db/               # SQLite pool, migrations, query builder
+├── db/               # pool, migrations, query builder
+├── service/          # service layer — chokepoint for CRUD lifecycle
 ├── hooks/            # Lua VM, crap.* API, hook lifecycle
 ├── admin/            # Axum admin UI (handlers, templates)
 ├── api/              # Tonic gRPC service
 ├── scheduler/        # background job scheduler
 ├── mcp/              # Model Context Protocol server
-├── commands/         # CLI subcommands
+├── cli/              # CLI argument parsing
+├── commands/         # CLI subcommand implementations
+├── typegen/          # type generation (Rust, Lua, TS, Python, Go)
 └── scaffold/         # init/make scaffolding
 ```
 
@@ -174,6 +177,18 @@ cd docs && mdbook serve            # local preview at localhost:3000
 | **CI** | Every push & PR | fmt, clippy, tests |
 | **Nightly** | Push to main | x86_64 musl binary, Docker `nightly` tag, docs deploy |
 | **Release** | Tag `v*` | Multi-arch binaries, Docker semver tags, GitHub Release, docs deploy |
+
+## Cargo Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `sqlite` | yes | SQLite backend (bundled, no runtime dependency). |
+| `postgres` | no | PostgreSQL backend (via `tokio-postgres` + `deadpool-postgres`). |
+| `s3-storage` | no | S3-compatible upload storage (AWS S3, MinIO, R2, B2, Spaces). |
+| `redis` | no | Redis-backed cache and cross-node live-update transport. |
+| `browser-tests` | no | Headless Chrome end-to-end tests (via `chromiumoxide`). |
+
+Enable a feature at build time with `cargo build --features <name>` (combine with commas).
 
 ## License
 
