@@ -1206,6 +1206,7 @@ async fn find_depth_0_returns_id_only() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -1231,4 +1232,60 @@ async fn find_depth_0_returns_id_only() {
             );
         }
     }
+}
+
+/// Regression: user-supplied `where` clauses that target system columns
+/// (field paths starting with `_`) must be rejected at parse time with an
+/// InvalidArgument status. System columns (`_status`, `_deleted_at`, ...) are
+/// engine-internal — the supported entry points are the typed flags
+/// `trash = true` / `draft = true`.
+#[tokio::test]
+async fn find_with_where_on_system_column_rejected() {
+    let ts = setup_service(vec![make_numbered_posts_def()], vec![]);
+
+    // Directly filter on _deleted_at — must be rejected
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "items".to_string(),
+            r#where: Some(r#"{"_deleted_at": {"exists": true}}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("filtering on _deleted_at must be rejected");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("_deleted_at"),
+        "error message should name the rejected column: {}",
+        err.message()
+    );
+    assert!(
+        err.message().contains("system column"),
+        "error message should explain the reason: {}",
+        err.message()
+    );
+
+    // _status is also blocked — draft flag is the supported way
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "items".to_string(),
+            r#where: Some(r#"{"_status": "draft"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("filtering on _status must be rejected");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+    // Underscore-prefixed field inside `or` groups is blocked too
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "items".to_string(),
+            r#where: Some(r#"{"or":[{"_password_hash":"abc"},{"name":"Alpha"}]}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("filtering on _password_hash inside or-group must be rejected");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
 }

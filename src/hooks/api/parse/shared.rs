@@ -1,7 +1,7 @@
 //! Shared parsing helpers used by both collection and global definition parsers.
 
 use anyhow::Result;
-use mlua::{Table, Value};
+use mlua::{Result as LuaResult, Table, Value};
 use tracing::warn;
 
 use crate::core::{
@@ -158,28 +158,33 @@ pub(super) fn parse_live_setting(config: &Table) -> LiveConfig {
 }
 
 /// Parse `versions` from a Lua table.
-pub(super) fn parse_versions_config(config: &Table) -> Option<VersionsConfig> {
-    let val: Value = config.get("versions").ok()?;
+pub(super) fn parse_versions_config(config: &Table) -> LuaResult<Option<VersionsConfig>> {
+    let val: Value = match config.get("versions") {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
 
     match val {
-        Value::Boolean(true) => Some(VersionsConfig::new(true, 0)),
-        Value::Boolean(false) | Value::Nil => None,
+        Value::Boolean(true) => Ok(Some(VersionsConfig::new(true, 0))),
+        Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
-            let drafts = get_bool(&tbl, "drafts", true);
+            let drafts = get_bool(&tbl, "drafts", true)?;
             let max_versions = tbl.get::<u32>("max_versions").unwrap_or(0);
 
-            Some(VersionsConfig::new(drafts, max_versions))
+            Ok(Some(VersionsConfig::new(drafts, max_versions)))
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
 /// Parse `indexes` from a collection Lua table.
-pub(super) fn parse_indexes(config: &Table) -> Vec<crate::core::collection::IndexDefinition> {
+pub(super) fn parse_indexes(
+    config: &Table,
+) -> LuaResult<Vec<crate::core::collection::IndexDefinition>> {
     use crate::core::collection::IndexDefinition;
 
     let Ok(tbl) = get_table(config, "indexes") else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut indexes = Vec::new();
 
@@ -197,13 +202,13 @@ pub(super) fn parse_indexes(config: &Table) -> Vec<crate::core::collection::Inde
             continue;
         }
 
-        let unique = get_bool(&entry, "unique", false);
+        let unique = get_bool(&entry, "unique", false)?;
         let mut idx = IndexDefinition::new(fields);
         idx.unique = unique;
         indexes.push(idx);
     }
 
-    indexes
+    Ok(indexes)
 }
 
 pub(super) fn parse_access_config(config: &Table) -> Access {
@@ -233,7 +238,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("versions", true).unwrap();
-        let v = parse_versions_config(&tbl).unwrap();
+        let v = parse_versions_config(&tbl).unwrap().unwrap();
         assert!(v.drafts);
         assert_eq!(v.max_versions, 0);
     }
@@ -243,14 +248,14 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("versions", false).unwrap();
-        assert!(parse_versions_config(&tbl).is_none());
+        assert!(parse_versions_config(&tbl).unwrap().is_none());
     }
 
     #[test]
     fn test_parse_versions_config_absent() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        assert!(parse_versions_config(&tbl).is_none());
+        assert!(parse_versions_config(&tbl).unwrap().is_none());
     }
 
     #[test]
@@ -261,7 +266,7 @@ mod tests {
         ver.set("drafts", false).unwrap();
         ver.set("max_versions", 50u32).unwrap();
         tbl.set("versions", ver).unwrap();
-        let v = parse_versions_config(&tbl).unwrap();
+        let v = parse_versions_config(&tbl).unwrap().unwrap();
         assert!(!v.drafts);
         assert_eq!(v.max_versions, 50);
     }
@@ -272,7 +277,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let ver = lua.create_table().unwrap();
         tbl.set("versions", ver).unwrap();
-        let v = parse_versions_config(&tbl).unwrap();
+        let v = parse_versions_config(&tbl).unwrap().unwrap();
         assert!(v.drafts);
         assert_eq!(v.max_versions, 0);
     }
@@ -282,7 +287,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("versions", 42i64).unwrap();
-        assert!(parse_versions_config(&tbl).is_none());
+        assert!(parse_versions_config(&tbl).unwrap().is_none());
     }
 
     #[test]
@@ -424,7 +429,7 @@ mod tests {
         idx2.set("unique", true).unwrap();
         indexes_tbl.set(2, idx2).unwrap();
         config.set("indexes", indexes_tbl).unwrap();
-        let indexes = parse_indexes(&config);
+        let indexes = parse_indexes(&config).unwrap();
         assert_eq!(indexes.len(), 2);
         assert_eq!(indexes[0].fields, vec!["status", "created_at"]);
         assert!(!indexes[0].unique);
@@ -442,14 +447,14 @@ mod tests {
         idx.set("fields", fields).unwrap();
         indexes_tbl.set(1, idx).unwrap();
         config.set("indexes", indexes_tbl).unwrap();
-        assert!(parse_indexes(&config).is_empty());
+        assert!(parse_indexes(&config).unwrap().is_empty());
     }
 
     #[test]
     fn test_parse_indexes_absent() {
         let lua = Lua::new();
         let config = lua.create_table().unwrap();
-        assert!(parse_indexes(&config).is_empty());
+        assert!(parse_indexes(&config).unwrap().is_empty());
     }
 
     #[test]
@@ -461,7 +466,7 @@ mod tests {
         idx.set("unique", true).unwrap();
         indexes_tbl.set(1, idx).unwrap();
         config.set("indexes", indexes_tbl).unwrap();
-        assert!(parse_indexes(&config).is_empty());
+        assert!(parse_indexes(&config).unwrap().is_empty());
     }
 
     #[test]

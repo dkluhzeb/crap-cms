@@ -58,7 +58,7 @@ crap = {}
 --- @field label?       crap.LocalizedString   UI label (defaults to field name).
 --- @field description? crap.LocalizedString   Help text shown below the input.
 --- @field placeholder? crap.LocalizedString   Input placeholder text.
---- @field hidden?      boolean  Hide from admin UI (default: false).
+--- @field hidden?      boolean  Hide from the admin edit form only (default: false). The field's value is still returned in API responses (gRPC, Lua, MCP, REST). For full API stripping, use top-level `hidden` on `crap.FieldDefinition` instead.
 --- @field readonly?    boolean  Non-editable in admin (default: false).
 --- @field width?       crap.FieldWidth  Field width: "full", "half", or "third".
 --- @field collapsed?   boolean  Start collapsed in admin UI — groups, collapsibles, array/block rows (default: true). Set `false` to start expanded.
@@ -137,7 +137,7 @@ crap = {}
 --- @field index?        boolean           Create a B-tree index on this column (default: false). Skipped when unique=true (already indexed).
 --- @field localized?    boolean           Per-locale values (default: false).
 --- @field default_value? any              Default value on create.
---- @field hidden?       boolean           Hide from API responses (default: false).
+--- @field hidden?       boolean           Strip from all read responses — gRPC, Lua, MCP, admin JSON, REST (default: false). Writes are not stripped (internal hooks/Lua can still write the column). Implies the field is also skipped in the admin form. For admin-form-only hiding while keeping the value in API responses, use `admin.hidden` instead.
 --- @field validate?     string            Lua function ref (module.function format) called as crap.ValidateFunction.
 --- @field hooks?        crap.FieldHooks   Per-field lifecycle hooks (value transformers, no CRUD access).
 --- @field options?      crap.SelectOption[] Options for "select" field type.
@@ -183,6 +183,7 @@ crap = {}
 --- @field index?        boolean           Create a B-tree index on this column (default: false). Skipped when unique=true.
 --- @field localized?    boolean           Per-locale values (default: false).
 --- @field default_value? any              Default value on create.
+--- @field hidden?       boolean           Strip from all read responses (gRPC/Lua/MCP/admin/REST) and skip in the admin form. For admin-form-only hiding (value still returned in API), use `admin.hidden` instead. Default: false.
 --- @field validate?     string            Lua function ref called as `crap.ValidateFunction`.
 --- @field hooks?        crap.FieldHooks   Per-field lifecycle hooks.
 --- @field access?       crap.FieldAccess  Field-level access control (read/create/update).
@@ -217,6 +218,8 @@ crap = {}
 --- @field picker_appearance? crap.PickerAppearance  Input type: "dayOnly" (default), "dayAndTime", "timeOnly", "monthOnly".
 --- @field min_date?          string                 Minimum date (ISO "YYYY-MM-DD").
 --- @field max_date?          string                 Maximum date (ISO "YYYY-MM-DD").
+--- @field timezone?          boolean                Store an IANA timezone alongside the value. Requires `picker_appearance = "dayAndTime"` (ignored with a warning otherwise). Creates a companion `{field}_tz` column.
+--- @field default_timezone?  string                 IANA zone used as the admin form default (e.g. "America/New_York"). Only applies when `timezone = true`.
 
 --- @class crap.EmailField : crap.BaseField
 
@@ -728,6 +731,42 @@ function crap.collections.update_many(collection, query, data, opts) end
 --- @return { deleted: integer }
 function crap.collections.delete_many(collection, query) end
 
+--- @class crap.VersionSummary
+--- @field id          string    Version row ID (not the parent document ID).
+--- @field version     integer   Monotonically-increasing version number, newest first.
+--- @field status      string    Version status (e.g. `"published"`, `"draft"`).
+--- @field latest      boolean   `true` for the newest version, `false` otherwise.
+--- @field created_at? string    ISO 8601 timestamp the snapshot was taken (if recorded).
+
+--- @class crap.ListVersionsOptions
+--- @field limit?          integer  Max number of versions to return.
+--- @field offset?         integer  Offset for pagination.
+--- @field overrideAccess? boolean  Skip access control checks (default: `false`). Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level read-access checks. This was previously hardcoded to `true` — it is now opt-in.
+
+--- List version snapshots for a document, newest first. Returns a table of
+--- [`crap.VersionSummary`](lua://crap.VersionSummary) rows plus pagination metadata.
+--- Only available on collections with `versions` enabled.
+--- Inside hooks, runs within the parent operation's transaction.
+--- @param collection string                          Collection slug.
+--- @param id         string                          Parent document ID.
+--- @param opts?      crap.ListVersionsOptions        Optional options.
+--- @return { docs: crap.VersionSummary[], pagination: crap.PaginationInfo }
+function crap.collections.list_versions(collection, id, opts) end
+
+--- @class crap.RestoreVersionOptions
+--- @field overrideAccess? boolean  Skip access control checks (default: `false`). Set to `true` in trusted internal code (jobs, migrations) to bypass collection-level access checks. This was previously hardcoded to `true` — it is now opt-in.
+
+--- Restore a previous version: copies the snapshot data back onto the parent
+--- document and writes a new version row. Returns the restored document.
+--- Only available on collections with `versions` enabled.
+--- Inside hooks, runs within the parent operation's transaction.
+--- @param collection string                         Collection slug.
+--- @param id         string                         Parent document ID.
+--- @param version_id string                         Version row ID to restore.
+--- @param opts?      crap.RestoreVersionOptions     Optional options.
+--- @return crap.Document
+function crap.collections.restore_version(collection, id, version_id, opts) end
+
 
 -- ── crap.globals ─────────────────────────────────────────────
 
@@ -1044,6 +1083,11 @@ function crap.auth.hash_password(password) end
 --- @return boolean valid
 function crap.auth.verify_password(password, hash) end
 
+--- Return the currently authenticated user document for the in-flight request, or nil.
+--- Returns nil from init.lua, on unauthenticated requests, or outside a hook context.
+--- @return crap.Document?  user
+function crap.auth.user() end
+
 
 -- ── crap.env ─────────────────────────────────────────────────
 
@@ -1145,10 +1189,20 @@ crap.crypto = {}
 function crap.crypto.sha256(data) end
 
 --- HMAC-SHA256 of data with a key, returned as hex.
+--- Always compare HMACs with `crap.crypto.constant_time_eq(...)`, never with
+--- `==`, to avoid timing attacks.
 --- @param data string  Data to authenticate.
 --- @param key  string  HMAC key.
 --- @return string hex  64-character hex string.
 function crap.crypto.hmac_sha256(data, key) end
+
+--- Constant-time byte-string equality. Use this — never `==` — to compare
+--- HMAC tags, tokens, or any secret value. Length mismatch and content
+--- mismatch are indistinguishable from the return value.
+--- @param a string
+--- @param b string
+--- @return boolean equal
+function crap.crypto.constant_time_eq(a, b) end
 
 --- Base64 encode a string.
 --- @param str string

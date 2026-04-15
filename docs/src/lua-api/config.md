@@ -58,6 +58,6 @@ All sections from `crap.toml` are available — this table is not exhaustive. Th
 
 ## Notes
 
-- Values are a **read-only snapshot** taken at VM creation time. Changes to `crap.toml` after startup won't be reflected until the process restarts.
+- Values are a **read-only snapshot** taken at the moment each Lua VM is created. The VM pool is built at startup; once a VM is alive, its `crap.config` view is frozen for its lifetime. Edits to `crap.toml` after startup are not picked up without a restart (or VM-pool recycle, which today only happens on process restart).
 - Available in both init.lua and hooks.
 - Returns `nil` for non-existent keys (never errors).

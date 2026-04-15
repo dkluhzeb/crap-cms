@@ -98,7 +98,9 @@ Upload fields default to `picker = "drawer"`, which shows a browse button next t
 -- drawer is the default for upload fields — no need to set it explicitly
 crap.fields.upload({
     name = "featured_image",
-    relation_to = "media",
+    relationship = {
+        collection = "media",
+    },
 })
 ```
 

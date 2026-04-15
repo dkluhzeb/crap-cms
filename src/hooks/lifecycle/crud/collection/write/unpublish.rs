@@ -191,11 +191,15 @@ fn unpublish_document(
     // Access check — unpublish requires update access
     enforce_access(
         lua,
-        false,
-        def.access.update.as_deref(),
-        Some(&id),
+        &EnforceAccessParams {
+            slug: &collection,
+            override_access: false,
+            access_fn: def.access.update.as_deref(),
+            id: Some(&id),
+            deny_msg: "Update access denied",
+            injecting_status: false,
+        },
         &mut vec![],
-        "Update access denied",
     )?;
 
     handle_unpublish(

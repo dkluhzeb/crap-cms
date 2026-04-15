@@ -6,9 +6,11 @@ use std::collections::HashSet;
 
 use crate::core::cache::CacheBackend;
 use crate::core::{Document, FieldType, field::flatten_array_sub_fields, upload};
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
+use crate::db::query::populate::{
+    PopulateContext, PopulateCtx, PopulateOpts, Singleflight, document_to_json,
+};
 use crate::db::{
-    Filter, FilterClause, FilterOp, FindQuery,
+    AccessResult, Filter, FilterClause, FilterOp, FindQuery,
     query::{hydrate_document, read},
 };
 
@@ -25,6 +27,38 @@ pub fn populate_relationships_batch_cached(
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
 ) -> Result<()> {
+    // Fresh singleflight for this batch. The batch path already collapses
+    // per-collection fetches via `find_by_ids`, so per-id dedup matters mainly
+    // for nested container recursion into single-doc paths.
+    let singleflight = Singleflight::new();
+
+    populate_relationships_batch_cached_inner(ctx, docs, opts, cache, &singleflight)
+}
+
+/// Variant of [`populate_relationships_batch_cached`] that accepts an
+/// externally owned singleflight so concurrent populate trees across
+/// requests can deduplicate cache-miss DB fetches for the same target.
+///
+/// Callers in the service layer pass the process-wide
+/// [`SharedPopulateSingleflight`](crate::db::query::SharedPopulateSingleflight)
+/// here. Internal callers keep using the fresh-per-call variant above.
+pub fn populate_relationships_batch_cached_with_singleflight(
+    ctx: &PopulateContext<'_>,
+    docs: &mut [Document],
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
+) -> Result<()> {
+    populate_relationships_batch_cached_inner(ctx, docs, opts, cache, singleflight)
+}
+
+fn populate_relationships_batch_cached_inner(
+    ctx: &PopulateContext<'_>,
+    docs: &mut [Document],
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
+) -> Result<()> {
     if opts.depth <= 0 || docs.is_empty() {
         return Ok(());
     }
@@ -35,8 +69,8 @@ pub fn populate_relationships_batch_cached(
         visited.insert((ctx.collection_slug.to_string(), doc.id.to_string()));
     }
 
-    populate_flat_relationships(ctx, docs, opts, cache, &visited)?;
-    populate_nested_containers(ctx, docs, opts, cache, &visited)?;
+    populate_flat_relationships(ctx, docs, opts, cache, singleflight, &visited)?;
+    populate_nested_containers(ctx, docs, opts, cache, singleflight, &visited)?;
     populate_join_fields(ctx, docs, opts, cache, &visited)?;
 
     Ok(())
@@ -48,6 +82,7 @@ fn populate_flat_relationships(
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     for field in flatten_array_sub_fields(&ctx.def.fields) {
@@ -81,6 +116,7 @@ fn populate_flat_relationships(
             effective_depth,
             locale_ctx: opts.locale_ctx,
             cache,
+            singleflight,
         };
 
         if rel.is_polymorphic() {
@@ -126,6 +162,7 @@ fn populate_nested_containers(
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     for doc in docs.iter_mut() {
@@ -136,6 +173,7 @@ fn populate_nested_containers(
             effective_depth: opts.depth,
             locale_ctx: opts.locale_ctx,
             cache,
+            singleflight,
         };
 
         nested::populate_containers_in_doc(&nested_pctx, doc, &ctx.def.fields, &mut doc_visited)?;
@@ -208,6 +246,19 @@ fn populate_join_fields_for_doc(
             op: FilterOp::Equals(doc.id.to_string()),
         })];
 
+        // Target-collection access check (SEC-G). Denied => skip; Constrained => merge.
+        if let Some(check) = opts.join_access {
+            match check.check(target_def.access.read.as_deref(), opts.user)? {
+                AccessResult::Denied => {
+                    doc.fields
+                        .insert(field.name.clone(), Value::Array(Vec::new()));
+                    continue;
+                }
+                AccessResult::Constrained(extra) => fq.filters.extend(extra),
+                AccessResult::Allowed => {}
+            }
+        }
+
         if let Ok(matched_docs) =
             read::find(ctx.conn, &jc.collection, &target_def, &fq, opts.locale_ctx)
         {
@@ -242,6 +293,8 @@ fn populate_join_fields_for_doc(
                         depth: opts.depth - 1,
                         select: None,
                         locale_ctx: opts.locale_ctx,
+                        join_access: opts.join_access,
+                        user: opts.user,
                     },
                     cache,
                 )?;

@@ -1,5 +1,7 @@
 //! Top-level `CrapConfig` struct and its loading/validation logic.
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -15,14 +17,14 @@ use crate::config::{
     env::substitute_in_value,
     features::{
         AccessConfig, CacheConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig,
-        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
+        LocaleConfig, LoggingConfig, McpConfig, PaginationConfig, UpdateConfig, UploadConfig,
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
 
 /// Top-level configuration loaded from `crap.toml` in the config directory.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CrapConfig {
     /// Required CMS version. If set, warns on mismatch at startup.
     pub crap_version: Option<String>,
@@ -60,7 +62,59 @@ pub struct CrapConfig {
     pub cache: CacheConfig,
     /// File-based logging settings.
     pub logging: LoggingConfig,
+    /// `crap-cms update` settings (startup nudge).
+    pub update: UpdateConfig,
 }
+
+/// True if the config contains any non-empty secret.
+#[cfg(unix)]
+fn has_any_secret(config: &CrapConfig) -> bool {
+    !config.auth.secret.is_empty()
+        || !config.email.smtp_pass.is_empty()
+        || !config.upload.s3.secret_key.is_empty()
+}
+
+/// Pure check for whether a given Unix permissions mode is considered "loose"
+/// (world-readable or world-writable).
+#[cfg(unix)]
+fn is_world_accessible_mode(mode: u32) -> bool {
+    // World-read = 0o004, world-write = 0o002.
+    (mode & 0o777) & 0o006 != 0
+}
+
+/// Decide whether a loose-permissions warning should fire for a given config
+/// and mode. Returns `true` iff secrets are present AND permissions are loose.
+/// Used only from the test suite; the production path embeds the same check
+/// inline in `warn_on_loose_permissions`.
+#[cfg(all(unix, test))]
+fn should_warn_loose_permissions(config: &CrapConfig, mode: u32) -> bool {
+    has_any_secret(config) && is_world_accessible_mode(mode)
+}
+
+/// Emit a warning when the config file has loose Unix permissions (world-readable
+/// or world-writable) AND contains at least one non-empty secret. No-op on Windows.
+#[cfg(unix)]
+fn warn_on_loose_permissions(config_path: &Path, config: &CrapConfig) {
+    if !has_any_secret(config) {
+        return;
+    }
+
+    let Ok(meta) = fs::metadata(config_path) else {
+        return;
+    };
+
+    let mode = meta.mode();
+
+    if is_world_accessible_mode(mode) {
+        warn!(
+            "config file at {} is world-readable but contains secrets; recommend chmod 600",
+            config_path.display()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_on_loose_permissions(_config_path: &Path, _config: &CrapConfig) {}
 
 impl CrapConfig {
     /// Load configuration from `crap.toml` in the config directory, falling back to defaults.
@@ -92,6 +146,8 @@ impl CrapConfig {
                 .context("Invalid locale configuration")?;
 
             config.validate().context("Invalid configuration")?;
+
+            warn_on_loose_permissions(&config_path, &config);
 
             Ok(config)
         } else {
@@ -864,5 +920,72 @@ dev_mode = false
         config.depth.max_depth = -1;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("max_depth"));
+    }
+
+    /// BUG-3 regression: a typo at the top level (e.g. `admin_prot`) must fail
+    /// loading instead of being silently ignored.
+    #[test]
+    fn config_rejects_unknown_top_level_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "admin_prot = 3000\n").unwrap();
+        let err = CrapConfig::load(tmp.path()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("admin_prot") || msg.contains("unknown"),
+            "expected unknown-field error, got: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_warns_on_world_readable_with_secrets() {
+        use super::{is_world_accessible_mode, should_warn_loose_permissions};
+        use std::os::unix::fs::PermissionsExt;
+
+        // Write a real world-readable config with a secret, then sanity-check
+        // that load() succeeds. The warn! call is not captured by default tests,
+        // but the pure decision helper is.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("crap.toml");
+        std::fs::write(
+            &path,
+            r#"
+[auth]
+secret = "this-is-a-very-long-auth-secret-value-xxxxx"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // Load succeeds (warn is emitted internally).
+        let config = CrapConfig::load(tmp.path()).expect("load with 0644 should succeed");
+
+        // Loose-mode + secret-present decision should be true.
+        assert!(is_world_accessible_mode(0o644));
+        assert!(!is_world_accessible_mode(0o600));
+        assert!(is_world_accessible_mode(0o666));
+        assert!(should_warn_loose_permissions(&config, 0o644));
+        assert!(!should_warn_loose_permissions(&config, 0o600));
+
+        // No secret = no warn.
+        let empty = CrapConfig::default();
+        assert!(!should_warn_loose_permissions(&empty, 0o644));
+    }
+
+    /// BUG-3 regression: a typo inside a nested section must also fail.
+    #[test]
+    fn config_rejects_unknown_nested_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_prot = 3000\n",
+        )
+        .unwrap();
+        let err = CrapConfig::load(tmp.path()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("admin_prot") || msg.contains("unknown"),
+            "expected unknown-field error, got: {msg}"
+        );
     }
 }

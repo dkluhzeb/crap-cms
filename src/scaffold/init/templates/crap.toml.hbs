@@ -54,9 +54,11 @@ secret = "{{{auth_secret}}}"
 
 [live]
 # enabled = true                # enable SSE + gRPC Subscribe for live mutation events
+# transport = "memory"          # "memory" (default) — in-process events, or "redis" — cross-node fanout via Redis pub/sub (requires --features redis, reuses cache.redis_url)
 # channel_capacity = 1024       # broadcast channel buffer size
 # max_sse_connections = 1000    # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000  # drop slow subscribers whose send exceeds this (ms)
 
 {{#if has_locales}}
 [locale]

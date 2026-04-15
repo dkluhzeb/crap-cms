@@ -8,7 +8,9 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::core::{BlockDefinition, FieldDefinition, FieldType};
 use crate::db::query::helpers::join_table;
-use crate::db::{DbConnection, FilterClause, query::is_valid_identifier};
+use crate::db::{
+    DbConnection, FilterClause, LocaleContext, LocaleMode, query::is_valid_identifier,
+};
 
 // ── Dot notation normalization ───────────────────────────────────────────
 
@@ -74,6 +76,81 @@ fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
     false
 }
 
+/// Look up the [`FieldType`] for a DB column name on the parent table.
+///
+/// Handles:
+/// - Plain top-level fields (`"status"` → `FieldType::Text`)
+/// - Transparent layout wrappers (Row/Collapsible/Tabs)
+/// - Group sub-fields using the `{group}__{sub}` double-underscore naming
+///   (including nested groups: `a__b__c`)
+/// - Optional locale suffix (`field__{locale}`, `group__sub__{locale}`) —
+///   the locale segment is the last path component and does not affect the
+///   leaf field type.
+///
+/// Returns `None` when the column cannot be mapped to a known field —
+/// callers fall back to `DbValue::Text` binding.
+fn lookup_column_field_type(col: &str, fields: &[FieldDefinition]) -> Option<FieldType> {
+    // Fast path: a top-level scalar/layout leaf named exactly `col`.
+    if let Some(f) = find_field_recursive(col, fields)
+        && !matches!(
+            f.field_type,
+            FieldType::Group | FieldType::Array | FieldType::Blocks | FieldType::Relationship
+        )
+    {
+        return Some(f.field_type.clone());
+    }
+
+    // Group column: split on `__` and walk the tree. If the final segment
+    // fails to resolve, drop it and retry — the trailing segment may be a
+    // locale suffix (e.g. `title__en`, `meta__description__de`).
+    let parts: Vec<&str> = col.split("__").collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    if let Some(ft) = walk_group_path(&parts, fields) {
+        return Some(ft);
+    }
+
+    // Retry without trailing segment to handle locale-suffixed columns.
+    if parts.len() >= 2 {
+        let without_tail = &parts[..parts.len() - 1];
+        return walk_group_path(without_tail, fields);
+    }
+
+    None
+}
+
+/// Walk a `__`-separated path through Group fields (and transparent layout
+/// wrappers) to find the leaf field type.
+fn walk_group_path(parts: &[&str], fields: &[FieldDefinition]) -> Option<FieldType> {
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut current = fields;
+    let mut leaf_type: Option<FieldType> = None;
+
+    for (i, seg) in parts.iter().enumerate() {
+        let is_last = i == parts.len() - 1;
+        let found = find_field_recursive(seg, current)?;
+
+        if is_last {
+            leaf_type = Some(found.field_type.clone());
+            break;
+        }
+
+        match found.field_type {
+            FieldType::Group => {
+                current = &found.fields;
+            }
+            _ => return None,
+        }
+    }
+
+    leaf_type
+}
+
 /// Find a field by name, recursing into transparent layout wrappers (Row, Collapsible, Tabs).
 fn find_field_recursive<'a>(
     name: &str,
@@ -110,12 +187,25 @@ fn find_field_recursive<'a>(
 #[derive(Debug)]
 pub(super) enum ResolvedFilter {
     /// Direct column on parent table (existing behavior).
-    Column(String),
+    ///
+    /// `field_type` is the leaf field's type, used to cast filter operand
+    /// values when binding. `None` when the type cannot be determined —
+    /// binding falls back to `DbValue::Text`.
+    Column {
+        col: String,
+        field_type: Option<FieldType>,
+    },
     /// EXISTS subquery against a join table.
     Subquery {
         join_table: String,
         parent_table: String,
         condition: SubqueryCondition,
+        /// When the join table has a `_locale` column and the query is
+        /// scoped to a single locale, this holds the locale string to
+        /// constrain the subquery with `_locale = ?`. `None` means no
+        /// locale filtering (junction table has no `_locale` column, or
+        /// `LocaleMode::All` is active).
+        locale_constraint: Option<String>,
     },
 }
 
@@ -123,8 +213,13 @@ pub(super) enum ResolvedFilter {
 #[derive(Debug)]
 pub(super) enum SubqueryCondition {
     /// Direct column on join table (array sub-fields, has-many related_id).
-    Column(String),
-    /// `_block_type` column on the join table.
+    ///
+    /// `field_type` drives operand casting; `None` means fall back to Text.
+    Column {
+        col: String,
+        field_type: Option<FieldType>,
+    },
+    /// `_block_type` column on the join table. Always text.
     BlockType,
     /// `json_extract` on the `data` column, possibly with `json_each` joins
     /// for nested blocks/arrays.
@@ -133,6 +228,8 @@ pub(super) enum SubqueryCondition {
         each_joins: Vec<(String, String)>,
         /// Final expression, e.g. `json_extract(data, '$.body')`.
         extract_expr: String,
+        /// Leaf field type for operand coercion. `None` falls back to Text.
+        field_type: Option<FieldType>,
     },
 }
 
@@ -145,14 +242,26 @@ pub(super) enum SubqueryCondition {
 /// - **Array** → subquery with typed column on join table
 /// - **Blocks** → subquery with `json_extract` (and `json_each` for nesting)
 /// - **Relationship** (has-many) → subquery on `related_id`
+///
+/// `locale_ctx` drives per-locale filtering on junction tables: when the
+/// target array/blocks/relationship field is `localized` and the query is
+/// scoped to a single locale (`Single` or `Default`), the returned
+/// [`ResolvedFilter::Subquery`] carries a `locale_constraint` so the EXISTS
+/// subquery adds a `_locale = ?` clause. `LocaleMode::All` leaves the
+/// constraint empty (match rows in any locale).
 pub(super) fn resolve_filter(
     conn: &dyn DbConnection,
     field: &str,
     slug: &str,
     fields: &[FieldDefinition],
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<ResolvedFilter> {
     if !field.contains('.') {
-        return Ok(ResolvedFilter::Column(field.to_string()));
+        let field_type = lookup_column_field_type(field, fields);
+        return Ok(ResolvedFilter::Column {
+            col: field.to_string(),
+            field_type,
+        });
     }
 
     // Guarded by early return above: field.contains('.') is true here
@@ -165,10 +274,42 @@ pub(super) fn resolve_filter(
 
     let jt = join_table(slug, root);
 
+    // The junction table has a `_locale` column iff the container field is
+    // itself localized. Transparent layout wrappers (Row/Collapsible/Tabs)
+    // do not carry localization, so we only need to check `field_def.localized`.
+    // Nested containers inside a localized Group use `{group}__{array}` dot
+    // notation that does not route here (resolve_filter expects the root to
+    // be a top-level Array/Blocks/Relationship), so inherited Group locale
+    // does not apply at this call site.
+    let has_locale_col = field_def.localized && locale_ctx.is_some_and(|c| c.config.is_enabled());
+    let locale_constraint = has_locale_col
+        .then(|| locale_ctx.and_then(subquery_locale))
+        .flatten();
+
     match field_def.field_type {
-        FieldType::Array => resolve_array_filter(conn, root, rest, field, slug, field_def, jt),
-        FieldType::Blocks => resolve_blocks_filter(conn, root, rest, field, slug, field_def, jt),
-        FieldType::Relationship => resolve_relationship_filter(root, rest, slug, field_def, jt),
+        FieldType::Array => resolve_array_filter(
+            conn,
+            root,
+            rest,
+            field,
+            slug,
+            field_def,
+            jt,
+            locale_constraint,
+        ),
+        FieldType::Blocks => resolve_blocks_filter(
+            conn,
+            root,
+            rest,
+            field,
+            slug,
+            field_def,
+            jt,
+            locale_constraint,
+        ),
+        FieldType::Relationship => {
+            resolve_relationship_filter(root, rest, slug, field_def, jt, locale_constraint)
+        }
         _ => {
             bail!(
                 "Field '{}' (type {:?}) does not support sub-field filtering",
@@ -179,6 +320,19 @@ pub(super) fn resolve_filter(
     }
 }
 
+/// Pick the locale string to use as a `_locale = ?` constraint for a subquery.
+///
+/// `Single(loc)` → use that locale. `Default` → use the configured default.
+/// `All` → `None` (match across all locales).
+fn subquery_locale(ctx: &LocaleContext) -> Option<String> {
+    match &ctx.mode {
+        LocaleMode::Single(l) => Some(l.clone()),
+        LocaleMode::Default => Some(ctx.config.default_locale.clone()),
+        LocaleMode::All => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn resolve_array_filter(
     conn: &dyn DbConnection,
     root: &str,
@@ -187,6 +341,7 @@ fn resolve_array_filter(
     slug: &str,
     field_def: &FieldDefinition,
     join_table: String,
+    locale_constraint: Option<String>,
 ) -> Result<ResolvedFilter> {
     for seg in rest.split('.') {
         if !is_valid_identifier(seg) {
@@ -203,13 +358,18 @@ fn resolve_array_filter(
                 // Group sub-fields in arrays are stored as JSON TEXT columns.
                 // Access nested values via json_extract.
                 let extract_expr = conn.json_extract_expr(first_seg, remaining);
+                let field_type = sub_def
+                    .and_then(|g| find_field_recursive(remaining, &g.fields))
+                    .map(|f| f.field_type.clone());
                 Ok(ResolvedFilter::Subquery {
                     join_table,
                     parent_table: slug.to_string(),
                     condition: SubqueryCondition::Json {
                         each_joins: vec![],
                         extract_expr,
+                        field_type,
                     },
+                    locale_constraint,
                 })
             }
             _ => {
@@ -222,14 +382,24 @@ fn resolve_array_filter(
         }
     } else {
         // Simple sub-field — direct typed column on join table.
+        let field_type = field_def
+            .fields
+            .iter()
+            .find(|f| f.name == rest)
+            .map(|f| f.field_type.clone());
         Ok(ResolvedFilter::Subquery {
             join_table,
             parent_table: slug.to_string(),
-            condition: SubqueryCondition::Column(rest.to_string()),
+            condition: SubqueryCondition::Column {
+                col: rest.to_string(),
+                field_type,
+            },
+            locale_constraint,
         })
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_blocks_filter(
     conn: &dyn DbConnection,
     _root: &str,
@@ -238,12 +408,14 @@ fn resolve_blocks_filter(
     slug: &str,
     field_def: &FieldDefinition,
     join_table: String,
+    locale_constraint: Option<String>,
 ) -> Result<ResolvedFilter> {
     if rest == "_block_type" {
         Ok(ResolvedFilter::Subquery {
             join_table,
             parent_table: slug.to_string(),
             condition: SubqueryCondition::BlockType,
+            locale_constraint,
         })
     } else {
         let rest_parts: Vec<&str> = rest.split('.').collect();
@@ -252,7 +424,7 @@ fn resolve_blocks_filter(
                 bail!("Invalid segment '{}' in filter path '{}'", seg, field);
             }
         }
-        let (each_joins, extract_expr) =
+        let (each_joins, extract_expr, field_type) =
             walk_block_fields(conn, &rest_parts, &field_def.blocks, &join_table)?;
         Ok(ResolvedFilter::Subquery {
             join_table,
@@ -260,7 +432,9 @@ fn resolve_blocks_filter(
             condition: SubqueryCondition::Json {
                 each_joins,
                 extract_expr,
+                field_type,
             },
+            locale_constraint,
         })
     }
 }
@@ -271,6 +445,7 @@ fn resolve_relationship_filter(
     slug: &str,
     field_def: &FieldDefinition,
     join_table: String,
+    locale_constraint: Option<String>,
 ) -> Result<ResolvedFilter> {
     if let Some(ref rc) = field_def.relationship {
         if rc.has_many {
@@ -284,7 +459,11 @@ fn resolve_relationship_filter(
             Ok(ResolvedFilter::Subquery {
                 join_table,
                 parent_table: slug.to_string(),
-                condition: SubqueryCondition::Column("related_id".to_string()),
+                condition: SubqueryCondition::Column {
+                    col: "related_id".to_string(),
+                    field_type: Some(FieldType::Text),
+                },
+                locale_constraint,
             })
         } else {
             bail!(
@@ -296,6 +475,10 @@ fn resolve_relationship_filter(
         bail!("Relationship field '{}' missing relationship config", root);
     }
 }
+
+/// Result of walking a block filter path: the `json_each` joins needed,
+/// the final extract expression, and the leaf field type for binding.
+pub(super) type BlockWalkResult = (Vec<(String, String)>, String, Option<FieldType>);
 
 /// Walk block type definitions to build `json_each` joins and a final
 /// `json_extract` expression for a nested path.
@@ -310,7 +493,7 @@ pub(super) fn walk_block_fields(
     segments: &[&str],
     block_defs: &[BlockDefinition],
     join_table: &str,
-) -> Result<(Vec<(String, String)>, String)> {
+) -> Result<BlockWalkResult> {
     if segments.is_empty() {
         bail!("Empty path for block filter");
     }
@@ -329,14 +512,14 @@ pub(super) fn walk_block_fields(
         let seg = remaining[0];
         remaining = &remaining[1..];
 
-        // Handle _block_type at nested level
+        // Handle _block_type at nested level — always Text.
         if seg == "_block_type" {
             if !remaining.is_empty() {
                 bail!("_block_type must be the last segment in a filter path");
             }
             let expr = build_block_type_expr(conn, &each_joins, &mut json_path_parts, join_table);
 
-            return Ok((each_joins, expr));
+            return Ok((each_joins, expr, Some(FieldType::Text)));
         }
 
         let field_def = current_fields
@@ -389,7 +572,7 @@ pub(super) fn walk_block_fields(
                     conn.json_extract_expr("data", &path)
                 };
 
-                return Ok((each_joins, expr));
+                return Ok((each_joins, expr, Some(field_def.field_type.clone())));
             }
         }
     }
@@ -574,9 +757,12 @@ mod tests {
     #[test]
     fn resolve_filter_no_dots_returns_column() {
         let (_dir, conn) = test_conn();
-        let resolved = resolve_filter(&conn, "status", "posts", &[]).unwrap();
+        let resolved = resolve_filter(&conn, "status", "posts", &[], None).unwrap();
         match resolved {
-            ResolvedFilter::Column(col) => assert_eq!(col, "status"),
+            ResolvedFilter::Column { col, field_type } => {
+                assert_eq!(col, "status");
+                assert_eq!(field_type, None);
+            }
             other => panic!("Expected Column, got {:?}", other),
         }
     }
@@ -588,17 +774,22 @@ mod tests {
             "items",
             vec![make_field("name", FieldType::Text, false)],
         )];
-        let resolved = resolve_filter(&conn, "items.name", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "items.name", "posts", &fields, None).unwrap();
         match resolved {
             ResolvedFilter::Subquery {
                 join_table,
                 parent_table,
                 condition,
+                locale_constraint,
             } => {
                 assert_eq!(join_table, "posts_items");
                 assert_eq!(parent_table, "posts");
+                assert_eq!(locale_constraint, None);
                 match condition {
-                    SubqueryCondition::Column(col) => assert_eq!(col, "name"),
+                    SubqueryCondition::Column { col, field_type } => {
+                        assert_eq!(col, "name");
+                        assert_eq!(field_type, Some(FieldType::Text));
+                    }
                     other => panic!("Expected Column, got {:?}", other),
                 }
             }
@@ -613,15 +804,17 @@ mod tests {
         addr.fields = vec![make_field("city", FieldType::Text, false)];
         let fields = vec![make_array_field("items", vec![addr])];
 
-        let resolved = resolve_filter(&conn, "items.address.city", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "items.address.city", "posts", &fields, None).unwrap();
         match resolved {
             ResolvedFilter::Subquery { condition, .. } => match condition {
                 SubqueryCondition::Json {
                     each_joins,
                     extract_expr,
+                    field_type,
                 } => {
                     assert!(each_joins.is_empty());
                     assert_eq!(extract_expr, "json_extract(address, '$.city')");
+                    assert_eq!(field_type, Some(FieldType::Text));
                 }
                 other => panic!("Expected Json, got {:?}", other),
             },
@@ -633,7 +826,8 @@ mod tests {
     fn resolve_filter_block_type() {
         let (_dir, conn) = test_conn();
         let fields = vec![make_blocks_field("content", vec![])];
-        let resolved = resolve_filter(&conn, "content._block_type", "posts", &fields).unwrap();
+        let resolved =
+            resolve_filter(&conn, "content._block_type", "posts", &fields, None).unwrap();
         match resolved {
             ResolvedFilter::Subquery { condition, .. } => {
                 assert!(matches!(condition, SubqueryCondition::BlockType));
@@ -652,15 +846,17 @@ mod tests {
                 vec![make_field("body", FieldType::Textarea, false)],
             )],
         )];
-        let resolved = resolve_filter(&conn, "content.body", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "content.body", "posts", &fields, None).unwrap();
         match resolved {
             ResolvedFilter::Subquery { condition, .. } => match condition {
                 SubqueryCondition::Json {
                     each_joins,
                     extract_expr,
+                    field_type,
                 } => {
                     assert!(each_joins.is_empty());
                     assert_eq!(extract_expr, "json_extract(data, '$.body')");
+                    assert_eq!(field_type, Some(FieldType::Textarea));
                 }
                 other => panic!("Expected Json, got {:?}", other),
             },
@@ -672,7 +868,7 @@ mod tests {
     fn resolve_filter_has_many_relationship() {
         let (_dir, conn) = test_conn();
         let fields = vec![make_has_many_field("tags", "tags")];
-        let resolved = resolve_filter(&conn, "tags.id", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "tags.id", "posts", &fields, None).unwrap();
         match resolved {
             ResolvedFilter::Subquery {
                 join_table,
@@ -681,7 +877,10 @@ mod tests {
             } => {
                 assert_eq!(join_table, "posts_tags");
                 match condition {
-                    SubqueryCondition::Column(col) => assert_eq!(col, "related_id"),
+                    SubqueryCondition::Column { col, field_type } => {
+                        assert_eq!(col, "related_id");
+                        assert_eq!(field_type, Some(FieldType::Text));
+                    }
                     other => panic!("Expected Column, got {:?}", other),
                 }
             }
@@ -693,7 +892,7 @@ mod tests {
     fn resolve_filter_has_many_rejects_non_id() {
         let (_dir, conn) = test_conn();
         let fields = vec![make_has_many_field("tags", "tags")];
-        let result = resolve_filter(&conn, "tags.name", "posts", &fields);
+        let result = resolve_filter(&conn, "tags.name", "posts", &fields, None);
         assert!(result.is_err());
         assert!(
             result
@@ -711,7 +910,7 @@ mod tests {
                 .relationship(RelationshipConfig::new("users", false))
                 .build(),
         ];
-        let result = resolve_filter(&conn, "author.name", "posts", &fields);
+        let result = resolve_filter(&conn, "author.name", "posts", &fields, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Has-one"));
     }
@@ -720,7 +919,7 @@ mod tests {
     fn resolve_filter_unsupported_field_type() {
         let (_dir, conn) = test_conn();
         let fields = vec![make_field("title", FieldType::Text, false)];
-        let result = resolve_filter(&conn, "title.sub", "posts", &fields);
+        let result = resolve_filter(&conn, "title.sub", "posts", &fields, None);
         assert!(result.is_err());
         assert!(
             result
@@ -734,7 +933,7 @@ mod tests {
     fn resolve_filter_relationship_missing_config() {
         let (_dir, conn) = test_conn();
         let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship).build()];
-        let result = resolve_filter(&conn, "tags.id", "posts", &fields);
+        let result = resolve_filter(&conn, "tags.id", "posts", &fields, None);
         assert!(result.is_err());
         assert!(
             result
@@ -748,7 +947,7 @@ mod tests {
     fn resolve_filter_unknown_root_field() {
         let (_dir, conn) = test_conn();
         let fields = vec![make_field("title", FieldType::Text, false)];
-        let result = resolve_filter(&conn, "nonexistent.sub", "posts", &fields);
+        let result = resolve_filter(&conn, "nonexistent.sub", "posts", &fields, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unknown field"));
     }
@@ -760,7 +959,7 @@ mod tests {
             "items",
             vec![make_field("name", FieldType::Text, false)],
         )];
-        let result = resolve_filter(&conn, "items.name.deep", "posts", &fields);
+        let result = resolve_filter(&conn, "items.name.deep", "posts", &fields, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Nested dot path"));
     }
@@ -772,7 +971,7 @@ mod tests {
             "items",
             vec![make_field("name", FieldType::Text, false)],
         )];
-        let result = resolve_filter(&conn, "items.bad field", "posts", &fields);
+        let result = resolve_filter(&conn, "items.bad field", "posts", &fields, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid segment"));
     }
@@ -787,7 +986,7 @@ mod tests {
                 vec![make_field("body", FieldType::Textarea, false)],
             )],
         )];
-        let result = resolve_filter(&conn, "content.bad field", "posts", &fields);
+        let result = resolve_filter(&conn, "content.bad field", "posts", &fields, None);
         assert!(result.is_err());
     }
 
@@ -800,7 +999,7 @@ mod tests {
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let (joins, expr) =
+        let (joins, expr, _leaf) =
             walk_block_fields(&conn, &["body"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.body')");
@@ -813,7 +1012,7 @@ mod tests {
         grp.fields = vec![make_field("title", FieldType::Text, false)];
         let block_defs = vec![make_block_def("rich", vec![grp])];
 
-        let (joins, expr) =
+        let (joins, expr, _leaf) =
             walk_block_fields(&conn, &["meta", "title"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.meta.title')");
@@ -830,7 +1029,7 @@ mod tests {
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr) =
+        let (joins, expr, _leaf) =
             walk_block_fields(&conn, &["nested", "text"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.nested')");
@@ -853,7 +1052,7 @@ mod tests {
         nested.blocks = mid_blocks;
         let block_defs = vec![make_block_def("top", vec![nested])];
 
-        let (joins, expr) = walk_block_fields(
+        let (joins, expr, _leaf) = walk_block_fields(
             &conn,
             &["nested", "deeper", "field"],
             &block_defs,
@@ -879,7 +1078,7 @@ mod tests {
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr) = walk_block_fields(
+        let (joins, expr, _leaf) = walk_block_fields(
             &conn,
             &["nested", "_block_type"],
             &block_defs,
@@ -904,7 +1103,7 @@ mod tests {
         sidebar.fields = vec![nested];
         let block_defs = vec![make_block_def("layout", vec![sidebar])];
 
-        let (joins, expr) = walk_block_fields(
+        let (joins, expr, _leaf) = walk_block_fields(
             &conn,
             &["sidebar", "nested", "body"],
             &block_defs,
@@ -980,7 +1179,7 @@ mod tests {
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let (joins, expr) =
+        let (joins, expr, _leaf) =
             walk_block_fields(&conn, &["_block_type"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$._block_type')");
@@ -993,7 +1192,7 @@ mod tests {
         arr.fields = vec![make_field("name", FieldType::Text, false)];
         let block_defs = vec![make_block_def("list", vec![arr])];
 
-        let (joins, expr) =
+        let (joins, expr, _leaf) =
             walk_block_fields(&conn, &["items", "name"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.items')");
@@ -1090,7 +1289,7 @@ mod tests {
         meta.fields = vec![nested];
         let block_defs = vec![make_block_def("rich", vec![meta])];
 
-        let (joins, expr) = walk_block_fields(
+        let (joins, expr, _leaf) = walk_block_fields(
             &conn,
             &["meta", "nested", "_block_type"],
             &block_defs,

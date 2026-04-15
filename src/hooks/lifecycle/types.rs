@@ -120,6 +120,21 @@ pub(crate) struct MaxInstructions(pub(crate) u64);
 /// Storage backend, stored in Lua `app_data` for upload file cleanup in CRUD hooks.
 pub(crate) struct LuaStorage(pub(crate) crate::core::upload::SharedStorage);
 
+/// User-invalidation transport, stored in Lua `app_data` so CRUD delete
+/// and lock paths can publish live-stream tear-down signals from inside
+/// Lua-invoked service calls. `None` (missing app_data) = no-op.
+pub(crate) struct LuaInvalidationTransport(
+    pub(crate) crate::core::event::SharedInvalidationTransport,
+);
+
+/// Process-wide populate singleflight, stored in Lua `app_data` so Lua-invoked
+/// `crap.collections.find` / `crap.collections.find_by_id` calls can dedup
+/// populate cache-miss fetches across concurrent requests. `None` (missing
+/// app_data) falls back to a fresh per-call singleflight. For override-access
+/// Lua calls the service layer's guardrail discards whatever we pass here,
+/// so the Arc only pays off for ordinary (non-override) Lua reads.
+pub(crate) struct LuaPopulateSingleflight(pub(crate) crate::db::query::SharedPopulateSingleflight);
+
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
 pub(crate) struct HookDepth(pub(crate) u32);

@@ -4,13 +4,15 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashSet;
 
+use tracing::warn;
+
 use super::populate_relationships_cached;
 use crate::core::cache::CacheBackend;
 use crate::db::query::populate::{PopulateContext, PopulateOpts, document_to_json};
 use crate::{
     core::{Document, FieldType, upload},
     db::{
-        Filter, FilterClause, FilterOp, FindQuery,
+        AccessResult, Filter, FilterClause, FilterOp, FindQuery,
         query::{hydrate_document, read::find},
     },
 };
@@ -69,9 +71,23 @@ fn populate_join_docs(
         op: FilterOp::Equals(doc.id.to_string()),
     })];
 
+    // Target-collection access check (SEC-G). When hooks are wired in by the
+    // service layer, honor the target's `access.read`. Denied => empty array.
+    // Constrained => merge into fq.filters. Allowed => proceed as-is.
+    if let Some(check) = opts.join_access {
+        match check.check(target_def.access.read.as_deref(), opts.user)? {
+            AccessResult::Denied => return Ok(Vec::new()),
+            AccessResult::Constrained(extra) => fq.filters.extend(extra),
+            AccessResult::Allowed => {}
+        }
+    }
+
     let matched_docs = match find(ctx.conn, &jc.collection, target_def, &fq, opts.locale_ctx) {
         Ok(docs) => docs,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) => {
+            warn!("join populate find error for {}: {e:#}", jc.collection);
+            return Ok(Vec::new());
+        }
     };
 
     let mut populated = Vec::new();
@@ -105,6 +121,8 @@ fn populate_join_docs(
                 depth: opts.depth - 1,
                 select: None,
                 locale_ctx: opts.locale_ctx,
+                join_access: opts.join_access,
+                user: opts.user,
             },
             cache,
         )?;
@@ -117,14 +135,46 @@ fn populate_join_docs(
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result as AnyResult;
     use serde_json::json;
 
     use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateContext, PopulateOpts};
+    use super::super::super::{JoinAccessCheck, PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
     use crate::core::cache::NoneCache;
     use crate::core::{Document, Registry};
+    use crate::db::{AccessResult, Filter, FilterClause, FilterOp};
     use std::collections::HashSet;
+
+    /// Fixture check: Denied for every call.
+    struct DenyAll;
+    impl JoinAccessCheck for DenyAll {
+        fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Denied)
+        }
+    }
+
+    /// Fixture check: Allowed for every call.
+    struct AllowAll;
+    impl JoinAccessCheck for AllowAll {
+        fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Allowed)
+        }
+    }
+
+    /// Fixture check: constrained with a filter that won't match any post
+    /// (forces empty result after the filter merge, without needing _status).
+    struct ConstrainToTitle(&'static str);
+    impl JoinAccessCheck for ConstrainToTitle {
+        fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {
+            Ok(AccessResult::Constrained(vec![FilterClause::Single(
+                Filter {
+                    field: "title".to_string(),
+                    op: FilterOp::Equals(self.0.to_string()),
+                },
+            )]))
+        }
+    }
 
     #[test]
     fn join_field_populates_reverse_docs() {
@@ -152,6 +202,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -198,6 +250,8 @@ mod tests {
                 depth: 0,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -237,6 +291,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -281,6 +337,8 @@ mod tests {
                 depth: 1,
                 select: Some(&select),
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -291,5 +349,191 @@ mod tests {
             !doc.fields.contains_key("posts"),
             "join field not in select should be skipped"
         );
+    }
+
+    /// SEC-G regression: when the target collection's read access hook denies,
+    /// the join field must produce an empty array — the target docs are not
+    /// exfiltrated through the reverse-lookup.
+    #[test]
+    fn join_field_denies_when_target_read_access_denied() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
+
+        let mut visited = HashSet::new();
+        let deny = DenyAll;
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: Some(&deny),
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let posts = doc
+            .fields
+            .get("posts")
+            .expect("posts join field should exist");
+        let arr = posts.as_array().expect("posts should be an array");
+        assert!(
+            arr.is_empty(),
+            "denied target access must produce an empty join array"
+        );
+    }
+
+    /// SEC-G regression: Constrained access merges filters into the find, so
+    /// only docs matching the constraint are returned.
+    #[test]
+    fn join_field_constrained_by_target_read_access() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
+
+        let mut visited = HashSet::new();
+        // Only "First Post" passes the constraint.
+        let constrained = ConstrainToTitle("First Post");
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: Some(&constrained),
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let posts = doc
+            .fields
+            .get("posts")
+            .expect("posts join field should exist");
+        let arr = posts.as_array().expect("posts should be an array");
+        assert_eq!(arr.len(), 1, "constraint limits to one post");
+        assert_eq!(
+            arr[0].get("title").and_then(|t| t.as_str()),
+            Some("First Post")
+        );
+    }
+
+    /// SEC-G regression: Allowed access proceeds as today; legacy callers
+    /// without a hook also behave unchanged (covered by
+    /// `join_field_populates_reverse_docs` above).
+    #[test]
+    fn join_field_allowed_by_target_read_access() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
+
+        let mut visited = HashSet::new();
+        let allow = AllowAll;
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: Some(&allow),
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let arr = doc
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .expect("posts should be an array");
+        assert_eq!(arr.len(), 2, "Allowed access returns all target docs");
+    }
+
+    /// Legacy path (no hooks wired) still works for internal callers.
+    #[test]
+    fn join_field_without_hooks_behaves_as_before() {
+        // This is covered by `join_field_populates_reverse_docs` which uses
+        // `join_access: None` — keep the explicit name for audit traceability.
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let arr = doc
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .expect("posts should be an array");
+        assert_eq!(arr.len(), 2);
     }
 }

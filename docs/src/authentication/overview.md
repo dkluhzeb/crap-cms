@@ -11,7 +11,7 @@ Crap CMS provides built-in authentication via auth-enabled collections. Any coll
 - **Rate limiting** — login endpoints enforce per-email rate limiting (configurable max attempts and lockout window).
 - **Timing-safe** — login always performs a password hash comparison, even when the user doesn't exist, to prevent timing-based email enumeration.
 - **CSRF protection** — admin UI forms and HTMX requests are protected with double-submit cookie tokens.
-- **Secure cookies** — the `crap_session` cookie includes the `Secure` flag in production (when `dev_mode = false`).
+- **Secure cookies** — the `crap_session` cookie includes the `Secure` flag in production (when `dev_mode = false`). The cookie's `SameSite` attribute defaults to `Lax`; set `[auth] session_cookie_samesite = "strict"` in `crap.toml` for stricter CSRF protection at the cost of breaking cross-site navigation (clicks from emails, external links, etc. will require re-login).
 - **`_password_hash`** — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.
 - **`_locked`** — when set to a truthy value, the user is denied access on every request (JWT validation, Me, admin session). Takes effect immediately, even for valid unexpired tokens. See [Auth Collections](auth-collections.md#account-locking).
 - **Token/Password providers** — `TokenProvider` (JWT) and `PasswordProvider` (Argon2id) traits abstract token and password primitives. Rarely swapped.

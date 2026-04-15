@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use crate::core::cache::CacheBackend;
 use crate::core::{Document, FieldType, field::flatten_array_sub_fields};
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts};
+use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, Singleflight};
 
 use super::{join, nested, nonpoly, poly};
 
@@ -20,6 +20,39 @@ pub fn populate_relationships_cached(
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
 ) -> Result<()> {
+    let singleflight = Singleflight::new();
+
+    populate_relationships_cached_inner(ctx, doc, visited, opts, cache, &singleflight)
+}
+
+/// Variant of [`populate_relationships_cached`] that accepts an externally
+/// owned singleflight so concurrent populate trees across requests can
+/// deduplicate cache-miss DB fetches for the same target document.
+///
+/// Callers in the service layer pass the process-wide
+/// [`SharedPopulateSingleflight`](crate::db::query::SharedPopulateSingleflight)
+/// here. Internal callers keep using the fresh-per-call variant above.
+pub fn populate_relationships_cached_with_singleflight(
+    ctx: &PopulateContext<'_>,
+    doc: &mut Document,
+    visited: &mut HashSet<(String, String)>,
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
+) -> Result<()> {
+    populate_relationships_cached_inner(ctx, doc, visited, opts, cache, singleflight)
+}
+
+/// Internal entry point that carries an explicit singleflight, so recursive
+/// calls within the same populate tree share the same dedup table.
+pub(crate) fn populate_relationships_cached_inner(
+    ctx: &PopulateContext<'_>,
+    doc: &mut Document,
+    visited: &mut HashSet<(String, String)>,
+    opts: &PopulateOpts<'_>,
+    cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
+) -> Result<()> {
     if opts.depth <= 0 {
         return Ok(());
     }
@@ -32,7 +65,7 @@ pub fn populate_relationships_cached(
 
     visited.insert(visit_key);
 
-    populate_flat_relationships(ctx, doc, opts, cache, visited)?;
+    populate_flat_relationships(ctx, doc, opts, cache, singleflight, visited)?;
 
     let nested_pctx = PopulateCtx {
         conn: ctx.conn,
@@ -40,6 +73,7 @@ pub fn populate_relationships_cached(
         effective_depth: opts.depth,
         locale_ctx: opts.locale_ctx,
         cache,
+        singleflight,
     };
 
     nested::populate_containers_in_doc(&nested_pctx, doc, &ctx.def.fields, visited)?;
@@ -55,6 +89,7 @@ fn populate_flat_relationships(
     doc: &mut Document,
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
+    singleflight: &Singleflight<Option<Document>>,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     for field in flatten_array_sub_fields(&ctx.def.fields) {
@@ -88,6 +123,7 @@ fn populate_flat_relationships(
             effective_depth,
             locale_ctx: opts.locale_ctx,
             cache,
+            singleflight,
         };
 
         if rel.is_polymorphic() {

@@ -1,21 +1,25 @@
 //! Parsing functions for collection auth configuration.
 
-use mlua::{Table, Value};
+use mlua::{Result as LuaResult, Table, Value};
 
 use crate::core::collection::{Auth, AuthStrategy, MfaMode};
 
 use super::helpers::*;
 
-pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
-    let val: Value = config.get("auth").ok()?;
+pub(super) fn parse_collection_auth(config: &Table) -> LuaResult<Option<Auth>> {
+    let val: Value = match config.get("auth") {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+
     match val {
-        Value::Boolean(true) => Some(Auth::new(true)),
-        Value::Boolean(false) | Value::Nil => None,
+        Value::Boolean(true) => Ok(Some(Auth::new(true))),
+        Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
             let token_expiry = tbl.get::<u64>("token_expiry").unwrap_or(7200);
-            let disable_local = get_bool(&tbl, "disable_local", false);
-            let verify_email = get_bool(&tbl, "verify_email", false);
-            let forgot_password = get_bool(&tbl, "forgot_password", true);
+            let disable_local = get_bool(&tbl, "disable_local", false)?;
+            let verify_email = get_bool(&tbl, "verify_email", false)?;
+            let forgot_password = get_bool(&tbl, "forgot_password", true)?;
             let strategies = parse_auth_strategies(&tbl);
             let mut auth = Auth::new(true);
 
@@ -29,9 +33,9 @@ pub(super) fn parse_collection_auth(config: &Table) -> Option<Auth> {
                 _ => MfaMode::Off,
             };
 
-            Some(auth)
+            Ok(Some(auth))
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -65,7 +69,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("auth", true).unwrap();
-        let auth = parse_collection_auth(&tbl);
+        let auth = parse_collection_auth(&tbl).unwrap();
         assert!(auth.is_some());
         let auth = auth.unwrap();
         assert!(auth.enabled);
@@ -79,7 +83,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("auth", false).unwrap();
-        assert!(parse_collection_auth(&tbl).is_none());
+        assert!(parse_collection_auth(&tbl).unwrap().is_none());
     }
 
     #[test]
@@ -92,7 +96,7 @@ mod tests {
         auth_tbl.set("verify_email", true).unwrap();
         auth_tbl.set("forgot_password", false).unwrap();
         tbl.set("auth", auth_tbl).unwrap();
-        let auth = parse_collection_auth(&tbl);
+        let auth = parse_collection_auth(&tbl).unwrap();
         assert!(auth.is_some());
         let auth = auth.unwrap();
         assert!(auth.enabled);
@@ -114,7 +118,7 @@ mod tests {
         strats.set(1, s1).unwrap();
         auth_tbl.set("strategies", strats).unwrap();
         tbl.set("auth", auth_tbl).unwrap();
-        let auth = parse_collection_auth(&tbl).unwrap();
+        let auth = parse_collection_auth(&tbl).unwrap().unwrap();
         assert_eq!(auth.strategies.len(), 1);
         assert_eq!(auth.strategies[0].name, "oauth");
         assert_eq!(auth.strategies[0].authenticate, "hooks.auth.oauth_check");
@@ -126,7 +130,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let func = lua.create_function(|_, ()| Ok(())).unwrap();
         tbl.set("auth", func).unwrap();
-        assert!(parse_collection_auth(&tbl).is_none());
+        assert!(parse_collection_auth(&tbl).unwrap().is_none());
     }
 
     #[test]
@@ -144,7 +148,7 @@ mod tests {
         strats.set(2, s2).unwrap();
         auth_tbl.set("strategies", strats).unwrap();
         tbl.set("auth", auth_tbl).unwrap();
-        let auth = parse_collection_auth(&tbl).unwrap();
+        let auth = parse_collection_auth(&tbl).unwrap().unwrap();
         assert_eq!(auth.strategies.len(), 1);
         assert_eq!(auth.strategies[0].name, "oauth");
     }

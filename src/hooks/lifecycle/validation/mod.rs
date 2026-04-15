@@ -8,7 +8,7 @@ pub(crate) mod richtext_attrs;
 mod sub_fields;
 
 // Re-export public API
-pub use checks::evaluate_condition_table;
+pub use checks::{evaluate_condition_table, is_valid_email_format};
 
 use std::collections::HashMap;
 

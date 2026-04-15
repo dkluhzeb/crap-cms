@@ -176,7 +176,10 @@ fn lua_crud_delete() {
         })
         local id = doc.id
 
-        crap.collections.delete("articles", id)
+        local rv = crap.collections.delete("articles", id)
+        if rv ~= true then
+            return "BAD_RETURN:" .. tostring(rv)
+        end
 
         local result = crap.collections.find("articles", {})
         if result.pagination.totalDocs ~= 0 then

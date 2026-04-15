@@ -55,6 +55,7 @@ impl ContentService {
         let access_owned = access_ref.map(|s| s.to_string());
         let deny_msg_owned = deny_msg.to_string();
         let def_owned = def;
+        let invalidation_transport = self.invalidation_transport.clone();
 
         let (hard_count, soft_count, skipped_count, deleted_ids) =
             task::spawn_blocking(move || -> Result<(i64, i64, i64, Vec<String>), Status> {
@@ -78,8 +79,13 @@ impl ContentService {
                     return Err(Status::permission_denied("Read access denied"));
                 }
 
-                let filters =
-                    build_bulk_filters(&def_owned, &read_access, req_where.as_deref(), true)?;
+                let filters = build_bulk_filters(
+                    &collection,
+                    &def_owned,
+                    &read_access,
+                    req_where.as_deref(),
+                    true,
+                )?;
 
                 let tx = conn
                     .transaction_immediate()
@@ -108,6 +114,7 @@ impl ContentService {
                     .conn(&tx)
                     .write_hooks(&wh)
                     .user(user_doc)
+                    .invalidation_transport(Some(invalidation_transport.clone()))
                     .build();
 
                 let mut hard_count = 0i64;

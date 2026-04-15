@@ -28,7 +28,8 @@ pub(in crate::mcp::tools) fn exec_count(
     let conn = pool.get().context("DB connection")?;
 
     let filters = parse_where_filters(args);
-    let include_deleted = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+    let trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let hooks = RunnerReadHooks::new(runner, &conn);
     let ctx = ServiceContext::collection(slug, def)
@@ -39,7 +40,8 @@ pub(in crate::mcp::tools) fn exec_count(
         .build();
 
     let input = CountDocumentsInput::builder(&filters)
-        .include_deleted(include_deleted)
+        .include_drafts(include_drafts)
+        .trash(trash)
         .build();
 
     let count = count_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;

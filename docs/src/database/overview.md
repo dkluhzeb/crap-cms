@@ -1,6 +1,16 @@
 # Database
 
-Crap CMS uses SQLite as its database — zero configuration, single file, no server to manage.
+Crap CMS supports two first-class database backends:
+
+- **SQLite (default)** — zero configuration, single file, no server to manage, WAL mode for concurrent reads. The right choice for single-node deployments and the vast majority of workloads.
+- **PostgreSQL** — enabled via `--features postgres` at build time. Full feature parity with SQLite: schema sync, migrations, full-text search (via `tsvector`), `_ref_count` delete protection, soft delete, atomic job claiming (`FOR UPDATE SKIP LOCKED`), and all query operators. No feature degradation — pick whichever matches your operational model.
+
+The choice primarily comes down to your deployment topology:
+
+- Single server, single writer → **SQLite** (simpler, one binary, one file to back up).
+- Multi-server / high availability / dedicated job workers → **PostgreSQL** (shared writer across nodes).
+
+See [Multi-Server Deployment](../deployment/multi-server.md) for the full multi-node setup. The rest of this page documents the schema conventions and sync behavior that apply to both backends; SQLite is used for the examples.
 
 ## Configuration
 
@@ -12,7 +22,13 @@ cache_size = -16384          # page cache in KB (16MB)
 mmap_size = 268435456        # memory-mapped I/O (256MB)
 ```
 
-> For [multi-server deployments](../deployment/multi-server.md), a PostgreSQL backend is available via `--features postgres`.
+For PostgreSQL:
+
+```toml
+[database]
+backend = "postgres"
+url = "host=db.example.com user=crap dbname=crap_cms"
+```
 
 ## WAL Mode (SQLite)
 

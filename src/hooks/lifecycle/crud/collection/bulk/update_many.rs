@@ -13,7 +13,7 @@ use crate::{
         converters::{lua_table_to_find_query, lua_table_to_hashmap, lua_table_to_json_map},
         crud::{get_tx_conn, helpers::*},
     },
-    service::{self, LuaWriteHooks, WriteInput},
+    service::{self, LuaWriteHooks, WriteInput, validate_user_filters},
 };
 
 /// Update multiple documents matching a query with the given data.
@@ -45,22 +45,31 @@ fn update_many_documents(
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_collection(reg, collection)?;
 
-    // Find matching documents
+    // Find matching documents. We do NOT inject `_status` here — bulk ops
+    // operate on the raw query shape Lua provided. The validator still
+    // rejects user-supplied `_*` filters as defense-in-depth; if a hook
+    // author actually needs to target drafts, they pass the data shape
+    // explicitly via the `draft` opt and the matching user filters.
     let (mut find_query, _) = lua_table_to_find_query(query_table)?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);
-    add_draft_filter(&def, draft, &mut find_query.filters);
+    validate_user_filters(&find_query.filters).map_err(|e| RuntimeError(format!("{e}")))?;
 
     enforce_access(
         lua,
-        override_access,
-        def.access.update.as_deref(),
-        None,
+        &EnforceAccessParams {
+            slug: collection,
+            override_access,
+            access_fn: def.access.update.as_deref(),
+            id: None,
+            deny_msg: "Update access denied",
+            injecting_status: false,
+        },
         &mut find_query.filters,
-        "Update access denied",
     )?;
 
     let mut find_all = FindQuery::new();
     find_all.filters = find_query.filters;
+
     // Internal batch lookup for bulk mutation — not a user-facing read.
     let docs = query::find(conn, collection, &def, &find_all, locale_ctx.as_ref())
         .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
@@ -113,7 +122,9 @@ fn update_many_documents(
     }
 
     let result = lua.create_table()?;
+
     result.set("modified", modified)?;
+
     Ok(result)
 }
 

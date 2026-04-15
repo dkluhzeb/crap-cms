@@ -33,6 +33,9 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
+    // When the hook returned Constrained filters, enforce row-level match.
+    helpers::enforce_access_constraints(ctx, id, &access, "Update", false)?;
+
     let doc = query::find_by_id_raw(conn, ctx.slug, def, id, None, false)?.ok_or_else(|| {
         ServiceError::NotFound(format!("Document '{id}' not found in '{}'", ctx.slug))
     })?;
@@ -68,7 +71,7 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
     query::hydrate_document(conn, ctx.slug, &def.fields, &mut doc, None, None)?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

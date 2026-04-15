@@ -54,6 +54,7 @@ fn make_users_def() -> CollectionDefinition {
             .unique(true)
             .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
+        FieldDefinition::builder("role", FieldType::Text).build(),
     ];
     def.auth = Some(Auth {
         enabled: true,
@@ -132,7 +133,7 @@ fn setup_app_with_config(
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: std::sync::Arc::new(
@@ -156,6 +157,11 @@ fn setup_app_with_config(
             "test-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crap_cms::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
     };
 
     let router = build_router(state);
@@ -170,6 +176,10 @@ fn setup_app_with_config(
 }
 
 fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
+    create_test_user_with_role(app, email, password, "user")
+}
+
+fn create_test_user_with_role(app: &TestApp, email: &str, password: &str, role: &str) -> String {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
@@ -179,6 +189,7 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
     let data = std::collections::HashMap::from([
         ("email".to_string(), email.to_string()),
         ("name".to_string(), "Test User".to_string()),
+        ("role".to_string(), role.to_string()),
     ]);
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
@@ -314,6 +325,86 @@ async fn login_action_valid_credentials() {
     assert!(
         cookie.unwrap().contains("crap_session"),
         "Cookie should be crap_session"
+    );
+}
+
+#[tokio::test]
+async fn login_sets_session_cookie_with_samesite_lax_by_default() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    create_test_user(&app, "samesite-lax@test.com", "correct123");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "collection=users&email=samesite-lax@test.com&password=correct123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let session_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("crap_session="))
+        .expect("login should set crap_session cookie");
+
+    assert!(
+        session_cookie.contains("SameSite=Lax"),
+        "default session cookie must be SameSite=Lax, got: {session_cookie}"
+    );
+    assert!(
+        !session_cookie.contains("SameSite=Strict"),
+        "default must not be Strict, got: {session_cookie}"
+    );
+}
+
+#[tokio::test]
+async fn login_sets_session_cookie_with_samesite_strict_when_configured() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.auth.session_cookie_samesite = crap_cms::config::SessionCookieSameSite::Strict;
+
+    let app = setup_app_with_config(vec![make_users_def()], vec![], config);
+    create_test_user(&app, "samesite-strict@test.com", "correct123");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "collection=users&email=samesite-strict@test.com&password=correct123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let session_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("crap_session="))
+        .expect("login should set crap_session cookie");
+
+    assert!(
+        session_cookie.contains("SameSite=Strict"),
+        "configured session cookie must be SameSite=Strict, got: {session_cookie}"
     );
 }
 
@@ -1050,4 +1141,191 @@ async fn reset_password_invalid_token() {
             || body_lower.contains("reset"),
         "Should indicate invalid/expired token"
     );
+}
+
+// ── admin.access gate ────────────────────────────────────────────────
+
+fn setup_app_with_admin_gate(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+) -> TestApp {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.admin.access = Some("access.admin_only".to_string());
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    // Write the admin_only.lua access function into the config dir
+    let access_dir = tmp.path().join("access");
+    std::fs::create_dir_all(&access_dir).unwrap();
+    std::fs::write(
+        access_dir.join("admin_only.lua"),
+        r#"return function(context)
+    return context.user ~= nil and context.user.role == "admin"
+end"#,
+    )
+    .unwrap();
+
+    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
+
+    let registry = Registry::shared();
+    {
+        let mut reg = registry.write().unwrap();
+        for def in &collections {
+            reg.register_collection(def.clone());
+        }
+        for def in &globals {
+            reg.register_global(def.clone());
+        }
+    }
+
+    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
+
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+
+    let translations = Arc::new(crap_cms::admin::translations::Translations::load(
+        tmp.path(),
+    ));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+
+    let has_auth = {
+        let reg = registry.read().unwrap();
+        reg.collections.values().any(|d| d.is_auth_collection())
+    };
+
+    let state = AdminState {
+        config,
+        config_dir: tmp.path().to_path_buf(),
+        pool: db_pool.clone(),
+        registry: Registry::snapshot(&registry),
+        handlebars,
+        hook_runner,
+        jwt_secret: "test-jwt-secret".into(),
+        email_renderer,
+        email_provider: crap_cms::core::email::create_email_provider(
+            &crap_cms::config::EmailConfig::default(),
+        )
+        .unwrap(),
+        event_transport: None,
+        login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
+        ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
+        forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
+        ip_forgot_password_limiter: Arc::new(LoginRateLimiter::new(20, 900)),
+        has_auth,
+        translations,
+        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
+        shutdown: CancellationToken::new(),
+        csp_header: None,
+        storage: crap_cms::core::upload::create_storage(
+            tmp.path(),
+            &crap_cms::config::UploadConfig::default(),
+        )
+        .unwrap(),
+        token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
+            "test-secret",
+        )),
+        password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crap_cms::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
+    };
+
+    let router = build_router(state);
+
+    TestApp {
+        _tmp: tmp,
+        router,
+        pool: db_pool,
+        registry,
+        jwt_secret: "test-jwt-secret".into(),
+    }
+}
+
+/// Regression: admin.access gate must block non-admin users at login time,
+/// not just on subsequent page loads after the session cookie is set.
+#[tokio::test]
+async fn login_denied_by_admin_access_gate() {
+    let app = setup_app_with_admin_gate(vec![make_users_def()], vec![]);
+    create_test_user_with_role(&app, "nonadmin@test.com", "pass123", "user");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "collection=users&email=nonadmin@test.com&password=pass123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "Non-admin user should be denied at login by admin.access gate"
+    );
+
+    // Should NOT have a session cookie set
+    let has_session = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|v| v.to_str().unwrap_or("").contains("crap_session"));
+    assert!(
+        !has_session,
+        "Session cookie must not be set for denied users"
+    );
+}
+
+/// Admin users should still be able to log in when admin.access is configured.
+#[tokio::test]
+async fn login_allowed_by_admin_access_gate() {
+    let app = setup_app_with_admin_gate(vec![make_users_def()], vec![]);
+    create_test_user_with_role(&app, "admin@test.com", "pass123", "admin");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Cookie", csrf_cookie())
+                .header("X-CSRF-Token", TEST_CSRF)
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
+                .body(Body::from(
+                    "collection=users&email=admin@test.com&password=pass123",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    assert!(
+        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
+        "Admin user should be redirected after login, got {status}"
+    );
+
+    let has_session = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|v| v.to_str().unwrap_or("").contains("crap_session"));
+    assert!(has_session, "Admin user should get a session cookie");
 }

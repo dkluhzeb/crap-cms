@@ -2,7 +2,7 @@
 
 use crate::{
     core::{Registry, cache::CacheBackend},
-    db::{FilterClause, LocaleContext},
+    db::{FilterClause, LocaleContext, query::SharedPopulateSingleflight},
     service::read::post_process::PostProcessOpts,
 };
 
@@ -16,6 +16,12 @@ pub struct FindByIdInput<'a> {
     pub cache: Option<&'a dyn CacheBackend>,
     pub use_draft: bool,
     pub access_constraints: Option<Vec<FilterClause>>,
+    /// When true, include soft-deleted documents (trash view).
+    pub include_deleted: bool,
+    /// Optional process-wide singleflight for deduplicating concurrent
+    /// populate cache-miss fetches across requests. When `None`, the service
+    /// layer falls back to a fresh per-call singleflight.
+    pub singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> FindByIdInput<'a> {
@@ -34,6 +40,8 @@ pub struct FindByIdInputBuilder<'a> {
     cache: Option<&'a dyn CacheBackend>,
     use_draft: bool,
     access_constraints: Option<Vec<FilterClause>>,
+    include_deleted: bool,
+    singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> FindByIdInputBuilder<'a> {
@@ -47,6 +55,8 @@ impl<'a> FindByIdInputBuilder<'a> {
             cache: None,
             use_draft: false,
             access_constraints: None,
+            include_deleted: false,
+            singleflight: None,
         }
     }
 
@@ -85,6 +95,18 @@ impl<'a> FindByIdInputBuilder<'a> {
         self
     }
 
+    pub fn include_deleted(mut self, include_deleted: bool) -> Self {
+        self.include_deleted = include_deleted;
+        self
+    }
+
+    /// Attach a process-wide singleflight so populate cache-miss fetches
+    /// dedup across concurrent requests.
+    pub fn singleflight(mut self, singleflight: Option<SharedPopulateSingleflight>) -> Self {
+        self.singleflight = singleflight;
+        self
+    }
+
     pub fn build(self) -> FindByIdInput<'a> {
         FindByIdInput {
             id: self.id,
@@ -95,6 +117,8 @@ impl<'a> FindByIdInputBuilder<'a> {
             cache: self.cache,
             use_draft: self.use_draft,
             access_constraints: self.access_constraints,
+            include_deleted: self.include_deleted,
+            singleflight: self.singleflight,
         }
     }
 }
@@ -120,5 +144,43 @@ impl PostProcessOpts for FindByIdInput<'_> {
     }
     fn cache(&self) -> Option<&dyn CacheBackend> {
         self.cache
+    }
+    fn singleflight(&self) -> Option<&SharedPopulateSingleflight> {
+        self.singleflight.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    use crate::db::query::Singleflight;
+
+    /// Regression: `FindByIdInput::builder().singleflight(..)` must plumb the
+    /// Arc through to the built input so post-processing can share one
+    /// singleflight across concurrent populates.
+    #[test]
+    fn builder_threads_singleflight_through() {
+        let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
+        let before = Arc::strong_count(&sf);
+
+        let input = FindByIdInput::builder("id")
+            .singleflight(Some(sf.clone()))
+            .build();
+
+        assert!(input.singleflight.is_some());
+        assert_eq!(Arc::strong_count(&sf), before + 1);
+
+        let via_trait = PostProcessOpts::singleflight(&input).expect("singleflight present");
+        assert!(Arc::ptr_eq(via_trait, &sf));
+    }
+
+    #[test]
+    fn builder_singleflight_defaults_to_none() {
+        let input = FindByIdInput::builder("id").build();
+        assert!(input.singleflight.is_none());
+        assert!(PostProcessOpts::singleflight(&input).is_none());
     }
 }

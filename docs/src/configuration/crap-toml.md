@@ -205,9 +205,11 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 default_mode = "metadata"  # Default event delivery mode: "metadata" or "full"
+transport = "memory"     # Event transport: "memory" (default, in-process) or "redis" (cross-node fanout)
 channel_capacity = 1024  # Broadcast channel buffer size
 # max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000 # Drop subscribers whose outbound send exceeds this (ms)
 
 [locale]
 default_locale = "en"    # Default locale code
@@ -325,6 +327,7 @@ connect_src = ["'self'", "https://analytics.example.com"]
 | `reset_token_expiry` | integer/string | `3600` (`"1h"`) | Password reset token expiry. The "Forgot password" email link expires after this duration. Accepts seconds or human-readable. |
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
 | `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable. |
+| `session_cookie_samesite` | string | `"lax"` | `SameSite` attribute for the `crap_session` admin cookie. Accepts `"lax"` (default — cookie sent on top-level cross-site navigations, balanced CSRF protection), `"strict"` (cookie never sent on cross-site requests — breaks links from emails/external sites but hardens the admin against CSRF), or `"none"` (reserved; currently falls back to `"lax"` at runtime). |
 
 ### `[auth.password_policy]`
 
@@ -429,9 +432,11 @@ When configured, email enables password reset ("Forgot password?" link on login)
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
 | `default_mode` | string | `"metadata"` | Default event delivery mode. `"metadata"` sends only event type, collection, and document ID. `"full"` sends the complete document payload. |
+| `transport` | string | `"memory"` | Event transport. `"memory"` keeps events in-process (does not cross nodes). `"redis"` fans events out across all servers subscribed to the same Redis instance — requires the `redis` feature and reuses `[cache] redis_url`. |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
 | `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
 | `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
+| `subscriber_send_timeout_ms` | integer | `1000` | Per-subscriber outbound send timeout (ms). If forwarding an event to a specific live-update client (SSE or gRPC) takes longer than this, that subscriber is dropped to protect other subscribers from head-of-line blocking. |
 
 See [Live Updates](../live-updates/overview.md) for full documentation.
 

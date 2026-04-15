@@ -33,6 +33,13 @@ pub fn queue_job(ctx: &ServiceContext, input: &QueueJobInput) -> Result<JobRun, 
                 "Trigger access denied".to_string(),
             ));
         }
+
+        if matches!(result, AccessResult::Constrained(_)) {
+            return Err(ServiceError::HookError(format!(
+                "Access hook for job '{}' returned a filter table; job access is trigger-only — return true/false based on ctx.user fields instead.",
+                ctx.slug
+            )));
+        }
     }
 
     let job_run = query::jobs::insert_job(

@@ -11,7 +11,9 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::auth::{append_cookies, create_session_token, session_cookies},
+        handlers::auth::{
+            append_cookies, create_session_token, session_cookies, session_same_site,
+        },
     },
     core::auth::Claims,
     db::{DbPool, query::is_valid_identifier},
@@ -96,6 +98,7 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         session.expiry,
         session.exp,
         state.config.admin.dev_mode,
+        session_same_site(&state),
     );
     let mut response = StatusCode::NO_CONTENT.into_response();
 

@@ -23,7 +23,7 @@ pub enum CompressionMode {
 
 /// Admin UI and gRPC server bind settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     /// Port for the admin UI HTTP server. Default: 3000.
     pub admin_port: u16,
@@ -119,7 +119,7 @@ impl ServerConfig {
 
 /// SQLite database path and pool configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// Database backend: `"sqlite"` (default) or `"postgres"`.
     #[serde(default = "default_backend")]
@@ -192,7 +192,7 @@ impl Default for DatabaseConfig {
 /// Theme developers can extend these lists to allow external resources
 /// (CDNs, fonts, analytics, etc.).
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CspConfig {
     /// Enable CSP header. Default: true. Set to false to disable entirely.
     pub enabled: bool,
@@ -279,7 +279,7 @@ impl CspConfig {
 
 /// Admin UI behavior settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AdminConfig {
     /// Enable development mode (e.g., more verbose errors).
     pub dev_mode: bool,

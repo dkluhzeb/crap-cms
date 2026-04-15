@@ -11,11 +11,13 @@ use crate::{
         query::{self, filter::normalize_filter_fields},
     },
     hooks::lifecycle::{
-        LuaStorage,
+        LuaInvalidationTransport, LuaStorage,
         converters::lua_table_to_find_query,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, ServiceContext, ServiceError, delete_document_core},
+    service::{
+        LuaWriteHooks, ServiceContext, ServiceError, delete_document_core, validate_user_filters,
+    },
 };
 
 /// Context for bulk delete operations.
@@ -23,7 +25,6 @@ struct DeleteManyCtx<'a> {
     collection: &'a str,
     soft_delete: bool,
     override_access: bool,
-    draft: bool,
 }
 
 /// Resolve the access function for delete operations.
@@ -35,7 +36,7 @@ fn resolve_delete_access(def: &CollectionDefinition, soft_delete: bool) -> Optio
     }
 }
 
-/// Find documents matching the query, enforcing access control and draft filtering.
+/// Find documents matching the query, validating user filters and enforcing access.
 fn find_docs_for_deletion(
     lua: &Lua,
     conn: &dyn DbConnection,
@@ -52,20 +53,26 @@ fn find_docs_for_deletion(
 
     let (mut find_query, _) = lua_table_to_find_query(query_table)?;
     normalize_filter_fields(&mut find_query.filters, &def.fields);
-    add_draft_filter(def, ctx.draft, &mut find_query.filters);
+    validate_user_filters(&find_query.filters).map_err(|e| RuntimeError(format!("{e}")))?;
 
     let access_ref = resolve_delete_access(def, ctx.soft_delete);
+
     enforce_access(
         lua,
-        ctx.override_access,
-        access_ref,
-        None,
+        &EnforceAccessParams {
+            slug: ctx.collection,
+            override_access: ctx.override_access,
+            access_fn: access_ref,
+            id: None,
+            deny_msg: "Delete access denied",
+            injecting_status: false,
+        },
         &mut find_query.filters,
-        "Delete access denied",
     )?;
 
     let mut find_all = FindQuery::new();
     find_all.filters = find_query.filters;
+
     // Internal batch lookup for bulk mutation — not a user-facing read.
     let docs = query::find(conn, ctx.collection, def, &find_all, locale_ctx.as_ref())
         .map_err(|e| RuntimeError(format!("find error: {e:#}")))?;
@@ -96,7 +103,6 @@ fn delete_many_documents(
     let override_access = get_opt_bool(opts, "overrideAccess", false)?;
     let run_hooks = get_opt_bool(opts, "hooks", true)?;
     let force_hard_delete = get_opt_bool(opts, "forceHardDelete", false)?;
-    let draft = get_opt_bool(opts, "draft", false)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
@@ -107,7 +113,6 @@ fn delete_many_documents(
         collection,
         soft_delete,
         override_access,
-        draft,
     };
 
     let docs = find_docs_for_deletion(lua, conn, &def, &ctx, lc, query_table)?;
@@ -129,11 +134,16 @@ fn delete_many_documents(
         service_def.soft_delete = false;
     }
 
+    let invalidation_transport = lua
+        .app_data_ref::<LuaInvalidationTransport>()
+        .map(|t| t.0.clone());
+
     let ctx = ServiceContext::collection(collection, &service_def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(override_access)
+        .invalidation_transport(invalidation_transport)
         .build();
 
     let mut deleted = 0i64;

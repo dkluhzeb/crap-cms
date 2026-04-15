@@ -485,6 +485,7 @@ async fn find_by_id_default_depth_populates() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()

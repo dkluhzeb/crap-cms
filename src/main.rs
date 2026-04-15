@@ -16,7 +16,7 @@ use crap_cms::{
     cli::{self, crap_theme},
     commands::{
         self, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
-        MigrateAction, TemplatesAction, TrashAction, UserAction, serve::ServeMode,
+        MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction, serve::ServeMode,
     },
     config::{CrapConfig, LogRotation},
 };
@@ -141,6 +141,11 @@ enum Command {
         /// Output directory for generated files (default: <config>/types/)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Generate prost_types conversion code for Rust. Value is the proto module path
+        /// (e.g. "crate::proto"). Writes generated_proto.rs alongside generated.rs.
+        #[arg(long)]
+        proto: Option<String>,
     },
 
     /// Export the embedded content.proto file for gRPC client codegen
@@ -248,6 +253,20 @@ enum Command {
 
         #[command(subcommand)]
         action: Option<LogsAction>,
+    },
+
+    /// Manage installed versions of crap-cms
+    Update {
+        /// Skip confirmation prompts (no-op for read-only subcommands).
+        #[arg(short = 'y', long, global = true)]
+        yes: bool,
+
+        /// Allow self-update even when the binary looks distro-managed.
+        #[arg(long, global = true)]
+        force: bool,
+
+        #[command(subcommand)]
+        action: Option<UpdateCmd>,
     },
 }
 
@@ -436,9 +455,13 @@ async fn run(cli: Cli) -> Result<()> {
                 crap_cms::scaffold::blueprint_remove(&name)
             }
         },
-        Command::Typegen { lang, output } => {
+        Command::Typegen {
+            lang,
+            output,
+            proto,
+        } => {
             let config = commands::resolve_config_dir(config_flag)?;
-            commands::typegen::run(&config, &lang, output.as_deref())
+            commands::typegen::run(&config, &lang, output.as_deref(), proto.as_deref())
         }
         Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { action } => {
@@ -510,6 +533,14 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let config_dir = commands::resolve_config_dir(config_flag)?;
             commands::logs::run(&config_dir, action, follow, lines)
+        }
+        Command::Update { yes, force, action } => {
+            // Run on a blocking thread — `reqwest::blocking` spawns its own
+            // tokio runtime internally, and dropping that while inside
+            // `#[tokio::main]` panics. spawn_blocking isolates it.
+            tokio::task::spawn_blocking(move || commands::update::run(action, yes, force))
+                .await
+                .context("update task panicked")?
         }
     }
 }

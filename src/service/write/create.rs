@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::{ServiceError, helpers::strip_denied_fields};
-use crate::service::helpers::collect_hidden_field_names;
+use crate::service::helpers::collect_api_hidden_field_names;
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
@@ -31,6 +31,17 @@ pub fn create_document_core(
     let access = write_hooks.check_access(def.access.create.as_deref(), ctx.user, None, None)?;
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Create access denied".into()));
+    }
+
+    // `Constrained` returns make no sense for create: there is no target row
+    // to match against, and evaluating the filter against the incoming data
+    // would conflate access control with validation. Operators should return
+    // true/false based on `ctx.data` instead.
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for '{}.create' returned a filter table; filter-table returns are only valid for update/delete/undelete/unpublish (where a target row exists). Return true/false based on the incoming 'data' in ctx.",
+            ctx.slug
+        )));
     }
 
     let is_draft = input.draft && def.has_drafts();
@@ -98,7 +109,7 @@ pub fn create_document_core(
 
     // Strip read-denied fields AFTER hydration (hydration can add join data for denied fields)
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

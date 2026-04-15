@@ -729,6 +729,48 @@ fn before_render_hook_returning_nil_preserves_context() {
     assert_eq!(result, context);
 }
 
+/// A `before_render` hook that raises a Lua error must not crash the render
+/// path. The admin UI falls back to the original context unmodified so the
+/// page still renders.
+#[test]
+fn before_render_hook_error_returns_original_context() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("articles.lua"),
+        r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
+    ).unwrap();
+    std::fs::write(
+        tmp.path().join("init.lua"),
+        r#"
+        crap.hooks.register("before_render", function(ctx)
+            error("intentional before_render failure")
+        end)
+    "#,
+    )
+    .unwrap();
+
+    let config = CrapConfig::test_default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
+        .expect("HookRunner::new");
+
+    let context = json!({ "page": "edit", "title": "Hello" });
+    let result = runner.run_before_render(context.clone());
+
+    // A failing hook must not propagate — the original context is returned
+    // unmodified so callers (admin UI render path) can proceed.
+    assert_eq!(
+        result, context,
+        "errors in before_render must fall back to the original context"
+    );
+}
+
 // ── 7B. run_migration with standalone config dir ──────────────────────────────
 
 #[test]

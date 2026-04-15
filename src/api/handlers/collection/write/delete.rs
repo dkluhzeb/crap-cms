@@ -42,6 +42,7 @@ impl ContentService {
         let id = req.id.clone();
         let storage = self.storage.clone();
         let locale_config = self.locale_config.clone();
+        let invalidation_transport = self.invalidation_transport.clone();
 
         let auth_user = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool
@@ -53,10 +54,13 @@ impl ContentService {
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
 
+            // Service-layer delete publishes the invalidation signal on
+            // hard-delete of auth collections when a transport is attached.
             let ctx = service::ServiceContext::collection(&collection, &def_clone)
                 .pool(&pool)
                 .runner(&runner)
                 .user(user_doc.as_ref())
+                .invalidation_transport(Some(invalidation_transport))
                 .build();
             service::delete_document(&ctx, &id, Some(&*storage), Some(&locale_config))
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;

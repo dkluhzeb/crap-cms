@@ -279,7 +279,7 @@ fn populate_rel_in_map(
     Ok(())
 }
 
-use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
+use crate::db::query::populate::helpers::{CacheOrFetch, cache_or_fetch_doc, cache_set_doc};
 
 /// Populate a non-polymorphic has-one field within a JSON map.
 fn populate_has_one_in_map(
@@ -303,40 +303,50 @@ fn populate_has_one_in_map(
     let locale_key = locale_cache_key(pctx.locale_ctx);
     let key = populate_cache_key(rel_collection, &id, locale_key.as_deref());
 
-    if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
-        map.insert(name.to_string(), document_to_json(&cached, rel_collection));
-    } else if let Some(mut related_doc) =
-        find_by_id(pctx.conn, rel_collection, rel_def, &id, pctx.locale_ctx)?
-    {
-        if let Some(ref uc) = rel_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut related_doc, uc);
+    let mut related_doc = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
+        find_by_id(pctx.conn, rel_collection, rel_def, &id, pctx.locale_ctx)
+            .ok()
+            .flatten()
+    }) {
+        CacheOrFetch::Hit(cached) => {
+            map.insert(name.to_string(), document_to_json(&cached, rel_collection));
+            return Ok(());
         }
+        CacheOrFetch::Fresh(Some(d)) => d,
+        CacheOrFetch::Fresh(None) => return Ok(()),
+    };
 
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: pctx.conn,
-                registry: pctx.registry,
-                collection_slug: rel_collection,
-                def: rel_def,
-            },
-            &mut related_doc,
-            visited,
-            &PopulateOpts {
-                depth: effective_depth - 1,
-                select: None,
-                locale_ctx: pctx.locale_ctx,
-            },
-            pctx.cache,
-        )?;
-
-        let _ = cache_set_doc(pctx.cache, &key, &related_doc);
-        map.insert(
-            name.to_string(),
-            document_to_json(&related_doc, rel_collection),
-        );
+    if let Some(ref uc) = rel_def.upload
+        && uc.enabled
+    {
+        upload::assemble_sizes_object(&mut related_doc, uc);
     }
+
+    populate_relationships_cached(
+        &PopulateContext {
+            conn: pctx.conn,
+            registry: pctx.registry,
+            collection_slug: rel_collection,
+            def: rel_def,
+        },
+        &mut related_doc,
+        visited,
+        &PopulateOpts {
+            depth: effective_depth - 1,
+            select: None,
+            locale_ctx: pctx.locale_ctx,
+            join_access: None,
+            user: None,
+        },
+        pctx.cache,
+    )?;
+
+    let _ = cache_set_doc(pctx.cache, &key, &related_doc);
+    map.insert(
+        name.to_string(),
+        document_to_json(&related_doc, rel_collection),
+    );
+
     Ok(())
 }
 
@@ -368,39 +378,49 @@ fn populate_has_many_in_map(
         let locale_key = locale_cache_key(pctx.locale_ctx);
         let key = populate_cache_key(rel_collection, id, locale_key.as_deref());
 
-        if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
-            populated.push(document_to_json(&cached, rel_collection));
-        } else if let Some(mut related_doc) =
-            find_by_id(pctx.conn, rel_collection, rel_def, id, pctx.locale_ctx)?
-        {
-            if let Some(ref uc) = rel_def.upload
-                && uc.enabled
-            {
-                upload::assemble_sizes_object(&mut related_doc, uc);
+        let mut related_doc = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
+            find_by_id(pctx.conn, rel_collection, rel_def, id, pctx.locale_ctx)
+                .ok()
+                .flatten()
+        }) {
+            CacheOrFetch::Hit(cached) => {
+                populated.push(document_to_json(&cached, rel_collection));
+                continue;
             }
+            CacheOrFetch::Fresh(Some(d)) => d,
+            CacheOrFetch::Fresh(None) => {
+                populated.push(Value::String(id.clone()));
+                continue;
+            }
+        };
 
-            populate_relationships_cached(
-                &PopulateContext {
-                    conn: pctx.conn,
-                    registry: pctx.registry,
-                    collection_slug: rel_collection,
-                    def: rel_def,
-                },
-                &mut related_doc,
-                visited,
-                &PopulateOpts {
-                    depth: effective_depth - 1,
-                    select: None,
-                    locale_ctx: pctx.locale_ctx,
-                },
-                pctx.cache,
-            )?;
-
-            let _ = cache_set_doc(pctx.cache, &key, &related_doc);
-            populated.push(document_to_json(&related_doc, rel_collection));
-        } else {
-            populated.push(Value::String(id.clone()));
+        if let Some(ref uc) = rel_def.upload
+            && uc.enabled
+        {
+            upload::assemble_sizes_object(&mut related_doc, uc);
         }
+
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: pctx.conn,
+                registry: pctx.registry,
+                collection_slug: rel_collection,
+                def: rel_def,
+            },
+            &mut related_doc,
+            visited,
+            &PopulateOpts {
+                depth: effective_depth - 1,
+                select: None,
+                locale_ctx: pctx.locale_ctx,
+                join_access: None,
+                user: None,
+            },
+            pctx.cache,
+        )?;
+
+        let _ = cache_set_doc(pctx.cache, &key, &related_doc);
+        populated.push(document_to_json(&related_doc, rel_collection));
     }
     map.insert(name.to_string(), Value::Array(populated));
     Ok(())
@@ -436,35 +456,47 @@ fn populate_poly_has_one_in_map(
     let locale_key = locale_cache_key(pctx.locale_ctx);
     let key = populate_cache_key(&col, &id, locale_key.as_deref());
 
-    if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
-        map.insert(name.to_string(), document_to_json(&cached, &col));
-    } else if let Some(mut rd) = find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)? {
-        if let Some(ref uc) = item_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut rd, uc);
+    let mut rd = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
+        find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)
+            .ok()
+            .flatten()
+    }) {
+        CacheOrFetch::Hit(cached) => {
+            map.insert(name.to_string(), document_to_json(&cached, &col));
+            return Ok(());
         }
+        CacheOrFetch::Fresh(Some(d)) => d,
+        CacheOrFetch::Fresh(None) => return Ok(()),
+    };
 
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: pctx.conn,
-                registry: pctx.registry,
-                collection_slug: &col,
-                def: &item_def,
-            },
-            &mut rd,
-            visited,
-            &PopulateOpts {
-                depth: effective_depth - 1,
-                select: None,
-                locale_ctx: pctx.locale_ctx,
-            },
-            pctx.cache,
-        )?;
-
-        let _ = cache_set_doc(pctx.cache, &key, &rd);
-        map.insert(name.to_string(), document_to_json(&rd, &col));
+    if let Some(ref uc) = item_def.upload
+        && uc.enabled
+    {
+        upload::assemble_sizes_object(&mut rd, uc);
     }
+
+    populate_relationships_cached(
+        &PopulateContext {
+            conn: pctx.conn,
+            registry: pctx.registry,
+            collection_slug: &col,
+            def: &item_def,
+        },
+        &mut rd,
+        visited,
+        &PopulateOpts {
+            depth: effective_depth - 1,
+            select: None,
+            locale_ctx: pctx.locale_ctx,
+            join_access: None,
+            user: None,
+        },
+        pctx.cache,
+    )?;
+
+    let _ = cache_set_doc(pctx.cache, &key, &rd);
+    map.insert(name.to_string(), document_to_json(&rd, &col));
+
     Ok(())
 }
 
@@ -510,37 +542,49 @@ fn populate_poly_has_many_in_map(
         let locale_key = locale_cache_key(pctx.locale_ctx);
         let key = populate_cache_key(&col, &id, locale_key.as_deref());
 
-        if let Some(cached) = cache_get_doc(pctx.cache, &key)? {
-            populated.push(document_to_json(&cached, &col));
-        } else if let Some(mut rd) = find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)? {
-            if let Some(ref uc) = item_def.upload
-                && uc.enabled
-            {
-                upload::assemble_sizes_object(&mut rd, uc);
+        let mut rd = match cache_or_fetch_doc(pctx.cache, pctx.singleflight, &key, || {
+            find_by_id(pctx.conn, &col, &item_def, &id, pctx.locale_ctx)
+                .ok()
+                .flatten()
+        }) {
+            CacheOrFetch::Hit(cached) => {
+                populated.push(document_to_json(&cached, &col));
+                continue;
             }
+            CacheOrFetch::Fresh(Some(d)) => d,
+            CacheOrFetch::Fresh(None) => {
+                populated.push(Value::String(item.clone()));
+                continue;
+            }
+        };
 
-            populate_relationships_cached(
-                &PopulateContext {
-                    conn: pctx.conn,
-                    registry: pctx.registry,
-                    collection_slug: &col,
-                    def: &item_def,
-                },
-                &mut rd,
-                visited,
-                &PopulateOpts {
-                    depth: effective_depth - 1,
-                    select: None,
-                    locale_ctx: pctx.locale_ctx,
-                },
-                pctx.cache,
-            )?;
-
-            let _ = cache_set_doc(pctx.cache, &key, &rd);
-            populated.push(document_to_json(&rd, &col));
-        } else {
-            populated.push(Value::String(item.clone()));
+        if let Some(ref uc) = item_def.upload
+            && uc.enabled
+        {
+            upload::assemble_sizes_object(&mut rd, uc);
         }
+
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: pctx.conn,
+                registry: pctx.registry,
+                collection_slug: &col,
+                def: &item_def,
+            },
+            &mut rd,
+            visited,
+            &PopulateOpts {
+                depth: effective_depth - 1,
+                select: None,
+                locale_ctx: pctx.locale_ctx,
+                join_access: None,
+                user: None,
+            },
+            pctx.cache,
+        )?;
+
+        let _ = cache_set_doc(pctx.cache, &key, &rd);
+        populated.push(document_to_json(&rd, &col));
     }
     map.insert(name.to_string(), Value::Array(populated));
     Ok(())

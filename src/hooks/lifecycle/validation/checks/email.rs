@@ -31,7 +31,7 @@ pub(crate) fn check_email_format(
 ///
 /// Validates: exactly one @, non-empty local/domain, domain has a dot,
 /// no whitespace, no leading/trailing/consecutive dots in local part.
-pub(crate) fn is_valid_email_format(value: &str) -> bool {
+pub fn is_valid_email_format(value: &str) -> bool {
     let parts: Vec<&str> = value.splitn(2, '@').collect();
 
     if parts.len() != 2 {

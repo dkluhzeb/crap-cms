@@ -21,6 +21,7 @@ fn restore_version_inner(
     collection: String,
     id: String,
     version_id: String,
+    opts: Option<Table>,
 ) -> LuaResult<Value> {
     // SAFETY: pointer valid for hook call duration — see TxContext pattern
     let conn_ptr = get_tx_conn(lua)?;
@@ -28,17 +29,18 @@ fn restore_version_inner(
 
     let user = hook_user(lua);
     let def = resolve_collection(reg, &collection)?;
+    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
 
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
-        .override_access(true)
+        .override_access(override_access)
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(true)
+        .override_access(override_access)
         .build();
 
     let doc = restore_collection_version_core(&ctx, &id, &version_id, lc)
@@ -47,7 +49,7 @@ fn restore_version_inner(
     Ok(Value::Table(document_to_lua_table(lua, &doc)?))
 }
 
-/// Register `crap.collections.restore_version(collection, id, version_id)`.
+/// Register `crap.collections.restore_version(collection, id, version_id, opts?)`.
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_restore_version(
     lua: &Lua,
@@ -57,8 +59,8 @@ pub(crate) fn register_restore_version(
 ) -> Result<()> {
     let lc = locale_config.clone();
     let restore_version_fn = lua.create_function(
-        move |lua, (collection, id, version_id): (String, String, String)| {
-            restore_version_inner(lua, &registry, &lc, collection, id, version_id)
+        move |lua, (collection, id, version_id, opts): (String, String, String, Option<Table>)| {
+            restore_version_inner(lua, &registry, &lc, collection, id, version_id, opts)
         },
     )?;
 

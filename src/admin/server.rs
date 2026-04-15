@@ -57,7 +57,7 @@ use crate::{
         JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
         email::{EmailRenderer, create_email_provider},
-        event::EventBus,
+        event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
@@ -73,7 +73,7 @@ pub struct AdminStartParams {
     pub registry: Arc<Registry>,
     pub hook_runner: HookRunner,
     pub jwt_secret: JwtSecret,
-    pub event_bus: Option<EventBus>,
+    pub event_transport: Option<SharedEventTransport>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub ip_login_limiter: Arc<LoginRateLimiter>,
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
@@ -81,6 +81,9 @@ pub struct AdminStartParams {
     pub storage: SharedStorage,
     pub token_provider: SharedTokenProvider,
     pub password_provider: SharedPasswordProvider,
+    /// Optional shared invalidation transport — when `None`, a fresh
+    /// in-process one is created.
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
 impl AdminStartParams {
@@ -105,7 +108,7 @@ pub async fn start(
         registry,
         hook_runner,
         jwt_secret,
-        event_bus,
+        event_transport,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter,
@@ -113,6 +116,7 @@ pub async fn start(
         storage,
         token_provider,
         password_provider,
+        invalidation_transport,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
     let handlebars =
@@ -127,7 +131,10 @@ pub async fn start(
         .any(|d| d.is_auth_collection());
 
     let max_sse_connections = config.live.max_sse_connections;
+    let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
     let csp_header = config.admin.csp.build_header_value();
+    let invalidation_transport: SharedInvalidationTransport =
+        invalidation_transport.unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
     let state = AdminState {
         config,
         config_dir: config_dir.clone(),
@@ -138,7 +145,7 @@ pub async fn start(
         jwt_secret,
         email_renderer,
         email_provider,
-        event_bus,
+        event_transport,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter,
@@ -152,6 +159,9 @@ pub async fn start(
         storage,
         token_provider,
         password_provider,
+        subscriber_send_timeout_ms,
+        invalidation_transport,
+        populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
     };
 
     let h2c_enabled = state.config.server.h2c;

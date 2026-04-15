@@ -89,7 +89,7 @@ pub fn setup_app_with_config(
             &crap_cms::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         ip_login_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
@@ -113,6 +113,11 @@ pub fn setup_app_with_config(
             "test-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crap_cms::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
     };
 
     let router = build_router(state);

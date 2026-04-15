@@ -139,5 +139,5 @@ pub async fn auth_callback(
 
     state.ip_login_limiter.clear(&ip);
 
-    session_redirect(&session, state.config.admin.dev_mode)
+    session_redirect(&state, &session)
 }

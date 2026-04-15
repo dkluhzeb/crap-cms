@@ -26,7 +26,7 @@ pub enum SmtpTls {
 
 /// SMTP email configuration. Empty `smtp_host` disables email (no-op sends).
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmailConfig {
     /// Email provider: `"smtp"` (default), `"webhook"`, `"log"`, or `"custom"`.
     #[serde(default = "default_email_provider")]
@@ -116,7 +116,7 @@ impl Default for EmailConfig {
 
 /// Controls relationship population depth defaults and limits.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DepthConfig {
     /// Default population depth when request doesn't specify one.
     /// Used as default for FindByID. Find defaults to 0 regardless.
@@ -148,7 +148,7 @@ impl Default for DepthConfig {
 /// prefix = "crap:"         # key prefix for Redis
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CacheConfig {
     /// Cache backend: `"memory"` (default), `"redis"`, `"none"`, or `"custom"`.
     #[serde(default = "default_cache_backend")]
@@ -199,7 +199,7 @@ impl Default for CacheConfig {
 
 /// Controls default and maximum page sizes, and pagination mode.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PaginationConfig {
     /// Default page size when request doesn't specify a limit.
     pub default_limit: i64,
@@ -238,7 +238,7 @@ pub enum PaginationMode {
 
 /// MCP (Model Context Protocol) server configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct McpConfig {
     /// Enable MCP server (default: false).
     pub enabled: bool,
@@ -258,7 +258,7 @@ pub struct McpConfig {
 
 /// Global upload settings (per-collection upload config is separate).
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct UploadConfig {
     /// Storage backend: `"local"` (default), `"s3"`, or `"custom"`.
     #[serde(default = "default_upload_storage")]
@@ -274,6 +274,7 @@ pub struct UploadConfig {
 
 /// S3-compatible storage configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct S3Config {
     /// S3 bucket name.
     #[serde(default)]
@@ -322,7 +323,7 @@ impl Default for UploadConfig {
 
 /// Internationalization / locale configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LocaleConfig {
     /// Default locale code. Content without explicit locale uses this.
     pub default_locale: String,
@@ -391,7 +392,7 @@ impl LocaleConfig {
 
 /// Background job scheduler configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct JobsConfig {
     /// Max concurrent job executions across all queues. Default: 10.
     pub max_concurrent: usize,
@@ -429,19 +430,35 @@ impl Default for JobsConfig {
 
 /// Live event streaming configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LiveConfig {
     /// Enable live event streaming (SSE + gRPC Subscribe). Default: true.
     pub enabled: bool,
     /// Default event delivery mode for collections/globals that don't specify one.
     /// `"metadata"` (default) = id/operation only, `"full"` = after_read hooks + data.
     pub default_mode: String,
+    /// Event transport. `"memory"` (default) — in-process broadcast, events do
+    /// not cross server nodes. `"redis"` — Redis pub/sub (requires the `redis`
+    /// feature); events fan out to all server nodes subscribed to the same
+    /// Redis instance. The Redis URL is reused from `[cache] redis_url`.
+    #[serde(default = "default_live_transport")]
+    pub transport: String,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
     /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
     pub max_sse_connections: usize,
     /// Maximum concurrent gRPC Subscribe streams. 0 = unlimited. Default: 1000.
     pub max_subscribe_connections: usize,
+    /// Per-subscriber outbound send timeout (milliseconds). If forwarding an
+    /// event to a specific live-update client (gRPC Subscribe or admin SSE)
+    /// takes longer than this, that subscriber is dropped. Guards against a
+    /// slow client holding broadcast capacity and starving other subscribers.
+    /// Default: 1000 (1 second).
+    pub subscriber_send_timeout_ms: u64,
+}
+
+fn default_live_transport() -> String {
+    "memory".to_string()
 }
 
 impl Default for LiveConfig {
@@ -449,16 +466,18 @@ impl Default for LiveConfig {
         Self {
             enabled: true,
             default_mode: "metadata".to_string(),
+            transport: default_live_transport(),
             channel_capacity: 1024,
             max_sse_connections: 1000,
             max_subscribe_connections: 1000,
+            subscriber_send_timeout_ms: 1000,
         }
     }
 }
 
 /// Hook configuration — `on_init` script references and recursion limits.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HooksConfig {
     /// List of Lua script names (without extension) to run once when the CMS starts up.
     /// These are loaded from the `hooks/` directory.
@@ -504,7 +523,7 @@ impl Default for HooksConfig {
 /// When `default_deny` is true, collections/globals without explicit access functions
 /// deny all operations instead of allowing them. Default: true (secure by default).
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AccessConfig {
     /// When true (default), operations on collections/globals without an explicit access
     /// function are denied. When false, missing access functions allow all.
@@ -536,7 +555,7 @@ pub enum LogRotation {
 /// the config directory, or an absolute path). Disabled by default — stdout-only
 /// logging is the default for backward compatibility and Docker deployments.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     /// Enable file logging. Default: false.
     pub file: bool,
@@ -556,6 +575,24 @@ impl Default for LoggingConfig {
             path: "data/logs".to_string(),
             rotation: LogRotation::default(),
             max_files: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UpdateConfig {
+    /// On `crap-cms serve` startup, print a one-line notice if the cached
+    /// update-check shows a newer release is available. Cache is populated by
+    /// `crap-cms update check` (24h TTL); startup never performs a network
+    /// request. Default: true.
+    pub check_on_startup: bool,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            check_on_startup: true,
         }
     }
 }
@@ -672,9 +709,23 @@ mod tests {
     fn live_config_defaults() {
         let live = LiveConfig::default();
         assert!(live.enabled);
+        assert_eq!(live.transport, "memory");
         assert_eq!(live.channel_capacity, 1024);
         assert_eq!(live.max_sse_connections, 1000);
         assert_eq!(live.max_subscribe_connections, 1000);
+        assert_eq!(live.subscriber_send_timeout_ms, 1000);
+    }
+
+    #[test]
+    fn live_config_transport_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[live]\ntransport = \"redis\"\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.live.transport, "redis");
     }
 
     #[test]

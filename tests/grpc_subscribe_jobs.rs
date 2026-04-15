@@ -16,7 +16,7 @@ use crap_cms::config::*;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
-use crap_cms::core::event::EventBus;
+use crap_cms::core::event::{InProcessEventBus, SharedEventTransport};
 use crap_cms::core::field::*;
 use crap_cms::core::job::JobDefinitionBuilder;
 use crap_cms::db::{migrate, pool};
@@ -49,7 +49,8 @@ fn setup_service_with_event_bus(
     collections: Vec<CollectionDefinition>,
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
-    setup_service_inner(collections, globals, Some(EventBus::new(64)), vec![])
+    let transport: SharedEventTransport = Arc::new(InProcessEventBus::new(64));
+    setup_service_inner(collections, globals, Some(transport), vec![])
 }
 
 fn setup_service_with_jobs(
@@ -63,7 +64,7 @@ fn setup_service_with_jobs(
 fn setup_service_inner(
     collections: Vec<CollectionDefinition>,
     globals: Vec<GlobalDefinition>,
-    event_bus: Option<EventBus>,
+    event_transport: Option<SharedEventTransport>,
     locales: Vec<&str>,
 ) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -136,8 +137,8 @@ fn setup_service_inner(
             crap_cms::core::auth::Argon2PasswordProvider,
         ));
 
-    if let Some(eb) = event_bus {
-        deps = deps.event_bus(Some(eb));
+    if let Some(eb) = event_transport {
+        deps = deps.event_transport(Some(eb));
     }
 
     let service = ContentService::new(deps.build());

@@ -42,6 +42,8 @@ fn populate_depth_zero_noop() {
             depth: 0,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -81,6 +83,8 @@ fn populate_depth_one_hydrates() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -170,6 +174,8 @@ fn populate_circular_ref_stops() {
             depth: 10,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     );
@@ -235,6 +241,8 @@ fn populate_field_level_max_depth_caps() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -290,6 +298,8 @@ fn populate_select_filters_fields() {
             depth: 1,
             select: Some(&select),
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -331,6 +341,8 @@ fn populate_has_one_empty_string_skipped() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -370,6 +382,8 @@ fn populate_relationships_wrapper_creates_fresh_cache() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
     )
     .unwrap();
@@ -392,6 +406,8 @@ fn populate_relationships_wrapper_creates_fresh_cache() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
     )
     .unwrap();
@@ -482,6 +498,8 @@ fn populate_upload_inside_blocks() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -552,6 +570,8 @@ fn populate_relationship_inside_tabs() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -606,6 +626,8 @@ fn populate_relationship_inside_group() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )
@@ -666,6 +688,8 @@ fn populate_relationship_inside_array() {
             depth: 1,
             select: None,
             locale_ctx: None,
+            join_access: None,
+            user: None,
         },
         &NoneCache,
     )

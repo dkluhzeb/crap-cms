@@ -1,6 +1,5 @@
 //! POST /admin/collections/{slug}/empty-trash — permanently delete all trashed documents.
 
-use anyhow::Context as _;
 use axum::{
     Extension,
     extract::{Path, State},
@@ -12,18 +11,22 @@ use tokio::task;
 use tracing::error;
 
 use crate::{
-    admin::{AdminState, handlers::shared::check_access_or_forbid},
+    admin::AdminState,
     config::LocaleConfig,
-    core::{CollectionDefinition, auth::AuthUser, upload, upload::StorageBackend},
-    db::{
-        AccessResult, DbPool,
-        query::{self, Filter, FilterClause, FilterOp, FindQuery},
+    core::{
+        CollectionDefinition, auth::AuthUser, event::SharedInvalidationTransport, upload,
+        upload::StorageBackend,
     },
+    db::{DbPool, FindQuery},
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core},
+    service::{
+        FindDocumentsInput, RunnerReadHooks, RunnerWriteHooks, ServiceContext, ServiceError,
+        delete_document_core, find_documents,
+    },
 };
 
-/// Find all trashed documents and permanently delete them (skipping referenced ones).
+/// Find all trashed documents via the service layer and permanently delete them.
+#[allow(clippy::too_many_arguments)]
 fn empty_trash(
     pool: &DbPool,
     runner: &HookRunner,
@@ -31,18 +34,44 @@ fn empty_trash(
     slug: &str,
     locale_cfg: &LocaleConfig,
     storage: &dyn StorageBackend,
-) -> anyhow::Result<usize> {
-    let mut conn = pool.get().context("DB connection")?;
-    let tx = conn.transaction_immediate().context("Start transaction")?;
+    user_doc: Option<&crate::core::Document>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+) -> Result<usize, ServiceError> {
+    // Find trashed documents via service (respects access.trash)
+    let conn = pool.get().map_err(ServiceError::Internal)?;
+    let read_hooks = RunnerReadHooks::new(runner, &conn);
 
-    let mut fq = FindQuery::new();
-    fq.include_deleted = true;
-    fq.filters = vec![FilterClause::Single(Filter {
-        field: "_deleted_at".to_string(),
-        op: FilterOp::Exists,
-    })];
+    // System filters (`_deleted_at EXISTS`, `include_deleted`) are injected by
+    // the service layer based on `.trash(true)`. We also pass
+    // `.include_drafts(true)` because the trash view must show drafts and
+    // published rows alike — anything that was soft-deleted, regardless of
+    // status, should be eligible for purging.
+    let fq = FindQuery::builder().limit(10000).build();
 
-    let docs = query::find(&tx, slug, def, &fq, None)?;
+    let read_ctx = ServiceContext::collection(slug, def)
+        .pool(pool)
+        .conn(&conn)
+        .read_hooks(&read_hooks)
+        .user(user_doc)
+        .build();
+
+    let input = FindDocumentsInput::builder(&fq)
+        .hydrate(false)
+        .trash(true)
+        .include_drafts(true)
+        .build();
+
+    let result = find_documents(&read_ctx, &input)?;
+    let doc_ids: Vec<String> = result.docs.iter().map(|d| d.id.to_string()).collect();
+
+    drop(conn);
+
+    // Delete each document in a single transaction
+    let mut conn = pool.get().map_err(ServiceError::Internal)?;
+    let tx = conn
+        .transaction_immediate()
+        .map_err(ServiceError::Internal)?;
+
     let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
     let mut hard_def = def.clone();
     hard_def.soft_delete = false;
@@ -50,13 +79,15 @@ fn empty_trash(
     let ctx = ServiceContext::collection(slug, &hard_def)
         .conn(&tx)
         .write_hooks(&wh)
+        .user(user_doc)
+        .invalidation_transport(invalidation_transport)
         .build();
 
     let mut deleted = 0;
     let mut upload_fields = Vec::new();
 
-    for doc in &docs {
-        match delete_document_core(&ctx, &doc.id, Some(locale_cfg)) {
+    for id in &doc_ids {
+        match delete_document_core(&ctx, id, Some(locale_cfg)) {
             Ok(result) => {
                 if let Some(fields) = result.upload_doc_fields {
                     upload_fields.push(fields);
@@ -64,11 +95,11 @@ fn empty_trash(
                 deleted += 1;
             }
             Err(ServiceError::Referenced { .. }) => continue,
-            Err(e) => return Err(e.into_anyhow()),
+            Err(e) => return Err(e),
         }
     }
 
-    tx.commit().context("Commit empty-trash")?;
+    tx.commit().map_err(ServiceError::Internal)?;
 
     for fields in &upload_fields {
         upload::delete_upload_files(storage, fields);
@@ -97,26 +128,32 @@ pub async fn empty_trash_action(
             .into_response();
     }
 
-    // Collection-level trash access check — reject early before iterating documents
-    let access = check_access_or_forbid(&state, def.access.resolve_trash(), &auth_user, None, None);
-    if let Ok(AccessResult::Denied) | Err(_) = access {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-
     let pool = state.pool.clone();
     let storage = state.storage.clone();
     let locale_cfg = state.config.locale.clone();
     let runner = state.hook_runner.clone();
+    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    let invalidation_transport = state.invalidation_transport.clone();
 
     let result = task::spawn_blocking(move || {
-        empty_trash(&pool, &runner, &def, &slug, &locale_cfg, &*storage)
+        empty_trash(
+            &pool,
+            &runner,
+            &def,
+            &slug,
+            &locale_cfg,
+            &*storage,
+            user_doc.as_ref(),
+            Some(invalidation_transport),
+        )
     })
     .await;
 
     match result {
         Ok(Ok(count)) => Json(json!({"ok": true, "count": count})).into_response(),
+        Ok(Err(ServiceError::AccessDenied(_))) => StatusCode::FORBIDDEN.into_response(),
         Ok(Err(e)) => {
-            error!("Empty trash error: {:#}", e);
+            error!("Empty trash error: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Failed to empty trash"})),

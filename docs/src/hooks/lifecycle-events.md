@@ -79,3 +79,64 @@ In `after_change` and `after_delete` hooks, `context.data.id` contains the docum
 8. before_broadcast hooks (background, no CRUD)
 9. EventBus publish (if not suppressed)
 ```
+
+## `before_broadcast`
+
+Fires after a `create`, `update`, or `delete` has been committed and the live setting
+check has passed, but **before** the event is dispatched on the EventBus to live
+subscribers (SSE, gRPC `Subscribe`). Runs in a background `spawn_blocking` task — never
+blocks the response to the originating request.
+
+**No CRUD access** (the transaction is already closed).
+
+The hook receives a context table with `collection`, `operation` (`"create"`,
+`"update"`, or `"delete"`), and `data` (the document payload that would be broadcast).
+
+**Return values:**
+
+- A table — broadcast continues with the (possibly mutated) `data`.
+- `nil` or `false` — the broadcast is **suppressed** for this subscriber wave; no
+  event is dispatched.
+
+```lua
+crap.hooks.register("before_broadcast", function(ctx)
+    -- Don't broadcast drafts
+    if ctx.data.status == "draft" then
+        return nil
+    end
+
+    -- Strip a sensitive field from the broadcast payload only
+    ctx.data.internal_notes = nil
+    return ctx
+end)
+```
+
+Collection-level `before_broadcast` hook refs run before global registered hooks. A
+suppression at any stage stops the rest of the chain.
+
+## `before_render`
+
+Fires before an admin page template is rendered. The hook receives the full template
+context (the JSON object passed to the template engine) as a Lua table, and may return
+a modified table to inject globals, sidebar items, or additional template variables.
+
+**No CRUD access**, **global hooks only** (no collection-level refs). Errors, non-table
+returns, and conversion failures log a warning and fall back to the unmodified context.
+
+**Return values:**
+
+- A table — the new template context.
+- `nil` — the original context is preserved (no-op).
+- Anything else — logged as a warning, ignored.
+
+```lua
+crap.hooks.register("before_render", function(ctx)
+    -- Inject a banner shown in the admin layout
+    ctx.banner_message = "Maintenance window 02:00 UTC tonight"
+    return ctx
+end)
+```
+
+Fires from every admin page handler (dashboard, list, edit, delete confirm, version
+list/restore, login, forgot/reset password, etc.). Inspect `ctx` to branch on the page
+being rendered.

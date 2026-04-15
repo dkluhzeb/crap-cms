@@ -30,6 +30,10 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
         tbl.set("localized", true)?;
     }
 
+    if f.hidden {
+        tbl.set("hidden", true)?;
+    }
+
     if let Some(ref v) = f.validate {
         tbl.set("validate", v.as_str())?;
     }

@@ -16,15 +16,42 @@ docker run -p 3000:3000 -p 50051:50051 ghcr.io/dkluhzeb/crap-cms:latest serve -C
 
 Open [http://localhost:3000/admin](http://localhost:3000/admin) — login: `admin@crap.studio` / `admin123`
 
-Or download a [static binary](https://github.com/dkluhzeb/crap-cms/releases) (Linux x86_64, ARM64, Windows — no dependencies):
+Or install the latest release with the shell installer (Linux x86_64 / ARM64):
 
 ```bash
-curl -L -o crap-cms \
-  https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
-chmod +x crap-cms
-curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.tar.gz | tar xz
-./crap-cms serve -C ./example
+curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh | bash
 ```
+
+The installer downloads the matching binary, verifies it against `SHA256SUMS`, and places it under `~/.local/share/crap-cms/versions/<version>/`. It wires up a shim at `~/.local/bin/crap-cms` — add that directory to your `PATH` if it isn't already.
+
+<details>
+<summary>Inspect the script before running (recommended)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dkluhzeb/crap-cms/main/scripts/install.sh -o install.sh
+less install.sh               # review
+sha256sum install.sh          # compare against the repo's scripts/install.sh
+bash install.sh               # run once you're satisfied
+```
+
+For a reproducible install, pin the URL to a tag: `…/crap-cms/v0.1.0-alpha.5/scripts/install.sh`.
+</details>
+
+Prefer a direct [release download](https://github.com/dkluhzeb/crap-cms/releases)? Grab `crap-cms-linux-x86_64` (or the arch you need), `chmod +x`, and run — no other dependencies.
+
+### Managing versions
+
+Once installed, the binary manages itself:
+
+```bash
+crap-cms update check           # is a newer release out?
+crap-cms update list            # remote releases, marked with (installed) and *
+crap-cms update install v0.1.0-alpha.5
+crap-cms update use v0.1.0-alpha.5
+crap-cms update                 # shortcut: install latest + switch to it
+```
+
+`crap-cms serve` prints a one-line nudge on startup when a newer release is cached (24h TTL, populated by `crap-cms update check`). Set `[update] check_on_startup = false` in `crap.toml` to silence it.
 
 ## Features
 
@@ -114,13 +141,16 @@ src/
 ├── lib.rs            # crate exports
 ├── config/           # crap.toml loading + defaults
 ├── core/             # collection, field, document types
-├── db/               # SQLite pool, migrations, query builder
+├── db/               # pool, migrations, query builder
+├── service/          # service layer — chokepoint for CRUD lifecycle
 ├── hooks/            # Lua VM, crap.* API, hook lifecycle
 ├── admin/            # Axum admin UI (handlers, templates)
 ├── api/              # Tonic gRPC service
 ├── scheduler/        # background job scheduler
 ├── mcp/              # Model Context Protocol server
-├── commands/         # CLI subcommands
+├── cli/              # CLI argument parsing
+├── commands/         # CLI subcommand implementations
+├── typegen/          # type generation (Rust, Lua, TS, Python, Go)
 └── scaffold/         # init/make scaffolding
 ```
 
@@ -174,6 +204,18 @@ cd docs && mdbook serve            # local preview at localhost:3000
 | **CI** | Every push & PR | fmt, clippy, tests |
 | **Nightly** | Push to main | x86_64 musl binary, Docker `nightly` tag, docs deploy |
 | **Release** | Tag `v*` | Multi-arch binaries, Docker semver tags, GitHub Release, docs deploy |
+
+## Cargo Features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `sqlite` | yes | SQLite backend (bundled, no runtime dependency). |
+| `postgres` | no | PostgreSQL backend (via `tokio-postgres` + `deadpool-postgres`). |
+| `s3-storage` | no | S3-compatible upload storage (AWS S3, MinIO, R2, B2, Spaces). |
+| `redis` | no | Redis-backed cache and cross-node live-update transport. |
+| `browser-tests` | no | Headless Chrome end-to-end tests (via `chromiumoxide`). |
+
+Enable a feature at build time with `cargo build --features <name>` (combine with commas).
 
 ## License
 

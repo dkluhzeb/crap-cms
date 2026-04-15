@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::{
     core::document::VersionSnapshot,
     db::{AccessResult, query},
-    service::{ServiceContext, ServiceError, helpers},
+    service::{Def, ServiceContext, ServiceError, helpers},
 };
 
 /// Look up a single version snapshot by its ID.
@@ -32,9 +32,26 @@ pub fn find_version_by_id(
         None => return Ok(None),
     };
 
+    // Constrained: for collections enforce against the version's parent id;
+    // for globals, the filter table is meaningless (single row) and is rejected.
+    if matches!(access, AccessResult::Constrained(_)) {
+        match &ctx.def {
+            Def::Global(_) => {
+                return Err(ServiceError::HookError(format!(
+                    "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+                    ctx.slug
+                )));
+            }
+            _ => {
+                let parent_id = version.parent.to_string();
+                helpers::enforce_access_constraints(ctx, &parent_id, &access, "Read", false)?;
+            }
+        }
+    }
+
     // Strip read-denied fields from the snapshot JSON
     let mut denied = hooks.field_read_denied(ctx.fields(), ctx.user);
-    denied.extend(helpers::collect_hidden_field_names(ctx.fields(), ""));
+    denied.extend(helpers::collect_api_hidden_field_names(ctx.fields(), ""));
 
     if !denied.is_empty() {
         strip_snapshot_fields(&mut version.snapshot, &denied);

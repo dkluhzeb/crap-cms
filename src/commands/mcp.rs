@@ -49,6 +49,9 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         runner: hook_runner,
         config: cfg,
         config_dir,
+        // Stdio MCP runs standalone — no live-update streams in-process,
+        // so no invalidation transport is needed.
+        invalidation_transport: None,
     };
 
     mcp::stdio::run_stdio(server).await;

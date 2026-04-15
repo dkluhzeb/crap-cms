@@ -55,6 +55,13 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        )));
+    }
+
     let is_draft = input.draft && def.has_drafts();
     let gtable = global_table(ctx.slug);
     let ui_locale = input.ui_locale.as_deref();
@@ -159,7 +166,7 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
     query::hydrate_document(conn, &gtable, &def.fields, &mut doc, None, input.locale_ctx)?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(svc_helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(svc_helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

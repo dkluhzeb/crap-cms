@@ -77,7 +77,16 @@ pub(in crate::mcp::tools) fn exec_find(
         fq = fq.search(s.as_str());
     }
 
+    let is_trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false) && def.soft_delete;
+    let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Default sort for trash listings is a presentation concern — keep here.
+    if is_trash && order_by.is_none() {
+        fq = fq.order_by("-_deleted_at");
+    }
+
     let fq = fq.build();
+
     let hooks = RunnerReadHooks::new(runner, &conn);
     let ctx = ServiceContext::collection(slug, def)
         .pool(pool)
@@ -91,6 +100,8 @@ pub(in crate::mcp::tools) fn exec_find(
         .locale_ctx(locale_ctx.as_ref())
         .registry(Some(registry.as_ref()))
         .cursor_enabled(config.pagination.is_cursor())
+        .trash(is_trash)
+        .include_drafts(include_drafts)
         .build();
 
     let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;

@@ -1,0 +1,1 @@
+-- Globals hook lifecycle test fixture.

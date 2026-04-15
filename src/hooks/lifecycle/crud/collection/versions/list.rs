@@ -33,18 +33,19 @@ fn list_versions_inner(
     let offset: Option<i64> = opts
         .as_ref()
         .and_then(|o| o.get::<Option<i64>>("offset").ok().flatten());
+    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
 
     let user = hook_user(lua);
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
-        .override_access(true)
+        .override_access(override_access)
         .build();
 
     let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .read_hooks(&hooks)
         .user(user.as_ref())
-        .override_access(true)
+        .override_access(override_access)
         .build();
 
     let input = ListVersionsInput::builder(&id)

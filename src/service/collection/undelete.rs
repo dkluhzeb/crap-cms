@@ -25,6 +25,10 @@ pub fn undelete_document_core(ctx: &ServiceContext, id: &str) -> Result<Document
         return Err(ServiceError::AccessDenied("Undelete access denied".into()));
     }
 
+    // When the hook returned Constrained filters, enforce row-level match.
+    // The target row is soft-deleted, so we must search the trash view.
+    helpers::enforce_access_constraints(ctx, id, &access, "Undelete", true)?;
+
     let restored = query::restore(conn, ctx.slug, id)?;
 
     if !restored {
@@ -43,7 +47,7 @@ pub fn undelete_document_core(ctx: &ServiceContext, id: &str) -> Result<Document
         .ok_or_else(|| ServiceError::NotFound("Document not found after undelete".into()))?;
 
     let mut read_denied = write_hooks.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

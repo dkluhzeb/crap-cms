@@ -836,16 +836,19 @@ fn lua_find_drafts_only() {
             return "DRAFT_ALL_TOTAL:" .. tostring(all.pagination.totalDocs)
         end
 
-        -- Can still filter by _status explicitly within draft=true
-        local drafts = crap.collections.find("articles", {
-            draft = true,
-            where = { _status = "draft" },
-        })
-        if drafts.pagination.totalDocs ~= 1 then
-            return "DRAFT_ONLY_TOTAL:" .. tostring(drafts.pagination.totalDocs)
+        -- Filtering on the system column _status directly must be rejected —
+        -- it's engine-internal. Use the `draft = true` request flag to reach drafts.
+        local ok, err = pcall(function()
+            crap.collections.find("articles", {
+                draft = true,
+                where = { _status = "draft" },
+            })
+        end)
+        if ok then
+            return "EXPECTED_ERROR_ON_STATUS_FILTER"
         end
-        if drafts.documents[1].title ~= "Draft Only" then
-            return "DRAFT_TITLE:" .. tostring(drafts.documents[1].title)
+        if not tostring(err):find("_status") or not tostring(err):find("system column") then
+            return "UNEXPECTED_ERROR:" .. tostring(err)
         end
 
         return "ok"

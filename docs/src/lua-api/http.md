@@ -49,6 +49,7 @@ local resp = crap.http.request({
 - Uses [reqwest](https://docs.rs/reqwest) (blocking HTTP client). Since Lua hooks run inside `spawn_blocking`, blocking I/O is correct and won't stall the async runtime.
 - Non-2xx responses are **not** errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.
 - Available in both init.lua and hooks.
+- **TLS certificate verification** is always enabled (reqwest's default with the `rustls-tls` feature). There is no opt-out — `crap.http.request` will not connect to servers with invalid or self-signed certificates. Use a proper CA-signed certificate on any HTTPS endpoint you call.
 
 ## Security
 

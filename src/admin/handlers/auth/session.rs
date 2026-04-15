@@ -1,6 +1,9 @@
 //! Session cookie helpers for auth handlers.
 
 use axum::{http::header::SET_COOKIE, response::Response};
+use tracing::warn;
+
+use crate::{admin::AdminState, config::SessionCookieSameSite};
 
 /// MFA pending cookie expiry in seconds (5 minutes).
 const MFA_PENDING_EXPIRY: u64 = 300;
@@ -18,6 +21,7 @@ impl Cookie {
             value,
             max_age: 0,
             http_only: true,
+            same_site: "Lax",
         }
     }
 
@@ -40,6 +44,7 @@ pub(in crate::admin::handlers) struct CookieBuilder<'a> {
     value: &'a str,
     max_age: u64,
     http_only: bool,
+    same_site: &'static str,
 }
 
 impl<'a> CookieBuilder<'a> {
@@ -53,6 +58,12 @@ impl<'a> CookieBuilder<'a> {
         self
     }
 
+    /// Override the `SameSite` attribute. Defaults to `Lax`.
+    pub fn same_site(mut self, value: &'static str) -> Self {
+        self.same_site = value;
+        self
+    }
+
     /// Build the `Set-Cookie` header value.
     /// `dev_mode` controls whether the `Secure` flag is set.
     pub fn build(self, dev_mode: bool) -> Cookie {
@@ -61,28 +72,49 @@ impl<'a> CookieBuilder<'a> {
 
         Cookie {
             value: format!(
-                "{}={}{}; Path=/; SameSite=Lax; Max-Age={}{}",
-                self.name, self.value, http_only, self.max_age, secure,
+                "{}={}{}; Path=/; SameSite={}; Max-Age={}{}",
+                self.name, self.value, http_only, self.same_site, self.max_age, secure,
             ),
         }
     }
 }
 
+/// Resolve the configured `SameSite` attribute for the session cookie, honoring the
+/// `[auth] session_cookie_samesite` config key. `None` is reserved and falls back to
+/// `Lax` (see [`SessionCookieSameSite`] docs).
+pub(in crate::admin::handlers) fn session_same_site(state: &AdminState) -> &'static str {
+    if state.config.auth.session_cookie_samesite == SessionCookieSameSite::None {
+        warn!(
+            "[auth] session_cookie_samesite = \"none\" is reserved for future use; \
+             falling back to \"lax\". Set to \"strict\" or \"lax\" explicitly."
+        );
+    }
+
+    state.config.auth.session_cookie_samesite.as_attribute()
+}
+
 /// Build `Set-Cookie` header values for the session.
+///
+/// `same_site` controls the `SameSite=` attribute of both cookies (the JWT and the
+/// visible expiry timestamp travel together). Callers typically pass the result of
+/// [`session_same_site`].
 pub(in crate::admin::handlers) fn session_cookies(
     token: &str,
     expiry: u64,
     exp: u64,
     dev_mode: bool,
+    same_site: &'static str,
 ) -> Vec<String> {
     vec![
         Cookie::builder("crap_session", token)
             .max_age(expiry)
+            .same_site(same_site)
             .build(dev_mode)
             .to_string(),
         Cookie::builder("crap_session_exp", &exp.to_string())
             .max_age(expiry)
             .http_only(false)
+            .same_site(same_site)
             .build(dev_mode)
             .to_string(),
     ]
@@ -114,13 +146,21 @@ pub(in crate::admin::handlers) fn append_cookies(response: &mut Response, cookie
 }
 
 /// Build `Set-Cookie` header values that clear both session cookies.
-pub(in crate::admin::handlers) fn clear_session_cookies(dev_mode: bool) -> Vec<String> {
+///
+/// `same_site` must match the attribute used when the cookie was set — browsers treat
+/// a differing `SameSite` as a different cookie and the clear would silently no-op.
+pub(in crate::admin::handlers) fn clear_session_cookies(
+    dev_mode: bool,
+    same_site: &'static str,
+) -> Vec<String> {
     vec![
         Cookie::builder("crap_session", "")
+            .same_site(same_site)
             .build(dev_mode)
             .to_string(),
         Cookie::builder("crap_session_exp", "")
             .http_only(false)
+            .same_site(same_site)
             .build(dev_mode)
             .to_string(),
     ]
@@ -132,21 +172,23 @@ mod tests {
 
     #[test]
     fn session_cookies_dev_mode() {
-        let cookies = session_cookies("tok123", 7200, 1700000000, true);
+        let cookies = session_cookies("tok123", 7200, 1700000000, true, "Lax");
         assert_eq!(cookies.len(), 2);
         assert!(cookies[0].contains("crap_session=tok123"));
         assert!(cookies[0].contains("HttpOnly"));
         assert!(cookies[0].contains("Max-Age=7200"));
+        assert!(cookies[0].contains("SameSite=Lax"));
         assert!(!cookies[0].contains("Secure"));
         assert!(cookies[1].contains("crap_session_exp=1700000000"));
         assert!(!cookies[1].contains("HttpOnly"));
         assert!(cookies[1].contains("Max-Age=7200"));
+        assert!(cookies[1].contains("SameSite=Lax"));
         assert!(!cookies[1].contains("Secure"));
     }
 
     #[test]
     fn session_cookies_production_mode() {
-        let cookies = session_cookies("tok456", 3600, 1700003600, false);
+        let cookies = session_cookies("tok456", 3600, 1700003600, false, "Lax");
         assert_eq!(cookies.len(), 2);
         assert!(cookies[0].contains("crap_session=tok456"));
         assert!(cookies[0].contains("Max-Age=3600"));
@@ -157,11 +199,21 @@ mod tests {
     }
 
     #[test]
+    fn session_cookies_strict_same_site() {
+        let cookies = session_cookies("tok789", 1800, 1700001800, true, "Strict");
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies[0].contains("SameSite=Strict"));
+        assert!(cookies[1].contains("SameSite=Strict"));
+        assert!(!cookies[0].contains("SameSite=Lax"));
+    }
+
+    #[test]
     fn clear_session_cookies_dev_mode() {
-        let cookies = clear_session_cookies(true);
+        let cookies = clear_session_cookies(true, "Lax");
         assert_eq!(cookies.len(), 2);
         assert!(cookies[0].contains("crap_session=;"));
         assert!(cookies[0].contains("Max-Age=0"));
+        assert!(cookies[0].contains("SameSite=Lax"));
         assert!(!cookies[0].contains("Secure"));
         assert!(cookies[1].contains("crap_session_exp=;"));
         assert!(cookies[1].contains("Max-Age=0"));
@@ -170,13 +222,22 @@ mod tests {
 
     #[test]
     fn clear_session_cookies_production_mode() {
-        let cookies = clear_session_cookies(false);
+        let cookies = clear_session_cookies(false, "Lax");
         assert_eq!(cookies.len(), 2);
         assert!(cookies[0].contains("crap_session=;"));
         assert!(cookies[0].contains("Max-Age=0"));
         assert!(cookies[0].contains("; Secure"));
         assert!(cookies[1].contains("crap_session_exp=;"));
         assert!(cookies[1].contains("; Secure"));
+    }
+
+    #[test]
+    fn clear_session_cookies_preserves_configured_same_site() {
+        // The clear must match the original SameSite or the browser treats it as a
+        // different cookie and the clear silently no-ops.
+        let cookies = clear_session_cookies(true, "Strict");
+        assert!(cookies[0].contains("SameSite=Strict"));
+        assert!(cookies[1].contains("SameSite=Strict"));
     }
 
     #[test]

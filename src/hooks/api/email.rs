@@ -8,10 +8,21 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::CrapConfig,
-    core::email::{create_email_provider, queue_email},
+    core::email::{create_email_provider, queue_email, validate_no_crlf},
 };
 
 use super::super::lifecycle::crud::get_tx_conn;
+
+/// Validate header-derived email fields from a Lua `opts` table. Rejects any
+/// `\r`, `\n`, or `\0` in `to` or `subject` — the two fields currently
+/// accepted from Lua that end up in SMTP headers. Body fields (`html`,
+/// `text`) are not validated: they are MIME-encoded / JSON-escaped downstream.
+fn validate_email_fields(to: &str, subject: &str) -> mlua::Result<()> {
+    validate_no_crlf("to", to).map_err(|e| RuntimeError(format!("{e:#}")))?;
+    validate_no_crlf("subject", subject).map_err(|e| RuntimeError(format!("{e:#}")))?;
+
+    Ok(())
+}
 
 /// Register `crap.email` — outbound email sending via the configured provider.
 pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Result<()> {
@@ -25,6 +36,8 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
         let subject: String = opts.get("subject")?;
         let html: String = opts.get("html")?;
         let text: Option<String> = opts.get("text")?;
+
+        validate_email_fields(&to, &subject)?;
 
         provider
             .send(&to, &subject, &html, text.as_deref())
@@ -42,6 +55,8 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
         let subject: String = opts.get("subject")?;
         let html: String = opts.get("html")?;
         let text: Option<String> = opts.get("text")?;
+
+        validate_email_fields(&to, &subject)?;
 
         let retries: u32 = opts
             .get::<Option<u32>>("retries")

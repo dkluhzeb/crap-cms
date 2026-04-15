@@ -11,6 +11,41 @@ use crate::{
 
 use super::nonpoly::batch_fetch_single_collection;
 
+/// Outcome of resolving a single polymorphic reference in batch distribution.
+enum PolyResolution {
+    /// Successfully populated to a JSON object.
+    Populated(Value),
+    /// Could not resolve (malformed, visited, unknown collection): keep original string.
+    KeepAsString(String),
+    /// DB miss (soft-deleted or truly missing): drop from array / null for has-one.
+    Missing,
+}
+
+/// Resolve a single polymorphic ref string against the pre-fetched map.
+fn resolve_poly_item(
+    item: &str,
+    fetched_map: &HashMap<String, HashMap<String, Document>>,
+    visited: &HashSet<(String, String)>,
+) -> PolyResolution {
+    let Some((col, id)) = parse_poly_ref(item) else {
+        return PolyResolution::KeepAsString(item.to_string());
+    };
+
+    if visited.contains(&(col.clone(), id.clone())) {
+        return PolyResolution::KeepAsString(item.to_string());
+    }
+
+    let Some(col_map) = fetched_map.get(&col) else {
+        return PolyResolution::KeepAsString(item.to_string());
+    };
+
+    let Some(doc) = col_map.get(&id) else {
+        return PolyResolution::Missing;
+    };
+
+    PolyResolution::Populated(document_to_json(doc, &col))
+}
+
 /// Batch fetch and distribute for polymorphic has-many fields.
 pub(super) fn batch_poly_has_many(
     ctx: &PopulateCtx<'_>,
@@ -43,7 +78,9 @@ pub(super) fn batch_poly_has_many(
     // Batch fetch per collection
     let fetched_map = batch_fetch_with_cache(ctx, &ids_by_collection)?;
 
-    // Distribute results back to each document
+    // Distribute results back to each document. DB misses (soft-deleted /
+    // vanished targets) are dropped; malformed / visited / unknown-collection
+    // refs remain as raw strings.
     for doc in docs.iter_mut() {
         let items: Vec<String> = match doc.fields.get(field_name) {
             Some(Value::Array(arr)) => arr
@@ -55,14 +92,11 @@ pub(super) fn batch_poly_has_many(
         let mut populated = Vec::new();
 
         for item in &items {
-            let resolved = parse_poly_ref(item)
-                .and_then(|(col, id)| {
-                    let doc = fetched_map.get(&col)?.get(&id)?;
-                    Some(document_to_json(doc, &col))
-                })
-                .unwrap_or_else(|| Value::String(item.clone()));
-
-            populated.push(resolved);
+            match resolve_poly_item(item, &fetched_map, visited) {
+                PolyResolution::Populated(v) => populated.push(v),
+                PolyResolution::KeepAsString(s) => populated.push(Value::String(s)),
+                PolyResolution::Missing => {}
+            }
         }
         doc.fields
             .insert(field_name.to_string(), Value::Array(populated));
@@ -95,18 +129,22 @@ pub(super) fn batch_poly_has_one(
 
     let fetched_map = batch_fetch_with_cache(ctx, &ids_by_collection)?;
 
+    // DB misses set the field to null; malformed / visited / unknown-collection
+    // refs remain as raw strings.
     for doc in docs.iter_mut() {
         let raw = match doc.fields.get(field_name) {
             Some(Value::String(s)) if !s.is_empty() => s.clone(),
             _ => continue,
         };
 
-        if let Some((col, id)) = parse_poly_ref(&raw)
-            && let Some(col_map) = fetched_map.get(&col)
-            && let Some(cached_doc) = col_map.get(&id)
-        {
-            doc.fields
-                .insert(field_name.to_string(), document_to_json(cached_doc, &col));
+        match resolve_poly_item(&raw, &fetched_map, visited) {
+            PolyResolution::Populated(v) => {
+                doc.fields.insert(field_name.to_string(), v);
+            }
+            PolyResolution::Missing => {
+                doc.fields.insert(field_name.to_string(), Value::Null);
+            }
+            PolyResolution::KeepAsString(_) => {}
         }
     }
     Ok(())
@@ -180,6 +218,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -235,6 +275,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -280,6 +322,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -328,6 +372,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -347,7 +393,7 @@ mod tests {
     // ── Polymorphic has-many: doc not in fetched col_map ─────────────────────
 
     #[test]
-    fn batch_polymorphic_has_many_doc_not_in_col_map_keeps_string() {
+    fn batch_polymorphic_has_many_missing_doc_is_dropped() {
         let conn = setup_polymorphic_populate_db();
         let entries_def = make_entries_def_poly_has_many();
         // Register "articles" in registry so fetched_map gets an entry, but fetch
@@ -359,9 +405,10 @@ mod tests {
         registry.register_collection(articles_def);
 
         let mut doc = Document::new("e1".to_string());
-        // "articles" is a known collection, but "nope" doesn't exist in DB
+        // "articles" is a known collection, but "nope" doesn't exist in DB.
+        // Mix with a valid ref to ensure only the missing one is dropped.
         doc.fields
-            .insert("refs".to_string(), json!(["articles/nope"]));
+            .insert("refs".to_string(), json!(["articles/a1", "articles/nope"]));
 
         let mut docs = vec![doc];
         populate_relationships_batch_cached(
@@ -376,6 +423,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -383,13 +432,10 @@ mod tests {
 
         let refs = docs[0].fields.get("refs").expect("refs should exist");
         let arr = refs.as_array().expect("refs should be array");
-        assert_eq!(arr.len(), 1);
-        // articles is in fetched_map but "nope" was not found → stays as string
-        assert_eq!(
-            arr[0].as_str(),
-            Some("articles/nope"),
-            "missing doc in batch poly has-many should remain as string"
-        );
+        // Missing doc in a known collection is a DB miss → dropped from the array.
+        assert_eq!(arr.len(), 1, "missing target should be dropped");
+        assert!(arr[0].is_object(), "remaining ref should be populated");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("a1"));
     }
 
     // ── Polymorphic has-one: unknown collection in distribution ───────────────
@@ -422,6 +468,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -476,6 +524,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -487,6 +537,151 @@ mod tests {
             related.get("title").and_then(|v| v.as_str()),
             Some("CachedFromBatchCache"),
             "should use cached document in batch poly has-one"
+        );
+    }
+
+    // ── Regression: soft-deleted poly targets dropped (has-many) / nulled (has-one) ──
+
+    #[test]
+    fn batch_polymorphic_has_many_soft_deleted_target_dropped() {
+        let conn = setup_polymorphic_populate_db();
+        conn.execute_batch(
+            "ALTER TABLE articles ADD COLUMN _deleted_at TEXT;
+             UPDATE articles SET _deleted_at = '2024-02-01' WHERE id = 'a1';
+             INSERT INTO entries_refs (parent_id, related_id, related_collection, _order)
+                VALUES ('e1', 'a1', 'articles', 0), ('e1', 'pg1', 'pages', 1);",
+        )
+        .unwrap();
+
+        let entries_def = make_entries_def_poly_has_many();
+        let mut articles_def =
+            make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        articles_def.soft_delete = true;
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("title".to_string(), json!("Entry"));
+        join::hydrate_document(&conn, "entries", &entries_def.fields, &mut doc, None, None)
+            .unwrap();
+
+        let mut docs = vec![doc];
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "entries",
+                def: &entries_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let refs = docs[0].fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 1, "soft-deleted poly target should be dropped");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("pg1"));
+    }
+
+    #[test]
+    fn batch_polymorphic_has_one_missing_target_null() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let articles_def =
+            make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // "articles" is known, but "nope" doesn't exist → DB miss.
+        doc.fields
+            .insert("related".to_string(), json!("articles/nope"));
+
+        let mut docs = vec![doc];
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "entries",
+                def: &entries_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            docs[0].fields.get("related"),
+            Some(&serde_json::Value::Null),
+            "missing poly has-one target should be null"
+        );
+    }
+
+    #[test]
+    fn batch_polymorphic_has_one_soft_deleted_target_null() {
+        let conn = setup_polymorphic_populate_db();
+        conn.execute_batch(
+            "ALTER TABLE articles ADD COLUMN _deleted_at TEXT;
+             UPDATE articles SET _deleted_at = '2024-02-01' WHERE id = 'a1';",
+        )
+        .unwrap();
+
+        let entries_def = make_entries_def_poly_has_one();
+        let mut articles_def =
+            make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        articles_def.soft_delete = true;
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields
+            .insert("related".to_string(), json!("articles/a1"));
+
+        let mut docs = vec![doc];
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "entries",
+                def: &entries_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            docs[0].fields.get("related"),
+            Some(&serde_json::Value::Null),
+            "soft-deleted poly has-one target should be null"
         );
     }
 
@@ -530,6 +725,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )

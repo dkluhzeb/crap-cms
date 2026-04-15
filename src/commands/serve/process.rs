@@ -86,6 +86,29 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
     Ok(())
 }
 
+/// Poll `predicate` until it returns `false` or the timeout elapses.
+///
+/// Returns `true` iff the predicate transitioned to `false` before the
+/// deadline, `false` iff the timeout elapsed first. The predicate is called
+/// once immediately, then at each `poll_interval` until the deadline.
+#[cfg(unix)]
+fn wait_until_false<F>(timeout: Duration, poll_interval: Duration, mut predicate: F) -> bool
+where
+    F: FnMut() -> bool,
+{
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        if !predicate() {
+            return true;
+        }
+
+        thread::sleep(poll_interval);
+    }
+
+    !predicate()
+}
+
 /// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
 #[cfg(unix)]
 pub fn stop(config_dir: &Path) -> Result<()> {
@@ -106,18 +129,16 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     send_signal(pid, libc::SIGTERM)?;
 
     // Wait for graceful shutdown (up to 10 seconds).
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let exited = wait_until_false(Duration::from_secs(10), Duration::from_millis(100), || {
+        is_process_running(pid)
+    });
 
-    while Instant::now() < deadline {
-        if !is_process_running(pid) {
-            remove_pid_file(config_dir);
+    if exited {
+        remove_pid_file(config_dir);
 
-            cli::success(&format!("Stopped crap-cms (PID {pid})"));
+        cli::success(&format!("Stopped crap-cms (PID {pid})"));
 
-            return Ok(());
-        }
-
-        thread::sleep(Duration::from_millis(100));
+        return Ok(());
     }
 
     // Still running — force kill.
@@ -264,6 +285,8 @@ mod tests {
 
     #[cfg(unix)]
     use crate::commands::serve::pid::pid_file_path;
+    #[cfg(unix)]
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     #[cfg(unix)]
@@ -306,6 +329,30 @@ mod tests {
         status(tmp.path()).unwrap();
         // Stale PID file should be removed
         assert!(!pid_file_path(tmp.path()).exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn wait_until_false_returns_true_when_predicate_flips() {
+        let counter = AtomicU32::new(0);
+        let exited = wait_until_false(Duration::from_secs(5), Duration::from_millis(10), || {
+            counter.fetch_add(1, Ordering::SeqCst) < 3
+        });
+        assert!(exited, "predicate flipped false, should return true");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn wait_until_false_returns_false_when_predicate_stays_true() {
+        // Simulate a process that never responds to SIGTERM — the 10s wait
+        // must elapse so the caller issues SIGKILL. We use a short timeout
+        // in the test so it runs quickly.
+        let exited = wait_until_false(
+            Duration::from_millis(100),
+            Duration::from_millis(10),
+            || true,
+        );
+        assert!(!exited, "predicate never flipped, should return false");
     }
 
     #[test]

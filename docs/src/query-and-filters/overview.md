@@ -2,6 +2,8 @@
 
 Unified reference for querying documents across both the Lua API and gRPC API.
 
+> **Note on soft-deleted rows**: collections with `soft_delete = true` automatically exclude rows where `_deleted_at IS NOT NULL` from `Find`, `Count`, and populate. Filters on system columns (names starting with `_`) are rejected. Use the request-level `trash = true` / `draft = true` flags to reach internally-scoped data.
+
 ## Filter Operators
 
 | Operator | Lua | gRPC (where) | SQL |
@@ -303,13 +305,7 @@ grpcurl -plaintext -d '{"collection": "articles", "id": "abc123", "draft": true}
     localhost:50051 crap.ContentAPI/FindByID
 ```
 
-You can also filter directly on `_status`:
-
-```lua
-crap.collections.find("articles", {
-    where = { _status = "draft" },
-})
-```
+Filters on system columns (field paths starting with `_`, e.g. `_status`, `_deleted_at`) are rejected. Use the `draft = true` request flag to include drafts, and `trash = true` to reach soft-deleted rows — these are the supported entry points.
 
 See [Versions & Drafts](../collections/versions.md) for the full workflow.
 
@@ -472,7 +468,8 @@ You can filter on any column in the collection table:
 - `id`
 - `created_at` (if timestamps enabled)
 - `updated_at` (if timestamps enabled)
-- `_status` (if `versions.drafts` enabled)
+
+System columns (names starting with `_`, such as `_status`, `_deleted_at`, `_ref_count`, `_locked`, `_password_hash`) are engine-internal and cannot be filtered on directly. Reach their data via typed request flags (`draft = true`, `trash = true`) instead.
 
 Additionally, you can filter on sub-fields using dot notation:
 

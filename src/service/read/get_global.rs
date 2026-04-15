@@ -24,12 +24,19 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
         return Err(ServiceError::AccessDenied("Read access denied".into()));
     }
 
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        )));
+    }
+
     hooks.before_read(&def.hooks, ctx.slug, "get")?;
 
     let mut doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;
 
     let mut denied = hooks.field_read_denied(&def.fields, ctx.user);
-    denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&denied);
 

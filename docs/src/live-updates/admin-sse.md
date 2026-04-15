@@ -20,7 +20,10 @@ id: 42
 data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","edited_by":"user_456"}
 ```
 
-The `data` payload is JSON with the same fields as the gRPC `MutationEvent` (excluding the full document `data` for efficiency), plus an `edited_by` field containing the user ID of the authenticated user who made the change (or `null` for unauthenticated operations).
+The `data` payload is JSON with the same fields as the gRPC `MutationEvent`, plus an `edited_by` field containing the user ID of the authenticated user who made the change (or `null` for unauthenticated operations). The payload's own `data` field is always present:
+
+- **metadata mode** (default): `data` is an empty object (`{}`).
+- **full mode** (collection has `live = { mode = "full" }`): `data` contains the document with `after_read` hooks applied and field-level read-access stripping performed per subscriber — the same shape a `Find` or `FindByID` would return.
 
 ## Admin UI Integration
 

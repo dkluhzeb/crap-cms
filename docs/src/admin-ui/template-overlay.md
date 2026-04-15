@@ -17,6 +17,17 @@ When `admin.dev_mode = true` in `crap.toml`, templates are reloaded from disk on
 
 When `dev_mode = false`, templates are cached after first load (production mode).
 
+### Template Errors in Dev Mode
+
+If an operator-provided template in `<config_dir>/templates/` has a Handlebars syntax error while `admin.dev_mode = true`, the request returns a **500 Internal Server Error**. Crap CMS does **not** automatically fall back to the compiled default template — once a file shadows a default, the override is authoritative.
+
+To recover:
+
+- Fix the syntax error in your overlay template, or
+- Delete (or rename) the file from `<config_dir>/templates/` to fall back to the compiled default.
+
+For deployments, prefer `dev_mode = false` so the overlay is registered and cached on startup rather than re-parsed (and potentially 500-ing) on every request.
+
 ## Template Inheritance
 
 Templates use Handlebars partial inheritance:

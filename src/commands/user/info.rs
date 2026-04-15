@@ -7,7 +7,7 @@ use crate::{
     cli,
     core::{Document, SharedRegistry},
     db::{DbPool, query},
-    service::ServiceContext,
+    service::{self, ServiceContext},
 };
 
 use super::helpers::{get_user_email, resolve_user};
@@ -26,7 +26,7 @@ pub fn user_info(
 
     let conn = pool.get().context("Failed to get database connection")?;
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
-    let locked = crate::service::auth::is_locked(&ctx, &doc.id).unwrap_or(false);
+    let locked = service::auth::is_locked(&ctx, &doc.id).unwrap_or(false);
     let has_pw = query::has_password(&conn, collection, &doc.id).unwrap_or(false);
 
     print_identity(&doc, collection);
@@ -56,7 +56,7 @@ fn print_status(
     cli::kv_status("Locked", if locked { "yes" } else { "no" }, !locked);
 
     if verify_email {
-        let verified = crate::service::auth::is_verified(ctx, &doc.id).unwrap_or(false);
+        let verified = service::auth::is_verified(ctx, &doc.id).unwrap_or(false);
         cli::kv_status("Verified", if verified { "yes" } else { "no" }, verified);
     }
 

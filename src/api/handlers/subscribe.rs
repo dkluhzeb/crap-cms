@@ -8,13 +8,11 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll},
+    time::Duration,
 };
 
-use tokio::task;
-use tokio_stream::{
-    Stream, StreamExt,
-    wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
-};
+use tokio::{sync::mpsc, task, time::timeout};
+use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
@@ -26,12 +24,18 @@ use crate::{
     core::{
         Document, FieldDefinition, Registry,
         collection::LiveMode,
-        event::MutationEvent,
-        event::{EventOperation, EventTarget},
+        event::{
+            EventOperation, EventReceiver, EventTarget, InvalidationReceiver, MutationEvent,
+            RecvError,
+        },
     },
     db::{AccessResult, DbConnection, FilterClause, query::filter::memory::matches_constraints},
     hooks::HookRunner,
 };
+
+/// Outbound channel capacity per subscriber. Small — we rely on `send_timeout`
+/// + drop-on-backpressure rather than queuing.
+const SUBSCRIBER_CHANNEL_CAPACITY: usize = 16;
 
 /// Atomically try to acquire a Subscribe connection slot.
 ///
@@ -237,6 +241,120 @@ struct SubscribeAccess {
     user_doc: Option<Document>,
 }
 
+/// Message type sent into the outbound channel — either a normal event or a
+/// terminal status (delivered to the client before closing).
+type OutboundItem = Result<content::MutationEvent, Status>;
+
+/// Outbound channel send with timeout — returns `Err(())` if the subscriber
+/// should be dropped.
+async fn forward(
+    tx: &mpsc::Sender<OutboundItem>,
+    item: OutboundItem,
+    send_timeout_dur: Duration,
+) -> Result<(), ()> {
+    match timeout(send_timeout_dur, tx.send(item)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(()), // client disconnected
+        Err(_) => {
+            warn!("Subscribe client send timed out — dropping slow subscriber");
+            Err(())
+        }
+    }
+}
+
+/// Handle one recv from the event transport.
+async fn handle_event(
+    tx: &mpsc::Sender<OutboundItem>,
+    ctx: &SubscriberCtx,
+    recv: Result<MutationEvent, RecvError>,
+    send_timeout_dur: Duration,
+) -> Result<(), ()> {
+    match recv {
+        Ok(event) => {
+            let Some(out) = process_event(&event, ctx) else {
+                return Ok(());
+            };
+
+            forward(tx, Ok(out), send_timeout_dur).await
+        }
+        Err(RecvError::Lagged(n)) => {
+            warn!(
+                "Subscribe stream lagged by {} events — dropping subscriber \
+                 (forces reconnect); consider increasing [live] channel_capacity",
+                n
+            );
+            Err(())
+        }
+        Err(RecvError::Closed) => Err(()),
+    }
+}
+
+/// Handle an invalidation signal. Sends a terminal PermissionDenied before
+/// closing if the signal targets this subscriber.
+async fn handle_invalidation(
+    tx: &mpsc::Sender<OutboundItem>,
+    my_user_id: Option<&str>,
+    recv: Result<String, RecvError>,
+    send_timeout_dur: Duration,
+) -> Result<(), ()> {
+    let Ok(user_id) = recv else {
+        // Lag or closed — keep going.
+        return Ok(());
+    };
+
+    let Some(my_id) = my_user_id else {
+        return Ok(());
+    };
+
+    if user_id != my_id {
+        return Ok(());
+    }
+
+    warn!("Subscribe subscriber invalidated — user session revoked");
+    let _ = forward(
+        tx,
+        Err(Status::permission_denied(
+            "User session revoked — reconnect with a fresh token",
+        )),
+        send_timeout_dur,
+    )
+    .await;
+
+    Err(())
+}
+
+/// Spawn the pumping task that forwards events and honours invalidation.
+fn spawn_pump(
+    mut event_rx: EventReceiver,
+    mut invalidation_rx: InvalidationReceiver,
+    tx: mpsc::Sender<OutboundItem>,
+    ctx: SubscriberCtx,
+    my_user_id: Option<String>,
+    send_timeout_dur: Duration,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                recv = event_rx.recv() => {
+                    if handle_event(&tx, &ctx, recv, send_timeout_dur).await.is_err() {
+                        break;
+                    }
+                }
+                recv = invalidation_rx.recv() => {
+                    if handle_invalidation(
+                        &tx,
+                        my_user_id.as_deref(),
+                        recv,
+                        send_timeout_dur,
+                    ).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Subscribe to real-time mutation events (server streaming).
@@ -264,8 +382,8 @@ impl ContentService {
         let metadata = request.metadata().clone();
         let req = request.into_inner();
 
-        let event_bus = self
-            .event_bus
+        let event_transport = self
+            .event_transport
             .as_ref()
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
 
@@ -290,7 +408,13 @@ impl ContentService {
             ));
         }
 
-        let rx = event_bus.subscribe();
+        let my_user_id = access.user_doc.as_ref().map(|d| d.id.to_string());
+
+        let event_rx = event_transport.subscribe();
+        let invalidation_rx = self.invalidation_transport.subscribe();
+        let send_timeout_dur = Duration::from_millis(self.subscriber_send_timeout_ms);
+
+        let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
 
         let subscriber = SubscriberCtx {
             access,
@@ -299,18 +423,16 @@ impl ContentService {
             registry: self.registry.clone(),
         };
 
-        let stream = BroadcastStream::new(rx).filter_map(move |result| match result {
-            Ok(event) => process_event(&event, &subscriber).map(Ok),
-            Err(BroadcastStreamRecvError::Lagged(n)) => {
-                error!(
-                    "Subscribe stream lagged by {} events — client missed updates, \
-                     consider increasing [live] channel_capacity",
-                    n
-                );
+        spawn_pump(
+            event_rx,
+            invalidation_rx,
+            tx,
+            subscriber,
+            my_user_id,
+            send_timeout_dur,
+        );
 
-                None
-            }
-        });
+        let stream = ReceiverStream::new(rx);
 
         let guarded = GuardedStream {
             inner: Box::pin(stream),

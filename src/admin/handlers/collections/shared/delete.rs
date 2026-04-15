@@ -60,6 +60,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     let user_doc = get_user_doc(auth_user).cloned();
     let storage = state.storage.clone();
     let locale_config = state.config.locale.clone();
+    let invalidation_transport = state.invalidation_transport.clone();
 
     if force_hard_delete {
         def_clone.soft_delete = false;
@@ -70,6 +71,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
             .pool(&pool)
             .runner(&runner)
             .user(user_doc.as_ref())
+            .invalidation_transport(Some(invalidation_transport))
             .build();
         service::delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
     })
@@ -78,7 +80,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     match result {
         Ok(Ok(_)) => {
             state.hook_runner.publish_event(
-                &state.event_bus,
+                &state.event_transport,
                 &def.hooks,
                 def.live.as_ref(),
                 PublishEventInput::builder(EventTarget::Collection, EventOperation::Delete)

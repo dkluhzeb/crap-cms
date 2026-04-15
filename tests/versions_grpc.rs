@@ -270,6 +270,53 @@ async fn grpc_find_with_draft_returns_all() {
     assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2);
 }
 
+/// Regression: a user-supplied filter on `_status` against a versioned
+/// collection without `draft = true` must be rejected by the service-layer
+/// validator. Before the centralized injection refactor, the `use_draft` flag
+/// was inferred from `has_drafts && !req.draft` and the validator allowed
+/// `_status` whenever `use_draft = true`, so a `where = {_status: "draft"}`
+/// would silently produce empty results instead of erroring.
+#[tokio::test]
+async fn user_filter_on_status_without_draft_flag_rejected() {
+    let ts = setup_service(vec![make_versioned_def()]);
+
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "articles".to_string(),
+            r#where: Some(r#"{"_status": "draft"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("filtering on _status must be rejected");
+
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("_status"),
+        "error names rejected column: {}",
+        err.message()
+    );
+    assert!(
+        err.message().contains("system column"),
+        "error explains the rule: {}",
+        err.message()
+    );
+
+    // Even with `draft = true`, a user filter on `_status` is still rejected —
+    // the typed flag is the only supported entry point, never the raw column.
+    let err = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "articles".to_string(),
+            r#where: Some(r#"{"_status": "draft"}"#.to_string()),
+            draft: Some(true),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("filtering on _status must be rejected even with draft=true");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+}
+
 #[tokio::test]
 async fn grpc_draft_update_is_version_only() {
     let ts = setup_service(vec![make_versioned_def()]);
@@ -362,6 +409,7 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
             locale: None,
             select: vec![],
             draft: Some(true),
+            trash: None,
         }))
         .await
         .unwrap()
@@ -415,6 +463,7 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -613,6 +662,7 @@ async fn grpc_restore_version() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()

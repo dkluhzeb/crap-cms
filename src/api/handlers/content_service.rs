@@ -21,15 +21,18 @@ use crate::{
         AuthUser, CollectionDefinition, JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider, TokenProvider},
         cache::SharedCache,
-        collection::GlobalDefinition,
+        collection::{GlobalDefinition, Hooks, LiveSetting},
         email::EmailRenderer,
-        event::{EventBus, EventOperation, EventTarget, EventUser},
+        event::{
+            EventOperation, EventTarget, EventUser, InProcessInvalidationBus, SharedEventTransport,
+            SharedInvalidationTransport,
+        },
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
     db::{
         AccessResult, BoxedConnection, DbConnection, DbPool,
-        query::{self},
+        query::{self, SharedPopulateSingleflight, Singleflight},
     },
     hooks::{HookRunner, lifecycle::PublishEventInput},
     service::{self, ServiceContext},
@@ -47,7 +50,7 @@ pub struct ContentService {
     pub(in crate::api::handlers) email_config: EmailConfig,
     pub(in crate::api::handlers) email_renderer: Arc<EmailRenderer>,
     pub(in crate::api::handlers) server_config: ServerConfig,
-    pub(in crate::api::handlers) event_bus: Option<EventBus>,
+    pub(in crate::api::handlers) event_transport: Option<SharedEventTransport>,
     pub(in crate::api::handlers) locale_config: LocaleConfig,
     pub(in crate::api::handlers) storage: SharedStorage,
     pub(in crate::api::handlers) login_limiter: Arc<LoginRateLimiter>,
@@ -70,6 +73,15 @@ pub struct ContentService {
     pub(in crate::api::handlers) subscribe_connections: Arc<AtomicUsize>,
     /// Maximum allowed concurrent Subscribe streams. 0 = unlimited.
     pub(in crate::api::handlers) max_subscribe_connections: usize,
+    /// Per-subscriber outbound send timeout for live-update streams.
+    pub(in crate::api::handlers) subscriber_send_timeout_ms: u64,
+    /// Transport for signalling that a user's live-update streams must be torn
+    /// down (e.g. after lock or hard delete). Always present — even when live
+    /// updates are disabled, publishing to it is a no-op.
+    pub(in crate::api::handlers) invalidation_transport: SharedInvalidationTransport,
+    /// Process-wide singleflight for deduplicating concurrent populate
+    /// cache-miss DB fetches across requests.
+    pub(in crate::api::handlers) populate_singleflight: SharedPopulateSingleflight,
 }
 
 /// Pure helper methods — testable without I/O dependencies.
@@ -194,14 +206,9 @@ impl ContentService {
         }
     }
 
-    fn publish_event(
-        &self,
-        hooks: &crate::core::collection::Hooks,
-        live: Option<&crate::core::collection::LiveSetting>,
-        input: PublishEventInput,
-    ) {
+    fn publish_event(&self, hooks: &Hooks, live: Option<&LiveSetting>, input: PublishEventInput) {
         self.hook_runner
-            .publish_event(&self.event_bus, hooks, live, input);
+            .publish_event(&self.event_transport, hooks, live, input);
     }
 }
 
@@ -221,6 +228,13 @@ impl ContentService {
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
         let db_kind = deps.pool.kind().to_string();
         let max_subscribe_connections = deps.config.live.max_subscribe_connections;
+        let subscriber_send_timeout_ms = deps.config.live.subscriber_send_timeout_ms;
+        let invalidation_transport: SharedInvalidationTransport = deps
+            .invalidation_transport
+            .unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
+        let populate_singleflight: SharedPopulateSingleflight = deps
+            .populate_singleflight
+            .unwrap_or_else(|| Arc::new(Singleflight::new()));
 
         Self {
             pool: deps.pool,
@@ -232,7 +246,7 @@ impl ContentService {
             email_config: deps.config.email,
             email_renderer: deps.email_renderer,
             server_config: deps.config.server,
-            event_bus: deps.event_bus,
+            event_transport: deps.event_transport,
             locale_config: deps.config.locale,
             storage: deps.storage,
             token_provider: deps.token_provider,
@@ -248,6 +262,9 @@ impl ContentService {
             db_kind,
             subscribe_connections: Arc::new(AtomicUsize::new(0)),
             max_subscribe_connections,
+            subscriber_send_timeout_ms,
+            invalidation_transport,
+            populate_singleflight,
         }
     }
 

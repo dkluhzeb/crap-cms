@@ -6,7 +6,7 @@ Crap CMS supports real-time event streaming for mutation notifications. When doc
 
 - **gRPC Server Streaming** (`Subscribe` RPC) for API consumers
 - **SSE** (`GET /admin/events`) for the admin UI
-- **Internal bus**: `tokio::sync::broadcast` channel
+- **Transport**: pluggable. Default is in-process (`tokio::sync::broadcast`); behind `--features redis` you can switch to Redis pub/sub for cross-node fanout — see [Multi-Server Deployment](../deployment/multi-server.md).
 
 ## Configuration
 
@@ -16,20 +16,32 @@ In `crap.toml`:
 [live]
 enabled = true              # default: true
 default_mode = "metadata"   # default: "metadata" — global default for all collections
+transport = "memory"        # default: "memory" — in-process; set to "redis" for multi-node fanout
 channel_capacity = 1024     # default: 1024
 # max_sse_connections = 1000        # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)
+# subscriber_send_timeout_ms = 1000 # drop slow subscribers after this many ms (default: 1000)
 ```
+
+`transport = "redis"` uses the same Redis URL as `[cache] redis_url` (single source of truth). When the binary isn't built with `--features redis`, selecting `"redis"` aborts startup with a clear error.
 
 Set `enabled = false` to disable live updates entirely. Both SSE and gRPC Subscribe will be unavailable.
 
 Connection limits protect against resource exhaustion. When the limit is reached, new SSE connections receive `503 Service Unavailable` and new gRPC Subscribe calls receive `UNAVAILABLE` status. Existing connections are not affected.
 
+### Subscriber lifecycle
+
+Live-update subscribers (gRPC Subscribe or admin SSE) can be terminated by the server in three cases — all surface to the client as a closed stream and require a reconnect:
+
+- **Send timeout (SEC-D)** — if forwarding an event to a specific subscriber takes longer than `subscriber_send_timeout_ms` (default 1000 ms), that subscriber is dropped. Healthy subscribers are unaffected.
+- **Lag drop (SEC-D)** — if the broadcast channel overflows for a particular subscriber (it fell behind by more than `channel_capacity` events), that subscriber is dropped on its next read. Previously such subscribers were kept alive with a warning, which masked silent event loss; they are now closed deterministically.
+- **User session revocation (SEC-E)** — when a user is locked or hard-deleted via the service layer, every active stream owned by that user is immediately torn down with `PermissionDenied`. Anonymous subscribers are unaffected.
+
 ## Event Delivery Modes
 
 Each collection can control what data events carry:
 
-- **`metadata`** (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data, no `after_read` hooks. Clients re-fetch via `FindByID` if needed. Fast, safe, zero hook overhead.
+- **`metadata`** (default) — events carry only metadata: sequence, timestamp, operation, collection, document_id, edited_by. No document data is included. Metadata mode skips the per-subscriber `after_read` hooks and field-level read-access stripping on the event payload, because there is no payload to transform. The `before_broadcast` hook **still runs** (once per event, pre-dispatch) and the collection's `live` filter function still gates whether the event is broadcast at all. Clients re-fetch via `FindByID` if they need document data.
 
 - **`full`** — events carry complete document data, processed through `after_read` hooks and field-level access stripping — the same data a `Find` or `FindByID` call would return. Opt-in per collection.
 

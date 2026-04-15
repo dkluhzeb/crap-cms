@@ -20,28 +20,37 @@ use crate::{
         CollectionDefinition,
         auth::{AuthUser, Claims},
     },
-    db::{ops::find_document_by_id, query::AccessResult},
+    db::query::AccessResult,
+    service::{FindByIdInput, RunnerReadHooks, ServiceContext, find_document_by_id},
 };
 
 /// Fetch the document title for display in the delete confirmation page.
-///
-/// Returns `Ok(Some(title))` or `Ok(None)` if the title can't be determined.
-/// Returns `Err` if the document itself doesn't exist (caller should 404).
 fn fetch_delete_title(
     state: &AdminState,
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
+    user_doc: Option<&crate::core::Document>,
 ) -> Result<Option<String>, ()> {
-    match find_document_by_id(&state.pool, slug, def, id, None) {
+    let conn = state.pool.get().map_err(|_| ())?;
+    let hooks = RunnerReadHooks::new(&state.hook_runner, &conn);
+
+    let ctx = ServiceContext::collection(slug, def)
+        .pool(&state.pool)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user_doc)
+        .build();
+
+    let input = FindByIdInput::builder(id).build();
+
+    match find_document_by_id(&ctx, &input) {
         Ok(Some(doc)) => Ok(def
             .title_field()
             .and_then(|f| doc.get_str(f))
             .map(|s| s.to_string())),
         Ok(None) => Err(()),
         Err(e) => {
-            // Schema mismatch or other query error — still allow deletion.
-            // The DELETE query only needs the ID, not column definitions.
             warn!(
                 "Could not load document for delete confirmation ({}), proceeding anyway: {}",
                 id, e
@@ -82,7 +91,8 @@ pub async fn delete_confirm(
         _ => {}
     }
 
-    let title_value = match fetch_delete_title(&state, &slug, &def, &id) {
+    let user_doc = auth_user.as_ref().map(|Extension(au)| &au.user_doc);
+    let title_value = match fetch_delete_title(&state, &slug, &def, &id, user_doc) {
         Ok(title) => title,
         Err(()) => return not_found(&state, &format!("Document '{}' not found", id)),
     };

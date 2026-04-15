@@ -1,6 +1,6 @@
 //! Parsing functions for collection upload configuration.
 
-use mlua::{Table, Value};
+use mlua::{Result as LuaResult, Table, Value};
 
 use crate::{
     config::parse_filesize_string,
@@ -14,11 +14,15 @@ use crate::{
 
 use super::helpers::*;
 
-pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload> {
-    let val: Value = config.get("upload").ok()?;
+pub(super) fn parse_collection_upload(config: &Table) -> LuaResult<Option<CollectionUpload>> {
+    let val: Value = match config.get("upload") {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+
     match val {
-        Value::Boolean(true) => Some(CollectionUpload::new()),
-        Value::Boolean(false) | Value::Nil => None,
+        Value::Boolean(true) => Ok(Some(CollectionUpload::new())),
+        Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
             let mime_types = if let Ok(mt_tbl) = get_table(&tbl, "mime_types") {
                 mt_tbl
@@ -45,7 +49,7 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
             };
 
             let admin_thumbnail = get_string(&tbl, "admin_thumbnail");
-            let format_options = parse_format_options(&tbl);
+            let format_options = parse_format_options(&tbl)?;
 
             let mut upload = CollectionUpload::new();
 
@@ -55,9 +59,9 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
             upload.admin_thumbnail = admin_thumbnail;
             upload.format_options = format_options;
 
-            Some(upload)
+            Ok(Some(upload))
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -96,27 +100,31 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
     sizes
 }
 
-pub(super) fn parse_format_options(tbl: &Table) -> FormatOptions {
+pub(super) fn parse_format_options(tbl: &Table) -> LuaResult<FormatOptions> {
     let fo_tbl = match get_table(tbl, "format_options") {
         Ok(t) => t,
-        Err(_) => return FormatOptions::default(),
+        Err(_) => return Ok(FormatOptions::default()),
     };
 
-    let webp = get_table(&fo_tbl, "webp").ok().map(|t| {
-        let quality = t.get::<u8>("quality").unwrap_or(80);
-        let queue = get_bool(&t, "queue", false);
+    let webp = match get_table(&fo_tbl, "webp") {
+        Ok(t) => {
+            let quality = t.get::<u8>("quality").unwrap_or(80);
+            let queue = get_bool(&t, "queue", false)?;
+            Some(FormatQuality::new(quality, queue))
+        }
+        Err(_) => None,
+    };
 
-        FormatQuality::new(quality, queue)
-    });
+    let avif = match get_table(&fo_tbl, "avif") {
+        Ok(t) => {
+            let quality = t.get::<u8>("quality").unwrap_or(60);
+            let queue = get_bool(&t, "queue", false)?;
+            Some(FormatQuality::new(quality, queue))
+        }
+        Err(_) => None,
+    };
 
-    let avif = get_table(&fo_tbl, "avif").ok().map(|t| {
-        let quality = t.get::<u8>("quality").unwrap_or(60);
-        let queue = get_bool(&t, "queue", false);
-
-        FormatQuality::new(quality, queue)
-    });
-
-    FormatOptions { webp, avif }
+    Ok(FormatOptions { webp, avif })
 }
 
 /// Helper to create a hidden text field definition.
@@ -253,7 +261,7 @@ mod tests {
     fn test_parse_format_options_absent() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        let fo = parse_format_options(&tbl);
+        let fo = parse_format_options(&tbl).unwrap();
         assert!(fo.webp.is_none());
         assert!(fo.avif.is_none());
     }
@@ -267,7 +275,7 @@ mod tests {
         webp.set("quality", 90u8).unwrap();
         fo_tbl.set("webp", webp).unwrap();
         tbl.set("format_options", fo_tbl).unwrap();
-        let fo = parse_format_options(&tbl);
+        let fo = parse_format_options(&tbl).unwrap();
         assert!(fo.webp.is_some());
         assert_eq!(fo.webp.unwrap().quality, 90);
         assert!(fo.avif.is_none());
@@ -285,7 +293,7 @@ mod tests {
         avif.set("quality", 50u8).unwrap();
         fo_tbl.set("avif", avif).unwrap();
         tbl.set("format_options", fo_tbl).unwrap();
-        let fo = parse_format_options(&tbl);
+        let fo = parse_format_options(&tbl).unwrap();
         assert_eq!(fo.webp.unwrap().quality, 75);
         assert_eq!(fo.avif.unwrap().quality, 50);
     }
@@ -352,7 +360,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("upload", true).unwrap();
-        let upload = parse_collection_upload(&tbl);
+        let upload = parse_collection_upload(&tbl).unwrap();
         assert!(upload.is_some());
         assert!(upload.unwrap().enabled);
     }
@@ -362,7 +370,7 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("upload", false).unwrap();
-        assert!(parse_collection_upload(&tbl).is_none());
+        assert!(parse_collection_upload(&tbl).unwrap().is_none());
     }
 
     #[test]
@@ -386,7 +394,7 @@ mod tests {
         upload_tbl.set("image_sizes", sizes).unwrap();
 
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
         assert!(upload.enabled);
         assert_eq!(upload.mime_types, vec!["image/png", "image/jpeg"]);
         assert_eq!(upload.max_file_size, Some(5000000));
@@ -402,7 +410,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", 1048576i64).unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
         assert_eq!(upload.max_file_size, Some(1048576));
     }
 
@@ -413,7 +421,7 @@ mod tests {
         let upload_tbl = lua.create_table().unwrap();
         upload_tbl.set("max_file_size", "10MB").unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
         assert_eq!(upload.max_file_size, Some(10 * 1024 * 1024));
     }
 
@@ -423,7 +431,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let func = lua.create_function(|_, ()| Ok(())).unwrap();
         tbl.set("upload", func).unwrap();
-        assert!(parse_collection_upload(&tbl).is_none());
+        assert!(parse_collection_upload(&tbl).unwrap().is_none());
     }
 
     #[test]
@@ -440,7 +448,7 @@ mod tests {
         avif.set("queue", true).unwrap();
         fo_tbl.set("avif", avif).unwrap();
         tbl.set("format_options", fo_tbl).unwrap();
-        let fo = parse_format_options(&tbl);
+        let fo = parse_format_options(&tbl).unwrap();
         assert!(fo.webp.as_ref().unwrap().queue);
         assert_eq!(fo.webp.as_ref().unwrap().quality, 85);
         assert!(fo.avif.as_ref().unwrap().queue);
@@ -456,7 +464,7 @@ mod tests {
         avif.set("quality", 55u8).unwrap();
         fo_tbl.set("avif", avif).unwrap();
         tbl.set("format_options", fo_tbl).unwrap();
-        let fo = parse_format_options(&tbl);
+        let fo = parse_format_options(&tbl).unwrap();
         assert!(fo.webp.is_none());
         assert_eq!(fo.avif.as_ref().unwrap().quality, 55);
     }
@@ -495,7 +503,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let upload_tbl = lua.create_table().unwrap();
         tbl.set("upload", upload_tbl).unwrap();
-        let upload = parse_collection_upload(&tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap().unwrap();
         assert!(upload.mime_types.is_empty());
         assert!(upload.max_file_size.is_none());
     }

@@ -14,6 +14,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    config::LocaleConfig,
     core::{
         SharedRegistry,
         email::SYSTEM_EMAIL_JOB,
@@ -28,7 +29,10 @@ use crate::{
     hooks::HookRunner,
 };
 
-use super::runner::{check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs};
+use super::runner::{
+    check_cron_schedules, claim_retention_purge_tick, execute_job, purge_soft_deleted,
+    recover_stale_jobs,
+};
 use super::types::{EmailQueueConfig, SchedulerParams};
 
 /// Start the scheduler background loop. Runs until the cancellation token fires.
@@ -106,7 +110,13 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 purge_counter += 1;
 
                 run_periodic_purges(
-                    purge_counter, auto_purge_secs, &pool, &registry, &storage, &locale_config,
+                    purge_counter,
+                    auto_purge_secs,
+                    config.cron_interval as i64,
+                    &pool,
+                    &registry,
+                    &storage,
+                    &locale_config,
                 );
             }
             _ = heartbeat_ticker.tick() => {
@@ -146,14 +156,18 @@ fn recover_on_startup(pool: &DbPool, registry: &SharedRegistry) -> Result<()> {
 }
 
 /// Run periodic purges (every 10 cron intervals).
+///
+/// In multi-node deployments the retention purge is gated by an atomic
+/// `_crap_cron_fired` claim — only one node runs the purge per cron window.
 #[cfg(not(tarpaulin_include))]
 fn run_periodic_purges(
     counter: u64,
     auto_purge_secs: Option<u64>,
+    cron_interval_secs: i64,
     pool: &DbPool,
     registry: &SharedRegistry,
     storage: &SharedStorage,
-    locale_config: &crate::config::LocaleConfig,
+    locale_config: &LocaleConfig,
 ) {
     if !counter.is_multiple_of(10) {
         return;
@@ -169,12 +183,50 @@ fn run_periodic_purges(
         }
     }
 
-    if let Ok(conn) = pool.get() {
-        match purge_soft_deleted(&conn, registry, &**storage, locale_config) {
-            Ok(n) if n > 0 => info!("Purged {} expired soft-deleted doc(s)", n),
-            Ok(_) => {}
-            Err(e) => warn!("Soft-delete purge error: {}", e),
+    let Ok(mut conn) = pool.get() else {
+        return;
+    };
+
+    // The purge fires every 10 cron intervals, so the dedup window must cover
+    // that span — otherwise two nodes drifting by ~1 cron tick would each
+    // claim a fresh window and run the purge twice.
+    let purge_window_secs = cron_interval_secs.saturating_mul(10);
+
+    let claimed = match conn.transaction() {
+        Ok(tx) => match claim_retention_purge_tick(&tx, Utc::now(), purge_window_secs) {
+            Ok(true) => match tx.commit() {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!("Failed to commit retention-purge claim: {}", e);
+                    false
+                }
+            },
+            Ok(false) => {
+                debug!("Retention purge already claimed by another instance this window");
+                false
+            }
+            Err(e) => {
+                warn!("Retention-purge claim error: {}", e);
+                false
+            }
+        },
+        Err(e) => {
+            warn!(
+                "Failed to open transaction for retention-purge claim: {}",
+                e
+            );
+            false
         }
+    };
+
+    if !claimed {
+        return;
+    }
+
+    match purge_soft_deleted(&conn, registry, &**storage, locale_config) {
+        Ok(n) if n > 0 => info!("Purged {} expired soft-deleted doc(s)", n),
+        Ok(_) => {}
+        Err(e) => warn!("Soft-delete purge error: {}", e),
     }
 }
 

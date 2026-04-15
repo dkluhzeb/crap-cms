@@ -8,12 +8,13 @@ use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, SharedRegistry, upload},
+    core::{Registry, SharedRegistry, event::SharedInvalidationTransport, upload},
+    db::query::SharedPopulateSingleflight,
     hooks::{
         self, HookRunner,
         api::{self, VmLabel},
         lifecycle::{
-            LuaStorage,
+            LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
             crud::register_crud_functions,
             execution::scan_registered_events,
             types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
@@ -28,6 +29,8 @@ pub struct HookRunnerBuilder<'a> {
     config_dir: Option<&'a Path>,
     registry: Option<SharedRegistry>,
     config: Option<&'a CrapConfig>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl<'a> HookRunnerBuilder<'a> {
@@ -36,6 +39,8 @@ impl<'a> HookRunnerBuilder<'a> {
             config_dir: None,
             registry: None,
             config: None,
+            invalidation_transport: None,
+            populate_singleflight: None,
         }
     }
 
@@ -54,11 +59,31 @@ impl<'a> HookRunnerBuilder<'a> {
         self
     }
 
+    /// Attach the user-invalidation transport to every VM in the pool so
+    /// Lua-driven delete / lock paths can tear down live-update streams.
+    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
+        self.invalidation_transport = Some(transport);
+        self
+    }
+
+    /// Attach the process-wide populate singleflight to every VM in the pool
+    /// so Lua-driven `crap.collections.find` / `find_by_id` calls can dedup
+    /// populate cache-miss fetches across concurrent requests. For
+    /// override-access Lua calls the service layer's guardrail discards this
+    /// Arc, so the thread-through only pays off for ordinary (non-override)
+    /// Lua reads.
+    pub fn populate_singleflight(mut self, singleflight: SharedPopulateSingleflight) -> Self {
+        self.populate_singleflight = Some(singleflight);
+        self
+    }
+
     /// Build the HookRunner, creating and initializing the Lua VM pool.
     pub fn build(self) -> Result<HookRunner> {
         let config_dir = self.config_dir.expect("config_dir is required");
         let registry = self.registry.expect("registry is required");
         let config = self.config.expect("config is required");
+        let invalidation_transport = self.invalidation_transport;
+        let populate_singleflight = self.populate_singleflight;
 
         let pool_size = config.hooks.vm_pool_size.max(1);
 
@@ -67,7 +92,14 @@ impl<'a> HookRunnerBuilder<'a> {
         let mut vms = Vec::with_capacity(pool_size);
 
         for i in 0..pool_size {
-            vms.push(create_lua_vm(config_dir, registry.clone(), config, i + 1)?);
+            vms.push(create_lua_vm(
+                config_dir,
+                registry.clone(),
+                config,
+                i + 1,
+                invalidation_transport.clone(),
+                populate_singleflight.clone(),
+            )?);
         }
 
         // Cache which events have globally-registered hooks (from init.lua).
@@ -95,6 +127,8 @@ fn create_lua_vm(
     registry: SharedRegistry,
     config: &CrapConfig,
     vm_index: usize,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
 ) -> Result<Lua> {
     let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
 
@@ -110,7 +144,13 @@ fn create_lua_vm(
 
     register_apis(&lua, registry, config)?;
 
-    init_app_data(&lua, config_dir, config)?;
+    init_app_data(
+        &lua,
+        config_dir,
+        config,
+        invalidation_transport,
+        populate_singleflight,
+    )?;
 
     load_def_dir(&lua, config_dir, "collection")?;
     load_def_dir(&lua, config_dir, "global")?;
@@ -144,7 +184,13 @@ fn register_apis(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) -> Re
 }
 
 /// Initialize hook depth tracking, access config, and storage backend.
-fn init_app_data(lua: &Lua, config_dir: &Path, config: &CrapConfig) -> Result<()> {
+fn init_app_data(
+    lua: &Lua,
+    config_dir: &Path,
+    config: &CrapConfig,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
+) -> Result<()> {
     lua.set_app_data(HookDepth(0));
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
@@ -154,6 +200,14 @@ fn init_app_data(lua: &Lua, config_dir: &Path, config: &CrapConfig) -> Result<()
         .context("Failed to create storage backend for Lua VM")?;
 
     lua.set_app_data(LuaStorage(storage));
+
+    if let Some(transport) = invalidation_transport {
+        lua.set_app_data(LuaInvalidationTransport(transport));
+    }
+
+    if let Some(sf) = populate_singleflight {
+        lua.set_app_data(LuaPopulateSingleflight(sf));
+    }
 
     Ok(())
 }

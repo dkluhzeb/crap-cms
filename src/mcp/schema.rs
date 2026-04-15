@@ -275,7 +275,8 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                 "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
                 "depth": { "type": "integer", "description": "Relationship population depth" },
                 "search": { "type": "string", "description": "Full-text search query" },
-                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" }
+                "locale": { "type": "string", "description": "Locale code (e.g. 'en', 'de') or 'all' for all locales" },
+                "trash": { "type": "boolean", "description": "When true, return only soft-deleted documents (trash view)" }
             }
         }),
         CrudOp::Count => json!({

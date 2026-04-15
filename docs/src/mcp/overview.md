@@ -55,8 +55,9 @@ When `mcp.http = true`, the admin server exposes a `POST /mcp` endpoint.
 Send JSON-RPC 2.0 requests as the request body.
 
 An `api_key` is **required** when HTTP transport is enabled. Requests must include
-an `Authorization: Bearer <key>` header. The server will refuse to start if
-`mcp.http = true` and `api_key` is empty.
+an `Authorization: Bearer <key>` header. If `mcp.http = true` and `api_key` is empty,
+every request to `POST /mcp` is rejected with `401 Unauthorized` — the server still
+starts, but the endpoint is effectively inaccessible.
 
 ## Auto-Generated Tools
 
@@ -159,9 +160,11 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 
 - **stdio:** Access is controlled by who can run the process.
 - **HTTP:** Access is controlled by the `api_key` setting. An API key is **required**
-  when `http = true` — the server will refuse to start without one. As a defense-in-depth
-  measure, the HTTP endpoint also rejects all requests if the API key is somehow empty
-  at runtime.
+  when `http = true` — set it in `[mcp]` in `crap.toml` before enabling HTTP. If
+  `http = true` but `api_key` is empty, the server still starts and registers the
+  route, but every request to `POST /mcp` is rejected with `401 Unauthorized`. The
+  check is per-request, not at startup; operators should verify `api_key` is set
+  before exposing the endpoint externally.
 
 To restrict which collections are accessible, use `include_collections` /
 `exclude_collections`. These filters are enforced both in tool listing (`tools/list`)

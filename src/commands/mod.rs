@@ -14,6 +14,7 @@ pub mod status;
 pub mod templates;
 pub mod trash;
 pub mod typegen;
+pub mod update;
 pub mod user;
 pub mod work;
 
@@ -26,3 +27,4 @@ pub use cli_types::{
 };
 pub use config_resolve::resolve_config_dir;
 pub use helpers::load_config_and_sync;
+pub use update::UpdateCmd;

@@ -14,7 +14,9 @@ use crate::{
     db::query::read::{find_by_id, find_by_ids},
 };
 
-use crate::db::query::populate::helpers::{cache_get_doc, cache_set_doc};
+use crate::db::query::populate::helpers::{
+    CacheOrFetch, cache_get_doc, cache_or_fetch_doc, cache_set_doc,
+};
 
 /// Populate a non-polymorphic has-many field.
 pub(super) fn populate_nonpoly_has_many(
@@ -61,39 +63,40 @@ pub(super) fn populate_nonpoly_has_many(
 
         if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
             populated.push(document_to_json(&cached, rel_collection));
-        } else {
-            match fetched_map.remove(id) {
-                Some(mut related_doc) => {
-                    if let Some(ref uc) = rel_def.upload
-                        && uc.enabled
-                    {
-                        upload::assemble_sizes_object(&mut related_doc, uc);
-                    }
-                    populate_relationships_cached(
-                        &PopulateContext {
-                            conn: ctx.conn,
-                            registry: ctx.registry,
-                            collection_slug: rel_collection,
-                            def: rel_def,
-                        },
-                        &mut related_doc,
-                        visited,
-                        &PopulateOpts {
-                            depth: ctx.effective_depth - 1,
-                            select: None,
-                            locale_ctx: ctx.locale_ctx,
-                        },
-                        ctx.cache,
-                    )?;
-
-                    let _ = cache_set_doc(ctx.cache, &key, &related_doc);
-                    populated.push(document_to_json(&related_doc, rel_collection));
-                }
-                None => {
-                    populated.push(Value::String(id.clone()));
-                }
-            }
+            continue;
         }
+
+        // DB miss (soft-deleted or truly missing): omit from the array.
+        let Some(mut related_doc) = fetched_map.remove(id) else {
+            continue;
+        };
+
+        if let Some(ref uc) = rel_def.upload
+            && uc.enabled
+        {
+            upload::assemble_sizes_object(&mut related_doc, uc);
+        }
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: ctx.conn,
+                registry: ctx.registry,
+                collection_slug: rel_collection,
+                def: rel_def,
+            },
+            &mut related_doc,
+            visited,
+            &PopulateOpts {
+                depth: ctx.effective_depth - 1,
+                select: None,
+                locale_ctx: ctx.locale_ctx,
+                join_access: None,
+                user: None,
+            },
+            ctx.cache,
+        )?;
+
+        let _ = cache_set_doc(ctx.cache, &key, &related_doc);
+        populated.push(document_to_json(&related_doc, rel_collection));
     }
 
     doc.fields
@@ -122,42 +125,58 @@ pub(super) fn populate_nonpoly_has_one(
     let locale_key = locale_cache_key(ctx.locale_ctx);
     let key = populate_cache_key(rel_collection, &id, locale_key.as_deref());
 
-    if let Some(cached) = cache_get_doc(ctx.cache, &key)? {
-        doc.fields.insert(
-            field_name.to_string(),
-            document_to_json(&cached, rel_collection),
-        );
-    } else if let Some(mut related_doc) =
-        find_by_id(ctx.conn, rel_collection, rel_def, &id, ctx.locale_ctx)?
-    {
-        if let Some(ref uc) = rel_def.upload
-            && uc.enabled
-        {
-            upload::assemble_sizes_object(&mut related_doc, uc);
+    let mut related_doc = match cache_or_fetch_doc(ctx.cache, ctx.singleflight, &key, || {
+        find_by_id(ctx.conn, rel_collection, rel_def, &id, ctx.locale_ctx)
+            .ok()
+            .flatten()
+    }) {
+        CacheOrFetch::Hit(cached) => {
+            doc.fields.insert(
+                field_name.to_string(),
+                document_to_json(&cached, rel_collection),
+            );
+            return Ok(());
         }
-        populate_relationships_cached(
-            &PopulateContext {
-                conn: ctx.conn,
-                registry: ctx.registry,
-                collection_slug: rel_collection,
-                def: rel_def,
-            },
-            &mut related_doc,
-            visited,
-            &PopulateOpts {
-                depth: ctx.effective_depth - 1,
-                select: None,
-                locale_ctx: ctx.locale_ctx,
-            },
-            ctx.cache,
-        )?;
+        CacheOrFetch::Fresh(Some(d)) => d,
+        CacheOrFetch::Fresh(None) => {
+            // DB miss (soft-deleted or truly missing): set the field to null.
+            doc.fields.insert(field_name.to_string(), Value::Null);
+            return Ok(());
+        }
+    };
 
-        let _ = cache_set_doc(ctx.cache, &key, &related_doc);
-        doc.fields.insert(
-            field_name.to_string(),
-            document_to_json(&related_doc, rel_collection),
-        );
+    if let Some(ref uc) = rel_def.upload
+        && uc.enabled
+    {
+        upload::assemble_sizes_object(&mut related_doc, uc);
     }
+
+    populate_relationships_cached(
+        &PopulateContext {
+            conn: ctx.conn,
+            registry: ctx.registry,
+            collection_slug: rel_collection,
+            def: rel_def,
+        },
+        &mut related_doc,
+        visited,
+        &PopulateOpts {
+            depth: ctx.effective_depth - 1,
+            select: None,
+            locale_ctx: ctx.locale_ctx,
+            join_access: None,
+            user: None,
+        },
+        ctx.cache,
+    )?;
+
+    // Overwrite with the populated version so future cache hits skip the
+    // recursive population work.
+    let _ = cache_set_doc(ctx.cache, &key, &related_doc);
+    doc.fields.insert(
+        field_name.to_string(),
+        document_to_json(&related_doc, rel_collection),
+    );
     Ok(())
 }
 
@@ -240,6 +259,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -261,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn populate_has_many_missing_related_keeps_id() {
+    fn populate_has_many_missing_related_is_dropped() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE categories (
@@ -276,6 +297,8 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             );
+            INSERT INTO categories (id, name, created_at, updated_at)
+                VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');
             INSERT INTO posts (id, title, created_at, updated_at)
                 VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');",
         )
@@ -296,9 +319,11 @@ mod tests {
 
         let mut doc = Document::new("p1".to_string());
         doc.fields.insert("title".to_string(), json!("Hello"));
-        // Reference IDs that don't exist in categories table
-        doc.fields
-            .insert("tags".to_string(), json!(["nonexistent1", "nonexistent2"]));
+        // One existing, two missing — the missing ones should be dropped from the array.
+        doc.fields.insert(
+            "tags".to_string(),
+            json!(["nonexistent1", "c1", "nonexistent2"]),
+        );
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -314,6 +339,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -321,10 +348,202 @@ mod tests {
 
         let tags = doc.fields.get("tags").expect("tags should exist");
         let arr = tags.as_array().expect("tags should be an array");
-        assert_eq!(arr.len(), 2);
-        // Missing related docs should remain as string IDs
-        assert_eq!(arr[0].as_str(), Some("nonexistent1"));
-        assert_eq!(arr[1].as_str(), Some("nonexistent2"));
+        assert_eq!(arr.len(), 1, "missing targets should be dropped");
+        assert!(arr[0].is_object(), "remaining tag should be populated");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("c1"));
+    }
+
+    #[test]
+    fn populate_has_many_soft_deleted_target_dropped() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                _deleted_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO categories (id, name, _deleted_at, created_at, updated_at)
+                VALUES ('c1', 'Tech', NULL, '2024-01-01', '2024-01-01');
+            INSERT INTO categories (id, name, _deleted_at, created_at, updated_at)
+                VALUES ('c2', 'Science', '2024-02-01', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, created_at, updated_at)
+                VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let mut cats_def =
+            make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
+        cats_def.soft_delete = true;
+
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig::new("categories", true));
+        let posts_def = make_collection_def(
+            "posts",
+            vec![make_field("title", FieldType::Text), tags_field],
+        );
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("tags".to_string(), json!(["c1", "c2"]));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let tags = doc.fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be an array");
+        assert_eq!(arr.len(), 1, "soft-deleted target should be dropped");
+        assert!(arr[0].is_object(), "remaining tag should be populated");
+        assert_eq!(arr[0].get("name").and_then(|v| v.as_str()), Some("Tech"));
+    }
+
+    #[test]
+    fn populate_has_one_missing_related_is_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p1', 'Hello', 'missing', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("missing"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            doc.fields.get("author"),
+            Some(&serde_json::Value::Null),
+            "missing has-one target should be null"
+        );
+    }
+
+    #[test]
+    fn populate_has_one_soft_deleted_target_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                _deleted_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO authors (id, name, _deleted_at, created_at, updated_at)
+                VALUES ('a1', 'Alice', '2024-02-01', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p1', 'Hello', 'a1', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
+
+        let mut authors_def = make_authors_def();
+        authors_def.soft_delete = true;
+
+        let posts_def = make_posts_def();
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(authors_def);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            doc.fields.get("author"),
+            Some(&serde_json::Value::Null),
+            "soft-deleted has-one target should be null"
+        );
     }
 
     #[test]
@@ -382,6 +601,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &NoneCache,
         )
@@ -421,6 +642,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -470,6 +693,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )
@@ -537,6 +762,8 @@ mod tests {
                 depth: 1,
                 select: None,
                 locale_ctx: None,
+                join_access: None,
+                user: None,
             },
             &cache,
         )

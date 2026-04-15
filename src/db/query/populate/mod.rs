@@ -3,13 +3,22 @@
 mod batch;
 mod helpers;
 mod single;
+mod singleflight;
 mod types;
 mod wrappers;
 
-pub use batch::populate_relationships_batch_cached;
+pub use batch::{
+    populate_relationships_batch_cached, populate_relationships_batch_cached_with_singleflight,
+};
 pub(crate) use helpers::{document_to_json, parse_poly_ref};
-pub use single::populate_relationships_cached;
-pub use types::{PopulateContext, PopulateOpts, populate_cache_key};
+pub use single::{populate_relationships_cached, populate_relationships_cached_with_singleflight};
+pub use singleflight::Singleflight;
+
+/// Shared process-wide singleflight for deduplicating concurrent populate
+/// cache misses across requests.
+pub type SharedPopulateSingleflight =
+    std::sync::Arc<singleflight::Singleflight<Option<crate::core::Document>>>;
+pub use types::{JoinAccessCheck, PopulateContext, PopulateOpts, populate_cache_key};
 pub(crate) use types::{PopulateCtx, locale_cache_key};
 pub use wrappers::{populate_relationships, populate_relationships_batch};
 

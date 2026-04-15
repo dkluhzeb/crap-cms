@@ -3,11 +3,11 @@
 //! Tracks how many documents reference a given target via `_ref_count` columns.
 //! Replaces the O(N) back-reference scan with O(1) delete-protection checks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
-use tracing::{debug, error, trace};
+use tracing::{debug, trace};
 
 use crate::{
     config::LocaleConfig,
@@ -242,14 +242,19 @@ fn extract_refs_from_data(
 }
 
 /// Extract has-many ref targets from a JSON value (array of IDs or "collection/id" strings).
+///
+/// Duplicate IDs in the input are collapsed to a single reference. A relationship
+/// like `tags = ["a", "a", "b"]` represents two distinct outgoing edges, not
+/// three — ref counting must match that, otherwise target `a` would be double-
+/// counted and its `_ref_count` would never decrement back to 0.
 fn extract_has_many_refs(
     val: &Value,
     default_collection: &str,
     is_polymorphic: bool,
     refs: &mut Vec<OutgoingRef>,
 ) {
-    let ids = match val {
-        Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>(),
+    let ids: Vec<&str> = match val {
+        Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
         Value::String(s) => s
             .split(',')
             .map(|s| s.trim())
@@ -258,7 +263,15 @@ fn extract_has_many_refs(
         _ => return,
     };
 
+    // Dedupe while preserving first-seen order. A relationship is a set of
+    // edges; repeating the same ID does not create a second edge.
+    let mut seen: HashSet<&str> = HashSet::new();
+
     for id in ids {
+        if !seen.insert(id) {
+            continue;
+        }
+
         push_ref(refs, id, is_polymorphic, default_collection);
     }
 }
@@ -552,8 +565,12 @@ fn collect_has_many_refs(
     let params = &[DbValue::Text(parent_id.to_string())];
 
     if is_polymorphic {
+        // DISTINCT: junction tables permit duplicate (parent_id, related_id)
+        // rows when the user submits `tags = ["a", "a", "b"]`. The ref count
+        // represents an edge set, not a multiset, so duplicate rows must not
+        // inflate the count.
         let sql = format!(
-            "SELECT related_id, related_collection FROM \"{junction_table}\" WHERE parent_id = {p1}"
+            "SELECT DISTINCT related_id, related_collection FROM \"{junction_table}\" WHERE parent_id = {p1}"
         );
         let rows = match conn.query_all(&sql, params) {
             Ok(r) => r,
@@ -572,7 +589,8 @@ fn collect_has_many_refs(
             }
         }
     } else {
-        let sql = format!("SELECT related_id FROM \"{junction_table}\" WHERE parent_id = {p1}");
+        let sql =
+            format!("SELECT DISTINCT related_id FROM \"{junction_table}\" WHERE parent_id = {p1}");
         let rows = match conn.query_all(&sql, params) {
             Ok(r) => r,
             Err(e) => {
@@ -799,13 +817,30 @@ fn apply_deltas(conn: &dyn DbConnection, deltas: &HashMap<(String, String), i64>
                 )
             })?;
 
+        // Increment against a vanished target is a hard error: the caller is
+        // about to persist a reference to a row that no longer exists. Bail so
+        // the enclosing transaction rolls back, preventing a dangling ref.
         if affected == 0 && *delta > 0 {
-            error!(
-                "Ref count target {}/{} not found — increment by {} lost \
-                 (document may have been deleted concurrently). Referencing \
-                 document may hold a dangling reference.",
-                collection, id, delta
+            bail!(
+                "cannot reference {}/{}: target no longer exists \
+                 (concurrently hard-deleted)",
+                collection,
+                id
             );
+        }
+
+        // Decrement against a missing target is tolerated: soft-delete never
+        // decrements, so a missing row means a concurrent hard-delete already
+        // removed it. Nothing left to adjust.
+        if affected == 0 && *delta < 0 {
+            debug!(
+                "Skipped decrement on {}/{} by {}: target already gone",
+                collection,
+                id,
+                delta.abs()
+            );
+
+            continue;
         }
 
         if *delta < 0 {
@@ -1097,6 +1132,35 @@ mod tests {
 
         assert_eq!(get_ref_count_val(&conn, "tags", "t1"), 1);
         assert_eq!(get_ref_count_val(&conn, "tags", "t2"), 1);
+    }
+
+    /// Regression: a has-many relationship submitted with duplicate IDs
+    /// (e.g. `tags = ["t1", "t1", "t2"]`) must not double-count the ref count
+    /// on `t1`. A relationship is a set of edges, not a multiset.
+    /// Regression: the extract_has_many_refs helper must dedupe duplicate IDs
+    /// in the incoming JSON array before producing OutgoingRefs.
+    ///
+    /// Note: the junction table itself has a UNIQUE (parent_id, related_id)
+    /// constraint that blocks duplicates from being stored, so a full
+    /// DB-round-trip integration test of the scenario is not possible — the
+    /// schema rejects the setup. This unit test exercises the dedup at the
+    /// level where the JSON input is parsed, which is defense-in-depth
+    /// against future code paths that might bypass the junction constraint
+    /// (e.g., raw imports, tools that skip the write layer).
+    #[test]
+    fn extract_has_many_refs_dedupes_duplicate_ids() {
+        let mut refs: Vec<OutgoingRef> = Vec::new();
+        let val = serde_json::json!(["t1", "t1", "t2", "t1"]);
+        extract_has_many_refs(&val, "tags", false, &mut refs);
+
+        assert_eq!(
+            refs.len(),
+            2,
+            "duplicates in the JSON array must collapse to unique refs"
+        );
+        let ids: Vec<&str> = refs.iter().map(|r| r.target_id.as_str()).collect();
+        assert!(ids.contains(&"t1"));
+        assert!(ids.contains(&"t2"));
     }
 
     // ── Polymorphic has-one ──────────────────────────────────────────────
@@ -1428,22 +1492,6 @@ mod tests {
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
     }
 
-    // ── apply_deltas with nonexistent target ─────────────────────────────
-
-    #[test]
-    fn apply_deltas_nonexistent_target_does_not_error() {
-        let media = CollectionDefinition::new("media");
-        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
-        let conn = pool.get().unwrap();
-
-        // Increment ref on a target that doesn't exist — should not error
-        let mut deltas = HashMap::new();
-        deltas.insert(("media".to_string(), "nonexistent".to_string()), 1i64);
-
-        let result = apply_deltas(&conn, &deltas);
-        assert!(result.is_ok());
-    }
-
     // ── apply_deltas with mixed increments and decrements ────────────────
 
     #[test]
@@ -1543,5 +1591,80 @@ mod tests {
 
         assert_eq!(get_ref_count_val(&conn, "tags", "t1"), 0);
         assert_eq!(get_ref_count_val(&conn, "tags", "t2"), 0);
+    }
+
+    // ── Dangling reference detection ─────────────────────────────────────
+
+    /// Regression: `apply_deltas` must fail loudly when an increment targets
+    /// a row that no longer exists. Previously this was silently logged as an
+    /// error, leaving the caller with a dangling reference.
+    #[test]
+    fn apply_deltas_increment_on_missing_target_fails() {
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        // No row inserted for "m_missing" — target does not exist.
+        let mut deltas = HashMap::new();
+        deltas.insert(("media".to_string(), "m_missing".to_string()), 1i64);
+
+        let err = apply_deltas(&conn, &deltas).expect_err("increment on missing target must fail");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("media") && msg.contains("m_missing"),
+            "error should mention the missing target, got: {msg}"
+        );
+    }
+
+    /// Decrement against a missing target is a tolerated no-op — the target
+    /// is gone so there's nothing to adjust. Only hard-delete decrements, and
+    /// a concurrent hard-delete already removed the row.
+    #[test]
+    fn apply_deltas_decrement_on_missing_target_is_noop() {
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        let mut deltas = HashMap::new();
+        deltas.insert(("media".to_string(), "m_missing".to_string()), -1i64);
+
+        apply_deltas(&conn, &deltas).expect("decrement on missing target should be a no-op");
+    }
+
+    /// Happy path: increment against an existing target succeeds and updates
+    /// the `_ref_count`. Guards against regressing the normal flow while
+    /// adding the dangling-reference check.
+    #[test]
+    fn apply_deltas_increment_succeeds_when_target_exists() {
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+
+        let mut deltas = HashMap::new();
+        deltas.insert(("media".to_string(), "m1".to_string()), 2i64);
+
+        apply_deltas(&conn, &deltas).expect("increment on existing target should succeed");
+
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 2);
+    }
+
+    /// When a batch of deltas contains a mix of valid targets and one missing
+    /// target on an increment, the whole call must fail — callers rely on the
+    /// transaction rolling back to avoid partial writes.
+    #[test]
+    fn apply_deltas_batched_increment_fails_if_any_target_missing() {
+        let media = CollectionDefinition::new("media");
+        let (_tmp, pool, _) = setup_db(&[media], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+
+        let mut deltas = HashMap::new();
+        deltas.insert(("media".to_string(), "m1".to_string()), 1i64);
+        deltas.insert(("media".to_string(), "m_missing".to_string()), 1i64);
+
+        apply_deltas(&conn, &deltas).expect_err("batch must fail if any increment target missing");
     }
 }

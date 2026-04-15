@@ -58,6 +58,18 @@ pub fn get_global(
     query::get_global(&conn, slug, def, locale_ctx)
 }
 
+/// Parameters for [`find_by_id_full`].
+pub struct FindByIdFullParams<'a> {
+    pub conn: &'a dyn DbConnection,
+    pub slug: &'a str,
+    pub def: &'a CollectionDefinition,
+    pub id: &'a str,
+    pub locale_ctx: Option<&'a LocaleContext>,
+    pub constraints: Option<Vec<FilterClause>>,
+    pub use_draft: bool,
+    pub include_deleted: bool,
+}
+
 /// Find a document by ID with full hydration and optional draft overlay.
 ///
 /// Unified read path used by admin UI, gRPC, and Lua. Handles:
@@ -67,44 +79,35 @@ pub fn get_global(
 ///   of a direct find_by_id.
 /// - Hydration: join table data (blocks, arrays, has-many) is hydrated unless
 ///   a draft snapshot was used (snapshots already contain everything).
-pub fn find_by_id_full(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
-    id: &str,
-    locale_ctx: Option<&LocaleContext>,
-    constraints: Option<Vec<FilterClause>>,
-    use_draft: bool,
-) -> Result<Option<Document>> {
-    // Draft snapshot check first — if the latest version is a draft, use it directly.
-    // The snapshot contains all fields including blocks/arrays, so no hydration needed.
-    if use_draft
-        && def.has_drafts()
-        && let Some(version) = query::find_latest_version(conn, slug, id)?
+pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
+    if p.use_draft
+        && p.def.has_drafts()
+        && let Some(version) = query::find_latest_version(p.conn, p.slug, p.id)?
         && version.status == "draft"
-        && let Some(doc) = document_from_snapshot(id, &version.snapshot)
+        && let Some(doc) = document_from_snapshot(p.id, &version.snapshot)
     {
         return Ok(Some(doc));
     }
 
-    // Find from main table (with or without access constraints)
-    let mut doc = if let Some(constraint_filters) = constraints {
+    let mut doc = if let Some(constraint_filters) = p.constraints {
         let mut filters = constraint_filters;
         filters.push(FilterClause::Single(Filter {
             field: "id".to_string(),
-            op: FilterOp::Equals(id.to_string()),
+            op: FilterOp::Equals(p.id.to_string()),
         }));
-        let fq = FindQuery::builder().filters(filters).build();
-        query::find(conn, slug, def, &fq, locale_ctx)?
+        let fq = FindQuery::builder()
+            .filters(filters)
+            .include_deleted(p.include_deleted)
+            .build();
+        query::find(p.conn, p.slug, p.def, &fq, p.locale_ctx)?
             .into_iter()
             .next()
     } else {
-        query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
+        query::find_by_id_raw(p.conn, p.slug, p.def, p.id, p.locale_ctx, p.include_deleted)?
     };
 
-    // Hydrate join table data (blocks, arrays, has-many relationships)
     if let Some(ref mut d) = doc {
-        query::hydrate_document(conn, slug, &def.fields, d, None, locale_ctx)?;
+        query::hydrate_document(p.conn, p.slug, &p.def.fields, d, None, p.locale_ctx)?;
     }
 
     Ok(doc)

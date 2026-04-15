@@ -10,11 +10,11 @@ use crate::{
         auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         email::EmailRenderer,
-        event::EventBus,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
-    db::DbPool,
+    db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
 };
 
@@ -27,7 +27,7 @@ pub struct ContentServiceDepsBuilder {
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
     email_renderer: Option<Arc<EmailRenderer>>,
-    event_bus: Option<EventBus>,
+    event_transport: Option<SharedEventTransport>,
     login_limiter: Option<Arc<LoginRateLimiter>>,
     ip_login_limiter: Option<Arc<LoginRateLimiter>>,
     forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
@@ -36,6 +36,8 @@ pub struct ContentServiceDepsBuilder {
     cache: Option<SharedCache>,
     token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
 }
 
 impl ContentServiceDepsBuilder {
@@ -48,7 +50,7 @@ impl ContentServiceDepsBuilder {
             config: None,
             config_dir: None,
             email_renderer: None,
-            event_bus: None,
+            event_transport: None,
             login_limiter: None,
             ip_login_limiter: None,
             forgot_password_limiter: None,
@@ -57,6 +59,8 @@ impl ContentServiceDepsBuilder {
             cache: None,
             token_provider: None,
             password_provider: None,
+            invalidation_transport: None,
+            populate_singleflight: None,
         }
     }
 
@@ -102,8 +106,8 @@ impl ContentServiceDepsBuilder {
         self
     }
 
-    pub fn event_bus(mut self, event_bus: Option<EventBus>) -> Self {
-        self.event_bus = event_bus;
+    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
+        self.event_transport = transport;
 
         self
     }
@@ -162,6 +166,18 @@ impl ContentServiceDepsBuilder {
         self
     }
 
+    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
+        self.invalidation_transport = Some(transport);
+
+        self
+    }
+
+    pub fn populate_singleflight(mut self, singleflight: SharedPopulateSingleflight) -> Self {
+        self.populate_singleflight = Some(singleflight);
+
+        self
+    }
+
     pub fn build(self) -> ContentServiceDeps {
         ContentServiceDeps {
             pool: self.pool.expect("pool is required"),
@@ -171,7 +187,7 @@ impl ContentServiceDepsBuilder {
             config: self.config.expect("config is required"),
             config_dir: self.config_dir.expect("config_dir is required"),
             email_renderer: self.email_renderer.expect("email_renderer is required"),
-            event_bus: self.event_bus,
+            event_transport: self.event_transport,
             login_limiter: self.login_limiter.expect("login_limiter is required"),
             ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
             forgot_password_limiter: self
@@ -186,6 +202,8 @@ impl ContentServiceDepsBuilder {
             password_provider: self
                 .password_provider
                 .expect("password_provider is required"),
+            invalidation_transport: self.invalidation_transport,
+            populate_singleflight: self.populate_singleflight,
         }
     }
 }

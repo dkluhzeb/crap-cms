@@ -38,6 +38,13 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
         return Err(ServiceError::AccessDenied("Update access denied".into()));
     }
 
+    if matches!(access, AccessResult::Constrained(_)) {
+        return Err(ServiceError::HookError(format!(
+            "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+            ctx.slug
+        )));
+    }
+
     let gtable = global_table(ctx.slug);
 
     let doc = query::get_global(&tx, ctx.slug, def, None)?;
@@ -80,7 +87,7 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
     query::hydrate_document(&tx, &gtable, &def.fields, &mut doc, None, None)?;
 
     let mut read_denied = wh.field_read_denied(&def.fields, ctx.user);
-    read_denied.extend(helpers::collect_hidden_field_names(&def.fields, ""));
+    read_denied.extend(helpers::collect_api_hidden_field_names(&def.fields, ""));
 
     doc.strip_fields(&read_denied);
 

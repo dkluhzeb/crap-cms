@@ -27,13 +27,6 @@ pub fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<EventUs
         .map(|Extension(au)| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
 }
 
-/// Strip denied fields from a document's fields map.
-pub fn strip_denied_fields(fields: &mut HashMap<String, Value>, denied: &[String]) {
-    for name in denied {
-        fields.remove(name);
-    }
-}
-
 /// Helper to check collection/global-level access. Returns AccessResult or renders a 403 page.
 pub fn check_access_or_forbid(
     state: &AdminState,
@@ -214,52 +207,4 @@ pub fn has_read_access(
         result,
         Ok(AccessResult::Allowed | AccessResult::Constrained(_))
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn strip_denied_fields_removes_specified_keys() {
-        let mut fields = HashMap::new();
-        fields.insert("title".to_string(), json!("Hello"));
-        fields.insert("secret".to_string(), json!("hidden"));
-        fields.insert("body".to_string(), json!("content"));
-
-        strip_denied_fields(&mut fields, &["secret".to_string()]);
-
-        assert_eq!(fields.len(), 2);
-        assert!(fields.contains_key("title"));
-        assert!(fields.contains_key("body"));
-        assert!(!fields.contains_key("secret"));
-    }
-
-    #[test]
-    fn strip_denied_fields_empty_denied_list() {
-        let mut fields = HashMap::new();
-        fields.insert("title".to_string(), json!("Hello"));
-        fields.insert("body".to_string(), json!("content"));
-
-        strip_denied_fields(&mut fields, &[]);
-        assert_eq!(fields.len(), 2);
-    }
-
-    #[test]
-    fn strip_denied_fields_empty_fields_map() {
-        let mut fields: HashMap<String, Value> = HashMap::new();
-        strip_denied_fields(&mut fields, &["secret".to_string()]);
-        assert!(fields.is_empty());
-    }
-
-    #[test]
-    fn strip_denied_fields_nonexistent_key() {
-        let mut fields = HashMap::new();
-        fields.insert("title".to_string(), json!("Hello"));
-
-        strip_denied_fields(&mut fields, &["nonexistent".to_string()]);
-        assert_eq!(fields.len(), 1);
-    }
 }

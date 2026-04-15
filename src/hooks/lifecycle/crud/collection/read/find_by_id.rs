@@ -72,6 +72,7 @@ fn find_by_id_inner(
         .registry(Some(&r))
         .select(select.as_deref())
         .use_draft(use_draft)
+        .singleflight(hook_populate_singleflight(lua))
         .build();
 
     let doc = find_document_by_id(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;

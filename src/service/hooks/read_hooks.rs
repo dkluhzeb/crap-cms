@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
-    db::{AccessResult, DbConnection},
+    db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
         lifecycle::{
@@ -158,6 +158,28 @@ impl<'a> LuaReadHooksBuilder<'a> {
             ui_locale: self.ui_locale,
             override_access: self.override_access,
         }
+    }
+}
+
+/// Adapter that lets `populate` invoke a `ReadHooks` as a [`JoinAccessCheck`]
+/// for join-field target-collection access enforcement (SEC-G).
+pub struct ReadHooksJoinGuard<'a> {
+    hooks: &'a dyn ReadHooks,
+}
+
+impl<'a> ReadHooksJoinGuard<'a> {
+    pub fn new(hooks: &'a dyn ReadHooks) -> Self {
+        Self { hooks }
+    }
+}
+
+impl JoinAccessCheck for ReadHooksJoinGuard<'_> {
+    fn check(
+        &self,
+        access_ref: Option<&str>,
+        user: Option<&Document>,
+    ) -> anyhow::Result<AccessResult> {
+        self.hooks.check_access(access_ref, user, None, None)
     }
 }
 

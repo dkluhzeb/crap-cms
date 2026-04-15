@@ -7,7 +7,7 @@ use serde_json::{Number as JsonNumber, Value as JsonValue};
 use crate::{
     core::{
         FieldAdmin, FieldDefinition, FieldType,
-        field::{FieldAccess, FieldHooks, JoinConfig, McpFieldConfig},
+        field::{FieldAccess, FieldHooks, JoinConfig, McpFieldConfig, flatten_array_sub_fields},
     },
     db::query,
 };
@@ -74,15 +74,15 @@ fn parse_date_config(
     field_tbl: &Table,
     name: &str,
     field_type: &FieldType,
-) -> (Option<String>, bool, Option<String>) {
+) -> Result<(Option<String>, bool, Option<String>)> {
     if *field_type != FieldType::Date {
-        return (None, false, None);
+        return Ok((None, false, None));
     }
 
     let picker_appearance = get_string(field_tbl, "picker_appearance");
 
     let timezone = {
-        let tz = get_bool(field_tbl, "timezone", false);
+        let tz = get_bool(field_tbl, "timezone", false)?;
         let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
 
         if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
@@ -103,7 +103,7 @@ fn parse_date_config(
         None
     };
 
-    (picker_appearance, timezone, default_timezone)
+    Ok((picker_appearance, timezone, default_timezone))
 }
 
 /// Parsed constraint values for a single field.
@@ -252,7 +252,7 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
     let default_value = parse_default_value(field_tbl, &name, &field_type)?;
     let relationship = parse_field_relationship(field_tbl, &field_type)?;
     let (picker_appearance, timezone, default_timezone) =
-        parse_date_config(field_tbl, &name, &field_type);
+        parse_date_config(field_tbl, &name, &field_type)?;
     let constraints = parse_constraints(field_tbl, &name)?;
 
     let options = get_table(field_tbl, "options")
@@ -302,9 +302,9 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
         .unwrap_or_default();
 
     let mut fd_builder = FieldDefinition::builder(&name, field_type)
-        .required(get_bool(field_tbl, "required", false))
-        .unique(get_bool(field_tbl, "unique", false))
-        .index(get_bool(field_tbl, "index", false))
+        .required(get_bool(field_tbl, "required", false)?)
+        .unique(get_bool(field_tbl, "unique", false)?)
+        .index(get_bool(field_tbl, "index", false)?)
         .admin(admin)
         .hooks(hooks)
         .access(access)
@@ -312,8 +312,9 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
         .fields(sub_fields)
         .blocks(block_defs)
         .tabs(tab_defs)
-        .localized(get_bool(field_tbl, "localized", false))
-        .has_many(get_bool(field_tbl, "has_many", false))
+        .localized(get_bool(field_tbl, "localized", false)?)
+        .has_many(get_bool(field_tbl, "has_many", false)?)
+        .hidden(get_bool(field_tbl, "hidden", false)?)
         .options(options);
 
     if let Some(v) = get_string(field_tbl, "validate") {
@@ -380,12 +381,41 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
 }
 
 /// Parse a Lua sequence of field tables into a `Vec<FieldDefinition>`.
+///
+/// Rejects duplicate field names within the same namespace. Layout wrappers
+/// (Row, Collapsible, Tabs) are transparent — their children share the
+/// parent's namespace — so uniqueness is checked across the flattened set.
+/// Group sub-fields live in their own namespace (columns are prefixed
+/// `group__subfield`), so they are only checked for uniqueness within their
+/// own group (handled recursively via `parse_single_field` -> `parse_sub_fields`).
 pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
-    fields_tbl
+    let fields: Vec<FieldDefinition> = fields_tbl
         .clone()
         .sequence_values::<Table>()
         .map(|pair| parse_single_field(&pair?))
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    check_duplicate_field_names(&fields)?;
+
+    Ok(fields)
+}
+
+/// Fail when any two sibling fields (after flattening layout wrappers) share a name.
+fn check_duplicate_field_names(fields: &[FieldDefinition]) -> Result<()> {
+    use std::collections::HashSet;
+
+    let mut seen: HashSet<&str> = HashSet::new();
+
+    for f in flatten_array_sub_fields(fields) {
+        if !seen.insert(f.name.as_str()) {
+            bail!(
+                "Duplicate field name '{}' in the same scope — field names must be unique per level (layout wrappers are transparent)",
+                f.name
+            );
+        }
+    }
+
+    Ok(())
 }
 
 pub(super) fn parse_field_access(access_tbl: &Table) -> FieldAccess {
@@ -961,5 +991,91 @@ mod tests {
         field.set("default_value", 10i64).unwrap();
         fields_tbl.set(1, field).unwrap();
         assert!(parse_fields(&fields_tbl).is_ok());
+    }
+
+    /// BUG-2 regression: two sibling fields with the same name must fail
+    /// at parse time instead of silently overwriting each other at runtime.
+    #[test]
+    fn parse_fields_rejects_duplicate_name_at_same_level() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+
+        let f1 = lua.create_table().unwrap();
+        f1.set("name", "title").unwrap();
+        f1.set("type", "text").unwrap();
+        fields_tbl.set(1, f1).unwrap();
+
+        let f2 = lua.create_table().unwrap();
+        f2.set("name", "title").unwrap();
+        f2.set("type", "text").unwrap();
+        fields_tbl.set(2, f2).unwrap();
+
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("title") && msg.contains("Duplicate"),
+            "expected duplicate-name error, got: {msg}"
+        );
+    }
+
+    /// BUG-2 regression: layout wrappers (Row) are transparent, so a name
+    /// repeated between a top-level field and a Row child counts as a duplicate.
+    #[test]
+    fn parse_fields_rejects_duplicate_across_layout_wrappers() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+
+        // Top-level: title
+        let f1 = lua.create_table().unwrap();
+        f1.set("name", "title").unwrap();
+        f1.set("type", "text").unwrap();
+        fields_tbl.set(1, f1).unwrap();
+
+        // Row wrapping another "title" — also transparent → duplicate.
+        let row = lua.create_table().unwrap();
+        row.set("name", "row1").unwrap();
+        row.set("type", "row").unwrap();
+        let row_fields = lua.create_table().unwrap();
+        let inner = lua.create_table().unwrap();
+        inner.set("name", "title").unwrap();
+        inner.set("type", "text").unwrap();
+        row_fields.set(1, inner).unwrap();
+        row.set("fields", row_fields).unwrap();
+        fields_tbl.set(2, row).unwrap();
+
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("title"),
+            "expected duplicate-name error naming the field, got: {msg}"
+        );
+    }
+
+    /// BUG-2 regression: Group fields create their own namespace
+    /// (columns are prefixed `group__name`), so the same sub-field name
+    /// can appear in two different groups.
+    #[test]
+    fn parse_fields_allows_same_name_in_different_groups() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+
+        let mk_group = |slot: i64, name: &str| {
+            let g = lua.create_table().unwrap();
+            g.set("name", name).unwrap();
+            g.set("type", "group").unwrap();
+            let sub = lua.create_table().unwrap();
+            let s = lua.create_table().unwrap();
+            s.set("name", "label").unwrap();
+            s.set("type", "text").unwrap();
+            sub.set(1, s).unwrap();
+            g.set("fields", sub).unwrap();
+            fields_tbl.set(slot, g).unwrap();
+        };
+
+        mk_group(1, "hero");
+        mk_group(2, "footer");
+
+        // Should NOT error — `hero.label` and `footer.label` are distinct columns.
+        parse_fields(&fields_tbl).expect("groups namespace sub-fields independently");
     }
 }

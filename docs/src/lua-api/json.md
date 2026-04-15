@@ -31,6 +31,12 @@ print(data.count)  -- 42
 | `str` | string | JSON string |
 | **Returns** | any | Decoded Lua value |
 
+## Notes
+
+- **Integer precision** — JSON numbers are decoded into Lua number (`f64` under the hood). Integers larger than 2^53 (~9 × 10^15) lose precision. If you need to preserve large IDs exactly, encode them as strings before serializing.
+- **Nesting depth** — encoder rejects tables nested more than 64 levels deep to guard against runaway recursion. A self-referential Lua table (`t.a = t`) will exceed this limit and error rather than looping forever.
+- **Decode of untrusted input** — decoding is permissive and does not currently enforce a maximum depth on the input side. Keep that in mind when processing large attacker-controlled payloads.
+
 ## Common Patterns
 
 ### Webhook Payload

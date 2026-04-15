@@ -3,26 +3,27 @@ use std::{collections::HashMap, io::Cursor};
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
+use image::{
+    DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, codecs::avif::AvifEncoder, imageops,
+};
+use tracing::warn;
 
 use crate::core::upload::{
-    CollectionUpload, FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversionBuilder,
-    SharedStorage, SizeResult, SizeResultBuilder,
+    CollectionUpload, FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversion,
+    QueuedConversionBuilder, SharedStorage, SizeResult, SizeResultBuilder,
 };
 
-use super::process::CleanupGuard;
+use super::{StorageBackend, process::CleanupGuard};
 
 /// Resize an image according to the given size definition and fit mode.
 ///
 /// Returns `None` if the source image has zero width or height (malformed image).
-pub(super) fn resize_image(
-    img: &image::DynamicImage,
-    size: &ImageSize,
-) -> Option<image::DynamicImage> {
+pub(super) fn resize_image(img: &DynamicImage, size: &ImageSize) -> Option<DynamicImage> {
     if img.width() == 0 || img.height() == 0 {
         return None;
     }
 
-    let filter = image::imageops::FilterType::CatmullRom;
+    let filter = imageops::FilterType::CatmullRom;
     Some(match size.fit {
         ImageFit::Cover => {
             // Resize to fill, then center crop
@@ -46,6 +47,7 @@ pub(super) fn resize_image(
             let resized = img.resize_exact(resize_w, resize_h, filter);
             let x = (resized.width().saturating_sub(size.width)) / 2;
             let y = (resized.height().saturating_sub(size.height)) / 2;
+
             resized.crop_imm(
                 x,
                 y,
@@ -65,34 +67,36 @@ pub(super) fn resize_image(
 }
 
 /// Encode image as lossy WebP with given quality (via libwebp), returning raw bytes.
-pub(super) fn webp_to_bytes(img: &image::DynamicImage, quality: u8) -> Vec<u8> {
+pub(super) fn webp_to_bytes(img: &DynamicImage, quality: u8) -> Vec<u8> {
     let rgba = img.to_rgba8();
     let encoder = webp::Encoder::from_rgba(&rgba, img.width(), img.height());
     let mem = encoder.encode(quality as f32);
+
     mem.to_vec()
 }
 
 /// Save image as lossy WebP with given quality (via libwebp).
 #[cfg(test)]
-pub(super) fn save_webp(img: &image::DynamicImage, path: &Path, quality: u8) -> Result<()> {
+pub(super) fn save_webp(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
     let data = webp_to_bytes(img, quality);
+
     fs::write(path, &data).with_context(|| format!("Failed to write WebP: {}", path.display()))?;
+
     Ok(())
 }
 
 /// Encode image as AVIF with given quality, returning raw bytes.
-pub(super) fn avif_to_bytes(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>> {
-    use image::ImageEncoder;
-
+pub(super) fn avif_to_bytes(img: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
     let rgba = img.to_rgba8();
     let mut buf = Cursor::new(Vec::new());
-    let encoder = image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut buf, 8, quality);
+    let encoder = AvifEncoder::new_with_speed_quality(&mut buf, 8, quality);
+
     encoder
         .write_image(
             rgba.as_raw(),
             img.width(),
             img.height(),
-            image::ExtendedColorType::Rgba8,
+            ExtendedColorType::Rgba8,
         )
         .with_context(|| "Failed to encode AVIF")?;
 
@@ -101,9 +105,11 @@ pub(super) fn avif_to_bytes(img: &image::DynamicImage, quality: u8) -> Result<Ve
 
 /// Save image as AVIF with given quality.
 #[cfg(test)]
-pub(super) fn save_avif(img: &image::DynamicImage, path: &Path, quality: u8) -> Result<()> {
+pub(super) fn save_avif(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
     let data = avif_to_bytes(img, quality)?;
+
     fs::write(path, &data).with_context(|| format!("Failed to write AVIF: {}", path.display()))?;
+
     Ok(())
 }
 
@@ -116,7 +122,7 @@ pub fn process_image_entry_with_storage(
     target_key: &str,
     format: &str,
     quality: u8,
-    storage: &dyn super::StorageBackend,
+    storage: &dyn StorageBackend,
 ) -> Result<()> {
     let source_data = storage
         .get(source_key)
@@ -146,7 +152,7 @@ pub fn process_image_entry_with_storage(
 
 /// Save a resized image to storage and return `(size_key, size_url)`.
 pub(super) fn save_resized_image(
-    resized: &image::DynamicImage,
+    resized: &DynamicImage,
     stem: &str,
     ext: &str,
     size_name: &str,
@@ -162,7 +168,7 @@ pub(super) fn save_resized_image(
     resized
         .write_to(
             &mut buf,
-            image::ImageFormat::from_extension(ext).unwrap_or(image::ImageFormat::Png),
+            ImageFormat::from_extension(ext).unwrap_or(ImageFormat::Png),
         )
         .with_context(|| format!("Failed to encode resized image: {}", size_key))?;
 
@@ -183,7 +189,7 @@ pub(super) fn save_resized_image(
 
 /// Context for processing a format variant of a resized image.
 pub(super) struct FormatVariantCtx<'a> {
-    pub resized: &'a image::DynamicImage,
+    pub resized: &'a DynamicImage,
     pub format_name: &'a str,
     pub opts: &'a FormatQuality,
     pub stem: &'a str,
@@ -199,7 +205,7 @@ pub(super) fn process_format_variant(
     ctx: &FormatVariantCtx<'_>,
     guard: &mut CleanupGuard,
     formats: &mut HashMap<String, FormatResult>,
-    queued: &mut Vec<crate::core::upload::QueuedConversion>,
+    queued: &mut Vec<QueuedConversion>,
 ) -> Result<()> {
     let variant_filename = format!("{}_{}.{}", ctx.stem, ctx.size_name, ctx.format_name);
     let variant_key = format!("{}/{}", ctx.collection_slug, variant_filename);
@@ -211,6 +217,7 @@ pub(super) fn process_format_variant(
             .local_path(ctx.size_key)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ctx.size_key.to_string());
+
         let target_path = ctx
             .storage
             .local_path(&variant_key)
@@ -239,6 +246,7 @@ pub(super) fn process_format_variant(
             .with_context(|| format!("Failed to save {}: {}", ctx.format_name, variant_key))?;
 
         guard.push(variant_key);
+
         formats.insert(ctx.format_name.to_string(), FormatResult::new(variant_url));
     }
 
@@ -247,16 +255,13 @@ pub(super) fn process_format_variant(
 
 /// Process all image sizes and their format variants.
 pub(super) fn process_image_sizes(
-    img: &image::DynamicImage,
+    img: &DynamicImage,
     unique_filename: &str,
     collection_slug: &str,
     upload_config: &CollectionUpload,
     storage: &SharedStorage,
     guard: &mut CleanupGuard,
-) -> Result<(
-    HashMap<String, SizeResult>,
-    Vec<crate::core::upload::QueuedConversion>,
-)> {
+) -> Result<(HashMap<String, SizeResult>, Vec<QueuedConversion>)> {
     let mut sizes = HashMap::new();
     let mut queued_conversions = Vec::new();
 
@@ -268,10 +273,11 @@ pub(super) fn process_image_sizes(
         let resized = match resize_image(img, size_def) {
             Some(r) => r,
             None => {
-                tracing::warn!(
+                warn!(
                     "Skipping size '{}' — source image has zero dimensions",
                     size_def.name
                 );
+
                 continue;
             }
         };
@@ -299,6 +305,7 @@ pub(super) fn process_image_sizes(
                 collection_slug,
                 storage,
             };
+
             process_format_variant(&ctx, guard, &mut formats, &mut queued_conversions)?;
         }
 
@@ -313,6 +320,7 @@ pub(super) fn process_image_sizes(
                 collection_slug,
                 storage,
             };
+
             process_format_variant(&ctx, guard, &mut formats, &mut queued_conversions)?;
         }
 

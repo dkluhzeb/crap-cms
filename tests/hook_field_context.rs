@@ -1050,3 +1050,56 @@ fn nested_group_after_read_hooks_execute() {
         "Group sub-field after_read hook should uppercase value"
     );
 }
+
+// ── before_broadcast data-mutation asymmetry ─────────────────────────────────
+//
+// Mutating `ctx.data` inside a `before_broadcast` hook affects the event
+// payload but NOT the stored document. This test builds a hooks config with
+// a `before_broadcast` that rewrites `data.title`, creates a document with
+// the original title, runs `run_before_broadcast`, and asserts:
+//   1. the returned broadcast data has `title = "mutated"`.
+//   2. the stored document (read back from the DB) still has the original title.
+
+#[test]
+fn before_broadcast_mutation_does_not_affect_stored_doc() {
+    let (_tmp, pool, registry, runner) = setup();
+
+    let mut article_data = HashMap::new();
+    article_data.insert("title".to_string(), "original".to_string());
+    let doc = create_article(&pool, &registry, &article_data);
+
+    let hooks = Hooks {
+        before_broadcast: vec!["hooks.live.mutate_title_for_broadcast".to_string()],
+        ..Default::default()
+    };
+
+    let mut data = HashMap::new();
+    data.insert("id".to_string(), json!(doc.id.as_ref()));
+    data.insert("title".to_string(), json!("original"));
+
+    let broadcast = runner
+        .run_before_broadcast(&hooks, "articles", "create", data)
+        .expect("run_before_broadcast failed");
+    let broadcast = broadcast.expect("broadcast should not be suppressed");
+
+    assert_eq!(
+        broadcast.get("title").and_then(|v| v.as_str()),
+        Some("mutated"),
+        "before_broadcast mutation must affect the event payload"
+    );
+
+    // The stored doc must be untouched — read back via the same pool.
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("articles").unwrap().clone();
+    drop(reg);
+
+    let conn = pool.get().expect("DB connection");
+    let stored = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .expect("find_by_id")
+        .expect("stored doc must still exist");
+    assert_eq!(
+        stored.get_str("title"),
+        Some("original"),
+        "before_broadcast mutation must NOT affect the stored document"
+    );
+}

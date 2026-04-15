@@ -10,6 +10,7 @@ my-project/
 ├── init.lua               # Runs at startup (register global hooks, etc.)
 ├── .luarc.json            # LuaLS config for IDE support
 ├── .gitignore             # Ignores data/, uploads/, types/ by default
+├── stylua.toml            # StyLua formatter config for Lua files
 ├── collections/           # One .lua file per collection
 │   ├── posts.lua
 │   ├── users.lua
@@ -19,11 +20,14 @@ my-project/
 ├── hooks/                 # Lua modules referenced by hook strings
 │   ├── posts.lua
 │   └── access.lua
+├── access/                # Reusable access-control Lua modules
+├── jobs/                  # Job handler Lua modules (see `jobs` feature)
+├── plugins/               # Plugin Lua modules (see `plugins` feature)
 ├── migrations/            # Custom SQL migrations (see `migrate` command)
 ├── templates/             # Handlebars overrides for admin UI
 │   └── fields/
 │       └── custom.hbs
-├── translations/          # Admin UI translation overrides (JSON per locale)
+├── translations/          # (optional, user-created) Admin UI translation overrides (JSON per locale)
 │   └── de.json
 ├── static/                # Static file overrides (CSS, JS, fonts)
 ├── data/                  # Runtime data (auto-created)
@@ -36,6 +40,8 @@ my-project/
     ├── crap.lua           # API surface types (crap.* functions)
     └── generated.lua      # Per-collection types (data, doc, hook, filters)
 ```
+
+The `access/`, `jobs/`, `plugins/`, `migrations/`, `templates/`, and `static/` directories are created empty by `crap-cms init` — populate them as needed. The `translations/` directory is not scaffolded; create it yourself when you want to override admin UI strings (see [Localization](../locale/overview.md)).
 
 ## File Loading Order
 

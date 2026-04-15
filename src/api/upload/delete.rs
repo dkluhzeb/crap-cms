@@ -91,12 +91,14 @@ pub(super) async fn delete_upload(
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let storage = state.storage.clone();
     let locale_config = state.config.locale.clone();
+    let invalidation_transport = state.invalidation_transport.clone();
 
     let result = task::spawn_blocking(move || {
         let ctx = ServiceContext::collection(&slug_owned, &def_clone)
             .pool(&pool)
             .runner(&runner)
             .user(user_doc_owned.as_ref())
+            .invalidation_transport(Some(invalidation_transport))
             .build();
         delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
     })

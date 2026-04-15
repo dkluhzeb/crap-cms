@@ -14,6 +14,37 @@ collections, globals, registers hooks, or any combination.
 This works because `crap.collections.define()` and `crap.globals.define()` overwrite —
 calling either twice for the same slug replaces the first definition with the second.
 
+## Load Order
+
+Files are loaded in this fixed order at server start:
+
+1. `collections/*.lua` — **alphabetical by filename**
+2. `globals/*.lua` — alphabetical
+3. `jobs/*.lua` — alphabetical
+4. `init.lua` — last
+
+Plugins live outside these three directories and are picked up only when `init.lua`
+calls `require("plugin_name")`. **The order of those `require()` calls controls
+plugin execution order** — there is no automatic dependency resolution.
+
+If plugin A depends on collections, fields, or hooks added by plugin B, require B
+first:
+
+```lua
+-- init.lua
+require("my_plugins.base").install()        -- adds audit fields to all collections
+require("my_plugins.workflow").install()    -- reads those audit fields
+```
+
+Getting the order wrong produces silent runtime failures — the earlier plugin sees
+collections without the later plugin's fields, and any hook that depends on those
+fields fires on incomplete data without warning. Keep the `require()` block in
+`init.lua` explicit and well-commented.
+
+Two plugins that register the same collection slug silently overwrite each other
+(last call wins). Log output includes a `debug!` message but no warning. Pick slugs
+carefully and review any plugin you adopt from a third party.
+
 ## Writing a Plugin
 
 A plugin is a Lua module that returns a table with an `install()` function:

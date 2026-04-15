@@ -56,7 +56,14 @@ pub fn count_with_search(
     let mut params: Vec<DbValue> = Vec::new();
 
     let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
-    let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
+    let where_clause = build_where_clause(
+        conn,
+        &resolved_filters,
+        slug,
+        &def.fields,
+        locale_ctx,
+        &mut params,
+    )?;
     let mut has_where = !where_clause.is_empty();
 
     if has_where {

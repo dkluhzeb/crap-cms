@@ -40,16 +40,18 @@ crap.collections.define("media", {
 
 When uploads are enabled, these fields are automatically injected before your custom fields:
 
-| Field | Type | Hidden | Description |
-|-------|------|--------|-------------|
-| `filename` | text | No (readonly) | Sanitized filename with unique prefix |
-| `mime_type` | text | Yes | MIME type of the uploaded file |
-| `filesize` | number | Yes | File size in bytes |
-| `width` | number | Yes | Image width (images only) |
-| `height` | number | Yes | Image height (images only) |
-| `url` | text | Yes | URL path to the original file |
-| `focal_x` | number | Yes | Focal point X coordinate (0.0–1.0, default center) |
-| `focal_y` | number | Yes | Focal point Y coordinate (0.0–1.0, default center) |
+| Field | Type | Admin form | Description |
+|-------|------|------------|-------------|
+| `filename` | text | Visible (readonly) | Sanitized filename with unique prefix |
+| `mime_type` | text | Hidden | MIME type of the uploaded file |
+| `filesize` | number | Hidden | File size in bytes |
+| `width` | number | Hidden | Image width (images only) |
+| `height` | number | Hidden | Image height (images only) |
+| `url` | text | Hidden | URL path to the original file |
+| `focal_x` | number | Hidden | Focal point X coordinate (0.0–1.0, default center) |
+| `focal_y` | number | Hidden | Focal point Y coordinate (0.0–1.0, default center) |
+
+> All auto-injected fields are **always returned in API responses** (gRPC, Lua, MCP, REST, admin JSON). They use `admin.hidden = true` only — that flag suppresses standard form rendering because the upload preview widget and focal-point selector render these values directly. Consumers (and the admin's own preview widget) need them to display thumbnails, focal crops, and image variants.
 
 For each image size, additional fields are injected:
 

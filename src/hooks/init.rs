@@ -43,6 +43,16 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
 
     apply_config_defaults(&registry, config);
 
+    // BUG-5: statically-known hook/access refs are resolved at startup so
+    // typos fail to boot instead of surfacing at first request.
+    super::validate::validate_hook_references(&lua, &registry)
+        .context("Hook/access reference validation failed")?;
+
+    // Reject field names that collide with the generated locale-suffixed
+    // column pattern `{name}__{locale}`.
+    super::validate::validate_locale_field_collisions(&registry, &config.locale.locales)
+        .context("Locale/field-name collision detected")?;
+
     Ok(registry)
 }
 

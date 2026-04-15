@@ -36,11 +36,23 @@ pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedSt
     }
 }
 
-pub(super) fn get_bool(tbl: &Table, key: &str, default: bool) -> bool {
-    tbl.get::<Option<bool>>(key)
-        .ok()
-        .flatten()
-        .unwrap_or(default)
+/// Read a boolean field from a Lua table.
+///
+/// - Missing key -> `default`.
+/// - Boolean value -> returned as-is.
+/// - Any other type -> error naming the key and the actual type, so typos
+///   like `required = "true"` (string) surface at parse time instead of
+///   silently falling back to the default.
+pub(super) fn get_bool(tbl: &Table, key: &str, default: bool) -> mlua::Result<bool> {
+    match tbl.get::<Value>(key)? {
+        Value::Nil => Ok(default),
+        Value::Boolean(b) => Ok(b),
+        other => Err(mlua::Error::RuntimeError(format!(
+            "Field config key '{}' expected a boolean, got {}",
+            key,
+            other.type_name()
+        ))),
+    }
 }
 
 /// Parse the `collection` field from a relationship Lua table.
@@ -151,21 +163,61 @@ mod tests {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
         tbl.set("active", true).unwrap();
-        assert!(get_bool(&tbl, "active", false));
+        assert!(get_bool(&tbl, "active", false).unwrap());
     }
 
     #[test]
     fn test_get_bool_absent_default_true() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        assert!(get_bool(&tbl, "active", true));
+        assert!(get_bool(&tbl, "active", true).unwrap());
     }
 
     #[test]
     fn test_get_bool_absent_default_false() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        assert!(!get_bool(&tbl, "active", false));
+        assert!(!get_bool(&tbl, "active", false).unwrap());
+    }
+
+    /// BUG-1 regression: a non-bool value must raise an error naming the key
+    /// and the actual type, instead of silently using the default.
+    #[test]
+    fn test_get_bool_rejects_string_value() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("active", "true").unwrap();
+        let err = get_bool(&tbl, "active", false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("active"), "error should name the key: {msg}");
+        assert!(
+            msg.contains("boolean"),
+            "error should mention boolean: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_get_bool_rejects_number_value() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("active", 1i64).unwrap();
+        assert!(get_bool(&tbl, "active", false).is_err());
+    }
+
+    #[test]
+    fn test_get_bool_missing_uses_default() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(get_bool(&tbl, "missing", true).unwrap());
+        assert!(!get_bool(&tbl, "missing", false).unwrap());
+    }
+
+    #[test]
+    fn test_get_bool_present_true_returns_true() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("flag", true).unwrap();
+        assert!(get_bool(&tbl, "flag", false).unwrap());
     }
 
     #[test]

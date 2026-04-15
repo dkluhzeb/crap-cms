@@ -34,6 +34,20 @@ Multiple fields are combined with AND.
 
 > **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. Field values must be strings or operator objects — numeric/boolean shorthand (e.g., `{"count": 42}`) is not supported in the gRPC JSON `where` clause (use `{"count": {"equals": "42"}}` instead).
 
+## Field-Type-Aware Coercion
+
+Even though filter values are always sent as JSON strings, they are **coerced to the column's SQL type before binding** — so numeric comparisons are numeric, not lexicographic. Coercion is keyed off the field definition and the operator:
+
+| Field type | Bound as | Notes |
+|------------|----------|-------|
+| Number | `REAL` (f64) | Invalid / non-finite numbers fall back to `TEXT` with a runtime warning |
+| Checkbox | `INTEGER` | Accepts `"true"`/`"false"`/`"1"`/`"0"` (and `"yes"`/`"no"`/`"on"`/`"off"`); unknown values fall back to `TEXT` |
+| Date | `TEXT` | Normalized via ISO so lexicographic comparison works |
+| Text-like fields | `TEXT` | Default for everything else |
+| Text-only operators (`like`, `contains`, `starts_with`, `ends_with`, `regex`) | `TEXT` | Always bound as text even on numeric columns |
+
+See [Filter Operators](../lua-api/filter-operators.md) for the full per-operator table — the same coercion rules apply to Lua, gRPC, admin URL query params, and MCP.
+
 ## Examples
 
 ```bash

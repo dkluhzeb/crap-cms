@@ -1,5 +1,15 @@
 # Live Update Hooks
 
+## Execution Order
+
+For every mutation event, the live-update pipeline runs in this strict order — and short-circuits as soon as any step suppresses the event:
+
+1. **`live` setting check** — if `live = false`, the event is dropped immediately. If `live` is a function reference, it is called as a **gate**: returning `false`/`nil` drops the event and prevents `before_broadcast` from running at all.
+2. **`before_broadcast` hooks** — collection-level first, then global registered hooks. Any hook returning `false`/`nil` suppresses the event and stops the chain.
+3. **EventBus dispatch** — the event is delivered to each matching subscriber, with per-subscriber access checks, `after_read` hooks (full mode only), and field stripping (full mode only).
+
+The `live` filter function and `before_broadcast` hooks both receive a context table with `{ collection, operation, data }` and have similar shapes, but they sit at different stages: `live` is the cheap gate, `before_broadcast` is the transformation/suppression stage.
+
 ## `before_broadcast`
 
 A lifecycle event that fires after the write transaction has committed, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.
@@ -48,7 +58,7 @@ crap.hooks.register("before_broadcast", function(ctx)
 end)
 ```
 
-### Execution Order
+### Hook Order Within `before_broadcast`
 
 1. Collection-level `before_broadcast` hooks (string refs from definition)
 2. Global registered `before_broadcast` hooks (`crap.hooks.register`)
@@ -58,6 +68,10 @@ If any hook returns `false`/`nil`, the event is suppressed and no further hooks 
 ### CRUD Access
 
 `before_broadcast` hooks run after the transaction has committed and do **not** have CRUD access.
+
+### Data Modifications Are Event-Only
+
+Mutating `ctx.data` inside a `before_broadcast` hook affects **only** the broadcast event payload. The stored document is **not** updated — the hook fires post-commit, after the write transaction has already closed. Use this to redact fields, decorate the broadcast with computed values, or flatten internal structure for subscribers, but reach for `before_change` / `after_change` hooks if you actually need the change to land in the database.
 
 ## `live` Setting Functions
 
@@ -76,4 +90,4 @@ function M.should_broadcast(ctx)
 end
 ```
 
-The function receives `{ collection, operation, data }` and returns `true`/`false`. This is a fast gate — `before_broadcast` hooks only run if the `live` check passes.
+The function receives `{ collection, operation, data }` and returns `true`/`false`. This is a fast gate — `before_broadcast` hooks only run if the `live` check passes. See [Execution Order](#execution-order) above.

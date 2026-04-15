@@ -24,20 +24,18 @@ struct FindParams {
     pg_cursor: bool,
 }
 
-/// Query-building context for the find operation.
-struct FindCtx {
-    draft: bool,
-}
-
 // Note: `override_access` is parsed from opts and passed to `LuaReadHooks`
-// (which passes it to the service layer's `check_access`), not to `FindCtx`.
+// (which passes it to the service layer's `check_access`).
 
-/// Build the FindQuery from the Lua table, applying pagination, filters, and access control.
+/// Build the FindQuery from the Lua table, applying pagination + normalizing
+/// filter field paths.
+///
+/// Produces a *user* query — system filters (`_status`, `_deleted_at`) are
+/// injected by `service::find_documents` based on the typed flags.
 fn prepare_find_query(
     params: &FindParams,
     def: &CollectionDefinition,
     query_table: Option<Table>,
-    ctx: &FindCtx,
 ) -> LuaResult<FindQuery> {
     let (mut fq, lua_page) = match query_table {
         Some(qt) => lua_table_to_find_query(&qt)?,
@@ -61,7 +59,6 @@ fn prepare_find_query(
     }
 
     normalize_filter_fields(&mut fq.filters, &def.fields);
-    add_draft_filter(def, ctx.draft, &mut fq.filters);
 
     Ok(fq)
 }
@@ -91,11 +88,17 @@ fn find_inner(
         .map_err(|e| RuntimeError(e.to_string()))?;
     let override_access = get_opt_bool(&query_table, "overrideAccess", false)?;
     let draft = get_opt_bool(&query_table, "draft", false)?;
+    let trash = get_opt_bool(&query_table, "trash", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ctx = FindCtx { draft };
+    let mut find_query = prepare_find_query(params, &def, query_table)?;
 
-    let find_query = prepare_find_query(params, &def, query_table, &ctx)?;
+    let is_trash = trash && def.soft_delete;
+
+    // Default sort for trash listings is a presentation concern — keep here.
+    if is_trash && find_query.order_by.is_none() {
+        find_query.order_by = Some("-_deleted_at".to_string());
+    }
 
     let r = reg
         .read()
@@ -120,6 +123,9 @@ fn find_inner(
         .registry(Some(&r))
         .select(find_query.select.as_deref())
         .cursor_enabled(params.pg_cursor)
+        .trash(is_trash)
+        .include_drafts(draft)
+        .singleflight(hook_populate_singleflight(lua))
         .build();
 
     let result = find_documents(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))?;

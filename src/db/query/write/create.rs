@@ -11,7 +11,10 @@ use crate::{
         DbConnection, DbValue, LocaleContext,
         query::{
             coerce_value,
-            helpers::{coerce_date_value, prefixed_name, tz_column, utc_now, walk_leaf_fields},
+            helpers::{
+                coerce_date_value, prefixed_name, tz_column, utc_now, validate_no_null_byte,
+                walk_leaf_fields,
+            },
             locale_write_column,
             read::find_by_id_raw,
         },
@@ -103,6 +106,8 @@ fn collect_leaf_param(
     } else {
         None
     };
+
+    validate_no_null_byte(&field.field_type, &data_key, value)?;
 
     let db_val = match tz_key.as_ref() {
         Some(tk) => coerce_date_value(&field.field_type, value, data.get(tk).map(|s| s.as_str())),

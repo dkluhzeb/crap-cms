@@ -179,9 +179,17 @@ pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<b
 // ── Account status operations ───────────────────────────────────────
 
 /// Lock a user account, preventing login.
+///
+/// Publishes a user-invalidation signal (if a transport is configured on
+/// the context) so any active live-update streams owned by this user are
+/// torn down. Publish is a no-op when no transport is attached.
 pub fn lock_user(ctx: &ServiceContext, id: &str) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     query::lock_user(conn.as_ref(), ctx.slug, id)?;
+
+    // Tear down any live-update streams owned by this user. No-op when no
+    // transport is attached to the context.
+    ctx.publish_user_invalidation(id);
 
     Ok(())
 }
@@ -552,5 +560,47 @@ mod tests {
             .build();
         let result = consume_verification_token(&ctx, "vtok").unwrap();
         assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn lock_user_publishes_invalidation_when_transport_set() {
+        use crate::core::event::{InProcessInvalidationBus, SharedInvalidationTransport};
+
+        let (conn, def, _) = setup();
+        let bus = Arc::new(InProcessInvalidationBus::new());
+        let transport: SharedInvalidationTransport = bus;
+        let mut rx = transport.subscribe();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .invalidation_transport(Some(transport))
+            .build();
+
+        lock_user(&ctx, "u1").unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv timed out")
+            .expect("expected invalidation signal");
+        assert_eq!(received, "u1");
+    }
+
+    #[test]
+    fn lock_user_without_transport_is_noop() {
+        let (conn, def, _) = setup();
+
+        let ctx = ServiceContext::collection("users", &def)
+            .conn(&conn)
+            .build();
+
+        // Must succeed and not panic even with no transport attached.
+        lock_user(&ctx, "u1").unwrap();
+
+        let locked: i64 = conn
+            .query_row("SELECT _locked FROM users WHERE id = 'u1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(locked, 1);
     }
 }

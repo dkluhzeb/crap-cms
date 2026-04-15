@@ -77,3 +77,45 @@ local html = crap.richtext.render(doc.body)
 - Register nodes in `init.lua` so they're available to all VMs.
 - Custom nodes appear in the rich text editor toolbar for fields that include them.
 - The `render` function is called during `crap.richtext.render()` to convert custom nodes to HTML.
+
+## Render output is NOT sanitized
+
+The string your `render` function returns is inserted directly into the HTML output —
+**no escaping, no sanitization, no tag allowlist**. Whatever you return becomes
+raw markup in the rendered page.
+
+This is by design: custom nodes exist precisely so operators can emit structured
+HTML. But the trust boundary is strict:
+
+- `render` is **trusted code**. It runs server-side inside Lua you wrote.
+- Any user-supplied data you interpolate into the output string (node attrs,
+  document content, etc.) **must** be escaped by you before concatenation.
+
+Safe pattern — escape the parts that came from user input:
+
+```lua
+local function escape_html(s)
+    s = s or ""
+    s = s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+    s = s:gsub('"', "&quot;"):gsub("'", "&#39;")
+    return s
+end
+
+crap.richtext.register_node("callout", {
+    attrs = { crap.fields.text({ name = "body" }) },
+    render = function(attrs)
+        return '<div class="callout">' .. escape_html(attrs.body) .. '</div>'
+    end,
+})
+```
+
+Unsafe pattern — concatenating a user field directly produces stored XSS:
+
+```lua
+render = function(attrs)
+    return '<div class="callout">' .. (attrs.body or "") .. '</div>'  -- BAD
+end
+```
+
+Server-side richtext output is NOT passed through any sanitizer — there is no
+fallback. Treat every interpolation as a potential injection vector.

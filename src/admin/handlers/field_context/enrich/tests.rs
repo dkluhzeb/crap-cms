@@ -57,7 +57,7 @@ fn make_test_state() -> AdminState {
         jwt_secret: "test".into(),
         email_renderer,
         email_provider: create_email_provider(&EmailConfig::default()).unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter: Arc::new(LoginRateLimiter::new(3, 900)),
@@ -71,6 +71,11 @@ fn make_test_state() -> AdminState {
         storage: create_storage(tmp.path(), &UploadConfig::default()).unwrap(),
         token_provider: Arc::new(JwtTokenProvider::new("test-secret")),
         password_provider: Arc::new(Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crate::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
     }
 }
 
@@ -968,7 +973,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
             &crate::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
@@ -992,6 +997,11 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
             "test-secret",
         )),
         password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crate::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1075,7 +1085,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
             &crate::config::EmailConfig::default(),
         )
         .unwrap(),
-        event_bus: None,
+        event_transport: None,
         login_limiter,
         ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
@@ -1099,6 +1109,11 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
             "test-secret",
         )),
         password_provider: std::sync::Arc::new(crate::core::auth::Argon2PasswordProvider),
+        subscriber_send_timeout_ms: 1000,
+        invalidation_transport: std::sync::Arc::new(
+            crate::core::event::InProcessInvalidationBus::new(),
+        ),
+        populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
     };
 
     enrich_field_contexts(

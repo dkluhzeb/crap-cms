@@ -45,7 +45,6 @@ fn count_inner(
     let search = find_query.search;
 
     normalize_filter_fields(&mut filters, &def.fields);
-    add_draft_filter(&def, draft, &mut filters);
 
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
@@ -62,6 +61,7 @@ fn count_inner(
     let input = CountDocumentsInput::builder(&filters)
         .locale_ctx(locale_ctx.as_ref())
         .search(search.as_deref())
+        .include_drafts(draft)
         .build();
 
     count_documents(&ctx, &input).map_err(|e| RuntimeError(format!("{e}")))

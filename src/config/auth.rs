@@ -5,9 +5,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::{config::parsing::serde_duration, core::JwtSecret};
 
+/// Controls the `SameSite` attribute of the `crap_session` admin cookie.
+///
+/// - `Lax` (default) — cookie sent on top-level cross-site navigations (e.g. following a
+///   link from an email or external site). Matches browser defaults and is a good balance
+///   between usability and CSRF protection.
+/// - `Strict` — cookie **never** sent on cross-site requests, including top-level
+///   navigations. Hardens the admin against CSRF at the cost of breaking links from
+///   external sites / emails: users will appear logged-out after such a navigation and
+///   must log in again. Recommended for high-security deployments.
+/// - `None` — reserved; not currently supported. `SameSite=None` requires `Secure=true`
+///   and cross-site contexts the admin UI doesn't exercise today. Parsing is accepted so
+///   that future enablement is a no-migration change; at runtime `None` falls back to
+///   `Lax` and emits a warning. Do not rely on this value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionCookieSameSite {
+    /// Cookie sent on same-site requests and top-level cross-site navigations. Default.
+    #[default]
+    Lax,
+    /// Cookie only sent on strictly same-site requests. Breaks cross-site navigation.
+    Strict,
+    /// Reserved for future use. Currently falls back to `Lax` at runtime.
+    None,
+}
+
+impl SessionCookieSameSite {
+    /// Render the value as the literal used in the `SameSite=` cookie attribute.
+    ///
+    /// `None` currently falls back to `Lax` — see the enum docs. Callers that need
+    /// to detect the configured-but-unsupported case should inspect `self` directly.
+    pub fn as_attribute(self) -> &'static str {
+        match self {
+            SessionCookieSameSite::Strict => "Strict",
+            // `None` deliberately falls through to `Lax` for now (see enum docs).
+            SessionCookieSameSite::Lax | SessionCookieSameSite::None => "Lax",
+        }
+    }
+}
+
 /// JWT authentication settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
     /// JWT secret. If empty, a random secret is generated on first startup and
     /// persisted to `data/.jwt_secret`. Set explicitly for multi-instance deployments.
@@ -48,6 +87,15 @@ pub struct AuthConfig {
     /// Password strength requirements.
     #[serde(default)]
     pub password_policy: PasswordPolicy,
+    /// `SameSite` attribute for the `crap_session` admin cookie.
+    ///
+    /// Default: `"lax"`. Set to `"strict"` to refuse the session cookie on any
+    /// cross-site request (including top-level navigations from emails / external
+    /// links) for stricter CSRF protection. `"none"` is accepted for forward
+    /// compatibility but currently falls back to `lax` at runtime with a warning —
+    /// see [`SessionCookieSameSite`].
+    #[serde(default)]
+    pub session_cookie_samesite: SessionCookieSameSite,
 }
 
 fn default_rate_limit_backend() -> String {
@@ -73,6 +121,7 @@ impl Default for AuthConfig {
             rate_limit_redis_url: String::new(),
             rate_limit_prefix: default_rate_limit_prefix(),
             password_policy: PasswordPolicy::default(),
+            session_cookie_samesite: SessionCookieSameSite::default(),
         }
     }
 }
@@ -80,7 +129,7 @@ impl Default for AuthConfig {
 /// Password strength requirements. Applied to all password-setting paths:
 /// user creation (admin, gRPC, CLI), password reset, and password update.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PasswordPolicy {
     /// Minimum password length. Default: 8. Recommended: 12+ for modern security.
     pub min_length: usize,
@@ -278,6 +327,59 @@ mod tests {
         assert!(policy.validate("Abcdefg!").is_err(), "missing digit");
         assert!(policy.validate("Abc12345").is_err(), "missing special");
         assert!(policy.validate("Ac1!").is_err(), "too short");
+    }
+
+    #[test]
+    fn session_cookie_samesite_default_is_lax() {
+        let auth = AuthConfig::default();
+        assert_eq!(auth.session_cookie_samesite, SessionCookieSameSite::Lax);
+        assert_eq!(auth.session_cookie_samesite.as_attribute(), "Lax");
+    }
+
+    #[test]
+    fn session_cookie_samesite_parses_from_toml_lowercase() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[auth]\nsession_cookie_samesite = \"strict\"\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(
+            config.auth.session_cookie_samesite,
+            SessionCookieSameSite::Strict
+        );
+        assert_eq!(config.auth.session_cookie_samesite.as_attribute(), "Strict");
+    }
+
+    #[test]
+    fn session_cookie_samesite_rejects_invalid_value() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[auth]\nsession_cookie_samesite = \"bogus\"\n",
+        )
+        .unwrap();
+        let err = crate::config::CrapConfig::load(tmp.path())
+            .expect_err("bogus samesite value must fail to parse");
+
+        // Walk the full error chain — the top-level anyhow wrapper is a
+        // generic "failed to deserialize" string; the specific variant /
+        // field name only shows up in the source chain.
+        let full = format!("{err:#}").to_lowercase();
+        assert!(
+            full.contains("samesite")
+                || full.contains("bogus")
+                || full.contains("variant")
+                || full.contains("unknown variant"),
+            "expected parse error mentioning the bad variant, got: {full}"
+        );
+    }
+
+    #[test]
+    fn session_cookie_samesite_none_falls_back_to_lax_attribute() {
+        // `None` is parseable but currently renders as `Lax` at runtime.
+        assert_eq!(SessionCookieSameSite::None.as_attribute(), "Lax");
     }
 
     #[test]

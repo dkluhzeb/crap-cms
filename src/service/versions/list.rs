@@ -3,7 +3,10 @@
 use crate::{
     core::document::VersionSnapshot,
     db::{AccessResult, query},
-    service::{ListVersionsInput, PaginatedResult, ServiceContext, ServiceError},
+    service::{
+        Def, ListVersionsInput, PaginatedResult, ServiceContext, ServiceError,
+        helpers::enforce_access_constraints,
+    },
 };
 
 /// List version snapshots for a document/global with pagination and access control.
@@ -24,6 +27,24 @@ pub fn list_versions(
 
     if matches!(access, AccessResult::Denied) {
         return Err(ServiceError::AccessDenied("Read access denied".into()));
+    }
+
+    // Constrained handling depends on the target: for collections we enforce
+    // the filters against the parent document id (reusing the count-based
+    // helper); for globals the filter table is meaningless (single row) and
+    // is rejected with a clear operator-facing error.
+    if matches!(access, AccessResult::Constrained(_)) {
+        match &ctx.def {
+            Def::Global(_) => {
+                return Err(ServiceError::HookError(format!(
+                    "Access hook for global '{}' returned a filter table; globals don't support filter-based access — return true/false based on ctx.user fields instead.",
+                    ctx.slug
+                )));
+            }
+            _ => {
+                enforce_access_constraints(ctx, input.parent_id, &access, "Read", false)?;
+            }
+        }
     }
 
     let total = query::count_versions(conn, &table, input.parent_id)?;

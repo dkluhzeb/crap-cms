@@ -112,6 +112,23 @@ fn setup_service(
     collections: Vec<CollectionDefinition>,
     globals: Vec<GlobalDefinition>,
 ) -> TestSetup {
+    setup_service_inner(collections, globals, None)
+}
+
+/// Build a `ContentService` whose registry is loaded from a Lua fixture dir,
+/// so tests can exercise real access hooks and Lua-defined globals against
+/// the gRPC surface. The HookRunner uses the fixture dir as its config dir
+/// so hooks resolve via package paths.
+#[allow(dead_code)]
+fn setup_service_with_fixture(fixture_dir: &std::path::Path) -> TestSetup {
+    setup_service_inner(Vec::new(), Vec::new(), Some(fixture_dir.to_path_buf()))
+}
+
+fn setup_service_inner(
+    collections: Vec<CollectionDefinition>,
+    globals: Vec<GlobalDefinition>,
+    fixture_dir: Option<std::path::PathBuf>,
+) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::test_default();
     config.database.path = "test.db".to_string();
@@ -119,7 +136,14 @@ fn setup_service(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let (registry, hook_config_dir) = match fixture_dir.as_deref() {
+        Some(fd) => {
+            let reg = crap_cms::hooks::init_lua(fd, &config).expect("init lua from fixture");
+            (reg, fd.to_path_buf())
+        }
+        None => (Registry::shared(), tmp.path().to_path_buf()),
+    };
+
     {
         let mut reg = registry.write().unwrap();
         for def in &collections {
@@ -133,7 +157,7 @@ fn setup_service(
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
-        .config_dir(tmp.path())
+        .config_dir(&hook_config_dir)
         .registry(registry.clone())
         .config(&config)
         .build()
@@ -270,6 +294,7 @@ async fn create_and_find_by_id() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap()
@@ -366,6 +391,7 @@ async fn delete_document() {
             locale: None,
             select: vec![],
             draft: None,
+            trash: None,
         }))
         .await
         .unwrap_err();
@@ -852,6 +878,67 @@ async fn grpc_create_rejects_empty_required_in_nested_array() {
         "Error should reference the nested required field: {}",
         msg
     );
+}
+
+// ── Globals access control (gRPC surface) ───────────────────────────────
+//
+// Regression for the gRPC surface of the globals read-access gate. Service-
+// layer coverage lives in `tests/hook_lifecycle_globals.rs`; this test
+// asserts the translation: a `ServiceError::AccessDenied` becomes
+// `tonic::Code::PermissionDenied` at the gRPC boundary. Uses the same Lua
+// fixture as the admin HTTP access-denied test.
+fn admin_globals_access_fixture() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/admin_globals_access")
+}
+
+#[tokio::test]
+async fn grpc_global_read_access_denied_returns_permission_denied() {
+    let ts = setup_service_with_fixture(&admin_globals_access_fixture());
+
+    // Create an editor user (role = "editor"), then log them in to obtain a
+    // Bearer token. The access hook `hooks.access.admin_only` only admits
+    // `ctx.user.role == "admin"`, so this user must be denied.
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "editor-grpc@test.com"),
+                ("password", "password123"),
+                ("role", "editor"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    let token = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "editor-grpc@test.com".to_string(),
+            password: "password123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .token;
+
+    let mut req = Request::new(content::GetGlobalRequest {
+        slug: "restricted_settings".to_string(),
+        locale: None,
+    });
+    req.metadata_mut().insert(
+        "authorization",
+        format!("Bearer {}", token).parse().unwrap(),
+    );
+
+    let err = ts
+        .service
+        .get_global(req)
+        .await
+        .expect_err("non-admin GetGlobal must be denied");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
 }
 
 #[tokio::test]
