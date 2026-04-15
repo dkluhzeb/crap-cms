@@ -1,11 +1,15 @@
 //! Database connection pool with backend-specific configuration.
 
-use anyhow::{Context as _, Result};
+#[cfg(feature = "sqlite")]
+use anyhow::Context as _;
+use anyhow::Result;
 #[cfg(feature = "sqlite")]
 use r2d2::Pool;
 #[cfg(feature = "sqlite")]
 use r2d2_sqlite::SqliteConnectionManager;
-use std::{path::Path, sync::Arc, time::Duration};
+#[cfg(feature = "sqlite")]
+use std::time::Duration;
+use std::{path::Path, sync::Arc};
 
 use crate::config::CrapConfig;
 
@@ -76,7 +80,13 @@ impl DbPool {
 }
 
 /// Create a connection pool based on the configured backend.
+///
+/// `config_dir` is used by the SQLite backend to resolve relative DB paths;
+/// the Postgres backend ignores it (connection is fully URL-driven).
 pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
+    // Silence unused-param warning when built without the sqlite feature.
+    let _ = config_dir;
+
     match config.database.backend.as_str() {
         #[cfg(feature = "sqlite")]
         "sqlite" => create_sqlite_pool(config_dir, config),
