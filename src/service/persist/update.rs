@@ -27,23 +27,32 @@ pub fn persist_update(
     let slug = ctx.slug;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
+    let touches_refs = query::ref_count::data_touches_refs(&def.fields, final_data, hook_data, "");
 
-    // Lock new ref targets before UPDATE (Postgres only).
-    query::ref_count::lock_ref_targets_from_data(
-        conn,
-        &def.fields,
-        final_data,
-        hook_data,
-        &locale_cfg,
-    )?;
+    // Only snapshot + adjust ref counts when the write data actually changes
+    // relationship fields. Skipping saves ~10 queries for non-ref updates.
+    let old_refs = if touches_refs {
+        query::ref_count::lock_ref_targets_from_data(
+            conn,
+            &def.fields,
+            final_data,
+            hook_data,
+            &locale_cfg,
+        )?;
 
-    let old_refs =
-        query::ref_count::snapshot_outgoing_refs(conn, slug, id, &def.fields, &locale_cfg)?;
+        Some(query::ref_count::snapshot_outgoing_refs(
+            conn,
+            slug,
+            id,
+            &def.fields,
+            &locale_cfg,
+        )?)
+    } else {
+        None
+    };
 
     let doc = query::update(conn, slug, def, id, final_data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
-
-    query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, old_refs)?;
 
     if let Some(pw) = opts.password
         && !pw.is_empty()
@@ -63,6 +72,12 @@ pub fn persist_update(
     if conn.supports_fts() {
         query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
     }
+
+    // Ref count last: minimizes row-level lock hold time on shared targets.
+    if let Some(old_refs) = old_refs {
+        query::ref_count::after_update(conn, slug, &doc.id, &def.fields, &locale_cfg, old_refs)?;
+    }
+
     Ok(doc)
 }
 
@@ -82,23 +97,31 @@ pub fn persist_bulk_update(
     let conn = conn.as_ref();
     let def = ctx.collection_def();
 
-    // Lock new ref targets before UPDATE (Postgres only).
-    query::ref_count::lock_ref_targets_from_data(
-        conn,
-        &def.fields,
-        final_data,
-        hook_data,
-        locale_config,
-    )?;
+    let touches_refs = query::ref_count::data_touches_refs(&def.fields, final_data, hook_data, "");
 
-    let old_refs =
-        query::ref_count::snapshot_outgoing_refs(conn, ctx.slug, id, &def.fields, locale_config)?;
+    let old_refs = if touches_refs {
+        query::ref_count::lock_ref_targets_from_data(
+            conn,
+            &def.fields,
+            final_data,
+            hook_data,
+            locale_config,
+        )?;
+
+        Some(query::ref_count::snapshot_outgoing_refs(
+            conn,
+            ctx.slug,
+            id,
+            &def.fields,
+            locale_config,
+        )?)
+    } else {
+        None
+    };
 
     let updated = query::update_partial(conn, ctx.slug, def, id, final_data, locale_ctx)?;
 
     query::save_join_table_data(conn, ctx.slug, &def.fields, id, hook_data, locale_ctx)?;
-
-    query::ref_count::after_update(conn, ctx.slug, id, &def.fields, locale_config, old_refs)?;
 
     if def.has_versions() {
         let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.slug, &updated.id)
@@ -111,6 +134,11 @@ pub fn persist_bulk_update(
 
     if conn.supports_fts() {
         query::fts::fts_upsert(conn, ctx.slug, &updated, Some(def))?;
+    }
+
+    // Ref count last: minimizes row-level lock hold time on shared targets.
+    if let Some(old_refs) = old_refs {
+        query::ref_count::after_update(conn, ctx.slug, id, &def.fields, locale_config, old_refs)?;
     }
 
     Ok(updated)

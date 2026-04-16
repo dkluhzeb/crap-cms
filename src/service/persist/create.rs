@@ -40,8 +40,6 @@ pub fn persist_create(
     let doc = query::create(conn, slug, def, final_data, opts.locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
 
-    query::ref_count::after_create(conn, slug, &doc.id, &def.fields, &locale_cfg)?;
-
     if let Some(pw) = opts.password
         && !pw.is_empty()
     {
@@ -60,5 +58,17 @@ pub fn persist_create(
     if conn.supports_fts() {
         query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
     }
+
+    // Ref count UPDATE is last: it acquires a row-level lock on the target
+    // (e.g. the referenced author), and that lock is held until COMMIT.
+    // Doing it last minimizes lock hold time under concurrent writes.
+    query::ref_count::after_create_from_data(
+        conn,
+        &def.fields,
+        final_data,
+        hook_data,
+        &locale_cfg,
+    )?;
+
     Ok(doc)
 }

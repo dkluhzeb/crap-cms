@@ -18,8 +18,10 @@ use crate::{
 };
 
 /// Parse a JSON value into a list of string IDs.
+///
+/// Accepts either a JSON array of strings or a comma-separated string.
 /// Accepts a JSON array of strings or a comma-separated string.
-fn parse_id_list(val: &Value) -> Vec<String> {
+pub(crate) fn parse_id_list(val: &Value) -> Vec<String> {
     match val {
         Value::Array(arr) => arr
             .iter()
@@ -41,7 +43,7 @@ fn parse_id_list(val: &Value) -> Vec<String> {
 
 /// Parse polymorphic relationship values from form data.
 /// Accepts "collection/id" composite strings from either a JSON array or comma-separated string.
-fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
+pub(crate) fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
     parse_id_list(val)
         .into_iter()
         .filter_map(|item| {

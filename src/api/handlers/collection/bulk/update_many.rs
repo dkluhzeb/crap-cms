@@ -5,7 +5,7 @@ use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use super::helpers::{build_bulk_filters, check_per_doc_access, find_matching_docs};
+use super::helpers::{build_bulk_filters, check_per_doc_access};
 
 use crate::{
     api::{
@@ -92,68 +92,88 @@ impl ContentService {
                     return Err(Status::permission_denied("Read access denied"));
                 }
 
-                let filters = build_bulk_filters(
-                    &collection,
-                    &def_owned,
-                    &read_access,
-                    req_where.as_deref(),
-                    !draft,
-                )?;
-
-                let tx = conn
-                    .transaction_immediate()
-                    .context("Start transaction")
-                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-                let docs = find_matching_docs(
-                    &tx,
-                    &collection,
-                    &def_owned,
-                    filters,
-                    locale_ctx.as_ref(),
-                    &db_kind,
-                )?;
-
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-                check_per_doc_access(
-                    &docs,
-                    def_owned.access.update.as_deref(),
-                    user_doc,
-                    &hook_runner,
-                    &tx,
-                    "Update access denied",
-                )?;
-
-                let wh = RunnerWriteHooks::new(&hook_runner)
-                    .with_hooks_enabled(run_hooks)
-                    .with_conn(&tx);
-
-                let ctx = service::ServiceContext::collection(&collection, &def_owned)
-                    .conn(&tx)
-                    .write_hooks(&wh)
-                    .user(user_doc)
-                    .build();
+                // Process in batches: find a chunk of matching docs, update
+                // them, commit, repeat. Same pattern as DeleteMany — avoids
+                // loading all docs into memory and keeps transactions short.
+                const BATCH_SIZE: i64 = 500;
 
                 let mut count = 0i64;
                 let mut ids = Vec::new();
 
-                for doc in &docs {
-                    let input = WriteInput::builder(data.clone(), &join_data)
-                        .locale_ctx(locale_ctx.as_ref())
-                        .draft(draft)
+                loop {
+                    let tx = conn
+                        .transaction_immediate()
+                        .context("Start update transaction")
+                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    let batch_filters = build_bulk_filters(
+                        &collection,
+                        &def_owned,
+                        &read_access,
+                        req_where.as_deref(),
+                        !draft,
+                    )?;
+
+                    let batch_query = crate::db::query::FindQuery::builder()
+                        .filters(batch_filters)
+                        .limit(BATCH_SIZE)
                         .build();
 
-                    service::update_many_single_core(&ctx, &doc.id, input, &locale_config)
-                        .map_err(|e| e.reclassify(&db_kind))?;
-
-                    ids.push(doc.id.to_string());
-                    count += 1;
-                }
-
-                tx.commit()
-                    .context("Commit transaction")
+                    let docs = crate::db::query::find(
+                        &tx,
+                        &collection,
+                        &def_owned,
+                        &batch_query,
+                        locale_ctx.as_ref(),
+                    )
                     .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    if docs.is_empty() {
+                        tx.commit()
+                            .context("Commit final transaction")
+                            .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                        break;
+                    }
+
+                    check_per_doc_access(
+                        &docs,
+                        def_owned.access.update.as_deref(),
+                        user_doc,
+                        &hook_runner,
+                        &tx,
+                        "Update access denied",
+                    )?;
+
+                    let wh = RunnerWriteHooks::new(&hook_runner)
+                        .with_hooks_enabled(run_hooks)
+                        .with_conn(&tx);
+
+                    let ctx = service::ServiceContext::collection(&collection, &def_owned)
+                        .conn(&tx)
+                        .write_hooks(&wh)
+                        .user(user_doc)
+                        .build();
+
+                    for doc in &docs {
+                        let input = WriteInput::builder(data.clone(), &join_data)
+                            .locale_ctx(locale_ctx.as_ref())
+                            .draft(draft)
+                            .build();
+
+                        service::update_many_single_core(&ctx, &doc.id, input, &locale_config)
+                            .map_err(|e| e.reclassify(&db_kind))?;
+
+                        ids.push(doc.id.to_string());
+                        count += 1;
+                    }
+
+                    tx.commit()
+                        .context("Commit update transaction")
+                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+                }
 
                 Ok((count, ids))
             })

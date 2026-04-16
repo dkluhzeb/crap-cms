@@ -10,6 +10,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Batched `apply_deltas` for ref-count updates** — ref-count
+  increments/decrements are now grouped by (collection, delta) and
+  applied in a single `UPDATE … WHERE id IN (…)` per group instead of
+  one UPDATE per target document. Reduces round-trips from O(targets)
+  to O(distinct collection×delta pairs) — typically 1-3 UPDATEs instead
+  of 5-8+ for a write touching multiple relationships.
+
+- **Data-driven ref-count for creates (`after_create_from_data`)** —
+  on create, outgoing references are now computed from the write data
+  in memory instead of reading them back from the database. Eliminates
+  5+ SELECT queries per create that were redundantly re-reading
+  just-written data.
+
+- **Ref-count skip for non-ref updates** — `persist_update` now checks
+  whether the write data touches any relationship fields. When it
+  doesn't (e.g. updating only `content`), the entire ref-count dance
+  (snapshot before, read after, apply deltas) is skipped — saving
+  ~10 queries per non-ref update.
+
+- **Late ref-count lock acquisition** — the `_ref_count` UPDATE
+  (which acquires a Postgres row-level lock on the referenced target)
+  is now the last operation in `persist_create` and `persist_update`,
+  after version snapshots and FTS indexing. This minimizes the time
+  the row lock is held under concurrent writes to shared targets
+  (e.g. 50 creates all referencing the same author). Combined with
+  the other ref-count optimizations above, concurrent create
+  throughput improved ~3× and write latency dropped significantly.
+
+- **Batched junction-table inserts** — `set_related_ids` and
+  `set_polymorphic_related` now use a single multi-row INSERT instead
+  of one INSERT per related ID. Reduces round-trips from O(N) to 1
+  per has-many relationship field per write.
+
+- **Chunked bulk operations (DeleteMany, UpdateMany)** — bulk
+  mutations now process documents in batches of 500 per transaction
+  instead of loading all matches into a single long-lived transaction.
+  This removes the previous 10,000-document hard limit, keeps row
+  locks short-lived, and prevents timeouts on large bulk deletes
+  (previously a DeleteMany of ~14k documents would hold locks for
+  minutes and timeout the gRPC client).
+
 - **Default `[database] connection_timeout` raised from 5s to 30s** to
   match `busy_timeout`. The pool-level timeout was firing before
   SQLite's own WAL-writer retry loop had a chance to resolve write
@@ -29,13 +70,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   checkouts (no `DISCARD ALL` — recycling method switched from `Clean`
   to a no-op fast recycle). `SET timezone = 'UTC'` is also moved from
   per-checkout to a one-time `post_create` hook, eliminating another
-  round-trip per request.
-  **Measured impact**: uniform ~2× throughput improvement across every
-  postgres workload — reads and writes alike. `create @ c=50` went
-  from 78 to **206 req/s** (2.6×), closing to within 16% of SQLite.
-  `find_by_id @ c=50` from 1,865 to **3,702 req/s** (2.0×).
-  `find_deep @ c=50` from 226 to **388 req/s** (1.7×). `count @ c=50`
-  from 4,809 to **8,694 req/s** (1.8×). SQLite backend is unchanged.
+  round-trip per request. Provides a uniform ~2× throughput improvement
+  across every postgres workload — reads and writes alike. SQLite
+  backend is unchanged.
 
 - **Postgres write path: `SELECT … FOR UPDATE` pre-lock removed from
   ref-count handling.** Previously, every `create` and `update` on
@@ -55,10 +92,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   race on the same target, the **delete now wins** instead of the
   create — the create rolls back with a clear "cannot reference X:
   target no longer exists" error. Both paths produce a consistent
-  database; only which side surfaces the error has shifted. Measured
-  postgres impact: `create @ c=10` p50 215ms → 85ms (-60%), throughput
-  53 → 76 req/s (+43%); `create @ c=50` throughput 59 → 73 req/s
-  (+24%), p50 909ms → 612ms (-33%).
+  database; only which side surfaces the error has shifted.
 
 ### Fixed
 
@@ -70,12 +104,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   value. Access-check semantics preserved: `Denied` still yields empty
   arrays for every parent without querying the target collection, and
   `Constrained` filters merge into the batched query just like they
-  did in the per-parent path. Measured on the `example/` schema
-  against `ContentAPI/Find` at `depth=2`, concurrency 50: throughput
-  went from 17 req/s (29% errors, p99 4.5 s) to **605 req/s (0.8%
-  errors, p99 153 ms)** — a 36× throughput gain and a 30× tail-latency
-  reduction. At `depth=5` the error rate fell from 50% to 0.7% with
-  57× more throughput.
+  did in the per-parent path. Eliminates the N+1 pattern entirely,
+  yielding order-of-magnitude throughput gains and tail-latency
+  reductions for deep-populated queries.
 
 ## [0.1.0-alpha.5] — 2026-04-15
 

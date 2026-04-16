@@ -3,7 +3,7 @@
 //! Tracks how many documents reference a given target via `_ref_count` columns.
 //! Replaces the O(N) back-reference scan with O(1) delete-protection checks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
@@ -14,7 +14,10 @@ use crate::{
     core::{BlockDefinition, FieldDefinition, FieldType, field::flatten_array_sub_fields},
     db::{
         DbConnection, DbValue,
-        query::helpers::{join_table, locale_column, prefixed_name},
+        query::{
+            helpers::{join_table, locale_column, prefixed_name},
+            join::{parse_id_list, parse_polymorphic_values},
+        },
     },
 };
 
@@ -107,6 +110,86 @@ fn get_ref_count_inner(
     }))
 }
 
+/// Check whether write data contains any relationship or upload field values.
+///
+/// When an update doesn't touch any ref-bearing fields, the entire ref_count
+/// dance (snapshot before, read after, apply deltas) can be skipped — saving
+/// 10+ queries on the hot path.
+pub fn data_touches_refs(
+    fields: &[FieldDefinition],
+    flat_data: &HashMap<String, String>,
+    join_data: &HashMap<String, Value>,
+    prefix: &str,
+) -> bool {
+    for field in fields {
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = prefixed_name(prefix, &field.name);
+                if data_touches_refs(&field.fields, flat_data, join_data, &new_prefix) {
+                    return true;
+                }
+            }
+
+            FieldType::Row | FieldType::Collapsible => {
+                if data_touches_refs(&field.fields, flat_data, join_data, prefix) {
+                    return true;
+                }
+            }
+
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    if data_touches_refs(&tab.fields, flat_data, join_data, prefix) {
+                        return true;
+                    }
+                }
+            }
+
+            FieldType::Relationship | FieldType::Upload => {
+                let col = prefixed_name(prefix, &field.name);
+
+                if flat_data.contains_key(&col) || join_data.contains_key(&col) {
+                    return true;
+                }
+            }
+
+            FieldType::Array => {
+                let col = prefixed_name(prefix, &field.name);
+
+                if join_data.contains_key(&col) {
+                    // Array data present — check if sub-fields have relationship types
+                    let has_ref_sub = field.fields.iter().any(|f| {
+                        matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
+                    });
+
+                    if has_ref_sub {
+                        return true;
+                    }
+                }
+            }
+
+            FieldType::Blocks => {
+                let col = prefixed_name(prefix, &field.name);
+
+                if join_data.contains_key(&col) {
+                    let has_ref_sub = field.blocks.iter().any(|b| {
+                        b.fields.iter().any(|f| {
+                            matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
+                        })
+                    });
+
+                    if has_ref_sub {
+                        return true;
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    false
+}
+
 /// Historically this function pre-locked every outgoing ref target with
 /// `SELECT ... FOR UPDATE` before the main INSERT on Postgres. That added
 /// one round-trip per referenced document on the write hot path (3-5 per
@@ -145,6 +228,34 @@ pub fn after_create(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let new_refs = read_outgoing_refs(conn, table, id, fields, locale_config)?;
+    let deltas = to_delta_map(&[], &new_refs);
+
+    apply_deltas(conn, &deltas)
+}
+
+/// Adjust ref counts after creating a new document — data-driven variant.
+///
+/// Instead of reading outgoing refs back from the DB (which wastes 5+ round-trips
+/// for data that was just written), computes refs directly from the write data.
+/// This eliminates all SELECT queries from the create path's ref count phase.
+pub fn after_create_from_data(
+    conn: &dyn DbConnection,
+    fields: &[FieldDefinition],
+    flat_data: &HashMap<String, String>,
+    join_data: &HashMap<String, Value>,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let mut new_refs = Vec::new();
+
+    compute_refs_from_data(
+        fields,
+        flat_data,
+        join_data,
+        locale_config,
+        "",
+        &mut new_refs,
+    );
+
     let deltas = to_delta_map(&[], &new_refs);
 
     apply_deltas(conn, &deltas)
@@ -527,6 +638,189 @@ fn collect_blocks_refs(
     Ok(())
 }
 
+// ── Internal: compute refs from write data (no DB) ────────────────────
+
+/// Walk the field tree and compute outgoing refs from write data.
+///
+/// This mirrors `collect_refs` but reads from in-memory data maps instead
+/// of querying the database. Used by `after_create_from_data` to eliminate
+/// redundant SELECTs of just-written data.
+fn compute_refs_from_data(
+    fields: &[FieldDefinition],
+    flat_data: &HashMap<String, String>,
+    join_data: &HashMap<String, Value>,
+    locale_config: &LocaleConfig,
+    prefix: &str,
+    refs: &mut Vec<OutgoingRef>,
+) {
+    for field in fields {
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = prefixed_name(prefix, &field.name);
+                compute_refs_from_data(
+                    &field.fields,
+                    flat_data,
+                    join_data,
+                    locale_config,
+                    &new_prefix,
+                    refs,
+                );
+            }
+
+            FieldType::Row | FieldType::Collapsible => {
+                compute_refs_from_data(
+                    &field.fields,
+                    flat_data,
+                    join_data,
+                    locale_config,
+                    prefix,
+                    refs,
+                );
+            }
+
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    compute_refs_from_data(
+                        &tab.fields,
+                        flat_data,
+                        join_data,
+                        locale_config,
+                        prefix,
+                        refs,
+                    );
+                }
+            }
+
+            FieldType::Relationship | FieldType::Upload => {
+                let Some(rc) = &field.relationship else {
+                    continue;
+                };
+                let col = prefixed_name(prefix, &field.name);
+
+                if !field.has_parent_column() {
+                    // Has-many: read from join_data
+                    if let Some(val) = join_data.get(&col) {
+                        if rc.is_polymorphic() {
+                            for (coll, id) in parse_polymorphic_values(val) {
+                                push_ref(refs, &format!("{coll}/{id}"), true, "");
+                            }
+                        } else {
+                            for id in parse_id_list(val) {
+                                push_ref(refs, &id, false, &rc.collection);
+                            }
+                        }
+                    }
+                } else {
+                    // Has-one: read from flat_data
+                    let columns = if field.localized && locale_config.is_enabled() {
+                        locale_config
+                            .locales
+                            .iter()
+                            .filter_map(|l| locale_column(&col, l).ok())
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![col]
+                    };
+
+                    for col_name in &columns {
+                        if let Some(value) = flat_data.get(col_name) {
+                            push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
+                        }
+                    }
+                }
+            }
+
+            FieldType::Array => {
+                let col = prefixed_name(prefix, &field.name);
+                if let Some(Value::Array(rows)) = join_data.get(&col) {
+                    compute_array_refs_from_data(rows, &field.fields, refs);
+                }
+            }
+
+            FieldType::Blocks => {
+                let col = prefixed_name(prefix, &field.name);
+                if let Some(Value::Array(rows)) = join_data.get(&col) {
+                    compute_blocks_refs_from_data(rows, &field.blocks, refs);
+                }
+            }
+
+            _ => {}
+        }
+    }
+}
+
+/// Extract refs from array row data (JSON objects with sub-field values).
+fn compute_array_refs_from_data(
+    rows: &[Value],
+    fields: &[FieldDefinition],
+    refs: &mut Vec<OutgoingRef>,
+) {
+    let flat = flatten_array_sub_fields(fields);
+
+    let rel_fields: Vec<(&FieldDefinition, bool, &str)> = flat
+        .iter()
+        .filter_map(|f| {
+            if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
+                return None;
+            }
+            let rc = f.relationship.as_ref()?;
+            if rc.has_many {
+                return None;
+            }
+            Some((*f, rc.is_polymorphic(), rc.collection.as_ref()))
+        })
+        .collect();
+
+    if rel_fields.is_empty() {
+        return;
+    }
+
+    for row in rows {
+        for (f, is_poly, default_col) in &rel_fields {
+            if let Some(value) = row.get(&f.name).and_then(|v| v.as_str()) {
+                push_ref(refs, value, *is_poly, default_col);
+            }
+        }
+    }
+}
+
+/// Extract refs from blocks row data (JSON objects with _block_type and data fields).
+fn compute_blocks_refs_from_data(
+    rows: &[Value],
+    blocks: &[BlockDefinition],
+    refs: &mut Vec<OutgoingRef>,
+) {
+    for row in rows {
+        let Some(block_type) = row.get("_block_type").and_then(|v| v.as_str()) else {
+            continue;
+        };
+
+        let Some(block_def) = blocks.iter().find(|b| b.block_type == block_type) else {
+            continue;
+        };
+
+        let flat = flatten_array_sub_fields(&block_def.fields);
+
+        for f in &flat {
+            if !matches!(f.field_type, FieldType::Relationship | FieldType::Upload) {
+                continue;
+            }
+
+            let Some(rc) = &f.relationship else {
+                continue;
+            };
+
+            if rc.has_many {
+                continue;
+            }
+
+            if let Some(value) = row.get(&f.name).and_then(|v| v.as_str()) {
+                push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
+            }
+        }
+    }
+}
+
 // ── Internal: compute and apply deltas ──────────────────────────────────
 
 /// Compute ref count deltas between old and new outgoing ref sets.
@@ -556,70 +850,103 @@ fn to_delta_map(
 
 /// Apply ref count deltas to target collection tables.
 ///
-/// Each delta runs as a single `UPDATE <target> SET _ref_count = ... WHERE id = ?`.
+/// Deltas are batched per (collection, delta_value) so that all targets
+/// sharing the same collection and delta are updated in a single `UPDATE`
+/// with an `IN` clause. This reduces round-trips from O(targets) to
+/// O(distinct collection×delta_sign pairs) — typically 2-4 UPDATEs instead
+/// of 5-8+ for a write touching multiple relationships.
+///
 /// Postgres takes a row-level write lock on each updated row implicitly
 /// (READ COMMITTED default isolation), and SQLite serializes via the
-/// `IMMEDIATE` transaction held by the caller. No explicit `FOR UPDATE`
-/// pre-lock is needed on either backend — historical Postgres pre-locking
-/// was removed because it added one round-trip per target on the write hot
-/// path without meaningfully increasing safety: the `affected == 0` check
-/// below already detects a concurrently-deleted target and bails so the
-/// enclosing transaction rolls back, preventing a dangling reference.
+/// `IMMEDIATE` transaction held by the caller.
 fn apply_deltas(conn: &dyn DbConnection, deltas: &HashMap<(String, String), i64>) -> Result<()> {
+    if deltas.is_empty() {
+        return Ok(());
+    }
+
+    // Group by (collection, delta_value) → Vec<id>
+    let mut groups: HashMap<(&str, i64), Vec<&str>> = HashMap::new();
+
     for ((collection, id), delta) in deltas {
-        let p1 = conn.placeholder(1);
+        groups
+            .entry((collection.as_str(), *delta))
+            .or_default()
+            .push(id.as_str());
+    }
+
+    for ((collection, delta), ids) in &groups {
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
+        let in_clause = placeholders.join(", ");
+
         let clamped = conn.greatest_expr("0", &format!("_ref_count + ({})", delta));
-        let sql = format!(
-            "UPDATE \"{}\" SET _ref_count = {} WHERE id = {p1}",
-            collection, clamped
-        );
+        let sql =
+            format!("UPDATE \"{collection}\" SET _ref_count = {clamped} WHERE id IN ({in_clause})");
 
-        let affected = conn
-            .execute(&sql, &[DbValue::Text(id.clone())])
-            .with_context(|| {
-                format!(
-                    "Failed to update _ref_count on {}.{} by {}",
-                    collection, id, delta
-                )
-            })?;
+        let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();
 
-        // Increment against a vanished target is a hard error: the caller is
-        // about to persist a reference to a row that no longer exists. Bail so
-        // the enclosing transaction rolls back, preventing a dangling ref.
-        if affected == 0 && *delta > 0 {
+        let affected = conn.execute(&sql, &params).with_context(|| {
+            format!(
+                "Failed to batch-update _ref_count on {} by {}",
+                collection, delta
+            )
+        })?;
+
+        // Increment against vanished targets is a hard error: the caller is
+        // about to persist references to rows that no longer exist. Bail so
+        // the enclosing transaction rolls back, preventing dangling refs.
+        if *delta > 0 && affected < ids.len() {
+            let missing = find_missing_ids(conn, collection, ids);
             bail!(
                 "cannot reference {}/{}: target no longer exists \
                  (concurrently hard-deleted)",
                 collection,
-                id
+                missing
             );
         }
 
-        // Decrement against a missing target is tolerated: soft-delete never
+        // Decrement against missing targets is tolerated: soft-delete never
         // decrements, so a missing row means a concurrent hard-delete already
         // removed it. Nothing left to adjust.
-        if affected == 0 && *delta < 0 {
-            debug!(
-                "Skipped decrement on {}/{} by {}: target already gone",
-                collection,
-                id,
-                delta.abs()
-            );
-
-            continue;
+        if *delta < 0 && affected < ids.len() {
+            let skipped = ids.len() - affected;
+            debug!("Skipped decrement on {skipped} target(s) in {collection}: already gone");
         }
 
         if *delta < 0 {
             trace!(
-                "Decremented _ref_count on {}/{} by {}",
-                collection,
-                id,
+                "Decremented _ref_count on {} target(s) in {collection} by {}",
+                affected,
                 delta.abs()
             );
         }
     }
 
     Ok(())
+}
+
+/// Find which ids from a batch are missing from the table. Used only on
+/// the error path to produce a specific error message.
+fn find_missing_ids(conn: &dyn DbConnection, collection: &str, ids: &[&str]) -> String {
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
+    let in_clause = placeholders.join(", ");
+    let sql = format!("SELECT id FROM \"{collection}\" WHERE id IN ({in_clause})");
+
+    let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.to_string())).collect();
+
+    let Ok(rows) = conn.query_all(&sql, &params) else {
+        return ids.join(", ");
+    };
+
+    let found: HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r.get_string("id").ok())
+        .collect();
+
+    ids.iter()
+        .filter(|id| !found.contains(**id))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -1403,5 +1730,136 @@ mod tests {
         deltas.insert(("media".to_string(), "m_missing".to_string()), 1i64);
 
         apply_deltas(&conn, &deltas).expect_err("batch must fail if any increment target missing");
+    }
+
+    // ── after_create_from_data ──────────────────────────────────────────
+
+    fn upload_field_for_data() -> Vec<FieldDefinition> {
+        vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ]
+    }
+
+    #[test]
+    fn after_create_from_data_has_one() {
+        let media = CollectionDefinition::new("media");
+        let fields = upload_field_for_data();
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[media, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+
+        let mut flat_data = HashMap::new();
+        flat_data.insert("image".to_string(), "m1".to_string());
+        let join_data = HashMap::new();
+
+        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
+    }
+
+    #[test]
+    fn after_create_from_data_has_many() {
+        let tags = CollectionDefinition::new("tags");
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+        ];
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[tags, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "tags", "t1");
+        insert_doc(&conn, "tags", "t2");
+
+        let flat_data = HashMap::new();
+        let mut join_data = HashMap::new();
+        join_data.insert("tags".to_string(), serde_json::json!(["t1", "t2"]));
+
+        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+
+        assert_eq!(get_ref_count_val(&conn, "tags", "t1"), 1);
+        assert_eq!(get_ref_count_val(&conn, "tags", "t2"), 1);
+    }
+
+    #[test]
+    fn after_create_from_data_polymorphic_has_many() {
+        let articles = CollectionDefinition::new("articles");
+        let pages = CollectionDefinition::new("pages");
+        let mut rc = RelationshipConfig::new("articles", true);
+        rc.polymorphic = vec!["articles".into(), "pages".into()];
+        let fields = vec![
+            FieldDefinition::builder("refs", FieldType::Relationship)
+                .relationship(rc)
+                .build(),
+        ];
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[articles, pages, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "articles", "a1");
+        insert_doc(&conn, "pages", "pg1");
+
+        let flat_data = HashMap::new();
+        let mut join_data = HashMap::new();
+        join_data.insert(
+            "refs".to_string(),
+            serde_json::json!(["articles/a1", "pages/pg1"]),
+        );
+
+        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+
+        assert_eq!(get_ref_count_val(&conn, "articles", "a1"), 1);
+        assert_eq!(get_ref_count_val(&conn, "pages", "pg1"), 1);
+    }
+
+    #[test]
+    fn after_create_from_data_empty_values_no_refs() {
+        let media = CollectionDefinition::new("media");
+        let fields = upload_field_for_data();
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[media, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "media", "m1");
+
+        // Empty string = no ref
+        let mut flat_data = HashMap::new();
+        flat_data.insert("image".to_string(), String::new());
+        let join_data = HashMap::new();
+
+        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+
+        assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
+    }
+
+    #[test]
+    fn after_create_from_data_missing_target_fails() {
+        let media = CollectionDefinition::new("media");
+        let fields = upload_field_for_data();
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[media, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        let mut flat_data = HashMap::new();
+        flat_data.insert("image".to_string(), "m_missing".to_string());
+        let join_data = HashMap::new();
+
+        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale())
+            .expect_err("should fail when target doesn't exist");
     }
 }
