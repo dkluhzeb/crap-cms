@@ -18,6 +18,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   The new default lets SQLite's busy handler do its job before the
   outer pool gives up. Explicit config overrides still win.
 
+- **Postgres backend: per-connection prepared statement caching** —
+  the postgres backend now caches prepared statements per connection,
+  mirroring what rusqlite's `prepare_cached` already provides for the
+  SQLite backend. Previously, every call through the `DbConnection`
+  trait re-parsed and re-planned the SQL on the postgres side — even
+  for identical queries repeated thousands of times per second (e.g.,
+  `SELECT ... FROM posts WHERE id = $1`). The cache is a per-pooled-
+  connection `HashMap<String, Statement>` that persists across pool
+  checkouts (no `DISCARD ALL` — recycling method switched from `Clean`
+  to a no-op fast recycle). `SET timezone = 'UTC'` is also moved from
+  per-checkout to a one-time `post_create` hook, eliminating another
+  round-trip per request.
+  **Measured impact**: uniform ~2× throughput improvement across every
+  postgres workload — reads and writes alike. `create @ c=50` went
+  from 78 to **206 req/s** (2.6×), closing to within 16% of SQLite.
+  `find_by_id @ c=50` from 1,865 to **3,702 req/s** (2.0×).
+  `find_deep @ c=50` from 226 to **388 req/s** (1.7×). `count @ c=50`
+  from 4,809 to **8,694 req/s** (1.8×). SQLite backend is unchanged.
+
 - **Postgres write path: `SELECT … FOR UPDATE` pre-lock removed from
   ref-count handling.** Previously, every `create` and `update` on
   postgres acquired a per-target `FOR UPDATE` row lock on each
