@@ -57,10 +57,8 @@ fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
 
         // Recurse into transparent layout wrappers
         match f.field_type {
-            FieldType::Row | FieldType::Collapsible => {
-                if is_group_field(name, &f.fields) {
-                    return true;
-                }
+            FieldType::Row | FieldType::Collapsible if is_group_field(name, &f.fields) => {
+                return true;
             }
             FieldType::Tabs => {
                 for tab in &f.tabs {

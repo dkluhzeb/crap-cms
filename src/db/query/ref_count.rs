@@ -130,10 +130,10 @@ pub fn data_touches_refs(
                 }
             }
 
-            FieldType::Row | FieldType::Collapsible => {
-                if data_touches_refs(&field.fields, flat_data, join_data, prefix) {
-                    return true;
-                }
+            FieldType::Row | FieldType::Collapsible
+                if data_touches_refs(&field.fields, flat_data, join_data, prefix) =>
+            {
+                return true;
             }
 
             FieldType::Tabs => {
