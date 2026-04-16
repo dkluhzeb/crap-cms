@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d5ee608c.js";
+            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-70c0d16d.js"></script>
@@ -274,7 +274,7 @@ host = "0.0.0.0"        # Bind address
 path = "data/crap.db"   # Relative to config dir, or absolute
 pool_max_size = 64       # Max connections in the pool
 busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
-connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+connection_timeout = 30  # Pool checkout timeout (seconds or "30s")
 cache_size = -16384      # Page cache in KB (negative = KB; default 16MB)
 mmap_size = 268435456    # Memory-mapped I/O in bytes (default 256MB, 0 = off)
 wal_autocheckpoint = 1000 # WAL auto-checkpoint threshold in pages
@@ -445,7 +445,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>mmap_size</code></td><td>integer</td><td><code>268435456</code></td><td>SQLite memory-mapped I/O size in bytes. Default 256MB. Set to 0 to disable.</td></tr>
 <tr><td><code>wal_autocheckpoint</code></td><td>integer</td><td><code>1000</code></td><td>WAL auto-checkpoint threshold in pages.</td></tr>
 <tr><td><code>busy_timeout</code></td><td>duration</td><td><code>30000</code> (<code>"30s"</code>)</td><td>SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
-<tr><td><code>connection_timeout</code></td><td>duration</td><td><code>5</code></td><td>Pool checkout timeout in seconds. How long <code>pool.get()</code> waits for a free connection before returning an error.</td></tr>
+<tr><td><code>connection_timeout</code></td><td>duration</td><td><code>30</code></td><td>Pool checkout timeout in seconds. How long <code>pool.get()</code> waits for a free connection before returning an error. Should be &gt;= <code>busy_timeout</code> so SQLite’s WAL-writer retry loop resolves before the pool-level timeout fires.</td></tr>
 </tbody>
 </table>
 </div>
