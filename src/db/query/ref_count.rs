@@ -156,8 +156,10 @@ pub fn data_touches_refs(
                 let col = prefixed_name(prefix, &field.name);
 
                 if join_data.contains_key(&col) {
-                    // Array data present — check if sub-fields have relationship types
-                    let has_ref_sub = field.fields.iter().any(|f| {
+                    // Flatten through Row/Collapsible/Tabs wrappers to find
+                    // nested relationship sub-fields (mirrors compute_array_refs_from_data).
+                    let flat = flatten_array_sub_fields(&field.fields);
+                    let has_ref_sub = flat.iter().any(|f| {
                         matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
                     });
 
@@ -172,7 +174,8 @@ pub fn data_touches_refs(
 
                 if join_data.contains_key(&col) {
                     let has_ref_sub = field.blocks.iter().any(|b| {
-                        b.fields.iter().any(|f| {
+                        let flat = flatten_array_sub_fields(&b.fields);
+                        flat.iter().any(|f| {
                             matches!(f.field_type, FieldType::Relationship | FieldType::Upload)
                         })
                     });
@@ -698,15 +701,26 @@ fn compute_refs_from_data(
                 let col = prefixed_name(prefix, &field.name);
 
                 if !field.has_parent_column() {
-                    // Has-many: read from join_data
+                    // Has-many: read from join_data.
+                    // Deduplicate to match the DB path's SELECT DISTINCT —
+                    // junction tables can have duplicate rows, and parse_id_list
+                    // preserves them. Without dedup, duplicates inflate _ref_count.
                     if let Some(val) = join_data.get(&col) {
                         if rc.is_polymorphic() {
+                            let mut seen = HashSet::new();
+
                             for (coll, id) in parse_polymorphic_values(val) {
-                                push_ref(refs, &format!("{coll}/{id}"), true, "");
+                                if seen.insert((coll.clone(), id.clone())) {
+                                    push_ref(refs, &format!("{coll}/{id}"), true, "");
+                                }
                             }
                         } else {
+                            let mut seen = HashSet::new();
+
                             for id in parse_id_list(val) {
-                                push_ref(refs, &id, false, &rc.collection);
+                                if seen.insert(id.clone()) {
+                                    push_ref(refs, &id, false, &rc.collection);
+                                }
                             }
                         }
                     }
@@ -1843,6 +1857,39 @@ mod tests {
         after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
+    }
+
+    /// Regression: duplicate IDs in has-many data must be deduplicated
+    /// (matching the DB path's SELECT DISTINCT). Without dedup, _ref_count
+    /// would be inflated, permanently blocking deletion of the target.
+    #[test]
+    fn after_create_from_data_deduplicates_has_many() {
+        let tags = CollectionDefinition::new("tags");
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+        ];
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = fields.clone();
+
+        let (_tmp, pool, _) = setup_db(&[tags, posts], &no_locale());
+        let conn = pool.get().unwrap();
+
+        insert_doc(&conn, "tags", "t1");
+
+        let flat_data = HashMap::new();
+        let mut join_data = HashMap::new();
+        // Duplicate "t1" — must count as 1, not 2
+        join_data.insert("tags".to_string(), serde_json::json!(["t1", "t1", "t1"]));
+
+        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+
+        assert_eq!(
+            get_ref_count_val(&conn, "tags", "t1"),
+            1,
+            "duplicate IDs must be deduplicated — ref_count should be 1, not 3"
+        );
     }
 
     #[test]

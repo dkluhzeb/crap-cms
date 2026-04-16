@@ -144,6 +144,9 @@ impl ContentService {
                         .invalidation_transport(Some(invalidation_transport.clone()))
                         .build();
 
+                    let batch_len = docs.len();
+                    let mut batch_deleted = 0usize;
+
                     for doc in &docs {
                         match delete_document_core(&ctx, &doc.id, Some(&locale_cfg)) {
                             Ok(result) => {
@@ -156,6 +159,7 @@ impl ContentService {
                                     }
                                 }
                                 deleted_ids.push(doc.id.to_string());
+                                batch_deleted += 1;
                             }
                             Err(ServiceError::Referenced { .. }) => {
                                 skipped_count += 1;
@@ -167,6 +171,13 @@ impl ContentService {
                     tx.commit()
                         .context("Commit delete transaction")
                         .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    // If nothing was deleted in this batch, all remaining
+                    // matches are referenced — stop to avoid an infinite loop.
+                    if batch_deleted == 0 {
+                        skipped_count = batch_len as i64;
+                        break;
+                    }
                 }
 
                 for fields in &upload_fields_to_clean {

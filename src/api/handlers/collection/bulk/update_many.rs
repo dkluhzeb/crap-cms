@@ -94,21 +94,18 @@ impl ContentService {
 
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-                // Process in batches: find a chunk of matching docs, update
-                // them, commit, repeat. Same pattern as DeleteMany — avoids
-                // loading all docs into memory and keeps transactions short.
-                const BATCH_SIZE: i64 = 500;
-
-                let mut count = 0i64;
-                let mut ids = Vec::new();
-
-                loop {
+                // Phase 1: Find all matching docs and check access in one
+                // read-only transaction. Unlike DeleteMany (which re-queries
+                // because deleted docs leave the result set), updated docs
+                // still match the same filter, so we must collect IDs upfront
+                // to avoid re-updating the same docs in an infinite loop.
+                let doc_ids = {
                     let tx = conn
                         .transaction_immediate()
-                        .context("Start update transaction")
+                        .context("Start read transaction")
                         .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
-                    let batch_filters = build_bulk_filters(
+                    let filters = build_bulk_filters(
                         &collection,
                         &def_owned,
                         &read_access,
@@ -116,27 +113,18 @@ impl ContentService {
                         !draft,
                     )?;
 
-                    let batch_query = crate::db::query::FindQuery::builder()
-                        .filters(batch_filters)
-                        .limit(BATCH_SIZE)
+                    let find_query = crate::db::query::FindQuery::builder()
+                        .filters(filters)
                         .build();
 
                     let docs = crate::db::query::find(
                         &tx,
                         &collection,
                         &def_owned,
-                        &batch_query,
+                        &find_query,
                         locale_ctx.as_ref(),
                     )
                     .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-                    if docs.is_empty() {
-                        tx.commit()
-                            .context("Commit final transaction")
-                            .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-                        break;
-                    }
 
                     check_per_doc_access(
                         &docs,
@@ -146,6 +134,25 @@ impl ContentService {
                         &tx,
                         "Update access denied",
                     )?;
+
+                    tx.commit()
+                        .context("Commit read transaction")
+                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    docs.into_iter().map(|d| d.id).collect::<Vec<_>>()
+                };
+
+                // Phase 2: Update in chunks to keep transactions short.
+                const CHUNK_SIZE: usize = 500;
+
+                let mut count = 0i64;
+                let mut ids = Vec::new();
+
+                for chunk in doc_ids.chunks(CHUNK_SIZE) {
+                    let tx = conn
+                        .transaction_immediate()
+                        .context("Start update transaction")
+                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                     let wh = RunnerWriteHooks::new(&hook_runner)
                         .with_hooks_enabled(run_hooks)
@@ -157,16 +164,16 @@ impl ContentService {
                         .user(user_doc)
                         .build();
 
-                    for doc in &docs {
+                    for doc_id in chunk {
                         let input = WriteInput::builder(data.clone(), &join_data)
                             .locale_ctx(locale_ctx.as_ref())
                             .draft(draft)
                             .build();
 
-                        service::update_many_single_core(&ctx, &doc.id, input, &locale_config)
+                        service::update_many_single_core(&ctx, doc_id, input, &locale_config)
                             .map_err(|e| e.reclassify(&db_kind))?;
 
-                        ids.push(doc.id.to_string());
+                        ids.push(doc_id.to_string());
                         count += 1;
                     }
 
