@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "crap-cms"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -900,6 +900,7 @@ dependencies = [
  "console",
  "cron",
  "dashmap",
+ "deadpool",
  "deadpool-postgres",
  "dialoguer",
  "dirs",
@@ -918,6 +919,7 @@ dependencies = [
  "mime_guess",
  "mlua",
  "nanoid",
+ "parking_lot",
  "prost",
  "prost-types",
  "r2d2",

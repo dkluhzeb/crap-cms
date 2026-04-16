@@ -10,10 +10,11 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
+use deadpool::managed::{self, Metrics, RecycleResult};
+use parking_lot::Mutex;
 use tokio::task::block_in_place;
-use tokio_postgres::{NoTls, types::Type};
-use tracing::info;
+use tokio_postgres::{Client, NoTls, Statement, types::Type};
+use tracing::{error, info};
 
 use crate::{config::CrapConfig, core::FieldType};
 
@@ -202,6 +203,91 @@ macro_rules! pg_shared_methods {
     };
 }
 
+// ── Statement-cached pool ────────────────────────────────────────────────
+
+/// A pooled tokio_postgres `Client` plus a per-connection prepared-statement
+/// cache. Statements are connection-bound, so the cache must live with the
+/// client across pool checkouts — we achieve that by making `CachedClient`
+/// the deadpool Manager's pooled `Type`.
+///
+/// rusqlite has the equivalent built in (`prepare_cached`); without this
+/// wrapper, every postgres call re-parses the SQL on the postgres side and
+/// the read-path latency is structurally higher than sqlite's even for
+/// trivial queries. Caching brings postgres to feature parity.
+pub struct CachedClient {
+    client: Client,
+    cache: Mutex<HashMap<String, Statement>>,
+}
+
+/// Custom deadpool Manager that produces `CachedClient` instances. We can't
+/// use `deadpool_postgres::Manager` because its pooled `Type` is the bare
+/// `tokio_postgres::Client` — there's no place to attach the cache.
+pub struct CachedManager {
+    config: tokio_postgres::Config,
+}
+
+impl managed::Manager for CachedManager {
+    type Type = CachedClient;
+    type Error = tokio_postgres::Error;
+
+    async fn create(&self) -> std::result::Result<CachedClient, tokio_postgres::Error> {
+        let (client, conn) = self.config.connect(NoTls).await?;
+        // Spawn the connection driver. tokio_postgres requires this — the
+        // Client is just a handle; the driver future does the actual I/O.
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                error!("postgres connection task error: {e}");
+            }
+        });
+        // Set the timezone once at connection creation, so all timestamp
+        // expressions return UTC regardless of server config. Done here
+        // (not on every checkout) so it's a one-time cost.
+        client.batch_execute("SET timezone = 'UTC'").await?;
+        Ok(CachedClient {
+            client,
+            cache: Mutex::new(HashMap::new()),
+        })
+    }
+
+    async fn recycle(
+        &self,
+        _: &mut CachedClient,
+        _: &Metrics,
+    ) -> RecycleResult<tokio_postgres::Error> {
+        // Fast no-op recycle. Cache + connection state preserved across
+        // checkouts. We don't run `DISCARD ALL` because we don't use
+        // session-local state we'd want to clear (no temp tables, no
+        // advisory locks, no SET/RESET runtime params). Discarding would
+        // also throw away the prepared statements — defeating the point.
+        Ok(())
+    }
+}
+
+type CachedPool = managed::Pool<CachedManager>;
+type CachedObject = managed::Object<CachedManager>;
+
+/// Prepare a statement (cache lookup first), then return the cached
+/// `Statement` ready for `client.execute(&stmt, &params)`. The `prepare`
+/// callable is supplied by the caller so this works against either a
+/// `Client` or a `Transaction` (both expose `prepare(&str)`); the caller
+/// closes over `sql` so the borrow stays valid for the future's lifetime.
+async fn cached_prepare<F, Fut>(
+    cache: &Mutex<HashMap<String, Statement>>,
+    sql: &str,
+    prepare: F,
+) -> std::result::Result<Statement, tokio_postgres::Error>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<Statement, tokio_postgres::Error>>,
+{
+    if let Some(stmt) = cache.lock().get(sql).cloned() {
+        return Ok(stmt);
+    }
+    let stmt = prepare().await?;
+    cache.lock().insert(sql.to_string(), stmt.clone());
+    Ok(stmt)
+}
+
 // ── Pool ─────────────────────────────────────────────────────────────────
 
 /// Create a PostgreSQL connection pool from config.
@@ -213,21 +299,15 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
         .ok_or_else(|| anyhow!("database.url is required for postgres backend"))?;
 
     let pg_config: tokio_postgres::Config = url.parse().context("Invalid postgres URL")?;
-    let mgr = Manager::from_config(
-        pg_config,
-        NoTls,
-        ManagerConfig {
-            recycling_method: RecyclingMethod::Clean,
-        },
-    );
+    let mgr = CachedManager { config: pg_config };
 
-    let pool = Pool::builder(mgr)
+    let pool = CachedPool::builder(mgr)
         .max_size(config.database.pool_max_size as usize)
         .build()
         .context("Failed to create Postgres connection pool")?;
 
     info!(
-        "Postgres pool created (max_size={})",
+        "Postgres pool created (max_size={}, statement cache enabled)",
         config.database.pool_max_size
     );
 
@@ -235,25 +315,15 @@ pub fn create_pool(config: &CrapConfig) -> Result<DbPool> {
 }
 
 struct PgPoolBackend {
-    pool: Pool,
+    pool: CachedPool,
 }
 
 impl super::pool::PoolBackend for PgPoolBackend {
     fn get(&self) -> Result<BoxedConnection> {
-        let client = block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let c = self.pool.get().await?;
-                // Ensure all timestamp expressions use UTC, regardless of
-                // the server's timezone setting.
-                c.batch_execute("SET timezone = 'UTC'").await?;
-                Ok::<_, deadpool_postgres::PoolError>(c)
-            })
-        })
-        .map_err(|e| anyhow!("Failed to get Postgres connection: {}", e))?;
+        let obj = block_in_place(|| tokio::runtime::Handle::current().block_on(self.pool.get()))
+            .map_err(|e| anyhow!("Failed to get Postgres connection: {}", e))?;
 
-        Ok(BoxedConnection::new(Box::new(PgConnection {
-            inner: client,
-        })))
+        Ok(BoxedConnection::new(Box::new(PgConnection { inner: obj })))
     }
 
     fn kind(&self) -> &'static str {
@@ -264,16 +334,22 @@ impl super::pool::PoolBackend for PgPoolBackend {
 // ── Connection ───────────────────────────────────────────────────────────
 
 pub struct PgConnection {
-    inner: deadpool_postgres::Client,
+    inner: CachedObject,
 }
 
 impl ConnectionInner for PgConnection {
     fn transaction_boxed(&mut self) -> Result<Box<dyn TransactionInner + '_>> {
-        let tx =
-            block_in_place(|| tokio::runtime::Handle::current().block_on(self.inner.transaction()))
-                .context("Failed to begin transaction")?;
+        // Splitting borrow on CachedClient: tx needs &mut client, cache stays
+        // shared. The Transaction itself implements GenericClient and has
+        // its own prepare() — no need to also hold a &Client.
+        let cached: &mut CachedClient = &mut self.inner;
+        let cache = &cached.cache;
+        let tx = block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(cached.client.transaction())
+        })
+        .context("Failed to begin transaction")?;
 
-        Ok(Box::new(PgTransaction { inner: tx }))
+        Ok(Box::new(PgTransaction { inner: tx, cache }))
     }
 
     fn transaction_immediate_boxed(&mut self) -> Result<Box<dyn TransactionInner + '_>> {
@@ -282,23 +358,42 @@ impl ConnectionInner for PgConnection {
     }
 }
 
-/// Implement the query methods of `DbConnection` for a type with an `inner` field
-/// that implements `GenericClient` (deadpool-postgres).
+/// Generate the query methods of `DbConnection` that route through
+/// `cached_prepare` so we benefit from the per-connection statement cache
+/// on every call. Both `PgConnection` and `PgTransaction` use this.
+///
+/// Inputs:
+/// - `$exec_expr`: `self -> &impl GenericClient` accessor — used for the
+///   actual execute/query AND for prepare(). Both Client and Transaction
+///   have prepare(); Statements are connection-bound and survive the
+///   surrounding transaction's commit/rollback so they're safe to cache
+///   at the connection level.
+/// - `$cache_expr`: `self -> &Mutex<HashMap<String, Statement>>`.
 macro_rules! pg_query_methods {
-    () => {
+    (|$s:ident| exec = $exec_expr:expr, cache = $cache_expr:expr) => {
         fn execute(&self, sql: &str, params: &[DbValue]) -> Result<usize> {
             let pg_params = to_pg_params(params);
             let refs = pg_param_refs(&pg_params);
+            let $s = self;
+            let exec = $exec_expr;
+            let cache = $cache_expr;
             let count = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.inner.execute(sql, &refs))
+                tokio::runtime::Handle::current().block_on(async {
+                    let stmt = cached_prepare(cache, sql, || exec.prepare(sql)).await?;
+                    exec.execute(&stmt, &refs).await
+                })
             })
             .with_context(|| format!("execute failed: {sql}"))?;
             Ok(count as usize)
         }
 
         fn execute_batch(&self, sql: &str) -> Result<()> {
+            // batch_execute uses simple-query protocol (multi-statement,
+            // no params, no caching). Used for setup/migration SQL where
+            // the savings of caching wouldn't apply.
+            let $s = self;
             block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.inner.batch_execute(sql))
+                tokio::runtime::Handle::current().block_on($exec_expr.batch_execute(sql))
             })
             .with_context(|| format!("execute_batch failed: {sql}"))?;
             Ok(())
@@ -317,8 +412,14 @@ macro_rules! pg_query_methods {
         fn query_all(&self, sql: &str, params: &[DbValue]) -> Result<Vec<DbRow>> {
             let pg_params = to_pg_params(params);
             let refs = pg_param_refs(&pg_params);
+            let $s = self;
+            let exec = $exec_expr;
+            let cache = $cache_expr;
             let rows = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.inner.query(sql, &refs))
+                tokio::runtime::Handle::current().block_on(async {
+                    let stmt = cached_prepare(cache, sql, || exec.prepare(sql)).await?;
+                    exec.query(&stmt, &refs).await
+                })
             })
             .with_context(|| format!("query failed: {sql}"))?;
             Ok(rows.iter().map(pg_row_to_dbrow).collect())
@@ -327,8 +428,14 @@ macro_rules! pg_query_methods {
         fn query_one(&self, sql: &str, params: &[DbValue]) -> Result<Option<DbRow>> {
             let pg_params = to_pg_params(params);
             let refs = pg_param_refs(&pg_params);
+            let $s = self;
+            let exec = $exec_expr;
+            let cache = $cache_expr;
             let row = block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.inner.query_opt(sql, &refs))
+                tokio::runtime::Handle::current().block_on(async {
+                    let stmt = cached_prepare(cache, sql, || exec.prepare(sql)).await?;
+                    exec.query_opt(&stmt, &refs).await
+                })
             })
             .with_context(|| format!("query_one failed: {sql}"))?;
             Ok(row.as_ref().map(pg_row_to_dbrow))
@@ -337,14 +444,15 @@ macro_rules! pg_query_methods {
 }
 
 impl DbConnection for PgConnection {
-    pg_query_methods!();
+    pg_query_methods!(|this| exec = &this.inner.client, cache = &this.inner.cache);
     pg_shared_methods!();
 }
 
 // ── Transaction ──────────────────────────────────────────────────────────
 
 pub struct PgTransaction<'conn> {
-    inner: deadpool_postgres::Transaction<'conn>,
+    inner: tokio_postgres::Transaction<'conn>,
+    cache: &'conn Mutex<HashMap<String, Statement>>,
 }
 
 impl TransactionInner for PgTransaction<'_> {
@@ -355,7 +463,7 @@ impl TransactionInner for PgTransaction<'_> {
 }
 
 impl DbConnection for PgTransaction<'_> {
-    pg_query_methods!();
+    pg_query_methods!(|this| exec = &this.inner, cache = this.cache);
     pg_shared_methods!();
 }
 

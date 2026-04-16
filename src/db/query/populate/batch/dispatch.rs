@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::cache::CacheBackend;
 use crate::core::{Document, FieldType, field::flatten_array_sub_fields, upload};
@@ -182,7 +182,12 @@ fn populate_nested_containers(
     Ok(())
 }
 
-/// Populate reverse-lookup join fields (can't batch, falls through to per-doc).
+/// Populate reverse-lookup join fields across all `docs` in a batch.
+///
+/// For each join field, collects every parent doc's id, issues a single
+/// `find(on_field IN (ids…))`, buckets results by `on_field`, and emits a
+/// per-parent array. This replaces the previous per-parent-doc query pattern
+/// (N+1 on the number of parents) — critical for `find_deep` throughput.
 fn populate_join_fields(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
@@ -198,26 +203,10 @@ fn populate_join_fields(
                 .is_none_or(|sel| sel.iter().any(|s| s == &f.name))
     });
 
-    if !has_join_fields || opts.depth <= 0 {
+    if !has_join_fields || opts.depth <= 0 || docs.is_empty() {
         return Ok(());
     }
 
-    for doc in docs.iter_mut() {
-        let mut doc_visited = visited.clone();
-        populate_join_fields_for_doc(ctx, doc, opts, cache, &mut doc_visited)?;
-    }
-
-    Ok(())
-}
-
-/// Populate join fields for a single document.
-fn populate_join_fields_for_doc(
-    ctx: &PopulateContext<'_>,
-    doc: &mut Document,
-    opts: &PopulateOpts<'_>,
-    cache: &dyn CacheBackend,
-    doc_visited: &mut HashSet<(String, String)>,
-) -> Result<()> {
     for field in &ctx.def.fields {
         if field.field_type != FieldType::Join {
             continue;
@@ -239,73 +228,324 @@ fn populate_join_fields_for_doc(
             None => continue,
         };
 
-        let mut fq = FindQuery::new();
+        // Build a shared filter clause for the field — access check runs once
+        // per field, not once per parent doc. Denied → every parent gets [];
+        // Constrained → extra filters merge into the batched query.
+        let mut shared_filters: Vec<FilterClause> = Vec::new();
+        let mut denied_all = false;
 
-        fq.filters = vec![FilterClause::Single(Filter {
-            field: jc.on.clone(),
-            op: FilterOp::Equals(doc.id.to_string()),
-        })];
-
-        // Target-collection access check (SEC-G). Denied => skip; Constrained => merge.
         if let Some(check) = opts.join_access {
             match check.check(target_def.access.read.as_deref(), opts.user)? {
-                AccessResult::Denied => {
-                    doc.fields
-                        .insert(field.name.clone(), Value::Array(Vec::new()));
-                    continue;
-                }
-                AccessResult::Constrained(extra) => fq.filters.extend(extra),
+                AccessResult::Denied => denied_all = true,
+                AccessResult::Constrained(extra) => shared_filters.extend(extra),
                 AccessResult::Allowed => {}
             }
         }
 
-        if let Ok(matched_docs) =
-            read::find(ctx.conn, &jc.collection, &target_def, &fq, opts.locale_ctx)
-        {
-            let mut populated = Vec::new();
+        if denied_all {
+            for doc in docs.iter_mut() {
+                doc.fields
+                    .insert(field.name.clone(), Value::Array(Vec::new()));
+            }
+            continue;
+        }
 
-            for mut matched_doc in matched_docs {
-                hydrate_document(
-                    ctx.conn,
-                    &jc.collection,
-                    &target_def.fields,
-                    &mut matched_doc,
-                    None,
-                    opts.locale_ctx,
-                )?;
+        // Collect unique parent ids. Order-preserving so output is deterministic.
+        let mut parent_ids: Vec<String> = Vec::with_capacity(docs.len());
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        for doc in docs.iter() {
+            let id = doc.id.to_string();
+            if seen_ids.insert(id.clone()) {
+                parent_ids.push(id);
+            }
+        }
 
-                if let Some(ref uc) = target_def.upload
-                    && uc.enabled
-                {
-                    upload::assemble_sizes_object(&mut matched_doc, uc);
+        let mut fq = FindQuery::new();
+        fq.filters = shared_filters;
+        fq.filters.push(FilterClause::Single(Filter {
+            field: jc.on.clone(),
+            op: FilterOp::In(parent_ids),
+        }));
+
+        let matched_docs =
+            match read::find(ctx.conn, &jc.collection, &target_def, &fq, opts.locale_ctx) {
+                Ok(docs) => docs,
+                Err(_) => {
+                    for doc in docs.iter_mut() {
+                        doc.fields
+                            .insert(field.name.clone(), Value::Array(Vec::new()));
+                    }
+                    continue;
                 }
+            };
 
-                populate_relationships_cached(
-                    &PopulateContext {
-                        conn: ctx.conn,
-                        registry: ctx.registry,
-                        collection_slug: &jc.collection,
-                        def: &target_def,
-                    },
-                    &mut matched_doc,
-                    doc_visited,
-                    &PopulateOpts {
-                        depth: opts.depth - 1,
-                        select: None,
-                        locale_ctx: opts.locale_ctx,
-                        join_access: opts.join_access,
-                        user: opts.user,
-                    },
-                    cache,
-                )?;
+        // Hydrate + populate each matched doc once (not per-parent). Nested
+        // populates recurse at depth-1.
+        let mut prepared: Vec<Document> = Vec::with_capacity(matched_docs.len());
+        let mut nested_visited = visited.clone();
+        for mut matched_doc in matched_docs {
+            hydrate_document(
+                ctx.conn,
+                &jc.collection,
+                &target_def.fields,
+                &mut matched_doc,
+                None,
+                opts.locale_ctx,
+            )?;
 
-                populated.push(document_to_json(&matched_doc, &jc.collection));
+            if let Some(ref uc) = target_def.upload
+                && uc.enabled
+            {
+                upload::assemble_sizes_object(&mut matched_doc, uc);
             }
 
-            doc.fields
-                .insert(field.name.clone(), Value::Array(populated));
+            populate_relationships_cached(
+                &PopulateContext {
+                    conn: ctx.conn,
+                    registry: ctx.registry,
+                    collection_slug: &jc.collection,
+                    def: &target_def,
+                },
+                &mut matched_doc,
+                &mut nested_visited,
+                &PopulateOpts {
+                    depth: opts.depth - 1,
+                    select: None,
+                    locale_ctx: opts.locale_ctx,
+                    join_access: opts.join_access,
+                    user: opts.user,
+                },
+                cache,
+            )?;
+
+            prepared.push(matched_doc);
+        }
+
+        // Bucket matched docs by their `on` field value so we can emit one
+        // array per parent. A single matched doc only belongs to one parent
+        // (the `on` column is a scalar foreign-key field).
+        let mut buckets: HashMap<String, Vec<Value>> = HashMap::new();
+        for matched_doc in &prepared {
+            let key = match matched_doc.fields.get(&jc.on) {
+                Some(Value::String(s)) => s.clone(),
+                Some(other) => other.to_string().trim_matches('"').to_string(),
+                None => continue,
+            };
+            buckets
+                .entry(key)
+                .or_default()
+                .push(document_to_json(matched_doc, &jc.collection));
+        }
+
+        for doc in docs.iter_mut() {
+            let arr = buckets.remove(&doc.id.to_string()).unwrap_or_default();
+            doc.fields.insert(field.name.clone(), Value::Array(arr));
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::super::super::test_helpers::{
+        make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
+    };
+    use super::*;
+    use crate::core::Registry;
+    use crate::core::cache::NoneCache;
+
+    /// Regression for the join-field N+1: batch populate across N parent docs
+    /// must produce correct per-parent buckets. Before this change, the code
+    /// issued one `find()` per parent; correctness was preserved but query
+    /// count scaled with N. After the fix: one `IN (…)` query per field,
+    /// results bucketed by the `on_field` value.
+    #[test]
+    fn batch_join_field_buckets_per_parent() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        // Two authors as parents: a1 (has posts p1, p2), a2 (has post p3).
+        let mut docs = vec![
+            {
+                let mut d = Document::new("a1".to_string());
+                d.fields.insert("name".to_string(), json!("Alice"));
+                d
+            },
+            {
+                let mut d = Document::new("a2".to_string());
+                d.fields.insert("name".to_string(), json!("Bob"));
+                d
+            },
+        ];
+
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        // a1 sees exactly its two posts.
+        let a1_posts = docs[0]
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .expect("a1 should get a posts array");
+        assert_eq!(a1_posts.len(), 2, "a1 has 2 posts");
+        let a1_titles: Vec<&str> = a1_posts
+            .iter()
+            .filter_map(|v| v.get("title").and_then(|t| t.as_str()))
+            .collect();
+        assert!(a1_titles.contains(&"First Post"));
+        assert!(a1_titles.contains(&"Second Post"));
+
+        // a2 sees only its own post — no leakage from a1.
+        let a2_posts = docs[1]
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .expect("a2 should get a posts array");
+        assert_eq!(a2_posts.len(), 1, "a2 has 1 post");
+        assert_eq!(
+            a2_posts[0].get("title").and_then(|t| t.as_str()),
+            Some("Other Post")
+        );
+    }
+
+    /// Batch path: an author with no matching posts must get an empty array,
+    /// not a missing field. Before the batch rewrite this worked by accident
+    /// because each parent ran its own query; after the rewrite the bucket
+    /// lookup must still emit `[]` for no-match cases.
+    #[test]
+    fn batch_join_field_empty_bucket_for_parent_with_no_matches() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        // a99 is a parent with no matching posts — the setup_join_db fixture
+        // has no posts with author='a99'.
+        let mut docs = vec![{
+            let mut d = Document::new("a99".to_string());
+            d.fields.insert("name".to_string(), json!("Nobody"));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: None,
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        let posts = docs[0]
+            .fields
+            .get("posts")
+            .and_then(|v| v.as_array())
+            .expect("posts must still be present as an empty array");
+        assert!(
+            posts.is_empty(),
+            "no-match parent must render as empty array, not missing"
+        );
+    }
+
+    /// SEC-G guardrail preserved across the batch: Denied target access must
+    /// leave every parent with an empty array, not an unfiltered fetch.
+    #[test]
+    fn batch_join_field_denies_for_all_parents_when_target_read_denied() {
+        use crate::db::AccessResult;
+        use crate::db::query::populate::JoinAccessCheck;
+        use anyhow::Result as AnyResult;
+
+        struct DenyAll;
+        impl JoinAccessCheck for DenyAll {
+            fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {
+                Ok(AccessResult::Denied)
+            }
+        }
+
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut docs = vec![
+            {
+                let mut d = Document::new("a1".to_string());
+                d.fields.insert("name".to_string(), json!("Alice"));
+                d
+            },
+            {
+                let mut d = Document::new("a2".to_string());
+                d.fields.insert("name".to_string(), json!("Bob"));
+                d
+            },
+        ];
+
+        let deny = DenyAll;
+        populate_relationships_batch_cached(
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut docs,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+                join_access: Some(&deny),
+                user: None,
+            },
+            &NoneCache,
+        )
+        .unwrap();
+
+        for (i, doc) in docs.iter().enumerate() {
+            let arr = doc.fields.get("posts").and_then(|v| v.as_array()).unwrap();
+            assert!(
+                arr.is_empty(),
+                "parent {i} must have empty posts under Denied"
+            );
+        }
+    }
 }

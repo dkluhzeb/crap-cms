@@ -136,8 +136,14 @@ pub struct DatabaseConfig {
     /// Accepts integer milliseconds or human-readable string ("30s", "1m").
     #[serde(with = "serde_duration_ms")]
     pub busy_timeout: u64,
-    /// Pool connection timeout in seconds. Default: 5.
-    /// Accepts integer seconds or human-readable string ("5s", "10s").
+    /// Pool connection timeout in seconds. Default: 30.
+    /// Accepts integer seconds or human-readable string ("30s", "1m").
+    ///
+    /// Should be >= `busy_timeout` so SQLite's own retry loop for write
+    /// contention (WAL single-writer) gets a chance to resolve before the
+    /// outer pool-level timeout fires. A shorter value will cause spurious
+    /// `ServiceError::Transient` errors under load on `find_deep` or bulk
+    /// write workloads where requests issue many back-to-back queries.
     #[serde(with = "serde_duration")]
     pub connection_timeout: u64,
     /// SQLite page cache size in KB. Negative = KB, positive = pages. Default: 16384 (16MB).
@@ -178,7 +184,7 @@ impl Default for DatabaseConfig {
             path: "data/crap.db".to_string(),
             pool_max_size: 64,
             busy_timeout: 30000,
-            connection_timeout: 5,
+            connection_timeout: 30,
             cache_size: default_cache_size(),
             mmap_size: default_mmap_size(),
             wal_autocheckpoint: default_wal_autocheckpoint(),

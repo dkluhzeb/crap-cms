@@ -4,6 +4,110 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.6] — Unreleased
+
+### Added
+
+### Changed
+
+- **Batched `apply_deltas` for ref-count updates** — ref-count
+  increments/decrements are now grouped by (collection, delta) and
+  applied in a single `UPDATE … WHERE id IN (…)` per group instead of
+  one UPDATE per target document. Reduces round-trips from O(targets)
+  to O(distinct collection×delta pairs) — typically 1-3 UPDATEs instead
+  of 5-8+ for a write touching multiple relationships.
+
+- **Data-driven ref-count for creates (`after_create_from_data`)** —
+  on create, outgoing references are now computed from the write data
+  in memory instead of reading them back from the database. Eliminates
+  5+ SELECT queries per create that were redundantly re-reading
+  just-written data.
+
+- **Ref-count skip for non-ref updates** — `persist_update` now checks
+  whether the write data touches any relationship fields. When it
+  doesn't (e.g. updating only `content`), the entire ref-count dance
+  (snapshot before, read after, apply deltas) is skipped — saving
+  ~10 queries per non-ref update.
+
+- **Late ref-count lock acquisition** — the `_ref_count` UPDATE
+  (which acquires a Postgres row-level lock on the referenced target)
+  is now the last operation in `persist_create` and `persist_update`,
+  after version snapshots and FTS indexing. This minimizes the time
+  the row lock is held under concurrent writes to shared targets
+  (e.g. 50 creates all referencing the same author). Combined with
+  the other ref-count optimizations above, concurrent create
+  throughput improved ~3× and write latency dropped significantly.
+
+- **Batched junction-table inserts** — `set_related_ids` and
+  `set_polymorphic_related` now use a single multi-row INSERT instead
+  of one INSERT per related ID. Reduces round-trips from O(N) to 1
+  per has-many relationship field per write.
+
+- **Chunked bulk operations (DeleteMany, UpdateMany)** — bulk
+  mutations now process documents in batches of 500 per transaction
+  instead of loading all matches into a single long-lived transaction.
+  This removes the previous 10,000-document hard limit, keeps row
+  locks short-lived, and prevents timeouts on large bulk deletes
+  (previously a DeleteMany of ~14k documents would hold locks for
+  minutes and timeout the gRPC client).
+
+- **Default `[database] connection_timeout` raised from 5s to 30s** to
+  match `busy_timeout`. The pool-level timeout was firing before
+  SQLite's own WAL-writer retry loop had a chance to resolve write
+  contention, producing spurious `ServiceError::Transient` errors
+  under load (most visible on `find_deep` and bulk-write workloads).
+  The new default lets SQLite's busy handler do its job before the
+  outer pool gives up. Explicit config overrides still win.
+
+- **Postgres backend: per-connection prepared statement caching** —
+  the postgres backend now caches prepared statements per connection,
+  mirroring what rusqlite's `prepare_cached` already provides for the
+  SQLite backend. Previously, every call through the `DbConnection`
+  trait re-parsed and re-planned the SQL on the postgres side — even
+  for identical queries repeated thousands of times per second (e.g.,
+  `SELECT ... FROM posts WHERE id = $1`). The cache is a per-pooled-
+  connection `HashMap<String, Statement>` that persists across pool
+  checkouts (no `DISCARD ALL` — recycling method switched from `Clean`
+  to a no-op fast recycle). `SET timezone = 'UTC'` is also moved from
+  per-checkout to a one-time `post_create` hook, eliminating another
+  round-trip per request. Provides a uniform ~2× throughput improvement
+  across every postgres workload — reads and writes alike. SQLite
+  backend is unchanged.
+
+- **Postgres write path: `SELECT … FOR UPDATE` pre-lock removed from
+  ref-count handling.** Previously, every `create` and `update` on
+  postgres acquired a per-target `FOR UPDATE` row lock on each
+  referenced document before the main INSERT, then again before each
+  ref-count UPDATE — adding 1-2 round-trips per referenced doc on the
+  write hot path. The protection was redundant: the subsequent
+  `UPDATE _ref_count = _ref_count + 1 WHERE id = ?` already takes the
+  same row-level write lock implicitly, and the `affected == 0` check
+  introduced in alpha.5 already detects a concurrently-deleted target
+  and rolls back the enclosing transaction. SQLite was already a
+  no-op on this path (its `IMMEDIATE` transactions serialize all
+  writers at the DB level); SQLite behavior is unchanged. Multi-server
+  no-dangling-reference safety is preserved via `get_ref_count_locked`
+  on the delete side + the create side's `affected == 0` rollback.
+  **Subtle behavior change**: under a tight create-vs-hard-delete
+  race on the same target, the **delete now wins** instead of the
+  create — the create rolls back with a clear "cannot reference X:
+  target no longer exists" error. Both paths produce a consistent
+  database; only which side surfaces the error has shifted.
+
+### Fixed
+
+- **N+1 query on join-field population** — `populate_join_fields` was
+  issuing one `find()` per parent document in a batch. A `find()`
+  returning 20 parent docs with a `comments` join field meant 20
+  follow-up queries. Replaced with a single batched
+  `find(on_field IN (…))` plus post-fetch bucketing by the `on_field`
+  value. Access-check semantics preserved: `Denied` still yields empty
+  arrays for every parent without querying the target collection, and
+  `Constrained` filters merge into the batched query just like they
+  did in the per-parent path. Eliminates the N+1 pattern entirely,
+  yielding order-of-magnitude throughput gains and tail-latency
+  reductions for deep-populated queries.
+
 ## [0.1.0-alpha.5] — 2026-04-15
 
 ### Added

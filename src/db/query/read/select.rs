@@ -21,7 +21,7 @@ pub fn apply_select_filter(
     let mut out_exprs = Vec::new();
     let mut out_names = Vec::new();
 
-    for (expr, name) in select_exprs.into_iter().zip(result_names.into_iter()) {
+    for (expr, name) in select_exprs.into_iter().zip(result_names) {
         let dominated_by_select = matches!(name.as_str(), "id" | "created_at" | "updated_at")
             || selected.contains(name.as_str())
             || name.split_once("__").is_some_and(|(prefix, _)| {

@@ -12,7 +12,7 @@ use crate::{
     service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core},
 };
 
-use super::helpers::{build_bulk_filters, check_per_doc_access, find_matching_docs};
+use super::helpers::{build_bulk_filters, check_per_doc_access};
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -79,43 +79,12 @@ impl ContentService {
                     return Err(Status::permission_denied("Read access denied"));
                 }
 
-                let filters = build_bulk_filters(
-                    &collection,
-                    &def_owned,
-                    &read_access,
-                    req_where.as_deref(),
-                    true,
-                )?;
-
-                let tx = conn
-                    .transaction_immediate()
-                    .context("Start transaction")
-                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-                let docs =
-                    find_matching_docs(&tx, &collection, &def_owned, filters, None, &db_kind)?;
-
                 let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-                check_per_doc_access(
-                    &docs,
-                    access_owned.as_deref(),
-                    user_doc,
-                    &hook_runner,
-                    &tx,
-                    &deny_msg_owned,
-                )?;
-
-                let wh = RunnerWriteHooks::new(&hook_runner)
-                    .with_hooks_enabled(run_hooks)
-                    .with_conn(&tx);
-
-                let ctx = ServiceContext::collection(&collection, &def_owned)
-                    .conn(&tx)
-                    .write_hooks(&wh)
-                    .user(user_doc)
-                    .invalidation_transport(Some(invalidation_transport.clone()))
-                    .build();
+                // Process in batches: find a chunk of matching docs, delete
+                // them, commit, repeat. This avoids loading all documents into
+                // memory at once and keeps transactions short.
+                const BATCH_SIZE: i64 = 500;
 
                 let mut hard_count = 0i64;
                 let mut soft_count = 0i64;
@@ -123,29 +92,93 @@ impl ContentService {
                 let mut upload_fields_to_clean = Vec::new();
                 let mut deleted_ids = Vec::new();
 
-                for doc in &docs {
-                    match delete_document_core(&ctx, &doc.id, Some(&locale_cfg)) {
-                        Ok(result) => {
-                            if def_owned.soft_delete {
-                                soft_count += 1;
-                            } else {
-                                hard_count += 1;
-                                if let Some(fields) = result.upload_doc_fields {
-                                    upload_fields_to_clean.push(fields);
+                loop {
+                    let tx = conn
+                        .transaction_immediate()
+                        .context("Start delete transaction")
+                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    let batch_filters = build_bulk_filters(
+                        &collection,
+                        &def_owned,
+                        &read_access,
+                        req_where.as_deref(),
+                        true,
+                    )?;
+
+                    let batch_query = crate::db::query::FindQuery::builder()
+                        .filters(batch_filters)
+                        .limit(BATCH_SIZE)
+                        .build();
+
+                    let docs =
+                        crate::db::query::find(&tx, &collection, &def_owned, &batch_query, None)
+                            .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    if docs.is_empty() {
+                        tx.commit()
+                            .context("Commit final transaction")
+                            .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                        break;
+                    }
+
+                    // Per-doc access check for this batch.
+                    check_per_doc_access(
+                        &docs,
+                        access_owned.as_deref(),
+                        user_doc,
+                        &hook_runner,
+                        &tx,
+                        &deny_msg_owned,
+                    )?;
+
+                    let wh = RunnerWriteHooks::new(&hook_runner)
+                        .with_hooks_enabled(run_hooks)
+                        .with_conn(&tx);
+
+                    let ctx = ServiceContext::collection(&collection, &def_owned)
+                        .conn(&tx)
+                        .write_hooks(&wh)
+                        .user(user_doc)
+                        .invalidation_transport(Some(invalidation_transport.clone()))
+                        .build();
+
+                    let batch_len = docs.len();
+                    let mut batch_deleted = 0usize;
+
+                    for doc in &docs {
+                        match delete_document_core(&ctx, &doc.id, Some(&locale_cfg)) {
+                            Ok(result) => {
+                                if def_owned.soft_delete {
+                                    soft_count += 1;
+                                } else {
+                                    hard_count += 1;
+                                    if let Some(fields) = result.upload_doc_fields {
+                                        upload_fields_to_clean.push(fields);
+                                    }
                                 }
+                                deleted_ids.push(doc.id.to_string());
+                                batch_deleted += 1;
                             }
-                            deleted_ids.push(doc.id.to_string());
+                            Err(ServiceError::Referenced { .. }) => {
+                                skipped_count += 1;
+                            }
+                            Err(e) => return Err(Status::from(e.reclassify(&db_kind))),
                         }
-                        Err(ServiceError::Referenced { .. }) => {
-                            skipped_count += 1;
-                        }
-                        Err(e) => return Err(Status::from(e.reclassify(&db_kind))),
+                    }
+
+                    tx.commit()
+                        .context("Commit delete transaction")
+                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+
+                    // If nothing was deleted in this batch, all remaining
+                    // matches are referenced — stop to avoid an infinite loop.
+                    if batch_deleted == 0 {
+                        skipped_count = batch_len as i64;
+                        break;
                     }
                 }
-
-                tx.commit()
-                    .context("Commit transaction")
-                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
                 for fields in &upload_fields_to_clean {
                     upload::delete_upload_files(&*storage, fields);

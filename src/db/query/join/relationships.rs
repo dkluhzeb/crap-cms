@@ -10,6 +10,8 @@ use super::helpers::delete_junction_rows;
 /// Set the related IDs for a has-many relationship junction table.
 /// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
 ///
+/// Inserts are batched into a single multi-row INSERT to minimize round-trips.
+///
 /// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
 /// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
 pub fn set_related_ids(
@@ -24,49 +26,60 @@ pub fn set_related_ids(
 
     delete_junction_rows(conn, &table_name, parent_id, locale)?;
 
-    if let Some(loc) = locale {
-        let (p1, p2, p3, p4) = (
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-            conn.placeholder(4),
-        );
-        let sql = format!(
-            "INSERT INTO \"{}\" (parent_id, related_id, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4})",
-            table_name
-        );
-        for (i, id) in ids.iter().enumerate() {
-            conn.execute(
-                &sql,
-                &[
-                    DbValue::Text(parent_id.to_string()),
-                    DbValue::Text(id.clone()),
-                    DbValue::Integer(i as i64),
-                    DbValue::Text(loc.to_string()),
-                ],
-            )?;
-        }
-    } else {
-        let (p1, p2, p3) = (
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-        );
-        let sql = format!(
-            "INSERT INTO \"{}\" (parent_id, related_id, _order) VALUES ({p1}, {p2}, {p3})",
-            table_name
-        );
-        for (i, id) in ids.iter().enumerate() {
-            conn.execute(
-                &sql,
-                &[
-                    DbValue::Text(parent_id.to_string()),
-                    DbValue::Text(id.clone()),
-                    DbValue::Integer(i as i64),
-                ],
-            )?;
-        }
+    if ids.is_empty() {
+        return Ok(());
     }
+
+    if let Some(loc) = locale {
+        let cols_per_row = 4;
+        let mut params: Vec<DbValue> = Vec::with_capacity(ids.len() * cols_per_row);
+        let mut value_groups: Vec<String> = Vec::with_capacity(ids.len());
+
+        for (i, id) in ids.iter().enumerate() {
+            let base = i * cols_per_row;
+            let p1 = conn.placeholder(base + 1);
+            let p2 = conn.placeholder(base + 2);
+            let p3 = conn.placeholder(base + 3);
+            let p4 = conn.placeholder(base + 4);
+            value_groups.push(format!("({p1}, {p2}, {p3}, {p4})"));
+
+            params.push(DbValue::Text(parent_id.to_string()));
+            params.push(DbValue::Text(id.clone()));
+            params.push(DbValue::Integer(i as i64));
+            params.push(DbValue::Text(loc.to_string()));
+        }
+
+        let sql = format!(
+            "INSERT INTO \"{}\" (parent_id, related_id, _order, _locale) VALUES {}",
+            table_name,
+            value_groups.join(", ")
+        );
+        conn.execute(&sql, &params)?;
+    } else {
+        let cols_per_row = 3;
+        let mut params: Vec<DbValue> = Vec::with_capacity(ids.len() * cols_per_row);
+        let mut value_groups: Vec<String> = Vec::with_capacity(ids.len());
+
+        for (i, id) in ids.iter().enumerate() {
+            let base = i * cols_per_row;
+            let p1 = conn.placeholder(base + 1);
+            let p2 = conn.placeholder(base + 2);
+            let p3 = conn.placeholder(base + 3);
+            value_groups.push(format!("({p1}, {p2}, {p3})"));
+
+            params.push(DbValue::Text(parent_id.to_string()));
+            params.push(DbValue::Text(id.clone()));
+            params.push(DbValue::Integer(i as i64));
+        }
+
+        let sql = format!(
+            "INSERT INTO \"{}\" (parent_id, related_id, _order) VALUES {}",
+            table_name,
+            value_groups.join(", ")
+        );
+        conn.execute(&sql, &params)?;
+    }
+
     Ok(())
 }
 
@@ -122,6 +135,8 @@ pub fn find_related_ids(
 /// Each item is a `(related_collection, related_id)` pair.
 /// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
 ///
+/// Inserts are batched into a single multi-row INSERT to minimize round-trips.
+///
 /// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
 /// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
 pub fn set_polymorphic_related(
@@ -136,53 +151,64 @@ pub fn set_polymorphic_related(
 
     delete_junction_rows(conn, &table_name, parent_id, locale)?;
 
-    if let Some(loc) = locale {
-        let (p1, p2, p3, p4, p5) = (
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-            conn.placeholder(4),
-            conn.placeholder(5),
-        );
-        let sql = format!(
-            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
-            table_name
-        );
-        for (i, (rel_col, rel_id)) in items.iter().enumerate() {
-            conn.execute(
-                &sql,
-                &[
-                    DbValue::Text(parent_id.to_string()),
-                    DbValue::Text(rel_id.clone()),
-                    DbValue::Text(rel_col.clone()),
-                    DbValue::Integer(i as i64),
-                    DbValue::Text(loc.to_string()),
-                ],
-            )?;
-        }
-    } else {
-        let (p1, p2, p3, p4) = (
-            conn.placeholder(1),
-            conn.placeholder(2),
-            conn.placeholder(3),
-            conn.placeholder(4),
-        );
-        let sql = format!(
-            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order) VALUES ({p1}, {p2}, {p3}, {p4})",
-            table_name
-        );
-        for (i, (rel_col, rel_id)) in items.iter().enumerate() {
-            conn.execute(
-                &sql,
-                &[
-                    DbValue::Text(parent_id.to_string()),
-                    DbValue::Text(rel_id.clone()),
-                    DbValue::Text(rel_col.clone()),
-                    DbValue::Integer(i as i64),
-                ],
-            )?;
-        }
+    if items.is_empty() {
+        return Ok(());
     }
+
+    if let Some(loc) = locale {
+        let cols_per_row = 5;
+        let mut params: Vec<DbValue> = Vec::with_capacity(items.len() * cols_per_row);
+        let mut value_groups: Vec<String> = Vec::with_capacity(items.len());
+
+        for (i, (rel_col, rel_id)) in items.iter().enumerate() {
+            let base = i * cols_per_row;
+            let p1 = conn.placeholder(base + 1);
+            let p2 = conn.placeholder(base + 2);
+            let p3 = conn.placeholder(base + 3);
+            let p4 = conn.placeholder(base + 4);
+            let p5 = conn.placeholder(base + 5);
+            value_groups.push(format!("({p1}, {p2}, {p3}, {p4}, {p5})"));
+
+            params.push(DbValue::Text(parent_id.to_string()));
+            params.push(DbValue::Text(rel_id.clone()));
+            params.push(DbValue::Text(rel_col.clone()));
+            params.push(DbValue::Integer(i as i64));
+            params.push(DbValue::Text(loc.to_string()));
+        }
+
+        let sql = format!(
+            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order, _locale) VALUES {}",
+            table_name,
+            value_groups.join(", ")
+        );
+        conn.execute(&sql, &params)?;
+    } else {
+        let cols_per_row = 4;
+        let mut params: Vec<DbValue> = Vec::with_capacity(items.len() * cols_per_row);
+        let mut value_groups: Vec<String> = Vec::with_capacity(items.len());
+
+        for (i, (rel_col, rel_id)) in items.iter().enumerate() {
+            let base = i * cols_per_row;
+            let p1 = conn.placeholder(base + 1);
+            let p2 = conn.placeholder(base + 2);
+            let p3 = conn.placeholder(base + 3);
+            let p4 = conn.placeholder(base + 4);
+            value_groups.push(format!("({p1}, {p2}, {p3}, {p4})"));
+
+            params.push(DbValue::Text(parent_id.to_string()));
+            params.push(DbValue::Text(rel_id.clone()));
+            params.push(DbValue::Text(rel_col.clone()));
+            params.push(DbValue::Integer(i as i64));
+        }
+
+        let sql = format!(
+            "INSERT INTO \"{}\" (parent_id, related_id, related_collection, _order) VALUES {}",
+            table_name,
+            value_groups.join(", ")
+        );
+        conn.execute(&sql, &params)?;
+    }
+
     Ok(())
 }
 

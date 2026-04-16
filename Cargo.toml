@@ -1,6 +1,6 @@
 [package]
 name = "crap-cms"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 edition = "2024"
 default-run = "crap-cms"
 description = "Headless CMS in Rust with Lua hooks, gRPC API, and HTMX admin UI"
@@ -112,7 +112,7 @@ semver = "1"
 [features]
 default = ["sqlite"]
 sqlite = ["dep:rusqlite", "dep:r2d2", "dep:r2d2_sqlite"]
-postgres = ["dep:tokio-postgres", "dep:deadpool-postgres"]
+postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:deadpool", "dep:parking_lot"]
 s3-storage = ["dep:rust-s3"]
 redis = ["dep:redis"]
 browser-tests = ["dep:chromiumoxide"]
@@ -133,6 +133,15 @@ features = ["with-serde_json-1"]
 
 [dependencies.deadpool-postgres]
 version = "0.14"
+optional = true
+
+[dependencies.deadpool]
+version = "0.12"
+optional = true
+features = ["managed", "rt_tokio_1"]
+
+[dependencies.parking_lot]
+version = "0.12"
 optional = true
 
 [dependencies.chromiumoxide]
