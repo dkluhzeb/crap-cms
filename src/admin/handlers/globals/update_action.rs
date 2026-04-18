@@ -23,8 +23,8 @@ use crate::{
         },
     },
     core::{
-        Document, auth::AuthUser, collection::GlobalDefinition, event::SharedEventTransport,
-        validate::ValidationError,
+        Document, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
+        event::SharedEventTransport, validate::ValidationError,
     },
     db::{
         DbPool,
@@ -39,6 +39,7 @@ struct UpdateParams {
     pool: DbPool,
     runner: HookRunner,
     event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
     slug: String,
     def: GlobalDefinition,
     form_data: HashMap<String, String>,
@@ -60,6 +61,7 @@ fn execute_update(
         .runner(&params.runner)
         .user(params.user_doc.as_ref())
         .event_transport(params.event_transport)
+        .cache(params.cache)
         .build();
 
     if params.action == "unpublish" && params.def.has_versions() {
@@ -167,6 +169,7 @@ pub async fn update_action(
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
         event_transport: state.event_transport.clone(),
+        cache: state.cache.clone(),
         slug: slug.clone(),
         def: def.clone(),
         form_data: form_data.clone(),

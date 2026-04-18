@@ -58,6 +58,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     let locale_config = state.config.locale.clone();
     let invalidation_transport = state.invalidation_transport.clone();
     let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
 
     if force_hard_delete {
         def_clone.soft_delete = false;
@@ -70,6 +71,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
             .user(user_doc.as_ref())
             .invalidation_transport(Some(invalidation_transport))
             .event_transport(event_transport)
+            .cache(cache)
             .build();
         service::delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
     })

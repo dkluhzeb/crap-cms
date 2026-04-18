@@ -9,7 +9,7 @@ use std::{
 use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
@@ -130,12 +130,6 @@ impl ContentService {
             .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
     }
 
-    /// Clear caches after a mutation. Called from gRPC handlers after
-    /// service-layer write operations (which now publish events internally).
-    pub(in crate::api::handlers) fn on_collection_mutation(&self) {
-        self.clear_cache();
-    }
-
     /// Publish mutation events for a list of document IDs (bulk operations).
     pub(in crate::api::handlers) fn publish_bulk_mutation_events(
         &self,
@@ -143,8 +137,6 @@ impl ContentService {
         doc_ids: &[String],
         operation: EventOperation,
     ) {
-        self.clear_cache();
-
         if let Ok(def) = self.get_collection_def(collection) {
             for doc_id in doc_ids {
                 self.publish_event(
@@ -167,8 +159,6 @@ impl ContentService {
         operation: EventOperation,
         auth_user: &Option<AuthUser>,
     ) {
-        self.clear_cache();
-
         if let Ok(def) = self.get_global_def(slug) {
             self.publish_event(
                 &def.hooks,
@@ -179,12 +169,6 @@ impl ContentService {
                     .edited_by(Self::event_user_from(auth_user))
                     .build(),
             );
-        }
-    }
-
-    fn clear_cache(&self) {
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
         }
     }
 

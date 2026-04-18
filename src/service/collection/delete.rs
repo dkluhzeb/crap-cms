@@ -47,6 +47,7 @@ pub fn delete_document(
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
         .invalidation_transport(ctx.invalidation_transport.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
@@ -56,6 +57,8 @@ pub fn delete_document(
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
     flush_queue(ctx, &queue);

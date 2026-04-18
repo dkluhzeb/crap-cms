@@ -76,6 +76,7 @@ async fn spawn_update(
     let runner = state.hook_runner.clone();
     let invalidation_bus = state.invalidation_transport.clone();
     let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
     let slug_owned = slug.to_string();
     let id_owned = id.to_string();
     let def_owned = def.clone();
@@ -92,6 +93,7 @@ async fn spawn_update(
             .runner(&runner)
             .user(user_doc.as_ref())
             .event_transport(event_transport)
+            .cache(cache)
             .build();
 
         let result = if input.action == "unpublish" && def_owned.has_versions() {

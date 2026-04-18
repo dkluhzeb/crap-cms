@@ -468,6 +468,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .token_provider(token_provider.clone())
                     .password_provider(password_provider.clone())
                     .invalidation_transport(invalidation_transport.clone())
+                    .cache(Some(cache.clone()))
                     .build(),
                 shutdown.clone(),
             )

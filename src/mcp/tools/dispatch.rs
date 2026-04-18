@@ -15,6 +15,7 @@ use crate::{
     config::McpConfig,
     core::{
         Registry,
+        cache::SharedCache,
         event::{SharedEventTransport, SharedInvalidationTransport},
     },
     db::DbPool,
@@ -346,6 +347,7 @@ pub fn execute_tool(
     config: &crate::config::CrapConfig,
     event_transport: Option<SharedEventTransport>,
     invalidation_transport: Option<SharedInvalidationTransport>,
+    cache: Option<SharedCache>,
 ) -> Result<String> {
     // Static tools first
     match name {
@@ -388,6 +390,7 @@ pub fn execute_tool(
                 runner,
                 config,
                 event_transport,
+                cache,
             ),
             ToolOp::Update => exec_update(
                 args,
@@ -397,6 +400,7 @@ pub fn execute_tool(
                 runner,
                 config,
                 event_transport,
+                cache,
             ),
             ToolOp::Delete => exec_delete(
                 args,
@@ -406,13 +410,26 @@ pub fn execute_tool(
                 runner,
                 event_transport,
                 invalidation_transport,
+                cache,
             ),
-            ToolOp::Undelete => {
-                exec_undelete(args, &parsed.slug, registry, pool, runner, event_transport)
-            }
-            ToolOp::Unpublish => {
-                exec_unpublish(args, &parsed.slug, registry, pool, runner, event_transport)
-            }
+            ToolOp::Undelete => exec_undelete(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                event_transport,
+                cache,
+            ),
+            ToolOp::Unpublish => exec_unpublish(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                event_transport,
+                cache,
+            ),
             ToolOp::ListVersions => exec_list_versions(args, &parsed.slug, registry, pool, runner),
             ToolOp::RestoreVersion => exec_restore_version(
                 args,
@@ -422,11 +439,18 @@ pub fn execute_tool(
                 runner,
                 config,
                 event_transport,
+                cache,
             ),
             ToolOp::ReadGlobal => exec_read_global(&parsed.slug, registry, pool, runner),
-            ToolOp::UpdateGlobal => {
-                exec_update_global(args, &parsed.slug, registry, pool, runner, event_transport)
-            }
+            ToolOp::UpdateGlobal => exec_update_global(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                event_transport,
+                cache,
+            ),
         };
     }
 

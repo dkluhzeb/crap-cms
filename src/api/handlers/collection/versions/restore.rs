@@ -41,6 +41,7 @@ impl ContentService {
         let def_owned = def.clone();
         let locale_config = self.locale_config.clone();
         let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
 
         let (doc, _auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
@@ -57,6 +58,7 @@ impl ContentService {
                 .runner(&runner)
                 .user(user_doc.as_ref())
                 .event_transport(event_transport)
+                .cache(cache)
                 .build();
 
             let doc = restore_collection_version(&ctx, &document_id, &version_id, &locale_config)
@@ -69,8 +71,6 @@ impl ContentService {
         .await
         .inspect_err(|e| error!("RestoreVersion task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.on_collection_mutation();
 
         Ok(Response::new(content::RestoreVersionResponse {
             document: Some(doc),

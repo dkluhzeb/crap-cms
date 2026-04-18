@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, event::SharedEventTransport},
+    core::{Registry, cache::SharedCache, event::SharedEventTransport},
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
@@ -16,6 +16,7 @@ use crate::{
 };
 
 /// Execute `create` — create a new document.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_create(
     args: &Value,
     slug: &str,
@@ -24,6 +25,7 @@ pub(in crate::mcp::tools) fn exec_create(
     runner: &HookRunner,
     config: &CrapConfig,
     event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
 ) -> Result<String> {
     let def = registry
         .collections
@@ -49,6 +51,7 @@ pub(in crate::mcp::tools) fn exec_create(
         .runner(runner)
         .override_access(true)
         .event_transport(event_transport)
+        .cache(cache)
         .build();
 
     let (doc, _ctx) = create_document(

@@ -16,6 +16,7 @@ use crate::{
     core::{
         CollectionDefinition,
         auth::AuthUser,
+        cache::SharedCache,
         event::{SharedEventTransport, SharedInvalidationTransport},
         upload,
         upload::StorageBackend,
@@ -40,6 +41,7 @@ fn empty_trash(
     user_doc: Option<&crate::core::Document>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
 ) -> Result<usize, ServiceError> {
     // Find trashed documents via service (respects access.trash)
     let conn = pool.get().map_err(ServiceError::Internal)?;
@@ -86,6 +88,7 @@ fn empty_trash(
         .user(user_doc)
         .invalidation_transport(invalidation_transport)
         .event_transport(event_transport)
+        .cache(cache)
         .build();
 
     let mut deleted = 0;
@@ -140,6 +143,7 @@ pub async fn empty_trash_action(
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
     let invalidation_transport = state.invalidation_transport.clone();
     let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
 
     let result = task::spawn_blocking(move || {
         empty_trash(
@@ -152,6 +156,7 @@ pub async fn empty_trash_action(
             user_doc.as_ref(),
             Some(invalidation_transport),
             event_transport,
+            cache,
         )
     })
     .await;

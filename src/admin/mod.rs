@@ -28,6 +28,7 @@ use crate::{
     core::{
         JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
+        cache::SharedCache,
         email::EmailRenderer,
         email::SharedEmailProvider,
         event::{SharedEventTransport, SharedInvalidationTransport},
@@ -97,6 +98,9 @@ pub struct AdminState {
     /// cache-miss DB fetches across requests. Plumbed into populate contexts
     /// that opt in via the service layer.
     pub populate_singleflight: SharedPopulateSingleflight,
+    /// Shared cross-request cache for populated relationship documents.
+    /// Passed to service-layer write operations for cache invalidation.
+    pub cache: Option<SharedCache>,
 }
 
 impl AdminState {

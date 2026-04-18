@@ -43,6 +43,7 @@ pub fn update_document(
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
         .build();
@@ -51,6 +52,8 @@ pub fn update_document(
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.clear_cache();
 
     ctx.publish_mutation_event(
         EventOperation::Update,

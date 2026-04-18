@@ -49,6 +49,7 @@ impl ContentService {
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
         let slug = req.slug.clone();
         let def_owned = def;
 
@@ -73,6 +74,7 @@ impl ContentService {
                 .runner(&runner)
                 .user(user_doc.as_ref())
                 .event_transport(event_transport)
+                .cache(cache)
                 .build();
 
             let (doc, _req_context) = service::update_global_document(

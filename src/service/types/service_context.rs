@@ -1,14 +1,15 @@
 //! Service context — calling environment for all service operations.
 
-use anyhow::{Context as _, anyhow};
-
 use std::{borrow::Cow, cell::RefCell, collections::HashMap, rc::Rc};
 
+use anyhow::{Context as _, anyhow};
 use serde_json::Value as JsonValue;
+use tracing::warn;
 
 use crate::{
     core::{
         CollectionDefinition, Document, FieldDefinition,
+        cache::SharedCache,
         collection::{GlobalDefinition, Hooks, LiveSetting},
         event::{
             EventOperation, EventTarget, EventUser, SharedEventTransport,
@@ -91,6 +92,9 @@ pub struct ServiceContext<'a> {
     pub user: Option<&'a Document>,
     /// Bypass all access checks (MCP, Lua `overrideAccess`).
     pub override_access: bool,
+    /// Populate cache. When set, service-layer write operations clear
+    /// the cache after commit to prevent stale relationship data.
+    pub cache: Option<SharedCache>,
     /// Transport for publishing mutation events to live-update subscribers.
     /// `None` = event publishing is a no-op.
     pub event_transport: Option<SharedEventTransport>,
@@ -200,6 +204,16 @@ impl<'a> ServiceContext<'a> {
     /// Publish a mutation event to all Subscribe/SSE clients.
     ///
     /// Fire-and-forget: spawns a background task for hooks + broadcast.
+    /// Clear the populate cache after a write operation.
+    /// No-op when no cache is attached.
+    pub fn clear_cache(&self) {
+        if let Some(ref cache) = self.cache
+            && let Err(e) = cache.clear()
+        {
+            warn!("Cache clear failed: {e:#}");
+        }
+    }
+
     /// Publish (or queue) a mutation event.
     ///
     /// When an `event_queue` is set (inside a transaction), the event is
@@ -334,6 +348,7 @@ pub struct ServiceContextBuilder<'a> {
     write_hooks: Option<&'a dyn WriteHooks>,
     user: Option<&'a Document>,
     override_access: bool,
+    cache: Option<SharedCache>,
     event_transport: Option<SharedEventTransport>,
     event_queue: Option<EventQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
@@ -351,6 +366,7 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: None,
             user: None,
             override_access: false,
+            cache: None,
             event_transport: None,
             event_queue: None,
             invalidation_transport: None,
@@ -392,6 +408,13 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach a populate cache. When set, service-layer write operations
+    /// clear the cache after commit to prevent stale relationship data.
+    pub fn cache(mut self, cache: Option<SharedCache>) -> Self {
+        self.cache = cache;
+        self
+    }
+
     /// Attach a mutation event transport. When set, service-layer write
     /// operations publish events to all Subscribe/SSE clients.
     pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
@@ -425,6 +448,7 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: self.write_hooks,
             user: self.user,
             override_access: self.override_access,
+            cache: self.cache,
             event_transport: self.event_transport,
             event_queue: self.event_queue,
             invalidation_transport: self.invalidation_transport,

@@ -69,6 +69,7 @@ mod tests {
             config_dir: tmp.path().to_path_buf(),
             event_transport: None,
             invalidation_transport: None,
+            cache: None,
         };
         (tmp, server)
     }

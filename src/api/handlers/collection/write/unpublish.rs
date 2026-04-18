@@ -28,6 +28,7 @@ impl ContentService {
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
         let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
         let collection = req.collection.clone();
         let id = req.id.clone();
         let def_owned = def.clone();
@@ -49,6 +50,7 @@ impl ContentService {
                 .runner(&runner)
                 .user(user_doc.as_ref())
                 .event_transport(event_transport)
+                .cache(cache)
                 .build();
 
             let doc = service::unpublish_document(&ctx, &id)
@@ -61,8 +63,6 @@ impl ContentService {
         .await
         .inspect_err(|e| error!("Task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.on_collection_mutation();
 
         Ok(Response::new(content::UpdateResponse {
             document: Some(proto_doc),

@@ -36,6 +36,7 @@ pub async fn restore_version(
     let locale_config = state.config.locale.clone();
     let user_doc = get_user_doc(&auth_user).cloned();
     let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
 
     let result = task::spawn_blocking(move || {
         let ctx = ServiceContext::global(&slug, &def)
@@ -43,6 +44,7 @@ pub async fn restore_version(
             .runner(&runner)
             .user(user_doc.as_ref())
             .event_transport(event_transport)
+            .cache(cache)
             .build();
 
         restore_global_version(&ctx, &version_id, &locale_config)

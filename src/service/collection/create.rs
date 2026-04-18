@@ -39,6 +39,7 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
         .build();
@@ -47,6 +48,8 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.clear_cache();
 
     // Publish the main document event + any queued events from Lua CRUD hooks.
     ctx.publish_mutation_event(

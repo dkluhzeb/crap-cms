@@ -43,6 +43,7 @@ impl ContentService {
         let locale_config = self.locale_config.clone();
         let invalidation_transport = self.invalidation_transport.clone();
         let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
 
         task::spawn_blocking(move || -> Result<(), Status> {
             let conn = pool
@@ -62,6 +63,7 @@ impl ContentService {
                 .user(user_doc.as_ref())
                 .invalidation_transport(Some(invalidation_transport))
                 .event_transport(event_transport)
+                .cache(cache)
                 .build();
             service::delete_document(&ctx, &id, Some(&*storage), Some(&locale_config))
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
@@ -71,8 +73,6 @@ impl ContentService {
         .await
         .inspect_err(|e| error!("Task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.on_collection_mutation();
 
         Ok(Response::new(content::DeleteResponse {
             success: true,

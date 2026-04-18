@@ -111,6 +111,7 @@ async fn spawn_create(
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
     let slug_owned = slug.to_string();
     let def_owned = def.clone();
     let user_doc = get_user_doc(auth_user).cloned();
@@ -126,6 +127,7 @@ async fn spawn_create(
             .runner(&runner)
             .user(user_doc.as_ref())
             .event_transport(event_transport)
+            .cache(cache)
             .build();
 
         service::create_document(

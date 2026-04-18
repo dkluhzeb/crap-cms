@@ -102,6 +102,7 @@ pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
         .build();
@@ -110,6 +111,8 @@ pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.clear_cache();
 
     ctx.publish_mutation_event(EventOperation::Update, &doc.id, doc.fields.clone());
     flush_queue(ctx, &queue);

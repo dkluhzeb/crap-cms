@@ -7,7 +7,7 @@ use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    core::{Registry, event::SharedEventTransport},
+    core::{Registry, cache::SharedCache, event::SharedEventTransport},
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
@@ -22,6 +22,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
     pool: &DbPool,
     runner: &HookRunner,
     event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
 ) -> Result<String> {
     let def = registry.globals.get(slug).context("Global not found")?;
 
@@ -32,6 +33,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
         .runner(runner)
         .override_access(true)
         .event_transport(event_transport)
+        .cache(cache)
         .build();
 
     let (doc, _ctx) = update_global_document(&ctx, WriteInput::builder(data, &join_data).build())?;

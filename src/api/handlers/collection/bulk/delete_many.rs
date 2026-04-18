@@ -57,6 +57,7 @@ impl ContentService {
         let def_owned = def;
         let invalidation_transport = self.invalidation_transport.clone();
         let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
 
         let (hard_count, soft_count, skipped_count, deleted_ids) =
             task::spawn_blocking(move || -> Result<(i64, i64, i64, Vec<String>), Status> {
@@ -144,6 +145,7 @@ impl ContentService {
                         .user(user_doc)
                         .invalidation_transport(Some(invalidation_transport.clone()))
                         .event_transport(event_transport.clone())
+                        .cache(cache.clone())
                         .build();
 
                     let batch_len = docs.len();

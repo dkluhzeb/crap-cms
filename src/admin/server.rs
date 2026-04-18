@@ -56,6 +56,7 @@ use crate::{
     core::{
         JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
+        cache::SharedCache,
         email::{EmailRenderer, create_email_provider},
         event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
@@ -84,6 +85,9 @@ pub struct AdminStartParams {
     /// Optional shared invalidation transport — when `None`, a fresh
     /// in-process one is created.
     pub invalidation_transport: Option<SharedInvalidationTransport>,
+    /// Shared cross-request cache for populated relationship documents.
+    /// Passed to service-layer write operations for cache invalidation.
+    pub cache: Option<SharedCache>,
 }
 
 impl AdminStartParams {
@@ -117,6 +121,7 @@ pub async fn start(
         token_provider,
         password_provider,
         invalidation_transport,
+        cache,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
     let handlebars =
@@ -162,6 +167,7 @@ pub async fn start(
         subscriber_send_timeout_ms,
         invalidation_transport,
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
+        cache,
     };
 
     let h2c_enabled = state.config.server.h2c;

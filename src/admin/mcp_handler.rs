@@ -112,6 +112,7 @@ pub(super) async fn mcp_http_handler(
         config_dir: state.config_dir.clone(),
         event_transport: state.event_transport.clone(),
         invalidation_transport: Some(state.invalidation_transport.clone()),
+        cache: state.cache.clone(),
     };
 
     let response = match task::spawn_blocking(move || server.handle_message(rpc_request)).await {
