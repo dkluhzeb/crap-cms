@@ -32,8 +32,9 @@ pub use types::{
 };
 
 pub use collection::{
-    DeleteManyOptions, DeleteManyResult, UpdateManyOptions, UpdateManyResult, create_document,
-    delete_document, delete_many, undelete_document, undelete_document_core, unpublish_document,
+    CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,
+    UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
+    delete_many, undelete_document, undelete_document_core, unpublish_document,
     unpublish_document_core, update_document, update_many,
 };
 pub use email::send_verification_email;

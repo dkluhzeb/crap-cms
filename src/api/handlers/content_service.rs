@@ -309,6 +309,13 @@ impl ContentApi for ContentService {
         self.count_impl(request).await
     }
 
+    async fn create_many(
+        &self,
+        request: Request<content::CreateManyRequest>,
+    ) -> Result<Response<content::CreateManyResponse>, Status> {
+        self.create_many_impl(request).await
+    }
+
     async fn update_many(
         &self,
         request: Request<content::UpdateManyRequest>,

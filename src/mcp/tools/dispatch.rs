@@ -30,7 +30,10 @@ use super::{
     collection::{
         read::{exec_count, exec_find, exec_find_by_id},
         versions::{exec_list_versions, exec_restore_version},
-        write::{exec_create, exec_delete, exec_undelete, exec_unpublish, exec_update},
+        write::{
+            exec_create, exec_create_many, exec_delete, exec_delete_many, exec_undelete,
+            exec_unpublish, exec_update, exec_update_many,
+        },
     },
     globals::{exec_read_global, exec_update_global},
     schema::{
@@ -54,8 +57,11 @@ pub enum ToolOp {
     FindById,
     Count,
     Create,
+    CreateMany,
     Update,
+    UpdateMany,
     Delete,
+    DeleteMany,
     Undelete,
     Unpublish,
     ListVersions,
@@ -114,6 +120,36 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
             name: format!("create_{}", slug),
             description: Some(format!("Create a new {} document", label)),
             input_schema: collection_input_schema(def, CrudOp::Create),
+        });
+
+        // create_many_<slug>
+        tools.push(ToolDefinition {
+            name: format!("create_many_{}", slug),
+            description: Some(format!(
+                "Bulk create multiple {} documents in batched transactions",
+                label
+            )),
+            input_schema: collection_input_schema(def, CrudOp::CreateMany),
+        });
+
+        // update_many_<slug>
+        tools.push(ToolDefinition {
+            name: format!("update_many_{}", slug),
+            description: Some(format!(
+                "Bulk update multiple {} documents matching a filter",
+                label
+            )),
+            input_schema: collection_input_schema(def, CrudOp::UpdateMany),
+        });
+
+        // delete_many_<slug>
+        tools.push(ToolDefinition {
+            name: format!("delete_many_{}", slug),
+            description: Some(format!(
+                "Bulk delete multiple {} documents matching a filter",
+                label
+            )),
+            input_schema: collection_input_schema(def, CrudOp::DeleteMany),
         });
 
         // update_<slug>
@@ -282,8 +318,11 @@ pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
         "find_by_id_",
         "find_",
         "count_",
+        "create_many_",
         "create_",
+        "update_many_",
         "update_",
+        "delete_many_",
         "delete_",
         "undelete_",
         "unpublish_",
@@ -297,8 +336,11 @@ pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
                 "find_" => ToolOp::Find,
                 "find_by_id_" => ToolOp::FindById,
                 "count_" => ToolOp::Count,
+                "create_many_" => ToolOp::CreateMany,
                 "create_" => ToolOp::Create,
+                "update_many_" => ToolOp::UpdateMany,
                 "update_" => ToolOp::Update,
+                "delete_many_" => ToolOp::DeleteMany,
                 "delete_" => ToolOp::Delete,
                 "undelete_" => ToolOp::Undelete,
                 "unpublish_" => ToolOp::Unpublish,
@@ -392,7 +434,26 @@ pub fn execute_tool(
                 event_transport,
                 cache,
             ),
+            ToolOp::CreateMany => exec_create_many(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                event_transport,
+                cache,
+            ),
             ToolOp::Update => exec_update(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                config,
+                event_transport,
+                cache,
+            ),
+            ToolOp::UpdateMany => exec_update_many(
                 args,
                 &parsed.slug,
                 registry,
@@ -408,6 +469,17 @@ pub fn execute_tool(
                 registry,
                 pool,
                 runner,
+                event_transport,
+                invalidation_transport,
+                cache,
+            ),
+            ToolOp::DeleteMany => exec_delete_many(
+                args,
+                &parsed.slug,
+                registry,
+                pool,
+                runner,
+                config,
                 event_transport,
                 invalidation_transport,
                 cache,

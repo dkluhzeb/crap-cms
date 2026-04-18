@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.7] — Unreleased
 
+### Added
+
+- **`service::create_many`** -- new service-layer function for bulk
+  document creation with transaction chunking, event publishing, and
+  cache clearing. Available for Lua hooks, MCP, and direct Rust callers.
+  gRPC `CreateMany` RPC to be added in a future release.
+
 ### Changed
 
 - **Live event publishing moved to the service layer** -- mutation events
