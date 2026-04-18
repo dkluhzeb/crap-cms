@@ -152,7 +152,7 @@ fn update_many_pool(
 
         // Publish events for this chunk after commit.
         for (id, fields) in chunk_results {
-            ctx.publish_mutation_event(EventOperation::Update, &id, fields);
+            ctx.publish_mutation_event(EventOperation::Update, &id, &fields);
         }
         flush_queue(ctx, &queue);
     }
@@ -194,7 +194,7 @@ fn update_many_conn(
 
         let (updated_doc, _) = update_many_single_core(ctx, &doc.id, input, locale_config)?;
 
-        ctx.publish_mutation_event(EventOperation::Update, &doc.id, updated_doc.fields.clone());
+        ctx.publish_mutation_event(EventOperation::Update, &doc.id, &updated_doc.fields);
         updated_ids.push(doc.id.to_string());
         modified += 1;
     }

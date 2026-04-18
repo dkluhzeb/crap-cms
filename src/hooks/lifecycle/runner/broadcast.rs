@@ -202,12 +202,16 @@ impl HookRunner {
             None => return,
         };
 
-        tokio::task::spawn_blocking({
-            let runner = self.clone();
-            let hooks = hooks.clone();
-            let live = live_setting.cloned();
-            move || publish_event_blocking(runner, transport, hooks, live, input)
-        });
+        // Run inline — callers are already on a blocking thread
+        // (spawn_blocking in gRPC/admin handlers). Avoids spawning a
+        // nested blocking task that competes for the thread pool.
+        publish_event_blocking(
+            self.clone(),
+            transport,
+            hooks.clone(),
+            live_setting.cloned(),
+            input,
+        );
     }
 }
 

@@ -67,11 +67,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Update,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
     flush_queue(ctx, &queue);
 
     Ok(result)
@@ -82,11 +78,7 @@ fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Update,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
 
     Ok(result)
 }

@@ -71,11 +71,7 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Create,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
     flush_queue(ctx, &queue);
     ctx.maybe_send_verification(&result.0);
     flush_verification_queue(ctx, &vqueue);
@@ -89,11 +85,7 @@ fn create_document_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Create,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Create, &result.0.id, &result.0.fields);
     ctx.maybe_send_verification(&result.0);
 
     Ok(result)

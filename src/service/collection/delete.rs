@@ -78,7 +78,7 @@ fn delete_document_pool(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
+    ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
     flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
@@ -103,7 +103,7 @@ fn delete_document_conn(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
+    ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
 
     if !def.soft_delete
         && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)

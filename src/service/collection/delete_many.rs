@@ -158,7 +158,7 @@ fn delete_many_pool(
 
         // Publish events for this batch after commit.
         for id in deleted_ids.iter().skip(deleted_ids.len() - batch_deleted) {
-            ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
+            ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
         }
         flush_queue(ctx, &queue);
 

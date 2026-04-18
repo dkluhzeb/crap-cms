@@ -129,7 +129,7 @@ fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, doc.fields.clone());
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
     flush_queue(ctx, &queue);
 
     Ok(doc)
@@ -140,7 +140,7 @@ fn unpublish_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Update, &doc.id, doc.fields.clone());
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, &doc.fields);
 
     Ok(doc)
 }

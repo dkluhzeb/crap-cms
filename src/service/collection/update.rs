@@ -72,11 +72,7 @@ fn update_document_pool(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Update,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
     flush_queue(ctx, &queue);
 
     Ok(result)
@@ -92,11 +88,7 @@ fn update_document_conn(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Update,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
 
     Ok(result)
 }

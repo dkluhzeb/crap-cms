@@ -168,7 +168,7 @@ fn restore_collection_version_pool(
     tx.commit().context("Commit")?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, document_id, doc.fields.clone());
+    ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
 
     Ok(doc)
 }
@@ -182,7 +182,7 @@ fn restore_collection_version_conn(
     let doc = restore_collection_version_core(ctx, document_id, version_id, locale_config)?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, document_id, doc.fields.clone());
+    ctx.publish_mutation_event(EventOperation::Update, document_id, &doc.fields);
 
     Ok(doc)
 }
@@ -272,7 +272,7 @@ pub fn restore_global_version(
     tx.commit().context("Commit")?;
 
     ctx.clear_cache();
-    ctx.publish_mutation_event(EventOperation::Update, "default", doc.fields.clone());
+    ctx.publish_mutation_event(EventOperation::Update, "default", &doc.fields);
 
     Ok(doc)
 }

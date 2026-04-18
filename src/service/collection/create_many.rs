@@ -128,7 +128,7 @@ fn create_many_pooled(
 
         ctx.clear_cache();
         for doc in documents.iter().skip(documents.len() - chunk.len()) {
-            ctx.publish_mutation_event(EventOperation::Create, &doc.id, doc.fields.clone());
+            ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
             ctx.maybe_send_verification(doc);
         }
         flush_queue(ctx, &queue);
@@ -155,7 +155,7 @@ fn create_many_on_conn(
 
         let (doc, _after_ctx) = create_document_core(ctx, input)?;
 
-        ctx.publish_mutation_event(EventOperation::Create, &doc.id, doc.fields.clone());
+        ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
         ctx.maybe_send_verification(&doc);
         documents.push(doc);
         created += 1;

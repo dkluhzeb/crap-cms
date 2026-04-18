@@ -13,7 +13,7 @@ use crate::{
     core::{
         CollectionDefinition, Document, FieldDefinition,
         cache::SharedCache,
-        collection::{GlobalDefinition, Hooks, LiveSetting},
+        collection::{GlobalDefinition, Hooks, LiveMode, LiveSetting},
         email::EmailRenderer,
         event::{
             EventOperation, EventTarget, EventUser, SharedEventTransport,
@@ -318,16 +318,24 @@ impl<'a> ServiceContext<'a> {
         &self,
         operation: EventOperation,
         doc_id: &str,
-        data: HashMap<String, JsonValue>,
+        data: &HashMap<String, JsonValue>,
     ) {
         if self.event_transport.is_none() {
             return;
         }
 
-        let (hooks, live) = match &self.def {
-            Def::Collection(d) => (d.hooks.clone(), d.live.clone()),
-            Def::Global(d) => (d.hooks.clone(), d.live.clone()),
+        let (hooks, live, live_mode) = match &self.def {
+            Def::Collection(d) => (d.hooks.clone(), d.live.clone(), d.live_mode),
+            Def::Global(d) => (d.hooks.clone(), d.live.clone(), d.live_mode),
             Def::None => return,
+        };
+
+        // Only clone document data for Full mode — Metadata mode subscribers
+        // ignore it, so cloning fields would be wasted work.
+        let data = if live_mode == LiveMode::Full {
+            data.clone()
+        } else {
+            HashMap::new()
         };
 
         let edited_by = self.user.map(|u| {
