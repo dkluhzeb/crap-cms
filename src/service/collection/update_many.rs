@@ -124,6 +124,8 @@ fn update_many_pool(
             .event_queue(queue.clone())
             .build();
 
+        let mut chunk_results = Vec::with_capacity(chunk.len());
+
         for doc_id in chunk {
             let input = WriteInput::builder(data.clone(), join_data)
                 .locale_ctx(opts.locale_ctx)
@@ -131,8 +133,9 @@ fn update_many_pool(
                 .ui_locale(opts.ui_locale.clone())
                 .build();
 
-            update_many_single_core(&inner_ctx, doc_id, input, locale_config)?;
+            let (doc, _) = update_many_single_core(&inner_ctx, doc_id, input, locale_config)?;
 
+            chunk_results.push((doc_id.to_string(), doc.fields.clone()));
             ids.push(doc_id.to_string());
             count += 1;
         }
@@ -144,8 +147,8 @@ fn update_many_pool(
         ctx.clear_cache();
 
         // Publish events for this chunk after commit.
-        for id in chunk {
-            ctx.publish_mutation_event(EventOperation::Update, id, Default::default());
+        for (id, fields) in chunk_results {
+            ctx.publish_mutation_event(EventOperation::Update, &id, fields);
         }
         flush_queue(ctx, &queue);
     }
@@ -185,8 +188,9 @@ fn update_many_conn(
             .ui_locale(opts.ui_locale.clone())
             .build();
 
-        update_many_single_core(ctx, &doc.id, input, locale_config)?;
+        let (updated_doc, _) = update_many_single_core(ctx, &doc.id, input, locale_config)?;
 
+        ctx.publish_mutation_event(EventOperation::Update, &doc.id, updated_doc.fields.clone());
         updated_ids.push(doc.id.to_string());
         modified += 1;
     }
