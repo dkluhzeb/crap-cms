@@ -15,7 +15,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   On first install, a hint is shown with how to activate completions
   in the current session.
 
+- **`status --check` health audit** — best-practice audit for project
+  configuration. Checks 24 rules across security, performance, config,
+  and operations:
+  - **Security**: auth secret strength/placeholder detection, brute-force
+    protection, default_deny, access rules coverage, rate limiting with
+    auth collections, CORS wildcard + credentials conflict.
+  - **Performance**: max_depth, cache disabled with relationships,
+    pool_max_size, connection_timeout, compression, pagination max_limit,
+    too many hooks/before_change hooks, too many live_mode "full" collections.
+  - **Config**: dev_mode, default_depth vs max_depth, email provider "log"
+    with verify_email enabled.
+  - **Operations**: pending migrations, auth collection without soft_delete,
+    upload collection without versioning, soft_delete without retention
+    policy, empty auth collection (0 users).
+
 ### Changed
+
+- **`status` command enhanced** — now displays:
+  - Server configuration (ports, compression, rate limiting).
+  - Trash count per collection (soft-deleted documents) and `soft_delete` tag.
+  - Versioning details (drafts, max versions) per versioned collection.
+  - Access rules overview (read/create/update/delete functions per
+    collection and global, with default deny/allow indicator).
+  - Hooks assignments (which lifecycle hooks are wired, with function names).
+  - Live event configuration (mode per target, or summary).
 
 ### Fixed
 

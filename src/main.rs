@@ -101,7 +101,11 @@ enum Command {
     },
 
     /// Show project status (collections, globals, migrations)
-    Status,
+    Status {
+        /// Run best-practice health checks on configuration and project state
+        #[arg(long)]
+        check: bool,
+    },
 
     /// User management for auth collections
     #[command(name = "user")]
@@ -395,9 +399,9 @@ async fn run(cli: Cli) -> Result<()> {
             }
             commands::work::run(&config, queues, concurrency, no_cron).await
         }
-        Command::Status => {
+        Command::Status { check } => {
             let config = commands::resolve_config_dir(config_flag)?;
-            commands::status::run(&config)
+            commands::status::run(&config, check)
         }
         Command::User { action } => {
             let config = commands::resolve_config_dir(config_flag)?;

@@ -121,10 +121,65 @@ crap-cms work -d --queues heavy --concurrency 2  # heavy processing
 ### `status` — Show project status
 
 ```bash
-crap-cms status
+crap-cms status [--check]
 ```
 
-Prints collections (with row counts), globals, DB size, and migration status.
+| Flag | Description |
+|------|-------------|
+| `--check` | Run best-practice health checks on configuration and project state |
+
+Prints a comprehensive project overview:
+
+- **Server config** — ports, compression, rate limiting
+- **Database** — path, size (SQLite), or backend name (PostgreSQL)
+- **Uploads** — total size and file count
+- **Locales** — configured locales and fallback setting
+- **Collections** — row counts, trash counts (soft-deleted documents), and tags (auth, upload, versions, soft_delete)
+- **Globals** — registered global documents
+- **Versioning** — which collections have drafts enabled and max version limits
+- **Access rules** — read/create/update/delete functions per collection and global, with default deny/allow indicator
+- **Hooks** — which lifecycle hooks are wired and to which functions
+- **Live events** — event mode per target (metadata, full, disabled, or filter function)
+- **Migrations** — total, applied, pending
+- **Jobs** — defined, running, failed in last 24h
+
+#### `status --check`
+
+Runs a best-practice audit with 24 checks across four categories:
+
+**Security:**
+- Auth secret too short or placeholder value
+- Brute-force protection disabled
+- `default_deny = false` (collections publicly accessible)
+- Collections without access rules
+- gRPC rate limiting disabled with auth collections
+- CORS wildcard origin with credentials
+
+**Performance:**
+- `max_depth > 3` (N+1 query growth)
+- Cache disabled with relationship fields
+- Pool size too small or connection timeout too aggressive
+- Response compression disabled
+- `pagination.max_limit > 500`
+- Too many hooks or before_change hooks per collection
+- Too many collections with `live_mode = "full"`
+
+**Configuration:**
+- `dev_mode` enabled
+- `default_depth` exceeds `max_depth`
+- Email provider set to `"log"` with `verify_email` enabled
+
+**Operations:**
+- Pending migrations
+- Auth collection without soft_delete
+- Upload collection without versioning
+- Soft delete without retention policy
+- Empty auth collection (0 users)
+
+```bash
+crap-cms status                # project overview
+crap-cms status --check        # overview + health audit
+```
 
 ### `user` — User management
 
@@ -859,6 +914,91 @@ crap-cms logs clear          # remove old rotated files
 ```
 
 Log files are stored in `data/logs/` (or the path configured in `[logging] path`). Old files are automatically pruned on startup based on `max_files`. See [Configuration Reference](../configuration/crap-toml.md) for all logging options.
+
+### `update` — Manage installed versions
+
+```bash
+crap-cms update [-y] [--force]
+crap-cms update <SUBCOMMAND>
+```
+
+Without a subcommand, checks for a newer release and installs + activates it (with confirmation prompt).
+
+| Flag | Description |
+|------|-------------|
+| `-y`, `--yes` | Skip confirmation prompts |
+| `--force` | Allow self-update even when the binary looks distro-managed |
+
+#### `update check`
+
+```bash
+crap-cms update check
+```
+
+Compare current version to the latest GitHub release. Exit code 0 if up-to-date, 1 if newer is available.
+
+#### `update list`
+
+```bash
+crap-cms update list
+```
+
+List available release tags, marking installed versions and the active one.
+
+#### `update install`
+
+```bash
+crap-cms update install <VERSION> [--reinstall]
+```
+
+Download, verify (SHA256), and stage a version in the local store (`~/.local/share/crap-cms/versions/`). Does not activate — use `update use` to switch.
+
+#### `update use`
+
+```bash
+crap-cms update use <VERSION>
+```
+
+Switch the `current` symlink to the given installed version. Also auto-installs shell completions for the user's shell (bash, zsh, or fish).
+
+#### `update uninstall`
+
+```bash
+crap-cms update uninstall <VERSION>
+```
+
+Remove an installed version from the store. Refuses to uninstall the active version.
+
+#### `update where`
+
+```bash
+crap-cms update where
+```
+
+Print the resolved path of the currently active binary.
+
+#### `update completions`
+
+```bash
+crap-cms update completions <SHELL>
+```
+
+Generate shell completions and print to stdout. Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+For bash, zsh, and fish, completions are also auto-installed after `update use` and bare `update`. On first install, a hint is shown with how to activate completions in the current session.
+
+```bash
+crap-cms update                          # install latest + activate
+crap-cms update -y                       # non-interactive
+crap-cms update check                    # check for updates
+crap-cms update list                     # list available versions
+crap-cms update install v0.1.0-alpha.7   # download + verify
+crap-cms update use v0.1.0-alpha.7       # switch to version
+crap-cms update uninstall v0.1.0-alpha.6 # remove old version
+crap-cms update where                    # print active binary path
+crap-cms update completions bash         # print bash completions
+eval "$(crap-cms update completions bash)"  # source directly
+```
 
 ## Environment Variables
 
