@@ -72,20 +72,12 @@ pub(super) fn handle_unpublish(
             .map_err(|e| RuntimeError(format!("before_change hook error: {e:#}")))?;
     }
 
-    let event_transport = hook_event_transport(lua);
-    let cache = hook_cache(lua);
-    let event_queue = hook_event_queue(lua);
+    let lua_infra = hook_lua_infra(lua);
 
     let mut ctx_builder = ServiceContext::collection(ctx.collection, ctx.def).conn(conn);
 
-    if let Some(et) = event_transport {
-        ctx_builder = ctx_builder.event_transport(Some(et));
-    }
-    if let Some(c) = cache {
-        ctx_builder = ctx_builder.cache(Some(c));
-    }
-    if let Some(eq) = event_queue {
-        ctx_builder = ctx_builder.event_queue(eq);
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
     }
 
     let svc_ctx = ctx_builder.build();
@@ -192,9 +184,7 @@ fn unpublish_document_lua(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
-    let event_transport = hook_event_transport(lua);
-    let cache = hook_cache(lua);
-    let event_queue = hook_event_queue(lua);
+    let lua_infra = hook_lua_infra(lua);
     let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
     let run_hooks = get_opt_bool(&opts, "hooks", true)?;
     let def = resolve_collection(reg, &collection)?;
@@ -226,14 +216,8 @@ fn unpublish_document_lua(
         .user(user.as_ref())
         .override_access(override_access);
 
-    if let Some(et) = event_transport {
-        ctx_builder = ctx_builder.event_transport(Some(et));
-    }
-    if let Some(c) = cache {
-        ctx_builder = ctx_builder.cache(Some(c));
-    }
-    if let Some(eq) = event_queue {
-        ctx_builder = ctx_builder.event_queue(eq);
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
     }
 
     let ctx = ctx_builder.build();

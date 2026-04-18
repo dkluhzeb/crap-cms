@@ -539,6 +539,21 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Apply infrastructure from a `LuaCrudInfra` bundle (event transport,
+    /// cache, event queue, verification queue). Used by Lua CRUD functions
+    /// to transfer the parent's infrastructure in a single call.
+    pub fn lua_infra(mut self, infra: &crate::hooks::LuaCrudInfra) -> Self {
+        if infra.event_transport.is_some() {
+            self.event_transport = infra.event_transport.clone();
+        }
+        if infra.cache.is_some() {
+            self.cache = infra.cache.clone();
+        }
+        self.event_queue = infra.event_queue.clone();
+        self.verification_queue = infra.verification_queue.clone();
+        self
+    }
+
     /// Attach a user-invalidation transport. When set, service-layer
     /// operations that revoke user sessions (lock, hard-delete of auth
     /// documents) will publish a tear-down signal.

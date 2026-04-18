@@ -155,6 +155,23 @@ pub struct LuaCrudInfra {
     pub verification_queue: Option<VerificationQueue>,
 }
 
+impl LuaCrudInfra {
+    /// Build from a parent `ServiceContext`, attaching the given queues.
+    /// Clones the context's event transport and cache (cheap Arc clones).
+    pub fn from_ctx(
+        ctx: &crate::service::ServiceContext,
+        event_queue: Option<EventQueue>,
+        verification_queue: Option<VerificationQueue>,
+    ) -> Self {
+        Self {
+            event_transport: ctx.event_transport.clone(),
+            cache: ctx.cache.clone(),
+            event_queue,
+            verification_queue,
+        }
+    }
+}
+
 // Safety: LuaCrudInfra contains Arc (Send+Sync) and Rc<RefCell> (not Send).
 // The Rc<RefCell<Vec>> (EventQueue) is only accessed on the same thread that
 // owns the Lua VM — mlua's `send` feature enforces this at the type level.

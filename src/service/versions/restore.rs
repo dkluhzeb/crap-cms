@@ -144,12 +144,7 @@ fn restore_collection_version_pool(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let infra = LuaCrudInfra {
-        event_transport: ctx.event_transport.clone(),
-        cache: ctx.cache.clone(),
-        event_queue: None,
-        verification_queue: None,
-    };
+    let infra = LuaCrudInfra::from_ctx(ctx, None, None);
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)
@@ -253,12 +248,7 @@ pub fn restore_global_version(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let infra = LuaCrudInfra {
-        event_transport: ctx.event_transport.clone(),
-        cache: ctx.cache.clone(),
-        event_queue: None,
-        verification_queue: None,
-    };
+    let infra = LuaCrudInfra::from_ctx(ctx, None, None);
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)

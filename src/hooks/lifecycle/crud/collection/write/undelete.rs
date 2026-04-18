@@ -26,9 +26,7 @@ fn undelete_document_lua(
 
     let override_access = get_opt_bool(opts, "overrideAccess", false)?;
     let user = hook_user(lua);
-    let event_transport = hook_event_transport(lua);
-    let cache = hook_cache(lua);
-    let event_queue = hook_event_queue(lua);
+    let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, collection)?;
 
     if !def.soft_delete {
@@ -51,14 +49,8 @@ fn undelete_document_lua(
         .user(user.as_ref())
         .override_access(override_access);
 
-    if let Some(et) = event_transport {
-        ctx_builder = ctx_builder.event_transport(Some(et));
-    }
-    if let Some(c) = cache {
-        ctx_builder = ctx_builder.cache(Some(c));
-    }
-    if let Some(eq) = event_queue {
-        ctx_builder = ctx_builder.event_queue(eq);
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
     }
 
     let ctx = ctx_builder.build();

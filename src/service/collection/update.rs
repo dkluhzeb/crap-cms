@@ -45,12 +45,7 @@ fn update_document_pool(
 
     let queue = Rc::new(RefCell::new(Vec::new()));
 
-    let infra = LuaCrudInfra {
-        event_transport: ctx.event_transport.clone(),
-        cache: ctx.cache.clone(),
-        event_queue: Some(queue.clone()),
-        verification_queue: None,
-    };
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
 
     let mut wh = RunnerWriteHooks::new(runner)
         .with_conn(&tx)

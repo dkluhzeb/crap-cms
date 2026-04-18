@@ -91,12 +91,7 @@ fn create_many_pooled(
         let queue = Rc::new(RefCell::new(Vec::new()));
         let vqueue = Rc::new(RefCell::new(Vec::new()));
 
-        let infra = LuaCrudInfra {
-            event_transport: ctx.event_transport.clone(),
-            cache: ctx.cache.clone(),
-            event_queue: Some(queue.clone()),
-            verification_queue: Some(vqueue.clone()),
-        };
+        let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), Some(vqueue.clone()));
 
         let mut wh = RunnerWriteHooks::new(runner)
             .with_conn(&tx)

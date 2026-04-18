@@ -11,10 +11,8 @@ use tracing::warn;
 
 use crate::{
     core::{
-        CollectionDefinition, Document, SharedRegistry,
-        cache::SharedCache,
-        collection::GlobalDefinition,
-        event::{SharedEventTransport, SharedInvalidationTransport},
+        CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition,
+        event::SharedInvalidationTransport,
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
@@ -23,7 +21,7 @@ use crate::{
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
-    service::{EventQueue, VerificationQueue, validate_access_constraints},
+    service::validate_access_constraints,
 };
 
 /// Extract a bool from an optional Lua options table, returning `default` when absent.
@@ -63,28 +61,10 @@ pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSing
         .map(|sf| sf.0.clone())
 }
 
-/// Extract the event transport from Lua app_data (if CRUD infra was threaded in).
-pub(crate) fn hook_event_transport(lua: &Lua) -> Option<SharedEventTransport> {
-    lua.app_data_ref::<LuaCrudInfra>()
-        .and_then(|i| i.event_transport.clone())
-}
-
-/// Extract the cache from Lua app_data (if CRUD infra was threaded in).
-pub(crate) fn hook_cache(lua: &Lua) -> Option<SharedCache> {
-    lua.app_data_ref::<LuaCrudInfra>()
-        .and_then(|i| i.cache.clone())
-}
-
-/// Extract the event queue from Lua app_data (if CRUD infra was threaded in).
-pub(crate) fn hook_event_queue(lua: &Lua) -> Option<EventQueue> {
-    lua.app_data_ref::<LuaCrudInfra>()
-        .and_then(|i| i.event_queue.clone())
-}
-
-/// Extract the verification queue from Lua app_data (if CRUD infra was threaded in).
-pub(crate) fn hook_verification_queue(lua: &Lua) -> Option<VerificationQueue> {
-    lua.app_data_ref::<LuaCrudInfra>()
-        .and_then(|i| i.verification_queue.clone())
+/// Build a `LuaCrudInfra` from all available Lua app_data fields.
+/// Returns `None` when no infra was threaded into the VM.
+pub(crate) fn hook_lua_infra(lua: &Lua) -> Option<LuaCrudInfra> {
+    lua.app_data_ref::<LuaCrudInfra>().map(|i| i.clone())
 }
 
 /// Extract the invalidation transport from Lua app_data (if set via

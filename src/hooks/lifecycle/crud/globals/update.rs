@@ -27,9 +27,7 @@ fn globals_update_inner(
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
 
-    let event_transport = hook_event_transport(lua);
-    let cache = hook_cache(lua);
-    let event_queue = hook_event_queue(lua);
+    let lua_infra = hook_lua_infra(lua);
     let locale_str = get_opt_string(&opts, "locale")?;
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
@@ -73,14 +71,8 @@ fn globals_update_inner(
         .user(user.as_ref())
         .override_access(override_access);
 
-    if let Some(et) = event_transport {
-        ctx_builder = ctx_builder.event_transport(Some(et));
-    }
-    if let Some(c) = cache {
-        ctx_builder = ctx_builder.cache(Some(c));
-    }
-    if let Some(eq) = event_queue {
-        ctx_builder = ctx_builder.event_queue(eq);
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
     }
 
     let ctx = ctx_builder.build();
