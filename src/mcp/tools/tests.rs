@@ -771,6 +771,7 @@ fn execute_tool_config_tools_disabled_returns_error() {
         tmp.path(),
         &config,
         None,
+        None,
     )
     .unwrap_err();
     assert!(err.to_string().contains("config_tools"));
@@ -801,6 +802,7 @@ fn execute_tool_unknown_tool_errors() {
         &runner,
         tmp.path(),
         &config,
+        None,
         None,
     )
     .unwrap_err();
@@ -841,6 +843,7 @@ fn execute_tool_excluded_collection_returns_error() {
         &runner,
         tmp.path(),
         &config,
+        None,
         None,
     )
     .unwrap_err();
@@ -886,6 +889,7 @@ fn execute_tool_included_collection_succeeds() {
         tmp.path(),
         &config,
         None,
+        None,
     );
     assert!(result.is_ok(), "find_posts should succeed: {:?}", result);
 
@@ -898,6 +902,7 @@ fn execute_tool_included_collection_succeeds() {
         &runner,
         tmp.path(),
         &config,
+        None,
         None,
     )
     .unwrap_err();

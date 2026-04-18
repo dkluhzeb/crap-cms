@@ -16,21 +16,15 @@ use crate::{
         AdminState,
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
-            shared::{
-                forbidden, get_event_user, get_user_doc, htmx_redirect, redirect_response,
-                toast_only_error,
-            },
+            shared::{forbidden, get_user_doc, htmx_redirect, redirect_response, toast_only_error},
         },
     },
     core::{
-        Document,
         auth::AuthUser,
         collection::CollectionDefinition,
-        event::{EventOperation, EventTarget},
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
     db::query::{LocaleContext, LocaleMode},
-    hooks::lifecycle::PublishEventInput,
     service::{
         self, ServiceContext, ServiceError,
         auth::{lock_user, unlock_user},
@@ -40,16 +34,8 @@ use crate::{
 use super::render_form_validation_errors;
 use super::upload::{UploadParams, UploadResult, process_collection_upload};
 
-/// Handle post-update success: commit upload, clean old files, enqueue conversions, publish event.
-fn handle_update_success(
-    state: &AdminState,
-    def: &CollectionDefinition,
-    slug: &str,
-    id: &str,
-    doc: &Document,
-    upload: Option<UploadResult>,
-    auth_user: &Option<Extension<AuthUser>>,
-) {
+/// Handle post-update success: commit upload, clean old files, enqueue conversions.
+fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Option<UploadResult>) {
     if let Some(mut ur) = upload {
         ur.guard.commit();
 
@@ -64,18 +50,6 @@ fn handle_update_success(
             warn!("Failed to enqueue image conversions: {}", e);
         }
     }
-
-    state.hook_runner.publish_event(
-        &state.event_transport,
-        &def.hooks,
-        def.live.as_ref(),
-        PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
-            .collection(slug.to_string())
-            .document_id(id.to_string())
-            .data(doc.fields.clone())
-            .edited_by(get_event_user(auth_user))
-            .build(),
-    );
 }
 
 /// Prepared update input.
@@ -101,6 +75,7 @@ async fn spawn_update(
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let invalidation_bus = state.invalidation_transport.clone();
+    let event_transport = state.event_transport.clone();
     let slug_owned = slug.to_string();
     let id_owned = id.to_string();
     let def_owned = def.clone();
@@ -116,6 +91,7 @@ async fn spawn_update(
             .pool(&pool)
             .runner(&runner)
             .user(user_doc.as_ref())
+            .event_transport(event_transport)
             .build();
 
         let result = if input.action == "unpublish" && def_owned.has_versions() {
@@ -249,8 +225,8 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     .await;
 
     match result {
-        Ok(Ok((doc, _req_context))) => {
-            handle_update_success(state, &def, slug, id, &doc, upload_result, auth_user);
+        Ok(Ok(_)) => {
+            handle_update_success(state, slug, id, upload_result);
 
             htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
         }

@@ -1,14 +1,17 @@
 //! Collection document deletion.
 
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow::Context as _;
 use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::upload::{self, StorageBackend},
-    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core},
+    core::{
+        event::EventOperation,
+        upload::{self, StorageBackend},
+    },
+    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core, flush_queue},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -37,17 +40,25 @@ pub fn delete_document(
         wh = wh.with_override_access();
     }
 
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
         .invalidation_transport(ctx.invalidation_transport.clone())
+        .event_transport(ctx.event_transport.clone())
+        .event_queue(queue.clone())
         .build();
 
     let result = delete_document_core(&inner_ctx, id, locale_config)?;
+    drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
+    flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
     if !def.soft_delete

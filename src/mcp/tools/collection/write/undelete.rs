@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tracing::info;
 
 use crate::{
-    core::Registry,
+    core::{Registry, event::SharedEventTransport},
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, undelete_document},
@@ -20,6 +20,7 @@ pub(in crate::mcp::tools) fn exec_undelete(
     registry: &Arc<Registry>,
     pool: &DbPool,
     runner: &HookRunner,
+    event_transport: Option<SharedEventTransport>,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -34,6 +35,7 @@ pub(in crate::mcp::tools) fn exec_undelete(
         .pool(pool)
         .runner(runner)
         .override_access(true)
+        .event_transport(event_transport)
         .build();
 
     undelete_document(&ctx, id)?;

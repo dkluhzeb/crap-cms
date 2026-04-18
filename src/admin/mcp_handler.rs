@@ -110,7 +110,7 @@ pub(super) async fn mcp_http_handler(
         runner: state.hook_runner.clone(),
         config: state.config.clone(),
         config_dir: state.config_dir.clone(),
-        // Thread the transport so MCP hard-delete tears down live streams.
+        event_transport: state.event_transport.clone(),
         invalidation_transport: Some(state.invalidation_transport.clone()),
     };
 

@@ -24,10 +24,11 @@ pub mod write;
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, CountDocumentsInputBuilder, Def, FindByIdInput, FindByIdInputBuilder,
-    FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput, ListVersionsInput,
-    PaginatedResult, PersistOptions, PersistOptionsBuilder, SearchDocumentsInput, ServiceContext,
-    ServiceContextBuilder, WriteInput, WriteInputBuilder, WriteResult,
+    CountDocumentsInput, CountDocumentsInputBuilder, Def, EventQueue, FindByIdInput,
+    FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
+    ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
+    SearchDocumentsInput, ServiceContext, ServiceContextBuilder, WriteInput, WriteInputBuilder,
+    WriteResult, flush_queue,
 };
 
 pub use collection::{

@@ -8,7 +8,7 @@ use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
-    core::{AuthUser, Document, FieldDefinition, FieldType, event::EventUser},
+    core::{AuthUser, Document, FieldDefinition, FieldType},
     db::AccessResult,
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
@@ -18,13 +18,6 @@ use super::response::{forbidden, server_error};
 /// Extract the user document from AuthUser extension (for access checks).
 pub fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&Document> {
     auth_user.as_ref().map(|Extension(au)| &au.user_doc)
-}
-
-/// Extract an EventUser from the AuthUser extension (for SSE event attribution).
-pub fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<EventUser> {
-    auth_user
-        .as_ref()
-        .map(|Extension(au)| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
 }
 
 /// Helper to check collection/global-level access. Returns AccessResult or renders a 403 page.

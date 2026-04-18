@@ -69,6 +69,7 @@ impl ContentService {
         let req_where = req.r#where.clone();
         let def_owned = def;
         let locale_config = self.locale_config.clone();
+        let event_transport = self.event_transport.clone();
 
         let (modified, updated_ids) =
             task::spawn_blocking(move || -> Result<(i64, Vec<String>), Status> {
@@ -162,6 +163,7 @@ impl ContentService {
                         .conn(&tx)
                         .write_hooks(&wh)
                         .user(user_doc)
+                        .event_transport(event_transport.clone())
                         .build();
 
                     for doc_id in chunk {

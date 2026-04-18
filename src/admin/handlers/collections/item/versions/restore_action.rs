@@ -35,12 +35,14 @@ pub async fn restore_version(
     let runner = state.hook_runner.clone();
     let locale_config = state.config.locale.clone();
     let user_doc = get_user_doc(&auth_user).cloned();
+    let event_transport = state.event_transport.clone();
 
     let result = task::spawn_blocking(move || {
         let ctx = ServiceContext::collection(&slug, &def)
             .pool(&pool)
             .runner(&runner)
             .user(user_doc.as_ref())
+            .event_transport(event_transport)
             .build();
 
         restore_collection_version(&ctx, &id, &version_id, &locale_config)

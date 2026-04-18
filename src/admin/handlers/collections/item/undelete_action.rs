@@ -39,12 +39,14 @@ pub async fn undelete_action(
     let id_owned = id.clone();
     let def_owned = def.clone();
     let user_doc = crate::admin::handlers::shared::get_user_doc(&auth_user).cloned();
+    let event_transport = state.event_transport.clone();
 
     let result = task::spawn_blocking(move || {
         let ctx = ServiceContext::collection(&slug_owned, &def_owned)
             .pool(&pool)
             .runner(&runner)
             .user(user_doc.as_ref())
+            .event_transport(event_transport)
             .build();
 
         service::undelete_document(&ctx, &id_owned)

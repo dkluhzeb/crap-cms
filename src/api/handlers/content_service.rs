@@ -130,28 +130,10 @@ impl ContentService {
             .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
     }
 
-    /// Publish a collection mutation event (update, delete, create).
-    /// Handles cache clearing and event bus publishing in one call.
-    pub(in crate::api::handlers) fn publish_mutation_event(
-        &self,
-        collection: &str,
-        doc_id: &str,
-        operation: EventOperation,
-        auth_user: &Option<AuthUser>,
-    ) {
+    /// Clear caches after a mutation. Called from gRPC handlers after
+    /// service-layer write operations (which now publish events internally).
+    pub(in crate::api::handlers) fn on_collection_mutation(&self) {
         self.clear_cache();
-
-        if let Ok(def) = self.get_collection_def(collection) {
-            self.publish_event(
-                &def.hooks,
-                def.live.as_ref(),
-                PublishEventInput::builder(EventTarget::Collection, operation)
-                    .collection(collection.to_string())
-                    .document_id(doc_id.to_string())
-                    .edited_by(Self::event_user_from(auth_user))
-                    .build(),
-            );
-        }
     }
 
     /// Publish mutation events for a list of document IDs (bulk operations).

@@ -3,12 +3,14 @@
 use anyhow::Context as _;
 use serde_json::Value;
 
+use std::{cell::RefCell, rc::Rc};
+
 use crate::{
-    core::Document,
+    core::{Document, event::EventOperation},
     db::{AccessResult, query},
     hooks::{HookContext, HookEvent},
     service::{
-        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, helpers,
+        AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
         persist_unpublish, run_after_change_hooks,
     },
 };
@@ -93,16 +95,24 @@ pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
         wh = wh.with_override_access();
     }
 
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .event_transport(ctx.event_transport.clone())
+        .event_queue(queue.clone())
         .build();
 
     let doc = unpublish_document_core(&inner_ctx, id)?;
+    drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, doc.fields.clone());
+    flush_queue(ctx, &queue);
 
     Ok(doc)
 }

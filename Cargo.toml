@@ -1,6 +1,6 @@
 [package]
 name = "crap-cms"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 edition = "2024"
 default-run = "crap-cms"
 description = "Headless CMS in Rust with Lua hooks, gRPC API, and HTMX admin UI"

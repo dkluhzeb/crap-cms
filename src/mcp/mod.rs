@@ -67,6 +67,7 @@ mod tests {
             runner,
             config,
             config_dir: tmp.path().to_path_buf(),
+            event_transport: None,
             invalidation_transport: None,
         };
         (tmp, server)

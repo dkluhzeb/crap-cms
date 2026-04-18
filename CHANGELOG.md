@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.7] — Unreleased
+
+### Changed
+
+- **Live event publishing moved to the service layer** -- mutation events
+  are now published by the service functions (`create_document`,
+  `update_document`, `delete_document`, `undelete_document`,
+  `unpublish_document`, `update_global_document`) instead of each
+  handler (gRPC, admin, MCP) publishing independently. This eliminates
+  the class of bugs where a handler forgets to publish events (e.g.
+  `empty_trash` was missing events entirely).
+  Events are queued during the transaction and flushed after commit,
+  so Lua CRUD operations within hooks also produce events correctly.
+  **Surfaces that now emit live events:**
+  - gRPC API (Create, Update, Delete, Undelete, Unpublish, RestoreVersion)
+  - Admin panel (create, update, delete, empty trash, undelete, restore)
+  - MCP tools (create, update, delete, undelete, unpublish, restore)
+  - Lua CRUD within hooks (create, update, delete, undelete)
+  **Operations that do NOT emit live events (by design):**
+  - Migrations (`migrate up`) -- run before the event transport exists
+  - `on_init` hooks -- run during startup before subscribers connect
+  - CLI commands (`user create`, `import`, etc.) -- no event transport
+  - Bulk operations (`UpdateMany`, `DeleteMany`) -- events fire per
+    document within the chunked transaction loop
+
+### Fixed
+
+- **`empty_trash` now emits live events** -- previously, emptying the
+  trash via the admin panel deleted documents without publishing any
+  mutation events. Subscribe/SSE clients were not notified. Now handled
+  automatically by the service-layer event publishing.
+
 ## [0.1.0-alpha.6] — 2026-04-16
 
 ### Added

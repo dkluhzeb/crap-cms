@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::Registry,
+    core::{Registry, event::SharedEventTransport},
     db::DbPool,
     hooks::HookRunner,
     service::{
@@ -77,6 +77,7 @@ pub(in crate::mcp::tools) fn exec_restore_version(
     pool: &DbPool,
     runner: &HookRunner,
     config: &CrapConfig,
+    event_transport: Option<SharedEventTransport>,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -95,6 +96,7 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .pool(pool)
         .runner(runner)
         .override_access(true)
+        .event_transport(event_transport)
         .build();
 
     let doc = restore_collection_version(&ctx, id, version_id, &config.locale)?;

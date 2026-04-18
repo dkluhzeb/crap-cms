@@ -14,7 +14,10 @@ use crate::{
     admin::AdminState,
     config::LocaleConfig,
     core::{
-        CollectionDefinition, auth::AuthUser, event::SharedInvalidationTransport, upload,
+        CollectionDefinition,
+        auth::AuthUser,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+        upload,
         upload::StorageBackend,
     },
     db::{DbPool, FindQuery},
@@ -36,6 +39,7 @@ fn empty_trash(
     storage: &dyn StorageBackend,
     user_doc: Option<&crate::core::Document>,
     invalidation_transport: Option<SharedInvalidationTransport>,
+    event_transport: Option<SharedEventTransport>,
 ) -> Result<usize, ServiceError> {
     // Find trashed documents via service (respects access.trash)
     let conn = pool.get().map_err(ServiceError::Internal)?;
@@ -81,6 +85,7 @@ fn empty_trash(
         .write_hooks(&wh)
         .user(user_doc)
         .invalidation_transport(invalidation_transport)
+        .event_transport(event_transport)
         .build();
 
     let mut deleted = 0;
@@ -134,6 +139,7 @@ pub async fn empty_trash_action(
     let runner = state.hook_runner.clone();
     let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
     let invalidation_transport = state.invalidation_transport.clone();
+    let event_transport = state.event_transport.clone();
 
     let result = task::spawn_blocking(move || {
         empty_trash(
@@ -145,6 +151,7 @@ pub async fn empty_trash_action(
             &*storage,
             user_doc.as_ref(),
             Some(invalidation_transport),
+            event_transport,
         )
     })
     .await;

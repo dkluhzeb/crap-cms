@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::Registry,
+    core::{Registry, event::SharedEventTransport},
     db::DbPool,
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
@@ -23,6 +23,7 @@ pub(in crate::mcp::tools) fn exec_create(
     pool: &DbPool,
     runner: &HookRunner,
     config: &CrapConfig,
+    event_transport: Option<SharedEventTransport>,
 ) -> Result<String> {
     let def = registry
         .collections
@@ -47,6 +48,7 @@ pub(in crate::mcp::tools) fn exec_create(
         .pool(pool)
         .runner(runner)
         .override_access(true)
+        .event_transport(event_transport)
         .build();
 
     let (doc, _ctx) = create_document(
