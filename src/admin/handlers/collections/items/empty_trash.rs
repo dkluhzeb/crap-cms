@@ -14,22 +14,27 @@ use crate::{
     admin::AdminState,
     config::LocaleConfig,
     core::{
-        CollectionDefinition,
+        CollectionDefinition, Document,
         auth::AuthUser,
         cache::SharedCache,
         event::{SharedEventTransport, SharedInvalidationTransport},
         upload,
         upload::StorageBackend,
     },
-    db::{DbPool, FindQuery},
+    db::{DbPool, Filter, FilterClause, FilterOp},
     hooks::HookRunner,
-    service::{
-        FindDocumentsInput, RunnerReadHooks, RunnerWriteHooks, ServiceContext, ServiceError,
-        delete_document_core, find_documents,
-    },
+    service::{DeleteManyOptions, ServiceContext, ServiceError, delete_many},
 };
 
-/// Find all trashed documents via the service layer and permanently delete them.
+/// Build trash filters: match only soft-deleted documents.
+fn trash_filters() -> Vec<FilterClause> {
+    vec![FilterClause::Single(Filter {
+        field: "_deleted_at".to_string(),
+        op: FilterOp::Exists,
+    })]
+}
+
+/// Find all trashed documents and permanently delete them via the service layer.
 #[allow(clippy::too_many_arguments)]
 fn empty_trash(
     pool: &DbPool,
@@ -38,82 +43,37 @@ fn empty_trash(
     slug: &str,
     locale_cfg: &LocaleConfig,
     storage: &dyn StorageBackend,
-    user_doc: Option<&crate::core::Document>,
+    user_doc: Option<&Document>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     event_transport: Option<SharedEventTransport>,
     cache: Option<SharedCache>,
 ) -> Result<usize, ServiceError> {
-    // Find trashed documents via service (respects access.trash)
-    let conn = pool.get().map_err(ServiceError::Internal)?;
-    let read_hooks = RunnerReadHooks::new(runner, &conn);
-
-    // System filters (`_deleted_at EXISTS`, `include_deleted`) are injected by
-    // the service layer based on `.trash(true)`. We also pass
-    // `.include_drafts(true)` because the trash view must show drafts and
-    // published rows alike — anything that was soft-deleted, regardless of
-    // status, should be eligible for purging.
-    let fq = FindQuery::builder().limit(10000).build();
-
-    let read_ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
-        .conn(&conn)
-        .read_hooks(&read_hooks)
-        .user(user_doc)
-        .build();
-
-    let input = FindDocumentsInput::builder(&fq)
-        .hydrate(false)
-        .trash(true)
-        .include_drafts(true)
-        .build();
-
-    let result = find_documents(&read_ctx, &input)?;
-    let doc_ids: Vec<String> = result.docs.iter().map(|d| d.id.to_string()).collect();
-
-    drop(conn);
-
-    // Delete each document in a single transaction
-    let mut conn = pool.get().map_err(ServiceError::Internal)?;
-    let tx = conn
-        .transaction_immediate()
-        .map_err(ServiceError::Internal)?;
-
-    let wh = RunnerWriteHooks::new(runner).with_conn(&tx);
     let mut hard_def = def.clone();
     hard_def.soft_delete = false;
 
+    let filters = trash_filters();
+
     let ctx = ServiceContext::collection(slug, &hard_def)
-        .conn(&tx)
-        .write_hooks(&wh)
+        .pool(pool)
+        .runner(runner)
         .user(user_doc)
         .invalidation_transport(invalidation_transport)
         .event_transport(event_transport)
         .cache(cache)
         .build();
 
-    let mut deleted = 0;
-    let mut upload_fields = Vec::new();
+    let delete_opts = DeleteManyOptions {
+        run_hooks: true,
+        include_deleted: true,
+    };
 
-    for id in &doc_ids {
-        match delete_document_core(&ctx, id, Some(locale_cfg)) {
-            Ok(result) => {
-                if let Some(fields) = result.upload_doc_fields {
-                    upload_fields.push(fields);
-                }
-                deleted += 1;
-            }
-            Err(ServiceError::Referenced { .. }) => continue,
-            Err(e) => return Err(e),
-        }
-    }
+    let result = delete_many(&ctx, filters, locale_cfg, &delete_opts)?;
 
-    tx.commit().map_err(ServiceError::Internal)?;
-
-    for fields in &upload_fields {
+    for fields in &result.upload_fields_to_clean {
         upload::delete_upload_files(storage, fields);
     }
 
-    Ok(deleted)
+    Ok(result.hard_deleted as usize)
 }
 
 /// POST /admin/collections/{slug}/empty-trash

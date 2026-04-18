@@ -12,7 +12,6 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    core::event::EventOperation,
     db::LocaleContext,
     service::{self, ServiceContext, WriteInput},
 };
@@ -53,7 +52,7 @@ impl ContentService {
         let slug = req.slug.clone();
         let def_owned = def;
 
-        let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
+        let (proto_doc, _auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
                 error!("UpdateGlobal pool error: {}", e);
                 Status::internal("Internal error")
@@ -96,13 +95,6 @@ impl ContentService {
         .await
         .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.publish_global_mutation_event(
-            &req.slug,
-            &proto_doc.id,
-            EventOperation::Update,
-            &auth_user,
-        );
 
         Ok(Response::new(content::UpdateGlobalResponse {
             document: Some(proto_doc),

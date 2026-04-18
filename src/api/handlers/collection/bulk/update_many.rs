@@ -1,11 +1,10 @@
 //! Bulk UpdateMany RPC handler.
 
-use anyhow::Context as _;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use super::helpers::{build_bulk_filters, check_per_doc_access};
+use super::helpers::build_bulk_filters;
 
 use crate::{
     api::{
@@ -15,9 +14,8 @@ use crate::{
             convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    core::event::EventOperation,
     db::{AccessResult, LocaleContext},
-    service::{self, RunnerWriteHooks, ServiceError, WriteInput},
+    service::{self, ServiceContext, ServiceError, UpdateManyOptions},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -72,127 +70,69 @@ impl ContentService {
         let event_transport = self.event_transport.clone();
         let cache = Some(self.cache.clone());
 
-        let (modified, updated_ids) =
-            task::spawn_blocking(move || -> Result<(i64, Vec<String>), Status> {
-                let mut conn = pool
-                    .get()
-                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+        let modified = task::spawn_blocking(move || -> Result<i64, Status> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
 
-                let auth_user =
-                    ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
+            let auth_user =
+                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-                let read_access = ContentService::check_access_blocking(
-                    def_owned.access.read.as_deref(),
-                    &auth_user,
-                    None,
-                    None,
-                    &hook_runner,
-                    &mut conn,
-                )?;
+            let read_access = ContentService::check_access_blocking(
+                def_owned.access.read.as_deref(),
+                &auth_user,
+                None,
+                None,
+                &hook_runner,
+                &mut conn,
+            )?;
 
-                if matches!(read_access, AccessResult::Denied) {
-                    return Err(Status::permission_denied("Read access denied"));
-                }
+            if matches!(read_access, AccessResult::Denied) {
+                return Err(Status::permission_denied("Read access denied"));
+            }
 
-                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            drop(conn);
 
-                // Phase 1: Find all matching docs and check access in one
-                // read-only transaction. Unlike DeleteMany (which re-queries
-                // because deleted docs leave the result set), updated docs
-                // still match the same filter, so we must collect IDs upfront
-                // to avoid re-updating the same docs in an infinite loop.
-                let doc_ids = {
-                    let tx = conn
-                        .transaction_immediate()
-                        .context("Start read transaction")
-                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+            let filters = build_bulk_filters(
+                &collection,
+                &def_owned,
+                &read_access,
+                req_where.as_deref(),
+                !draft,
+            )?;
 
-                    let filters = build_bulk_filters(
-                        &collection,
-                        &def_owned,
-                        &read_access,
-                        req_where.as_deref(),
-                        !draft,
-                    )?;
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
 
-                    let find_query = crate::db::query::FindQuery::builder()
-                        .filters(filters)
-                        .build();
+            let ctx = ServiceContext::collection(&collection, &def_owned)
+                .pool(&pool)
+                .runner(&hook_runner)
+                .user(user_doc)
+                .event_transport(event_transport)
+                .cache(cache)
+                .build();
 
-                    let docs = crate::db::query::find(
-                        &tx,
-                        &collection,
-                        &def_owned,
-                        &find_query,
-                        locale_ctx.as_ref(),
-                    )
-                    .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
+            let update_opts = UpdateManyOptions {
+                locale_ctx: locale_ctx.as_ref(),
+                run_hooks,
+                draft,
+                ui_locale: None,
+            };
 
-                    check_per_doc_access(
-                        &docs,
-                        def_owned.access.update.as_deref(),
-                        user_doc,
-                        &hook_runner,
-                        &tx,
-                        "Update access denied",
-                    )?;
+            let result = service::update_many(
+                &ctx,
+                filters,
+                data,
+                &join_data,
+                &locale_config,
+                &update_opts,
+            )
+            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
-                    tx.commit()
-                        .context("Commit read transaction")
-                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-                    docs.into_iter().map(|d| d.id).collect::<Vec<_>>()
-                };
-
-                // Phase 2: Update in chunks to keep transactions short.
-                const CHUNK_SIZE: usize = 500;
-
-                let mut count = 0i64;
-                let mut ids = Vec::new();
-
-                for chunk in doc_ids.chunks(CHUNK_SIZE) {
-                    let tx = conn
-                        .transaction_immediate()
-                        .context("Start update transaction")
-                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-                    let wh = RunnerWriteHooks::new(&hook_runner)
-                        .with_hooks_enabled(run_hooks)
-                        .with_conn(&tx);
-
-                    let ctx = service::ServiceContext::collection(&collection, &def_owned)
-                        .conn(&tx)
-                        .write_hooks(&wh)
-                        .user(user_doc)
-                        .event_transport(event_transport.clone())
-                        .cache(cache.clone())
-                        .build();
-
-                    for doc_id in chunk {
-                        let input = WriteInput::builder(data.clone(), &join_data)
-                            .locale_ctx(locale_ctx.as_ref())
-                            .draft(draft)
-                            .build();
-
-                        service::update_many_single_core(&ctx, doc_id, input, &locale_config)
-                            .map_err(|e| e.reclassify(&db_kind))?;
-
-                        ids.push(doc_id.to_string());
-                        count += 1;
-                    }
-
-                    tx.commit()
-                        .context("Commit update transaction")
-                        .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-                }
-
-                Ok((count, ids))
-            })
-            .await
-            .inspect_err(|e| error!("Task error: {}", e))
-            .map_err(|_| Status::internal("Internal error"))??;
-
-        self.publish_bulk_mutation_events(&req.collection, &updated_ids, EventOperation::Update);
+            Ok(result.modified)
+        })
+        .await
+        .inspect_err(|e| error!("Task error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::UpdateManyResponse { modified }))
     }

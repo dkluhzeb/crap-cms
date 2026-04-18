@@ -26,8 +26,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - Migrations (`migrate up`) -- run before the event transport exists
   - `on_init` hooks -- run during startup before subscribers connect
   - CLI commands (`user create`, `import`, etc.) -- no event transport
-  - Bulk operations (`UpdateMany`, `DeleteMany`) -- events fire per
-    document within the chunked transaction loop
+  - CLI commands (`user create`, `import`, etc.) -- no event transport
+
+- **Cache clearing moved to the service layer** -- the populate cache
+  (relationship resolution results) is now cleared by every write
+  operation at the service level, not just gRPC handlers. Admin,
+  MCP, and Lua mutations now correctly invalidate the cache.
+
+- **Bulk operations (`DeleteMany`, `UpdateMany`) moved to the service
+  layer** -- transaction chunking, per-doc lifecycle hooks, event
+  publishing, cache clearing, and referenced-doc handling are now in
+  `service::delete_many` and `service::update_many`. All surfaces
+  (gRPC, admin empty_trash, Lua `delete_many`/`update_many`) call
+  the same service functions. Pool-based callers get automatic 500-doc
+  transaction chunking; Lua callers on an existing connection run
+  single-pass.
 
 ### Fixed
 
@@ -35,6 +48,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   trash via the admin panel deleted documents without publishing any
   mutation events. Subscribe/SSE clients were not notified. Now handled
   automatically by the service-layer event publishing.
+
+- **Admin mutations now clear the populate cache** -- previously only
+  gRPC handlers cleared the cache. Admin panel writes left stale
+  relationship data in the cache.
 
 ## [0.1.0-alpha.6] — 2026-04-16
 
