@@ -8,7 +8,7 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     core::{Document, event::EventOperation},
     db::{AccessResult, query},
-    hooks::{HookContext, HookEvent},
+    hooks::{HookContext, HookEvent, LuaCrudInfra},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, flush_queue, helpers,
         persist_unpublish, run_after_change_hooks,
@@ -80,22 +80,42 @@ pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Documen
     Ok(doc)
 }
 
-/// Unpublish a versioned document within a single transaction.
+/// Unpublish a versioned document.
+///
+/// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
+/// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
 #[cfg(not(tarpaulin_include))]
 pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    if ctx.pool.is_some() {
+        unpublish_document_pool(ctx, id)
+    } else {
+        unpublish_document_conn(ctx, id)
+    }
+}
+
+fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
     let def = ctx.collection_def();
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra {
+        event_transport: ctx.event_transport.clone(),
+        cache: ctx.cache.clone(),
+        event_queue: Some(queue.clone()),
+        verification_queue: None,
+    };
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
 
     if ctx.override_access {
         wh = wh.with_override_access();
     }
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
 
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
@@ -116,6 +136,16 @@ pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
     ctx.publish_mutation_event(EventOperation::Update, &doc.id, doc.fields.clone());
     flush_queue(ctx, &queue);
+
+    Ok(doc)
+}
+
+fn unpublish_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
+    let doc = unpublish_document_core(ctx, id)?;
+
+    ctx.clear_cache();
+
+    ctx.publish_mutation_event(EventOperation::Update, &doc.id, doc.fields.clone());
 
     Ok(doc)
 }

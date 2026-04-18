@@ -11,18 +11,32 @@ use crate::{
         event::EventOperation,
         upload::{self, StorageBackend},
     },
+    hooks::LuaCrudInfra,
     service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core, flush_queue},
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Delete a document within a single transaction: before-hooks -> delete -> after-hooks -> commit.
-/// If `storage` is provided and the collection is an upload collection,
-/// upload files are cleaned up after successful deletion.
-// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
-// Tested indirectly through CLI integration tests and gRPC API tests.
+/// Delete a document: before-hooks -> delete -> after-hooks.
+///
+/// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
+/// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
 #[cfg(not(tarpaulin_include))]
 pub fn delete_document(
+    ctx: &ServiceContext,
+    id: &str,
+    storage: Option<&dyn StorageBackend>,
+    locale_config: Option<&LocaleConfig>,
+) -> Result<HashMap<String, Value>> {
+    if ctx.pool.is_some() {
+        delete_document_pool(ctx, id, storage, locale_config)
+    } else {
+        delete_document_conn(ctx, id, storage, locale_config)
+    }
+}
+
+/// Pool-based delete: own transaction with event publishing after commit.
+fn delete_document_pool(
     ctx: &ServiceContext,
     id: &str,
     storage: Option<&dyn StorageBackend>,
@@ -34,13 +48,22 @@ pub fn delete_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra {
+        event_transport: ctx.event_transport.clone(),
+        cache: ctx.cache.clone(),
+        event_queue: Some(queue.clone()),
+        verification_queue: None,
+    };
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
 
     if ctx.override_access {
         wh = wh.with_override_access();
     }
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
 
     let inner_ctx = ServiceContext::collection(ctx.slug, def)
         .conn(&tx)
@@ -64,6 +87,29 @@ pub fn delete_document(
     flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
+    if !def.soft_delete
+        && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)
+    {
+        upload::delete_upload_files(s, &fields);
+    }
+
+    Ok(result.context)
+}
+
+/// Conn-based delete: uses existing connection (Lua CRUD path).
+fn delete_document_conn(
+    ctx: &ServiceContext,
+    id: &str,
+    storage: Option<&dyn StorageBackend>,
+    locale_config: Option<&LocaleConfig>,
+) -> Result<HashMap<String, Value>> {
+    let def = ctx.collection_def();
+    let result = delete_document_core(ctx, id, locale_config)?;
+
+    ctx.clear_cache();
+
+    ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
+
     if !def.soft_delete
         && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)
     {

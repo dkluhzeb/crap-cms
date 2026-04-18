@@ -12,7 +12,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
-            FieldHookEvent,
+            FieldHookEvent, LuaCrudInfra,
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
                 check_field_write_access_with_lua,
@@ -93,6 +93,10 @@ pub struct RunnerWriteHooks<'a> {
     /// When true, all access checks return Allowed unconditionally.
     /// Used by MCP (trusted local transport) to bypass access control.
     pub override_access: bool,
+    /// Infrastructure for Lua CRUD event publishing, cache invalidation, and event
+    /// queueing. Threaded into the Lua VM so that CRUD calls from hooks can publish
+    /// events and clear the cache.
+    pub infra: Option<LuaCrudInfra>,
 }
 
 impl<'a> RunnerWriteHooks<'a> {
@@ -103,6 +107,7 @@ impl<'a> RunnerWriteHooks<'a> {
             hooks_enabled: true,
             conn: None,
             override_access: false,
+            infra: None,
         }
     }
 
@@ -124,6 +129,12 @@ impl<'a> RunnerWriteHooks<'a> {
         self.override_access = true;
         self
     }
+
+    /// Attach infrastructure for Lua CRUD event/cache operations.
+    pub fn with_infra(mut self, infra: LuaCrudInfra) -> Self {
+        self.infra = Some(infra);
+        self
+    }
 }
 
 impl WriteHooks for RunnerWriteHooks<'_> {
@@ -135,7 +146,8 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         val_ctx: &ValidationCtx,
     ) -> Result<HookContext> {
         if self.hooks_enabled {
-            self.runner.run_before_write(hooks, fields, ctx, val_ctx)
+            self.runner
+                .run_before_write(hooks, fields, ctx, val_ctx, self.infra.clone())
         } else {
             // Still validate, but skip hooks
             self.runner.validate_fields(fields, &ctx.data, val_ctx)?;
@@ -152,7 +164,8 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         conn: &dyn DbConnection,
     ) -> Result<HookContext> {
         if self.hooks_enabled {
-            self.runner.run_after_write(hooks, fields, event, ctx, conn)
+            self.runner
+                .run_after_write(hooks, fields, event, ctx, conn, self.infra.clone())
         } else {
             Ok(ctx)
         }
@@ -166,7 +179,8 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         conn: &dyn DbConnection,
     ) -> Result<HookContext> {
         if self.hooks_enabled {
-            self.runner.run_hooks_with_conn(hooks, event, ctx, conn)
+            self.runner
+                .run_hooks_with_conn(hooks, event, ctx, conn, self.infra.clone())
         } else {
             Ok(ctx)
         }

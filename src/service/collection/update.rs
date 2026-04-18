@@ -6,6 +6,7 @@ use anyhow::Context as _;
 
 use crate::{
     core::event::EventOperation,
+    hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult, flush_queue,
         update_document_core,
@@ -14,13 +15,25 @@ use crate::{
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Update a document within a single transaction: before-hooks -> update -> after-hooks -> commit.
-/// When `draft` is true and the collection has drafts enabled, the update creates a version-only
-/// save: the main table is NOT modified, only a new version snapshot is recorded.
-// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
-// Tested indirectly through CLI integration tests and gRPC API tests.
+/// Update a document: before-hooks -> update -> after-hooks.
+///
+/// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
+/// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
 #[cfg(not(tarpaulin_include))]
 pub fn update_document(
+    ctx: &ServiceContext,
+    id: &str,
+    input: WriteInput<'_>,
+) -> Result<WriteResult> {
+    if ctx.pool.is_some() {
+        update_document_pool(ctx, id, input)
+    } else {
+        update_document_conn(ctx, id, input)
+    }
+}
+
+/// Pool-based update: own transaction with event publishing after commit.
+fn update_document_pool(
     ctx: &ServiceContext,
     id: &str,
     input: WriteInput<'_>,
@@ -30,13 +43,22 @@ pub fn update_document(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra {
+        event_transport: ctx.event_transport.clone(),
+        cache: ctx.cache.clone(),
+        event_queue: Some(queue.clone()),
+        verification_queue: None,
+    };
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
 
     if ctx.override_access {
         wh = wh.with_override_access();
     }
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
 
     let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def())
         .conn(&tx)
@@ -61,6 +83,25 @@ pub fn update_document(
         result.0.fields.clone(),
     );
     flush_queue(ctx, &queue);
+
+    Ok(result)
+}
+
+/// Conn-based update: uses existing connection (Lua CRUD path).
+fn update_document_conn(
+    ctx: &ServiceContext,
+    id: &str,
+    input: WriteInput<'_>,
+) -> Result<WriteResult> {
+    let result = update_document_core(ctx, id, input)?;
+
+    ctx.clear_cache();
+
+    ctx.publish_mutation_event(
+        EventOperation::Update,
+        &result.0.id,
+        result.0.fields.clone(),
+    );
 
     Ok(result)
 }

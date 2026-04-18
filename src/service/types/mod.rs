@@ -23,7 +23,8 @@ pub use paginated_result::PaginatedResult;
 pub use persist_options::{PersistOptions, PersistOptionsBuilder};
 pub use search_documents_input::SearchDocumentsInput;
 pub use service_context::{
-    Def, EmailContext, EventQueue, ServiceContext, ServiceContextBuilder, flush_queue,
+    Def, EmailContext, EventQueue, ServiceContext, ServiceContextBuilder, VerificationQueue,
+    flush_queue, flush_verification_queue,
 };
 pub use write_input::{WriteInput, WriteInputBuilder};
 pub use write_result::WriteResult;

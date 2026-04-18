@@ -10,15 +10,20 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::{
-    core::{CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, Document, SharedRegistry,
+        cache::SharedCache,
+        collection::GlobalDefinition,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+    },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        HookDepth, HookDepthGuard, LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext,
-        UserContext,
+        HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport, LuaPopulateSingleflight,
+        MaxHookDepth, UiLocaleContext, UserContext,
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
-    service::validate_access_constraints,
+    service::{EventQueue, VerificationQueue, validate_access_constraints},
 };
 
 /// Extract a bool from an optional Lua options table, returning `default` when absent.
@@ -56,6 +61,38 @@ pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
 pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSingleflight> {
     lua.app_data_ref::<LuaPopulateSingleflight>()
         .map(|sf| sf.0.clone())
+}
+
+/// Extract the event transport from Lua app_data (if CRUD infra was threaded in).
+pub(crate) fn hook_event_transport(lua: &Lua) -> Option<SharedEventTransport> {
+    lua.app_data_ref::<LuaCrudInfra>()
+        .and_then(|i| i.event_transport.clone())
+}
+
+/// Extract the cache from Lua app_data (if CRUD infra was threaded in).
+pub(crate) fn hook_cache(lua: &Lua) -> Option<SharedCache> {
+    lua.app_data_ref::<LuaCrudInfra>()
+        .and_then(|i| i.cache.clone())
+}
+
+/// Extract the event queue from Lua app_data (if CRUD infra was threaded in).
+pub(crate) fn hook_event_queue(lua: &Lua) -> Option<EventQueue> {
+    lua.app_data_ref::<LuaCrudInfra>()
+        .and_then(|i| i.event_queue.clone())
+}
+
+/// Extract the verification queue from Lua app_data (if CRUD infra was threaded in).
+pub(crate) fn hook_verification_queue(lua: &Lua) -> Option<VerificationQueue> {
+    lua.app_data_ref::<LuaCrudInfra>()
+        .and_then(|i| i.verification_queue.clone())
+}
+
+/// Extract the invalidation transport from Lua app_data (if set via
+/// `HookRunner::builder().invalidation_transport(..)`). Used by delete
+/// operations to tear down live sessions for deleted auth-collection users.
+pub(crate) fn hook_invalidation_transport(lua: &Lua) -> Option<SharedInvalidationTransport> {
+    lua.app_data_ref::<LuaInvalidationTransport>()
+        .map(|t| t.0.clone())
 }
 
 /// Look up a collection definition from the shared registry, returning a

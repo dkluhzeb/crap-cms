@@ -693,7 +693,8 @@ fn lua_hook_error_rolls_back_inner_crud() {
         user: None,
         ui_locale: None,
     };
-    let result = runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx);
+    let result =
+        runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None);
     assert!(result.is_err(), "hook error should propagate");
 
     // Drop tx without committing (rollback)

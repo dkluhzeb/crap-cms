@@ -11,6 +11,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner,
         lifecycle::{
+            LuaCrudInfra,
             execution::{
                 call_hook_ref, call_registered_hooks, get_hook_refs, has_field_hooks_for_event,
                 run_field_hooks_inner,
@@ -110,6 +111,7 @@ impl HookRunner {
         event: HookEvent,
         mut context: HookContext,
         conn: &dyn DbConnection,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<HookContext> {
         let hook_refs = get_hook_refs(hooks, &event);
 
@@ -124,8 +126,13 @@ impl HookRunner {
         // Safety: conn is valid for the duration of this method, and we hold
         // the Lua mutex so no concurrent access is possible.
         // Guard cleans up TxContext, UserContext, and UiLocaleContext on drop.
-        let _guard =
-            TxContextGuard::set(&lua, conn, context.user.clone(), context.ui_locale.clone());
+        let _guard = TxContextGuard::set(
+            &lua,
+            conn,
+            context.user.clone(),
+            context.ui_locale.clone(),
+            infra,
+        );
 
         for hook_ref in hook_refs {
             tracing::debug!("Running hook (tx): {} for {}", hook_ref, context.collection);
@@ -151,8 +158,8 @@ impl HookRunner {
 
         let lua = self.pool.acquire()?;
 
-        // Guard cleans up TxContext, UserContext, and UiLocaleContext on drop.
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        // Guard cleans up TxContext, UserContext, UiLocaleContext, and LuaCrudInfra on drop.
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         for hook_ref in refs {
             tracing::debug!("Running system hook: {}", hook_ref);
@@ -187,6 +194,7 @@ impl HookRunner {
     /// Run field-level hooks with an active database connection/transaction injected.
     /// CRUD functions (`crap.collections.find`, `.create`, etc.) become available
     /// to Lua field hooks, sharing the provided connection for transaction atomicity.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_field_hooks_with_conn(
         &self,
         fields: &[FieldDefinition],
@@ -195,6 +203,7 @@ impl HookRunner {
         collection: &str,
         operation: &str,
         wctx: &FieldWriteCtx,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<()> {
         // Skip VM acquisition if no fields have hooks for this event
         if !has_field_hooks_for_event(fields, &event) {
@@ -204,12 +213,13 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         // Inject the connection pointer so CRUD functions can use it.
-        // Guard cleans up TxContext, UserContext, and UiLocaleContext on drop.
+        // Guard cleans up TxContext, UserContext, UiLocaleContext, and LuaCrudInfra on drop.
         let _guard = TxContextGuard::set(
             &lua,
             wctx.conn,
             wctx.user.cloned(),
             wctx.ui_locale.map(|s| s.to_string()),
+            infra,
         );
 
         run_field_hooks_inner(&lua, fields, &event, data, collection, operation)

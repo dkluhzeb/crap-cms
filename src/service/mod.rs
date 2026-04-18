@@ -27,8 +27,8 @@ pub use types::{
     CountDocumentsInput, CountDocumentsInputBuilder, Def, EmailContext, EventQueue, FindByIdInput,
     FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
     ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
-    SearchDocumentsInput, ServiceContext, ServiceContextBuilder, WriteInput, WriteInputBuilder,
-    WriteResult, flush_queue,
+    SearchDocumentsInput, ServiceContext, ServiceContextBuilder, VerificationQueue, WriteInput,
+    WriteInputBuilder, WriteResult, flush_queue, flush_verification_queue,
 };
 
 pub use collection::{
@@ -51,7 +51,6 @@ pub use read::{
     ReadOptions, ReadOptionsBuilder, count_documents, find_document_by_id, find_documents,
     get_global_document, search_documents, validate_access_constraints, validate_user_filters,
 };
-pub(crate) use versions::restore_collection_version_core;
 pub use versions::unpublish_with_snapshot;
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,

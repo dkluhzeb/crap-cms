@@ -94,6 +94,7 @@ fn before_change_hook_modifies_data() {
             crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
             ctx,
             &tx,
+            None,
         )
         .expect("Hook execution failed");
 
@@ -135,6 +136,7 @@ fn before_validate_trims_title() {
             crap_cms::hooks::lifecycle::HookEvent::BeforeValidate,
             ctx,
             &tx,
+            None,
         )
         .expect("Hook execution failed");
 
@@ -167,6 +169,7 @@ fn field_before_change_transforms_value() {
             "articles",
             "create",
             &FieldWriteCtx::builder(&tx).build(),
+            None,
         )
         .expect("Field hook failed");
 
@@ -206,6 +209,7 @@ fn registered_hook_fires_for_all_collections() {
             crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
             ctx,
             &tx,
+            None,
         )
         .expect("Hook execution failed");
 
@@ -271,6 +275,7 @@ fn run_before_write_full_lifecycle() {
             &def.fields,
             ctx,
             &ValidationCtx::builder(&tx, "articles").build(),
+            None,
         )
         .expect("run_before_write failed");
 
@@ -326,6 +331,7 @@ fn run_before_write_fails_on_validation_error() {
         &def.fields,
         ctx,
         &ValidationCtx::builder(&tx, "articles").build(),
+        None,
     );
     assert!(
         result.is_err(),

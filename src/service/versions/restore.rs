@@ -8,8 +8,9 @@ use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, FieldDefinition, FieldType, event::EventOperation},
     db::{AccessResult, query, query::helpers::global_table},
+    hooks::LuaCrudInfra,
     service::{RunnerWriteHooks, ServiceContext, ServiceError, helpers},
 };
 
@@ -115,7 +116,23 @@ fn warn_on_snapshot_drift(
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Restore a collection document to a specific version snapshot.
+///
+/// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
+/// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
 pub fn restore_collection_version(
+    ctx: &ServiceContext,
+    document_id: &str,
+    version_id: &str,
+    locale_config: &LocaleConfig,
+) -> Result<Document> {
+    if ctx.pool.is_some() {
+        restore_collection_version_pool(ctx, document_id, version_id, locale_config)
+    } else {
+        restore_collection_version_conn(ctx, document_id, version_id, locale_config)
+    }
+}
+
+fn restore_collection_version_pool(
     ctx: &ServiceContext,
     document_id: &str,
     version_id: &str,
@@ -127,7 +144,16 @@ pub fn restore_collection_version(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let infra = LuaCrudInfra {
+        event_transport: ctx.event_transport.clone(),
+        cache: ctx.cache.clone(),
+        event_queue: None,
+        verification_queue: None,
+    };
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
 
     if ctx.override_access {
         wh = wh.with_override_access();
@@ -139,10 +165,30 @@ pub fn restore_collection_version(
         .user(ctx.user)
         .override_access(ctx.override_access)
         .cache(ctx.cache.clone())
+        .event_transport(ctx.event_transport.clone())
         .build();
 
     let doc = restore_collection_version_core(&inner_ctx, document_id, version_id, locale_config)?;
+
     tx.commit().context("Commit")?;
+
+    ctx.clear_cache();
+    ctx.publish_mutation_event(EventOperation::Update, document_id, doc.fields.clone());
+
+    Ok(doc)
+}
+
+fn restore_collection_version_conn(
+    ctx: &ServiceContext,
+    document_id: &str,
+    version_id: &str,
+    locale_config: &LocaleConfig,
+) -> Result<Document> {
+    let doc = restore_collection_version_core(ctx, document_id, version_id, locale_config)?;
+
+    ctx.clear_cache();
+    ctx.publish_mutation_event(EventOperation::Update, document_id, doc.fields.clone());
+
     Ok(doc)
 }
 
@@ -207,7 +253,16 @@ pub fn restore_global_version(
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let infra = LuaCrudInfra {
+        event_transport: ctx.event_transport.clone(),
+        cache: ctx.cache.clone(),
+        event_queue: None,
+        verification_queue: None,
+    };
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
 
     if ctx.override_access {
         wh = wh.with_override_access();
@@ -219,11 +274,15 @@ pub fn restore_global_version(
         .user(ctx.user)
         .override_access(ctx.override_access)
         .cache(ctx.cache.clone())
+        .event_transport(ctx.event_transport.clone())
         .build();
 
     let doc = restore_global_version_core(&inner_ctx, version_id, locale_config)?;
 
     tx.commit().context("Commit")?;
+
+    ctx.clear_cache();
+    ctx.publish_mutation_event(EventOperation::Update, "default", doc.fields.clone());
 
     Ok(doc)
 }

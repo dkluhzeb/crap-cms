@@ -22,17 +22,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   handler (gRPC, admin, MCP) publishing independently. This eliminates
   the class of bugs where a handler forgets to publish events (e.g.
   `empty_trash` was missing events entirely).
-  Events are queued during the transaction and flushed after commit,
-  so Lua CRUD operations within hooks also produce events correctly.
+  Events are queued during the transaction via `EventQueue` and flushed
+  after commit, so Lua CRUD operations within hooks also produce events
+  correctly. Infrastructure (event transport, cache, event queue,
+  verification queue) is threaded from the parent service function
+  through `RunnerWriteHooks` into the Lua VM via `LuaCrudInfra` in
+  `app_data`, making side-effect mutations from hooks first-class
+  citizens of the event system.
   **Surfaces that now emit live events:**
   - gRPC API (Create, Update, Delete, Undelete, Unpublish, RestoreVersion)
   - Admin panel (create, update, delete, empty trash, undelete, restore)
   - MCP tools (create, update, delete, undelete, unpublish, restore)
-  - Lua CRUD within hooks (create, update, delete, undelete)
+  - Lua CRUD within hooks (create, update, delete, undelete, unpublish, restore_version)
   **Operations that do NOT emit live events (by design):**
   - Migrations (`migrate up`) -- run before the event transport exists
   - `on_init` hooks -- run during startup before subscribers connect
-  - CLI commands (`user create`, `import`, etc.) -- no event transport
   - CLI commands (`user create`, `import`, etc.) -- no event transport
 
 - **Cache clearing moved to the service layer** -- the populate cache
@@ -52,9 +56,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Verification emails moved to the service layer** -- email
   verification for auth collections with `verify_email` enabled is
   now triggered by `create_document` and `create_many` at the service
-  level. Previously only gRPC and admin create handlers sent
-  verification emails; Lua CRUD, MCP, and bulk creates were silently
-  skipping it.
+  level. Verification emails are queued via `VerificationQueue` during
+  transactions and sent after commit, so Lua CRUD creates within hooks
+  also trigger verification. Previously only gRPC and admin create
+  handlers sent verification emails; Lua CRUD, MCP, and bulk creates
+  were silently skipping it.
+
+- **Service functions support pool and conn modes** -- all single-op
+  service functions (`create_document`, `update_document`,
+  `delete_document`, `undelete_document`, `unpublish_document`,
+  `update_global_document`, `restore_collection_version`,
+  `restore_global_version`) now detect `ctx.pool` vs `ctx.conn` and
+  run in the appropriate mode. Pool mode opens its own transaction;
+  conn mode runs on the existing connection (Lua CRUD path). Lua CRUD
+  now calls the public service functions directly instead of internal
+  `_core` variants, ensuring events, cache, and verification are
+  handled uniformly.
 
 ### Fixed
 

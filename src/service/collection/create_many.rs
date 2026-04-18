@@ -13,9 +13,10 @@ use serde_json::Value;
 
 use crate::{
     core::event::EventOperation,
+    hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, create_document_core,
-        flush_queue,
+        flush_queue, flush_verification_queue,
     },
 };
 
@@ -88,8 +89,18 @@ fn create_many_pooled(
         let tx = conn.transaction_immediate().context("Start transaction")?;
 
         let queue = Rc::new(RefCell::new(Vec::new()));
+        let vqueue = Rc::new(RefCell::new(Vec::new()));
 
-        let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+        let infra = LuaCrudInfra {
+            event_transport: ctx.event_transport.clone(),
+            cache: ctx.cache.clone(),
+            event_queue: Some(queue.clone()),
+            verification_queue: Some(vqueue.clone()),
+        };
+
+        let mut wh = RunnerWriteHooks::new(runner)
+            .with_conn(&tx)
+            .with_infra(infra);
         if !opts.run_hooks {
             wh = wh.with_hooks_enabled(false);
         }
@@ -101,6 +112,7 @@ fn create_many_pooled(
             .override_access(ctx.override_access)
             .event_transport(ctx.event_transport.clone())
             .event_queue(queue.clone())
+            .verification_queue(vqueue.clone())
             .cache(ctx.cache.clone())
             .email_ctx(ctx.email_ctx.clone())
             .build();
@@ -125,6 +137,7 @@ fn create_many_pooled(
             ctx.maybe_send_verification(doc);
         }
         flush_queue(ctx, &queue);
+        flush_verification_queue(ctx, &vqueue);
     }
 
     Ok(CreateManyResult { created, documents })

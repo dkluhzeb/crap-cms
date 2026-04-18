@@ -9,6 +9,7 @@ use crate::{
     config::LocaleConfig,
     core::event::EventOperation,
     db::{FilterClause, FindQuery, LocaleContext, query},
+    hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, flush_queue,
         update_many_single_core,
@@ -104,15 +105,23 @@ fn update_many_pool(
             .transaction_immediate()
             .context("Start update transaction")?;
 
+        let queue = Rc::new(RefCell::new(Vec::new()));
+
+        let infra = LuaCrudInfra {
+            event_transport: ctx.event_transport.clone(),
+            cache: ctx.cache.clone(),
+            event_queue: Some(queue.clone()),
+            verification_queue: None,
+        };
+
         let mut wh = RunnerWriteHooks::new(runner)
             .with_hooks_enabled(opts.run_hooks)
-            .with_conn(&tx);
+            .with_conn(&tx)
+            .with_infra(infra);
 
         if ctx.override_access {
             wh = wh.with_override_access();
         }
-
-        let queue = Rc::new(RefCell::new(Vec::new()));
 
         let inner_ctx = ServiceContext::collection(ctx.slug, def)
             .conn(&tx)
