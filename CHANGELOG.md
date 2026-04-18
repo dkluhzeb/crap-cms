@@ -4,6 +4,74 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.7] — Unreleased
+
+### Added
+
+- **`service::create_many`** -- new service-layer function for bulk
+  document creation with transaction chunking, event publishing, and
+  cache clearing. Available for Lua hooks, MCP, and direct Rust callers.
+  gRPC `CreateMany` RPC to be added in a future release.
+
+### Changed
+
+- **Live event publishing moved to the service layer** -- mutation events
+  are now published by the service functions (`create_document`,
+  `update_document`, `delete_document`, `undelete_document`,
+  `unpublish_document`, `update_global_document`) instead of each
+  handler (gRPC, admin, MCP) publishing independently. This eliminates
+  the class of bugs where a handler forgets to publish events (e.g.
+  `empty_trash` was missing events entirely).
+  Events are queued during the transaction and flushed after commit,
+  so Lua CRUD operations within hooks also produce events correctly.
+  **Surfaces that now emit live events:**
+  - gRPC API (Create, Update, Delete, Undelete, Unpublish, RestoreVersion)
+  - Admin panel (create, update, delete, empty trash, undelete, restore)
+  - MCP tools (create, update, delete, undelete, unpublish, restore)
+  - Lua CRUD within hooks (create, update, delete, undelete)
+  **Operations that do NOT emit live events (by design):**
+  - Migrations (`migrate up`) -- run before the event transport exists
+  - `on_init` hooks -- run during startup before subscribers connect
+  - CLI commands (`user create`, `import`, etc.) -- no event transport
+  - CLI commands (`user create`, `import`, etc.) -- no event transport
+
+- **Cache clearing moved to the service layer** -- the populate cache
+  (relationship resolution results) is now cleared by every write
+  operation at the service level, not just gRPC handlers. Admin,
+  MCP, and Lua mutations now correctly invalidate the cache.
+
+- **Bulk operations (`DeleteMany`, `UpdateMany`) moved to the service
+  layer** -- transaction chunking, per-doc lifecycle hooks, event
+  publishing, cache clearing, and referenced-doc handling are now in
+  `service::delete_many` and `service::update_many`. All surfaces
+  (gRPC, admin empty_trash, Lua `delete_many`/`update_many`) call
+  the same service functions. Pool-based callers get automatic 500-doc
+  transaction chunking; Lua callers on an existing connection run
+  single-pass.
+
+- **Verification emails moved to the service layer** -- email
+  verification for auth collections with `verify_email` enabled is
+  now triggered by `create_document` and `create_many` at the service
+  level. Previously only gRPC and admin create handlers sent
+  verification emails; Lua CRUD, MCP, and bulk creates were silently
+  skipping it.
+
+### Fixed
+
+- **`empty_trash` now emits live events** -- previously, emptying the
+  trash via the admin panel deleted documents without publishing any
+  mutation events. Subscribe/SSE clients were not notified. Now handled
+  automatically by the service-layer event publishing.
+
+- **Verification emails now sent from all create surfaces** -- Lua
+  `crap.collections.create()`, MCP create tools, and bulk
+  `CreateMany` now send verification emails for auth collections.
+  Previously only gRPC and admin panel creates triggered verification.
+
+- **Admin mutations now clear the populate cache** -- previously only
+  gRPC handlers cleared the cache. Admin panel writes left stale
+  relationship data in the cache.
+
 ## [0.1.0-alpha.6] — 2026-04-16
 
 ### Added

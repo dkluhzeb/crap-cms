@@ -17,24 +17,20 @@ use crate::{
             forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
-                enrich_field_contexts, forbidden, get_event_user, get_user_doc, html_with_toast,
-                htmx_redirect, redirect_response, split_sidebar_fields,
-                translate_validation_errors,
+                enrich_field_contexts, forbidden, get_user_doc, html_with_toast, htmx_redirect,
+                redirect_response, split_sidebar_fields, translate_validation_errors,
             },
         },
     },
     core::{
-        Document,
-        auth::AuthUser,
-        collection::{GlobalDefinition, Hooks},
-        event::{EventOperation, EventTarget},
-        validate::ValidationError,
+        Document, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
+        event::SharedEventTransport, validate::ValidationError,
     },
     db::{
         DbPool,
         query::{LocaleContext, LocaleMode},
     },
-    hooks::{HookRunner, lifecycle::PublishEventInput},
+    hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},
 };
 
@@ -42,6 +38,8 @@ use crate::{
 struct UpdateParams {
     pool: DbPool,
     runner: HookRunner,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
     slug: String,
     def: GlobalDefinition,
     form_data: HashMap<String, String>,
@@ -62,6 +60,8 @@ fn execute_update(
         .pool(&params.pool)
         .runner(&params.runner)
         .user(params.user_doc.as_ref())
+        .event_transport(params.event_transport)
+        .cache(params.cache)
         .build();
 
     if params.action == "unpublish" && params.def.has_versions() {
@@ -79,28 +79,6 @@ fn execute_update(
                 .build(),
         )
     }
-}
-
-/// Publish a global update event.
-fn publish_update_event(
-    state: &AdminState,
-    hooks: &Hooks,
-    def: &GlobalDefinition,
-    slug: &str,
-    doc: &Document,
-    auth_user: &Option<Extension<AuthUser>>,
-) {
-    state.hook_runner.publish_event(
-        &state.event_transport,
-        hooks,
-        def.live.as_ref(),
-        PublishEventInput::builder(EventTarget::Global, EventOperation::Update)
-            .collection(slug.to_string())
-            .document_id(doc.id.clone())
-            .data(doc.fields.clone())
-            .edited_by(get_event_user(auth_user))
-            .build(),
-    );
 }
 
 /// Build the validation error response with re-rendered form fields.
@@ -190,6 +168,8 @@ pub async fn update_action(
     let params = UpdateParams {
         pool: state.pool.clone(),
         runner: state.hook_runner.clone(),
+        event_transport: state.event_transport.clone(),
+        cache: state.cache.clone(),
         slug: slug.clone(),
         def: def.clone(),
         form_data: form_data.clone(),
@@ -205,10 +185,7 @@ pub async fn update_action(
     let result = task::spawn_blocking(move || execute_update(params)).await;
 
     match result {
-        Ok(Ok((doc, _))) => {
-            publish_update_event(&state, &def.hooks, &def, &slug, &doc, &auth_user);
-            htmx_redirect(&format!("/admin/globals/{}", slug))
-        }
+        Ok(Ok(_)) => htmx_redirect(&format!("/admin/globals/{}", slug)),
         Ok(Err(e)) => match e {
             ServiceError::AccessDenied(_) => {
                 forbidden(&state, "You don't have permission to update this global")

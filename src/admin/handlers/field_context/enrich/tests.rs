@@ -76,6 +76,7 @@ fn make_test_state() -> AdminState {
             crate::core::event::InProcessInvalidationBus::new(),
         ),
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
+        cache: None,
     }
 }
 
@@ -1002,6 +1003,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
             crate::core::event::InProcessInvalidationBus::new(),
         ),
         populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
+        cache: None,
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1114,6 +1116,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
             crate::core::event::InProcessInvalidationBus::new(),
         ),
         populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
+        cache: None,
     };
 
     enrich_field_contexts(

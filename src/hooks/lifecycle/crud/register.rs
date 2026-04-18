@@ -72,6 +72,7 @@ fn register_collection_functions(
     )?;
 
     // Bulk operations
+    collection::bulk::create_many::register_create_many(lua, &collections, registry.clone())?;
     collection::bulk::update_many::register_update_many(
         lua,
         &collections,

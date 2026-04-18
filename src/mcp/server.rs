@@ -7,7 +7,11 @@ use serde_json::{Value, from_value, json, to_value};
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, event::SharedInvalidationTransport},
+    core::{
+        Registry,
+        cache::SharedCache,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+    },
     db::DbPool,
     hooks::HookRunner,
 };
@@ -25,9 +29,14 @@ pub struct McpServer {
     pub runner: HookRunner,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
+    /// Transport for publishing mutation events to live-update subscribers.
+    pub event_transport: Option<SharedEventTransport>,
     /// Transport for publishing user-invalidation signals on hard-delete
     /// of auth documents. `None` = no-op (MCP built in isolation / tests).
     pub invalidation_transport: Option<SharedInvalidationTransport>,
+    /// Shared cross-request cache for cache invalidation on write ops.
+    /// `None` = no cache invalidation (standalone CLI / tests).
+    pub cache: Option<SharedCache>,
 }
 
 /// Parse required JSON-RPC params, returning an error response on failure.
@@ -128,7 +137,9 @@ impl McpServer {
             &self.runner,
             &self.config_dir,
             &self.config,
+            self.event_transport.clone(),
             self.invalidation_transport.clone(),
+            self.cache.clone(),
         );
 
         match result {

@@ -9,7 +9,6 @@ use crate::{
         content,
         handlers::{ContentService, convert::document_to_proto},
     },
-    core::event::EventOperation,
     service::{ServiceContext, restore_collection_version},
 };
 
@@ -41,8 +40,10 @@ impl ContentService {
         let version_id = req.version_id.clone();
         let def_owned = def.clone();
         let locale_config = self.locale_config.clone();
+        let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
 
-        let (doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
+        let doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
                 error!("RestoreVersion pool error: {}", e);
                 Status::internal("Internal error")
@@ -56,6 +57,8 @@ impl ContentService {
                 .pool(&pool)
                 .runner(&runner)
                 .user(user_doc.as_ref())
+                .event_transport(event_transport)
+                .cache(cache)
                 .build();
 
             let doc = restore_collection_version(&ctx, &document_id, &version_id, &locale_config)
@@ -63,18 +66,11 @@ impl ContentService {
 
             let proto_doc = document_to_proto(&doc, &collection);
 
-            Ok((proto_doc, auth_user))
+            Ok(proto_doc)
         })
         .await
         .inspect_err(|e| error!("RestoreVersion task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.publish_mutation_event(
-            &req.collection,
-            &req.document_id,
-            EventOperation::Update,
-            &auth_user,
-        );
 
         Ok(Response::new(content::RestoreVersionResponse {
             document: Some(doc),

@@ -1,9 +1,8 @@
 //! Create handler — create a new document in a collection.
 
-use prost_types::value::Kind;
 use tokio::task;
 use tonic::{Request, Response, Status};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
@@ -14,9 +13,8 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    core::event::EventOperation,
     db::LocaleContext,
-    service::{self, ServiceContext, ServiceError, WriteInput},
+    service::{self, EmailContext, ServiceContext, ServiceError, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -58,10 +56,17 @@ impl ContentService {
         let token_provider = self.token_provider.clone();
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
+        let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
         let collection = req.collection.clone();
         let def_owned = def;
+        let email_ctx = Some(EmailContext {
+            email_config: self.email_config.clone(),
+            email_renderer: self.email_renderer.clone(),
+            server_config: self.server_config.clone(),
+        });
 
-        let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
+        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
@@ -77,6 +82,9 @@ impl ContentService {
                 .pool(&pool)
                 .runner(&runner)
                 .user(user_doc.as_ref())
+                .event_transport(event_transport)
+                .cache(cache)
+                .email_ctx(email_ctx)
                 .build();
 
             let (doc, _req_context) = service::create_document(
@@ -92,65 +100,14 @@ impl ContentService {
 
             let proto_doc = document_to_proto(&doc, &collection);
 
-            Ok((proto_doc, auth_user))
+            Ok(proto_doc)
         })
         .await
         .inspect_err(|e| error!("Task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
 
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
-        }
-
-        self.publish_mutation_event(
-            &req.collection,
-            &proto_doc.id,
-            EventOperation::Create,
-            &auth_user,
-        );
-
-        self.maybe_send_verification(&req.collection, &proto_doc);
-
         Ok(Response::new(content::CreateResponse {
             document: Some(proto_doc),
         }))
-    }
-
-    /// Send verification email if this is an auth collection with verify_email enabled.
-    fn maybe_send_verification(&self, collection: &str, proto_doc: &content::Document) {
-        let Ok(def) = self.get_collection_def(collection) else {
-            return;
-        };
-
-        let should_verify =
-            def.is_auth_collection() && def.auth.as_ref().is_some_and(|a| a.verify_email);
-
-        if !should_verify {
-            return;
-        }
-
-        let email_val = proto_doc
-            .fields
-            .as_ref()
-            .and_then(|s| s.fields.get("email"))
-            .and_then(|v| {
-                if let Some(Kind::StringValue(s)) = &v.kind {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            });
-
-        if let Some(user_email) = email_val {
-            service::send_verification_email(
-                self.pool.clone(),
-                self.email_config.clone(),
-                self.email_renderer.clone(),
-                self.server_config.clone(),
-                collection.to_string(),
-                proto_doc.id.clone(),
-                user_email,
-            );
-        }
     }
 }

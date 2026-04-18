@@ -6,7 +6,6 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    core::event::EventOperation,
     service::{self, ServiceError},
 };
 
@@ -43,8 +42,10 @@ impl ContentService {
         let storage = self.storage.clone();
         let locale_config = self.locale_config.clone();
         let invalidation_transport = self.invalidation_transport.clone();
+        let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
 
-        let auth_user = task::spawn_blocking(move || -> Result<_, Status> {
+        task::spawn_blocking(move || -> Result<(), Status> {
             let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
@@ -61,17 +62,17 @@ impl ContentService {
                 .runner(&runner)
                 .user(user_doc.as_ref())
                 .invalidation_transport(Some(invalidation_transport))
+                .event_transport(event_transport)
+                .cache(cache)
                 .build();
             service::delete_document(&ctx, &id, Some(&*storage), Some(&locale_config))
                 .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
-            Ok(auth_user)
+            Ok(())
         })
         .await
         .inspect_err(|e| error!("Task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.publish_mutation_event(&req.collection, &req.id, EventOperation::Delete, &auth_user);
 
         Ok(Response::new(content::DeleteResponse {
             success: true,

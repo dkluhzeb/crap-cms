@@ -19,30 +19,22 @@ use crate::{
             },
             forms::{extract_join_data_from_form, parse_form, transform_select_has_many},
             shared::{
-                forbidden, get_event_user, get_user_doc, htmx_redirect_with_created,
-                redirect_response, toast_only_error,
+                forbidden, get_user_doc, htmx_redirect_with_created, redirect_response,
+                toast_only_error,
             },
         },
     },
-    core::{
-        CollectionDefinition, Document,
-        auth::AuthUser,
-        event::{EventOperation, EventTarget},
-        upload,
-    },
+    core::{CollectionDefinition, Document, auth::AuthUser, upload},
     db::query::{LocaleContext, LocaleMode},
-    hooks::lifecycle::PublishEventInput,
-    service::{self, ServiceError},
+    service::{self, EmailContext, ServiceError},
 };
 
-/// Handle post-create success: commit upload, enqueue conversions, publish event, send verification email.
+/// Handle post-create success: commit upload and enqueue conversions.
 fn handle_create_success(
     state: &AdminState,
-    def: &CollectionDefinition,
     slug: &str,
     doc: &Document,
     upload_result: Option<UploadResult>,
-    auth_user: &Option<Extension<AuthUser>>,
 ) {
     if let Some(mut ur) = upload_result {
         ur.guard.commit();
@@ -54,33 +46,6 @@ fn handle_create_success(
         {
             warn!("Failed to enqueue image conversions: {}", e);
         }
-    }
-
-    state.hook_runner.publish_event(
-        &state.event_transport,
-        &def.hooks,
-        def.live.as_ref(),
-        PublishEventInput::builder(EventTarget::Collection, EventOperation::Create)
-            .collection(slug.to_string())
-            .document_id(doc.id.clone())
-            .data(doc.fields.clone())
-            .edited_by(get_event_user(auth_user))
-            .build(),
-    );
-
-    if def.is_auth_collection()
-        && def.auth.as_ref().is_some_and(|a| a.verify_email)
-        && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
-    {
-        service::send_verification_email(
-            state.pool.clone(),
-            state.config.email.clone(),
-            state.email_renderer.clone(),
-            state.config.server.clone(),
-            slug.to_string(),
-            doc.id.to_string(),
-            user_email.to_string(),
-        );
     }
 }
 
@@ -129,6 +94,13 @@ async fn spawn_create(
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
+    let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
+    let email_ctx = Some(EmailContext {
+        email_config: state.config.email.clone(),
+        email_renderer: state.email_renderer.clone(),
+        server_config: state.config.server.clone(),
+    });
     let slug_owned = slug.to_string();
     let def_owned = def.clone();
     let user_doc = get_user_doc(auth_user).cloned();
@@ -143,6 +115,9 @@ async fn spawn_create(
             .pool(&pool)
             .runner(&runner)
             .user(user_doc.as_ref())
+            .event_transport(event_transport)
+            .cache(cache)
+            .email_ctx(email_ctx)
             .build();
 
         service::create_document(
@@ -244,7 +219,7 @@ pub async fn create_action(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
-            handle_create_success(&state, &def, &slug, &doc, upload_result, &auth_user);
+            handle_create_success(&state, &slug, &doc, upload_result);
 
             let label = def
                 .title_field()

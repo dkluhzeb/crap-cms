@@ -9,7 +9,7 @@ use std::{
 use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     api::{
@@ -21,12 +21,9 @@ use crate::{
         AuthUser, CollectionDefinition, JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider, TokenProvider},
         cache::SharedCache,
-        collection::{GlobalDefinition, Hooks, LiveSetting},
+        collection::GlobalDefinition,
         email::EmailRenderer,
-        event::{
-            EventOperation, EventTarget, EventUser, InProcessInvalidationBus, SharedEventTransport,
-            SharedInvalidationTransport,
-        },
+        event::{InProcessInvalidationBus, SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
     },
@@ -34,7 +31,7 @@ use crate::{
         AccessResult, BoxedConnection, DbConnection, DbPool,
         query::{self, SharedPopulateSingleflight, Singleflight},
     },
-    hooks::{HookRunner, lifecycle::PublishEventInput},
+    hooks::HookRunner,
     service::{self, ServiceContext},
 };
 
@@ -119,96 +116,6 @@ impl ContentService {
             .and_then(|v| v.strip_prefix("Bearer "))
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-    }
-
-    /// Extract an EventUser from the gRPC AuthUser (for SSE event attribution).
-    pub(in crate::api::handlers) fn event_user_from(
-        auth_user: &Option<AuthUser>,
-    ) -> Option<EventUser> {
-        auth_user
-            .as_ref()
-            .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
-    }
-
-    /// Publish a collection mutation event (update, delete, create).
-    /// Handles cache clearing and event bus publishing in one call.
-    pub(in crate::api::handlers) fn publish_mutation_event(
-        &self,
-        collection: &str,
-        doc_id: &str,
-        operation: EventOperation,
-        auth_user: &Option<AuthUser>,
-    ) {
-        self.clear_cache();
-
-        if let Ok(def) = self.get_collection_def(collection) {
-            self.publish_event(
-                &def.hooks,
-                def.live.as_ref(),
-                PublishEventInput::builder(EventTarget::Collection, operation)
-                    .collection(collection.to_string())
-                    .document_id(doc_id.to_string())
-                    .edited_by(Self::event_user_from(auth_user))
-                    .build(),
-            );
-        }
-    }
-
-    /// Publish mutation events for a list of document IDs (bulk operations).
-    pub(in crate::api::handlers) fn publish_bulk_mutation_events(
-        &self,
-        collection: &str,
-        doc_ids: &[String],
-        operation: EventOperation,
-    ) {
-        self.clear_cache();
-
-        if let Ok(def) = self.get_collection_def(collection) {
-            for doc_id in doc_ids {
-                self.publish_event(
-                    &def.hooks,
-                    def.live.as_ref(),
-                    PublishEventInput::builder(EventTarget::Collection, operation.clone())
-                        .collection(collection.to_string())
-                        .document_id(doc_id.clone())
-                        .build(),
-                );
-            }
-        }
-    }
-
-    /// Publish a mutation event for a global document.
-    pub(in crate::api::handlers) fn publish_global_mutation_event(
-        &self,
-        slug: &str,
-        doc_id: &str,
-        operation: EventOperation,
-        auth_user: &Option<AuthUser>,
-    ) {
-        self.clear_cache();
-
-        if let Ok(def) = self.get_global_def(slug) {
-            self.publish_event(
-                &def.hooks,
-                def.live.as_ref(),
-                PublishEventInput::builder(EventTarget::Global, operation)
-                    .collection(slug.to_string())
-                    .document_id(doc_id.to_string())
-                    .edited_by(Self::event_user_from(auth_user))
-                    .build(),
-            );
-        }
-    }
-
-    fn clear_cache(&self) {
-        if let Err(e) = self.cache.clear() {
-            warn!("Cache clear failed: {:#}", e);
-        }
-    }
-
-    fn publish_event(&self, hooks: &Hooks, live: Option<&LiveSetting>, input: PublishEventInput) {
-        self.hook_runner
-            .publish_event(&self.event_transport, hooks, live, input);
     }
 }
 
@@ -402,6 +309,13 @@ impl ContentApi for ContentService {
         self.count_impl(request).await
     }
 
+    async fn create_many(
+        &self,
+        request: Request<content::CreateManyRequest>,
+    ) -> Result<Response<content::CreateManyResponse>, Status> {
+        self.create_many_impl(request).await
+    }
+
     async fn update_many(
         &self,
         request: Request<content::UpdateManyRequest>,
@@ -571,8 +485,6 @@ impl ContentApi for ContentService {
 mod tests {
     use super::*;
 
-    use crate::core::{Document, DocumentId, Slug, auth::ClaimsBuilder};
-
     // ── extract_token tests ───────────────────────────────────────────
 
     #[test]
@@ -611,26 +523,5 @@ mod tests {
         meta.insert("authorization", "bearer abc123".parse().unwrap());
         // "bearer" (lowercase) should not match "Bearer " prefix
         assert_eq!(ContentService::extract_token(&meta), None);
-    }
-
-    // ── event_user_from tests ─────────────────────────────────────────
-
-    #[test]
-    fn event_user_from_none() {
-        assert!(ContentService::event_user_from(&None).is_none());
-    }
-
-    #[test]
-    fn event_user_from_some() {
-        let claims = ClaimsBuilder::new(DocumentId::new("user-123"), Slug::new("users"))
-            .email("test@example.com")
-            .exp(9999999999)
-            .build()
-            .unwrap();
-        let doc = Document::builder(DocumentId::new("user-123")).build();
-        let auth_user = Some(AuthUser::new(claims, doc));
-        let event_user = ContentService::event_user_from(&auth_user).unwrap();
-        assert_eq!(event_user.id, "user-123");
-        assert_eq!(event_user.email, "test@example.com");
     }
 }

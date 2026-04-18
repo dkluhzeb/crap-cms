@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::Registry,
+    core::{Registry, cache::SharedCache, event::SharedEventTransport},
     db::DbPool,
     hooks::HookRunner,
     service::{
@@ -70,6 +70,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
 }
 
 /// Execute `restore_version` — restore a document to a specific version.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_restore_version(
     args: &Value,
     slug: &str,
@@ -77,6 +78,8 @@ pub(in crate::mcp::tools) fn exec_restore_version(
     pool: &DbPool,
     runner: &HookRunner,
     config: &CrapConfig,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -95,6 +98,8 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .pool(pool)
         .runner(runner)
         .override_access(true)
+        .event_transport(event_transport)
+        .cache(cache)
         .build();
 
     let doc = restore_collection_version(&ctx, id, version_id, &config.locale)?;

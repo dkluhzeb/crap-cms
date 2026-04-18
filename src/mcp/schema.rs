@@ -11,10 +11,13 @@ use crate::core::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CrudOp {
     Create,
+    CreateMany,
     Update,
+    UpdateMany,
     Find,
     FindById,
     Delete,
+    DeleteMany,
     Undelete,
     Unpublish,
     Count,
@@ -250,8 +253,72 @@ fn id_only_schema() -> Value {
 pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
     match op {
         CrudOp::Create => create_schema(def),
+        CrudOp::CreateMany => {
+            let item_schema = create_schema(def);
+            json!({
+                "type": "object",
+                "properties": {
+                    "documents": {
+                        "type": "array",
+                        "items": item_schema,
+                        "description": "Array of documents to create"
+                    },
+                    "hooks": {
+                        "type": "boolean",
+                        "description": "Run per-document lifecycle hooks (default: true)"
+                    },
+                    "draft": {
+                        "type": "boolean",
+                        "description": "Create documents as drafts (default: false)"
+                    }
+                },
+                "required": ["documents"]
+            })
+        }
         CrudOp::Update => update_schema(def),
+        CrudOp::UpdateMany => {
+            let data_schema = fields_to_object_schema(&def.fields);
+            json!({
+                "type": "object",
+                "properties": {
+                    "where": {
+                        "type": "object",
+                        "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"})"
+                    },
+                    "data": {
+                        "allOf": [data_schema],
+                        "description": "Field values to set on all matching documents"
+                    },
+                    "hooks": {
+                        "type": "boolean",
+                        "description": "Run per-document lifecycle hooks (default: true)"
+                    },
+                    "draft": {
+                        "type": "boolean",
+                        "description": "Target draft versions (default: false)"
+                    }
+                },
+                "required": ["data"]
+            })
+        }
         CrudOp::Delete | CrudOp::Undelete | CrudOp::Unpublish => id_only_schema(),
+        CrudOp::DeleteMany => json!({
+            "type": "object",
+            "properties": {
+                "where": {
+                    "type": "object",
+                    "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}). Omit to match all documents."
+                },
+                "hooks": {
+                    "type": "boolean",
+                    "description": "Run per-document lifecycle hooks (default: true)"
+                },
+                "force_hard_delete": {
+                    "type": "boolean",
+                    "description": "Force hard delete even on soft-delete collections (default: false)"
+                }
+            }
+        }),
         CrudOp::FindById => json!({
             "type": "object",
             "properties": {

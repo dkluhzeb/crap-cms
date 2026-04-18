@@ -1,21 +1,79 @@
 //! Service context — calling environment for all service operations.
 
-use anyhow::{Context as _, anyhow};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, rc::Rc};
 
-use std::borrow::Cow;
+use anyhow::{Context as _, anyhow};
+use serde_json::Value as JsonValue;
+use tracing::warn;
+
+use std::sync::Arc;
 
 use crate::{
+    config::{EmailConfig, ServerConfig},
     core::{
-        CollectionDefinition, Document, FieldDefinition, collection::GlobalDefinition,
-        event::SharedInvalidationTransport,
+        CollectionDefinition, Document, FieldDefinition,
+        cache::SharedCache,
+        collection::{GlobalDefinition, Hooks, LiveSetting},
+        email::EmailRenderer,
+        event::{
+            EventOperation, EventTarget, EventUser, SharedEventTransport,
+            SharedInvalidationTransport,
+        },
     },
     db::{BoxedConnection, DbConnection, DbPool, query::helpers::global_table},
     hooks::HookRunner,
+    hooks::lifecycle::PublishEventInput,
     service::{
         ServiceError,
         hooks::{ReadHooks, WriteHooks},
     },
 };
+
+/// Bundled email configuration for verification emails.
+/// Cloning is cheap (configs are small, renderer is Arc).
+#[derive(Clone)]
+pub struct EmailContext {
+    pub email_config: EmailConfig,
+    pub email_renderer: Arc<EmailRenderer>,
+    pub server_config: ServerConfig,
+}
+
+/// A mutation event waiting to be published after transaction commit.
+pub struct PendingEvent {
+    pub target: EventTarget,
+    pub operation: EventOperation,
+    pub collection: String,
+    pub document_id: String,
+    pub data: HashMap<String, JsonValue>,
+    pub edited_by: Option<EventUser>,
+    pub hooks: Hooks,
+    pub live: Option<LiveSetting>,
+}
+
+/// Shared queue for events accumulated during a transaction.
+/// Cloning is cheap (Rc + RefCell).
+pub type EventQueue = Rc<RefCell<Vec<PendingEvent>>>;
+
+/// Flush all events from a queue, publishing each via the given context's runner + transport.
+pub fn flush_queue(ctx: &ServiceContext, queue: &EventQueue) {
+    let Some(runner) = ctx.runner else { return };
+
+    let events: Vec<PendingEvent> = queue.borrow_mut().drain(..).collect();
+
+    for pending in events {
+        runner.publish_event(
+            &ctx.event_transport,
+            &pending.hooks,
+            pending.live.as_ref(),
+            PublishEventInput::builder(pending.target, pending.operation)
+                .collection(pending.collection)
+                .document_id(pending.document_id)
+                .data(pending.data)
+                .edited_by(pending.edited_by)
+                .build(),
+        );
+    }
+}
 
 /// The target definition for a service operation.
 pub enum Def<'a> {
@@ -47,6 +105,19 @@ pub struct ServiceContext<'a> {
     pub user: Option<&'a Document>,
     /// Bypass all access checks (MCP, Lua `overrideAccess`).
     pub override_access: bool,
+    /// Email configuration for verification emails on auth collection
+    /// creates. `None` = verification emails are skipped.
+    pub email_ctx: Option<EmailContext>,
+    /// Populate cache. When set, service-layer write operations clear
+    /// the cache after commit to prevent stale relationship data.
+    pub cache: Option<SharedCache>,
+    /// Transport for publishing mutation events to live-update subscribers.
+    /// `None` = event publishing is a no-op.
+    pub event_transport: Option<SharedEventTransport>,
+    /// Queue for events accumulated during a transaction. When set,
+    /// `publish_mutation_event` pushes to this queue instead of publishing
+    /// immediately. The caller flushes after commit via `flush_event_queue`.
+    pub event_queue: Option<EventQueue>,
     /// Transport for publishing user-invalidation signals (live-stream
     /// tear-down on lock / hard-delete). `None` = publishing is a no-op.
     pub invalidation_transport: Option<SharedInvalidationTransport>,
@@ -146,6 +217,142 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
+    /// Publish a mutation event to all Subscribe/SSE clients.
+    ///
+    /// Fire-and-forget: spawns a background task for hooks + broadcast.
+    /// Send a verification email if this is an auth collection with
+    /// `verify_email` enabled and the document has an email field.
+    /// No-op when email context is not attached.
+    pub fn maybe_send_verification(&self, doc: &Document) {
+        let Some(ref email_ctx) = self.email_ctx else {
+            return;
+        };
+        let Some(pool) = self.pool else { return };
+
+        let def = match &self.def {
+            Def::Collection(d) => d,
+            _ => return,
+        };
+
+        let should_verify =
+            def.is_auth_collection() && def.auth.as_ref().is_some_and(|a| a.verify_email);
+
+        if !should_verify {
+            return;
+        }
+
+        let Some(email) = doc.get_str("email") else {
+            return;
+        };
+
+        crate::service::send_verification_email(
+            pool.clone(),
+            email_ctx.email_config.clone(),
+            email_ctx.email_renderer.clone(),
+            email_ctx.server_config.clone(),
+            self.slug.to_string(),
+            doc.id.to_string(),
+            email.to_string(),
+        );
+    }
+
+    /// Clear the populate cache after a write operation.
+    /// No-op when no cache is attached.
+    pub fn clear_cache(&self) {
+        if let Some(ref cache) = self.cache
+            && let Err(e) = cache.clear()
+        {
+            warn!("Cache clear failed: {e:#}");
+        }
+    }
+
+    /// Publish (or queue) a mutation event.
+    ///
+    /// When an `event_queue` is set (inside a transaction), the event is
+    /// queued for later flushing. Otherwise it publishes immediately.
+    /// No-op when no event transport is attached.
+    pub fn publish_mutation_event(
+        &self,
+        operation: EventOperation,
+        doc_id: &str,
+        data: HashMap<String, JsonValue>,
+    ) {
+        if self.event_transport.is_none() {
+            return;
+        }
+
+        let (hooks, live) = match &self.def {
+            Def::Collection(d) => (d.hooks.clone(), d.live.clone()),
+            Def::Global(d) => (d.hooks.clone(), d.live.clone()),
+            Def::None => return,
+        };
+
+        let edited_by = self.user.map(|u| {
+            let email = u.get_str("email").unwrap_or_default().to_string();
+            EventUser::new(u.id.to_string(), email)
+        });
+
+        let target = match &self.def {
+            Def::Collection(_) | Def::None => EventTarget::Collection,
+            Def::Global(_) => EventTarget::Global,
+        };
+
+        let pending = PendingEvent {
+            target,
+            operation,
+            collection: self.slug.to_string(),
+            document_id: doc_id.to_string(),
+            data,
+            edited_by,
+            hooks,
+            live,
+        };
+
+        // If inside a transaction, queue for later flush.
+        if let Some(ref queue) = self.event_queue {
+            queue.borrow_mut().push(pending);
+            return;
+        }
+
+        // Otherwise publish immediately (post-commit path).
+        let Some(runner) = self.runner else { return };
+        runner.publish_event(
+            &self.event_transport,
+            &pending.hooks,
+            pending.live.as_ref(),
+            PublishEventInput::builder(pending.target, pending.operation)
+                .collection(pending.collection)
+                .document_id(pending.document_id)
+                .data(pending.data)
+                .edited_by(pending.edited_by)
+                .build(),
+        );
+    }
+
+    /// Flush all queued events (call after transaction commit).
+    pub fn flush_event_queue(&self) {
+        let Some(ref queue) = self.event_queue else {
+            return;
+        };
+        let Some(runner) = self.runner else { return };
+
+        let events: Vec<PendingEvent> = queue.borrow_mut().drain(..).collect();
+
+        for pending in events {
+            runner.publish_event(
+                &self.event_transport,
+                &pending.hooks,
+                pending.live.as_ref(),
+                PublishEventInput::builder(pending.target, pending.operation)
+                    .collection(pending.collection)
+                    .document_id(pending.document_id)
+                    .data(pending.data)
+                    .edited_by(pending.edited_by)
+                    .build(),
+            );
+        }
+    }
+
     /// Publish a user-invalidation signal if an invalidation transport is
     /// configured. Fire-and-forget — no-op when no transport is attached.
     ///
@@ -193,6 +400,10 @@ pub struct ServiceContextBuilder<'a> {
     write_hooks: Option<&'a dyn WriteHooks>,
     user: Option<&'a Document>,
     override_access: bool,
+    email_ctx: Option<EmailContext>,
+    cache: Option<SharedCache>,
+    event_transport: Option<SharedEventTransport>,
+    event_queue: Option<EventQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
@@ -208,6 +419,10 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: None,
             user: None,
             override_access: false,
+            email_ctx: None,
+            cache: None,
+            event_transport: None,
+            event_queue: None,
             invalidation_transport: None,
         }
     }
@@ -247,6 +462,32 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach email context for verification emails on auth collection creates.
+    pub fn email_ctx(mut self, ctx: Option<EmailContext>) -> Self {
+        self.email_ctx = ctx;
+        self
+    }
+
+    /// Attach a populate cache. When set, service-layer write operations
+    /// clear the cache after commit to prevent stale relationship data.
+    pub fn cache(mut self, cache: Option<SharedCache>) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    /// Attach a mutation event transport. When set, service-layer write
+    /// operations publish events to all Subscribe/SSE clients.
+    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
+        self.event_transport = transport;
+        self
+    }
+
+    /// Attach an event queue for deferred publishing (used inside transactions).
+    pub fn event_queue(mut self, queue: EventQueue) -> Self {
+        self.event_queue = Some(queue);
+        self
+    }
+
     /// Attach a user-invalidation transport. When set, service-layer
     /// operations that revoke user sessions (lock, hard-delete of auth
     /// documents) will publish a tear-down signal.
@@ -267,6 +508,10 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: self.write_hooks,
             user: self.user,
             override_access: self.override_access,
+            email_ctx: self.email_ctx,
+            cache: self.cache,
+            event_transport: self.event_transport,
+            event_queue: self.event_queue,
             invalidation_transport: self.invalidation_transport,
             slug: self.slug,
             def: self.def,

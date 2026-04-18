@@ -172,6 +172,7 @@ fn setup_app_with_config(
             crap_cms::core::event::InProcessInvalidationBus::new(),
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
+        cache: None,
     };
 
     let router = build_router(state);

@@ -138,6 +138,7 @@ pub fn restore_collection_version(
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
         .build();
 
     let doc = restore_collection_version_core(&inner_ctx, document_id, version_id, locale_config)?;
@@ -217,6 +218,7 @@ pub fn restore_global_version(
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
         .build();
 
     let doc = restore_global_version_core(&inner_ctx, version_id, locale_config)?;

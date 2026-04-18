@@ -7,20 +7,27 @@ use serde_json::{Value, json};
 use tracing::info;
 
 use crate::{
-    core::{Registry, event::SharedInvalidationTransport},
+    core::{
+        Registry,
+        cache::SharedCache,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+    },
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, delete_document},
 };
 
 /// Execute `delete` — delete a document by ID.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_delete(
     args: &Value,
     slug: &str,
     registry: &Arc<Registry>,
     pool: &DbPool,
     runner: &HookRunner,
+    event_transport: Option<SharedEventTransport>,
     invalidation_transport: Option<SharedInvalidationTransport>,
+    cache: Option<SharedCache>,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -35,7 +42,9 @@ pub(in crate::mcp::tools) fn exec_delete(
         .pool(pool)
         .runner(runner)
         .override_access(true)
+        .event_transport(event_transport)
         .invalidation_transport(invalidation_transport)
+        .cache(cache)
         .build();
     delete_document(&ctx, id, None, None)?;
 

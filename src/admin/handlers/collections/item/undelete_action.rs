@@ -12,7 +12,7 @@ use tracing::{error, info};
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{forbidden, htmx_redirect},
+        handlers::shared::{forbidden, get_user_doc, htmx_redirect},
     },
     core::auth::AuthUser,
     service::{self, ServiceContext, ServiceError},
@@ -38,13 +38,17 @@ pub async fn undelete_action(
     let slug_owned = slug.clone();
     let id_owned = id.clone();
     let def_owned = def.clone();
-    let user_doc = crate::admin::handlers::shared::get_user_doc(&auth_user).cloned();
+    let user_doc = get_user_doc(&auth_user).cloned();
+    let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
 
     let result = task::spawn_blocking(move || {
         let ctx = ServiceContext::collection(&slug_owned, &def_owned)
             .pool(&pool)
             .runner(&runner)
             .user(user_doc.as_ref())
+            .event_transport(event_transport)
+            .cache(cache)
             .build();
 
         service::undelete_document(&ctx, &id_owned)

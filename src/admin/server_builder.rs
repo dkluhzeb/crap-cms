@@ -8,6 +8,7 @@ use crate::{
     core::{
         JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
+        cache::SharedCache,
         event::{SharedEventTransport, SharedInvalidationTransport},
         rate_limit::LoginRateLimiter,
         upload::SharedStorage,
@@ -33,6 +34,7 @@ pub struct AdminStartParamsBuilder {
     token_provider: Option<SharedTokenProvider>,
     password_provider: Option<SharedPasswordProvider>,
     invalidation_transport: Option<SharedInvalidationTransport>,
+    cache: Option<SharedCache>,
 }
 
 impl AdminStartParamsBuilder {
@@ -53,6 +55,7 @@ impl AdminStartParamsBuilder {
             token_provider: None,
             password_provider: None,
             invalidation_transport: None,
+            cache: None,
         }
     }
 
@@ -146,6 +149,12 @@ impl AdminStartParamsBuilder {
         self
     }
 
+    pub fn cache(mut self, cache: Option<SharedCache>) -> Self {
+        self.cache = cache;
+
+        self
+    }
+
     pub fn build(self) -> AdminStartParams {
         AdminStartParams {
             config: self.config.expect("config is required"),
@@ -169,6 +178,7 @@ impl AdminStartParamsBuilder {
                 .password_provider
                 .expect("password_provider is required"),
             invalidation_transport: self.invalidation_transport,
+            cache: self.cache,
         }
     }
 }

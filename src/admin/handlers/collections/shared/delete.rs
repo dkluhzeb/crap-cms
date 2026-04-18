@@ -12,13 +12,9 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{forbidden, get_event_user, get_user_doc, htmx_redirect},
+        handlers::shared::{forbidden, get_user_doc, htmx_redirect},
     },
-    core::{
-        auth::AuthUser,
-        event::{EventOperation, EventTarget},
-    },
-    hooks::lifecycle::PublishEventInput,
+    core::auth::AuthUser,
     service::{self, ServiceError},
 };
 
@@ -61,6 +57,8 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     let storage = state.storage.clone();
     let locale_config = state.config.locale.clone();
     let invalidation_transport = state.invalidation_transport.clone();
+    let event_transport = state.event_transport.clone();
+    let cache = state.cache.clone();
 
     if force_hard_delete {
         def_clone.soft_delete = false;
@@ -72,6 +70,8 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
             .runner(&runner)
             .user(user_doc.as_ref())
             .invalidation_transport(Some(invalidation_transport))
+            .event_transport(event_transport)
+            .cache(cache)
             .build();
         service::delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
     })
@@ -79,17 +79,6 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
 
     match result {
         Ok(Ok(_)) => {
-            state.hook_runner.publish_event(
-                &state.event_transport,
-                &def.hooks,
-                def.live.as_ref(),
-                PublishEventInput::builder(EventTarget::Collection, EventOperation::Delete)
-                    .collection(slug.to_string())
-                    .document_id(id.to_string())
-                    .edited_by(get_event_user(auth_user))
-                    .build(),
-            );
-
             if json_response {
                 return json_ok_response();
             }

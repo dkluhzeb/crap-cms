@@ -9,7 +9,6 @@ use crate::{
         content,
         handlers::{ContentService, convert::document_to_proto},
     },
-    core::event::EventOperation,
     service::{self, ServiceContext, ServiceError},
 };
 
@@ -37,9 +36,11 @@ impl ContentService {
         let registry = self.registry.clone();
         let db_kind = self.db_kind.clone();
         let def_clone = def.clone();
+        let event_transport = self.event_transport.clone();
+        let cache = Some(self.cache.clone());
         let collection = req.collection.clone();
         let id = req.id.clone();
-        let (proto_doc, auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
+        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool
                 .get()
                 .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
@@ -54,6 +55,8 @@ impl ContentService {
                 .pool(&pool)
                 .runner(&runner)
                 .user(user_doc.as_ref())
+                .event_transport(event_transport)
+                .cache(cache)
                 .build();
 
             let doc = service::undelete_document(&ctx, &id)
@@ -61,13 +64,11 @@ impl ContentService {
 
             let proto_doc = document_to_proto(&doc, &collection);
 
-            Ok((proto_doc, auth_user))
+            Ok(proto_doc)
         })
         .await
         .inspect_err(|e| error!("Task error: {}", e))
         .map_err(|_| Status::internal("Internal error"))??;
-
-        self.publish_mutation_event(&req.collection, &req.id, EventOperation::Update, &auth_user);
 
         Ok(Response::new(content::UndeleteResponse {
             document: Some(proto_doc),

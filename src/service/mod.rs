@@ -24,15 +24,18 @@ pub mod write;
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, CountDocumentsInputBuilder, Def, FindByIdInput, FindByIdInputBuilder,
-    FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput, ListVersionsInput,
-    PaginatedResult, PersistOptions, PersistOptionsBuilder, SearchDocumentsInput, ServiceContext,
-    ServiceContextBuilder, WriteInput, WriteInputBuilder, WriteResult,
+    CountDocumentsInput, CountDocumentsInputBuilder, Def, EmailContext, EventQueue, FindByIdInput,
+    FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
+    ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
+    SearchDocumentsInput, ServiceContext, ServiceContextBuilder, WriteInput, WriteInputBuilder,
+    WriteResult, flush_queue,
 };
 
 pub use collection::{
-    create_document, delete_document, undelete_document, undelete_document_core,
-    unpublish_document, unpublish_document_core, update_document,
+    CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,
+    UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
+    delete_many, undelete_document, undelete_document_core, unpublish_document,
+    unpublish_document_core, update_document, update_many,
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};

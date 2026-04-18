@@ -2,8 +2,14 @@
 
 use anyhow::Context as _;
 
-use crate::service::{
-    RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult, create_document_core,
+use std::{cell::RefCell, rc::Rc};
+
+use crate::{
+    core::event::EventOperation,
+    service::{
+        RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult,
+        create_document_core, flush_queue,
+    },
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -26,16 +32,34 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
         wh = wh.with_override_access();
     }
 
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
     let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def())
         .conn(&tx)
         .write_hooks(&wh)
         .user(ctx.user)
         .override_access(ctx.override_access)
+        .cache(ctx.cache.clone())
+        .event_transport(ctx.event_transport.clone())
+        .event_queue(queue.clone())
+        .email_ctx(ctx.email_ctx.clone())
         .build();
 
     let result = create_document_core(&inner_ctx, input)?;
+    drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
+
+    ctx.clear_cache();
+
+    // Publish the main document event + any queued events from Lua CRUD hooks.
+    ctx.publish_mutation_event(
+        EventOperation::Create,
+        &result.0.id,
+        result.0.fields.clone(),
+    );
+    flush_queue(ctx, &queue);
+    ctx.maybe_send_verification(&result.0);
 
     Ok(result)
 }
