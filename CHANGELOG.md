@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.8] — Unreleased
+
+### Added
+
+- **Shell completions** — `crap-cms update completions <shell>` generates
+  completions for bash, zsh, fish, elvish, and powershell. For bash,
+  zsh, and fish, completions are also auto-installed to the standard
+  location after `crap-cms update use` and bare `crap-cms update`.
+  On first install, a hint is shown with how to activate completions
+  in the current session.
+
+### Changed
+
+### Fixed
+
 ## [0.1.0-alpha.7] — 2026-04-18
 
 ### Added

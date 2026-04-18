@@ -538,7 +538,7 @@ async fn run(cli: Cli) -> Result<()> {
             // Run on a blocking thread — `reqwest::blocking` spawns its own
             // tokio runtime internally, and dropping that while inside
             // `#[tokio::main]` panics. spawn_blocking isolates it.
-            tokio::task::spawn_blocking(move || commands::update::run(action, yes, force))
+            tokio::task::spawn_blocking(move || commands::update::run::<Cli>(action, yes, force))
                 .await
                 .context("update task panicked")?
         }

@@ -17,11 +17,14 @@ pub mod store;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use clap::Subcommand;
+use clap::{CommandFactory, Subcommand};
+use clap_complete::Shell;
 use semver::Version;
 use std::path::PathBuf;
 
 use crate::cli;
+
+mod completions;
 
 #[derive(Subcommand, Debug)]
 pub enum UpdateCmd {
@@ -54,10 +57,16 @@ pub enum UpdateCmd {
 
     /// Print the path of the currently active binary.
     Where,
+
+    /// Generate shell completions and print to stdout.
+    Completions {
+        /// Shell to generate completions for (bash, zsh, fish, elvish, powershell).
+        shell: Shell,
+    },
 }
 
 /// Execute an `UpdateCmd`. `None` means "install latest + use latest".
-pub fn run(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
+pub fn run<C: CommandFactory>(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
     match cmd {
         Some(UpdateCmd::Check) => run_check(),
         Some(UpdateCmd::List) => run_list(),
@@ -67,13 +76,14 @@ pub fn run(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
         }
         Some(UpdateCmd::Use { version }) => {
             refuse_on_windows("use")?;
-            run_use(&version, force)
+            run_use::<C>(&version, force)
         }
         Some(UpdateCmd::Uninstall { version }) => run_uninstall(&version),
         Some(UpdateCmd::Where) => run_where(),
+        Some(UpdateCmd::Completions { shell }) => run_completions::<C>(shell),
         None => {
             refuse_on_windows("update")?;
-            run_update_latest(yes, force)
+            run_update_latest::<C>(yes, force)
         }
     }
 }
@@ -92,6 +102,12 @@ fn refuse_on_windows(verb: &str) -> Result<()> {
              from https://github.com/dkluhzeb/crap-cms/releases/latest"
         );
     }
+    Ok(())
+}
+
+/// Print shell completions to stdout.
+fn run_completions<C: CommandFactory>(shell: Shell) -> Result<()> {
+    completions::print_completions::<C>(shell);
     Ok(())
 }
 
@@ -253,13 +269,14 @@ impl Drop for ScratchDir {
 }
 
 /// Switch the `current` symlink.
-fn run_use(version: &str, force: bool) -> Result<()> {
+fn run_use<C: CommandFactory>(version: &str, force: bool) -> Result<()> {
     let version = normalize_tag(version);
     let store = store::Store::default_for_user()?;
     ensure_self_managed(&store, force)?;
     store.switch_to(&version)?;
     cli::success(&format!("Switched to {version}."));
 
+    completions::install_completions::<C>();
     warn_if_path_misaligned(&store);
     Ok(())
 }
@@ -290,7 +307,7 @@ fn run_where() -> Result<()> {
 }
 
 /// `crap-cms update` (no args): install latest + switch to it.
-fn run_update_latest(yes: bool, force: bool) -> Result<()> {
+fn run_update_latest<C: CommandFactory>(yes: bool, force: bool) -> Result<()> {
     let latest = github::latest_tag(github::DEFAULT_REPO)?;
     let current = current_version();
 
@@ -308,7 +325,7 @@ fn run_update_latest(yes: bool, force: bool) -> Result<()> {
     }
 
     run_install(&latest, false, force)?;
-    run_use(&latest, force)?;
+    run_use::<C>(&latest, force)?;
     Ok(())
 }
 
