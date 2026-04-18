@@ -1,5 +1,6 @@
 //! CLI command handlers. Each submodule handles one top-level subcommand.
 
+pub mod bench;
 pub mod config_resolve;
 pub mod db;
 pub mod export;
@@ -22,8 +23,8 @@ mod cli_types;
 mod helpers;
 
 pub use cli_types::{
-    BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction, MigrateAction,
-    TemplatesAction, TrashAction, UserAction, parse_key_val,
+    BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
+    MigrateAction, TemplatesAction, TrashAction, UserAction, parse_key_val,
 };
 pub use config_resolve::resolve_config_dir;
 pub use helpers::load_config_and_sync;

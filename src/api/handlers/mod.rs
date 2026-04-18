@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc};
 mod auth;
 mod collection;
 mod content_service;
-mod convert;
+pub(crate) mod convert;
 mod deps_builder;
 mod globals;
 mod jobs;

@@ -15,8 +15,9 @@ use tracing_subscriber::{Layer, Registry, layer::SubscriberExt, util::Subscriber
 use crap_cms::{
     cli::{self, crap_theme},
     commands::{
-        self, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
-        MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction, serve::ServeMode,
+        self, BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction,
+        MakeAction, MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction,
+        serve::ServeMode,
     },
     config::{CrapConfig, LogRotation},
 };
@@ -257,6 +258,12 @@ enum Command {
 
         #[command(subcommand)]
         action: Option<LogsAction>,
+    },
+
+    /// Benchmark hooks, queries, and write cycles
+    Bench {
+        #[command(subcommand)]
+        action: BenchAction,
     },
 
     /// Manage installed versions of crap-cms
@@ -537,6 +544,10 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let config_dir = commands::resolve_config_dir(config_flag)?;
             commands::logs::run(&config_dir, action, follow, lines)
+        }
+        Command::Bench { action } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::bench::run(&config, action)
         }
         Command::Update { yes, force, action } => {
             // Run on a blocking thread — `reqwest::blocking` spawns its own

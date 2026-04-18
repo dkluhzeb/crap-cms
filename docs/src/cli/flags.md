@@ -181,6 +181,81 @@ crap-cms status                # project overview
 crap-cms status --check        # overview + health audit
 ```
 
+### `bench` — Benchmark hooks, queries, and write cycles
+
+Developer performance profiling tool. Measures hook execution time, query latency, and end-to-end write cycle duration.
+
+#### `bench hooks`
+
+```bash
+crap-cms bench hooks [-c <COLLECTION>] [-n <ITERATIONS>] [--hooks <LIST>] [--exclude <LIST>] [--all] [-d <JSON>]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--collection` | `-c` | — | Filter to a specific collection |
+| `--iterations` | `-n` | `10` | Number of iterations per hook |
+| `--hooks` | — | — | Run only these hooks (comma-separated function refs) |
+| `--exclude` | — | — | Run all hooks except these (comma-separated) |
+| `--all` | — | — | Run all hooks (skip interactive selection) |
+| `--data` | `-d` | — | Input data as JSON object |
+
+**Safety model:** Hooks may have external side effects (webhooks, API calls). By default, an interactive `MultiSelect` wizard lets you choose which hooks to benchmark. Use `--hooks` or `--all` for non-interactive use.
+
+**Data resolution:** `--data` JSON > existing document from DB > synthetic fallback. Hook errors are caught and reported without stopping the benchmark.
+
+```bash
+crap-cms bench hooks                                    # interactive wizard
+crap-cms bench hooks --all                              # run all (with warning)
+crap-cms bench hooks --hooks hooks.auto_slug -n 20      # specific hook, 20 iterations
+crap-cms bench hooks -c posts --exclude hooks.send_webhook  # all posts hooks except one
+```
+
+#### `bench queries`
+
+```bash
+crap-cms bench queries [-c <COLLECTION>] [--explain] [-w <JSON>]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--collection` | `-c` | — | Filter to a specific collection |
+| `--explain` | — | — | Show `EXPLAIN QUERY PLAN` output (SQLite only) |
+| `--where` | `-w` | — | JSON filter clause (same format as gRPC `where` parameter) |
+
+Read-only — no side effects, no confirmation needed. The `--where` filter uses the same JSON syntax as the gRPC API (e.g., `{"slug": {"equals": "my-post"}}`). Combined with `--explain`, this shows whether queries hit indexes.
+
+```bash
+crap-cms bench queries                                           # all collections
+crap-cms bench queries -c posts --explain                        # single collection with query plan
+crap-cms bench queries -c posts --where '{"status": "published"}' --explain  # filtered + plan
+```
+
+#### `bench create`
+
+```bash
+crap-cms bench create <COLLECTION> [-n <ITERATIONS>] [-d <JSON>] [--no-hooks] [-y]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--iterations` | `-n` | `5` | Number of iterations |
+| `--data` | `-d` | — | Input data as JSON object |
+| `--no-hooks` | — | — | Skip hooks (measure pure validation + persist) |
+| `--yes` | `-y` | — | Skip confirmation prompt |
+
+Runs the full service-layer create cycle (access check, validation, before-hooks, persist, after-hooks) inside a transaction that is rolled back after each iteration. **No data is persisted.**
+
+When hooks are enabled and `-y` is not set, a confirmation prompt is shown because hooks may call external APIs. Unique fields are automatically randomized per iteration to avoid constraint violations.
+
+```bash
+crap-cms bench create posts                  # full cycle with confirmation
+crap-cms bench create posts -y               # skip confirmation
+crap-cms bench create posts --no-hooks       # pure validation + persist
+crap-cms bench create posts -y -n 20         # 20 iterations, no prompt
+crap-cms bench create posts -d '{"title": "test", "slug": "bench-test"}'  # custom data
+```
+
 ### `user` — User management
 
 #### `user create`

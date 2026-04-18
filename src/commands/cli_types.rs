@@ -475,6 +475,74 @@ pub enum ImagesAction {
     },
 }
 
+/// Actions for the `bench` subcommand.
+#[derive(Subcommand)]
+pub enum BenchAction {
+    /// Time individual Lua hooks (interactive selection by default)
+    Hooks {
+        /// Filter to a specific collection
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Number of iterations per hook
+        #[arg(short = 'n', long, default_value = "10")]
+        iterations: usize,
+
+        /// Run only these hooks (comma-separated function refs)
+        #[arg(long)]
+        hooks: Option<String>,
+
+        /// Run all hooks except these (comma-separated function refs)
+        #[arg(long)]
+        exclude: Option<String>,
+
+        /// Run all hooks (skip interactive selection). WARNING: hooks may have side effects.
+        #[arg(long)]
+        all: bool,
+
+        /// Input data as JSON object (overrides automatic data resolution)
+        #[arg(short, long)]
+        data: Option<String>,
+    },
+
+    /// Time find queries on each collection
+    Queries {
+        /// Filter to a specific collection
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Show EXPLAIN QUERY PLAN output (SQLite only)
+        #[arg(long)]
+        explain: bool,
+
+        /// JSON filter clause (same format as gRPC `where` parameter)
+        #[arg(short, long)]
+        r#where: Option<String>,
+    },
+
+    /// Time a full document create cycle (transaction is rolled back)
+    Create {
+        /// Collection slug to benchmark
+        collection: String,
+
+        /// Number of iterations
+        #[arg(short = 'n', long, default_value = "5")]
+        iterations: usize,
+
+        /// Input data as JSON object
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Skip hooks (measure pure validation + persist)
+        #[arg(long)]
+        no_hooks: bool,
+
+        /// Skip confirmation prompt for hook side effects
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
+
 /// Actions for the `logs` subcommand.
 #[derive(Subcommand)]
 pub enum LogsAction {

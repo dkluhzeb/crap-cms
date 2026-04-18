@@ -70,9 +70,7 @@ fn parse_or_clause(value: &JsonValue) -> Result<FilterClause, String> {
 ///
 /// Supports simple equality (`{"field": "value"}`), operator objects
 /// (`{"field": {"greater_than": 5}}`), and `or` groups.
-pub(in crate::api::handlers) fn parse_where_json(
-    json_str: &str,
-) -> Result<Vec<FilterClause>, String> {
+pub fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
     let obj: JsonValue =
         serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
 

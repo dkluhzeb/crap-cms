@@ -15,6 +15,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   On first install, a hint is shown with how to activate completions
   in the current session.
 
+- **`bench` command** — benchmark hooks, queries, and write cycles for
+  developer performance profiling:
+  - `bench hooks` — time individual Lua hooks with interactive selection
+    wizard (`MultiSelect`). Supports `--hooks`, `--exclude`, `--all` for
+    non-interactive use. Uses real documents from the DB when available,
+    falls back to synthetic data. Catches hook errors without stopping.
+  - `bench queries` — time find queries per collection with optional
+    `--where` JSON filter clause (same format as gRPC API). `--explain`
+    shows SQLite `EXPLAIN QUERY PLAN` output with real index usage.
+  - `bench create <collection>` — time a full document create cycle
+    (validation + hooks + persist) with automatic transaction rollback.
+    `--no-hooks` for pure persist timing. Confirmation prompt when hooks
+    are enabled (skip with `-y`). Unique fields auto-randomized per
+    iteration to avoid constraint violations.
+
 - **`status --check` health audit** — best-practice audit for project
   configuration. Checks 24 rules across security, performance, config,
   and operations:
