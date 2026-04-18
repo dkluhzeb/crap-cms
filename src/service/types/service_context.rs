@@ -13,7 +13,7 @@ use crate::{
     core::{
         CollectionDefinition, Document, FieldDefinition,
         cache::SharedCache,
-        collection::{GlobalDefinition, Hooks, LiveSetting},
+        collection::{GlobalDefinition, Hooks, LiveMode, LiveSetting},
         email::EmailRenderer,
         event::{
             EventOperation, EventTarget, EventUser, SharedEventTransport,
@@ -54,6 +54,16 @@ pub struct PendingEvent {
 /// Cloning is cheap (Rc + RefCell).
 pub type EventQueue = Rc<RefCell<Vec<PendingEvent>>>;
 
+/// A verification email waiting to be sent after transaction commit.
+pub struct PendingVerification {
+    pub slug: String,
+    pub doc_id: String,
+    pub email: String,
+}
+
+/// Shared queue for verification emails accumulated during a transaction.
+pub type VerificationQueue = Rc<RefCell<Vec<PendingVerification>>>;
+
 /// Flush all events from a queue, publishing each via the given context's runner + transport.
 pub fn flush_queue(ctx: &ServiceContext, queue: &EventQueue) {
     let Some(runner) = ctx.runner else { return };
@@ -71,6 +81,28 @@ pub fn flush_queue(ctx: &ServiceContext, queue: &EventQueue) {
                 .data(pending.data)
                 .edited_by(pending.edited_by)
                 .build(),
+        );
+    }
+}
+
+/// Flush all queued verification emails, sending each via the parent's pool + email context.
+pub fn flush_verification_queue(ctx: &ServiceContext, queue: &VerificationQueue) {
+    let Some(pool) = ctx.pool else { return };
+    let Some(ref email_ctx) = ctx.email_ctx else {
+        return;
+    };
+
+    let pending: Vec<PendingVerification> = queue.borrow_mut().drain(..).collect();
+
+    for v in pending {
+        crate::service::send_verification_email(
+            pool.clone(),
+            email_ctx.email_config.clone(),
+            email_ctx.email_renderer.clone(),
+            email_ctx.server_config.clone(),
+            v.slug,
+            v.doc_id,
+            v.email,
         );
     }
 }
@@ -118,6 +150,9 @@ pub struct ServiceContext<'a> {
     /// `publish_mutation_event` pushes to this queue instead of publishing
     /// immediately. The caller flushes after commit via `flush_event_queue`.
     pub event_queue: Option<EventQueue>,
+    /// Queue for verification emails accumulated during a transaction.
+    /// Flushed after commit by the parent alongside events.
+    pub verification_queue: Option<VerificationQueue>,
     /// Transport for publishing user-invalidation signals (live-stream
     /// tear-down on lock / hard-delete). `None` = publishing is a no-op.
     pub invalidation_transport: Option<SharedInvalidationTransport>,
@@ -224,11 +259,6 @@ impl<'a> ServiceContext<'a> {
     /// `verify_email` enabled and the document has an email field.
     /// No-op when email context is not attached.
     pub fn maybe_send_verification(&self, doc: &Document) {
-        let Some(ref email_ctx) = self.email_ctx else {
-            return;
-        };
-        let Some(pool) = self.pool else { return };
-
         let def = match &self.def {
             Def::Collection(d) => d,
             _ => return,
@@ -245,15 +275,28 @@ impl<'a> ServiceContext<'a> {
             return;
         };
 
-        crate::service::send_verification_email(
-            pool.clone(),
-            email_ctx.email_config.clone(),
-            email_ctx.email_renderer.clone(),
-            email_ctx.server_config.clone(),
-            self.slug.to_string(),
-            doc.id.to_string(),
-            email.to_string(),
-        );
+        // Pool mode: send immediately.
+        if let (Some(pool), Some(email_ctx)) = (self.pool, &self.email_ctx) {
+            crate::service::send_verification_email(
+                pool.clone(),
+                email_ctx.email_config.clone(),
+                email_ctx.email_renderer.clone(),
+                email_ctx.server_config.clone(),
+                self.slug.to_string(),
+                doc.id.to_string(),
+                email.to_string(),
+            );
+            return;
+        }
+
+        // Conn mode: queue for the parent to send after commit.
+        if let Some(ref queue) = self.verification_queue {
+            queue.borrow_mut().push(PendingVerification {
+                slug: self.slug.to_string(),
+                doc_id: doc.id.to_string(),
+                email: email.to_string(),
+            });
+        }
     }
 
     /// Clear the populate cache after a write operation.
@@ -275,16 +318,24 @@ impl<'a> ServiceContext<'a> {
         &self,
         operation: EventOperation,
         doc_id: &str,
-        data: HashMap<String, JsonValue>,
+        data: &HashMap<String, JsonValue>,
     ) {
         if self.event_transport.is_none() {
             return;
         }
 
-        let (hooks, live) = match &self.def {
-            Def::Collection(d) => (d.hooks.clone(), d.live.clone()),
-            Def::Global(d) => (d.hooks.clone(), d.live.clone()),
+        let (hooks, live, live_mode) = match &self.def {
+            Def::Collection(d) => (d.hooks.clone(), d.live.clone(), d.live_mode),
+            Def::Global(d) => (d.hooks.clone(), d.live.clone(), d.live_mode),
             Def::None => return,
+        };
+
+        // Only clone document data for Full mode — Metadata mode subscribers
+        // ignore it, so cloning fields would be wasted work.
+        let data = if live_mode == LiveMode::Full {
+            data.clone()
+        } else {
+            HashMap::new()
         };
 
         let edited_by = self.user.map(|u| {
@@ -404,6 +455,7 @@ pub struct ServiceContextBuilder<'a> {
     cache: Option<SharedCache>,
     event_transport: Option<SharedEventTransport>,
     event_queue: Option<EventQueue>,
+    verification_queue: Option<VerificationQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
 }
 
@@ -423,6 +475,7 @@ impl<'a> ServiceContextBuilder<'a> {
             cache: None,
             event_transport: None,
             event_queue: None,
+            verification_queue: None,
             invalidation_transport: None,
         }
     }
@@ -488,6 +541,27 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach a verification queue for deferred email sending (used inside transactions).
+    pub fn verification_queue(mut self, queue: VerificationQueue) -> Self {
+        self.verification_queue = Some(queue);
+        self
+    }
+
+    /// Apply infrastructure from a `LuaCrudInfra` bundle (event transport,
+    /// cache, event queue, verification queue). Used by Lua CRUD functions
+    /// to transfer the parent's infrastructure in a single call.
+    pub fn lua_infra(mut self, infra: &crate::hooks::LuaCrudInfra) -> Self {
+        if infra.event_transport.is_some() {
+            self.event_transport = infra.event_transport.clone();
+        }
+        if infra.cache.is_some() {
+            self.cache = infra.cache.clone();
+        }
+        self.event_queue = infra.event_queue.clone();
+        self.verification_queue = infra.verification_queue.clone();
+        self
+    }
+
     /// Attach a user-invalidation transport. When set, service-layer
     /// operations that revoke user sessions (lock, hard-delete of auth
     /// documents) will publish a tear-down signal.
@@ -512,6 +586,7 @@ impl<'a> ServiceContextBuilder<'a> {
             cache: self.cache,
             event_transport: self.event_transport,
             event_queue: self.event_queue,
+            verification_queue: self.verification_queue,
             invalidation_transport: self.invalidation_transport,
             slug: self.slug,
             def: self.def,

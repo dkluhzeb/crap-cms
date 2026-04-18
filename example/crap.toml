@@ -7,7 +7,7 @@ grpc_reflection = true
 
 [database]
 path = "data/crap.db"
-# pool_max_size = 64
+pool_max_size = 64
 # backend = "postgres"
 # url = "host=localhost port=5432 user=crap password=crap dbname=crap_cms"
 

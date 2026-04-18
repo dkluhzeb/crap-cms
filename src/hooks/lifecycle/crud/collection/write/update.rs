@@ -16,11 +16,11 @@ use crate::{
         converters::*,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, ServiceContext, WriteInput, update_document_core},
+    service::{LuaWriteHooks, ServiceContext, WriteInput, update_document},
 };
 
 /// Execute the `crap.collections.update` operation.
-fn update_document(
+fn update_document_lua(
     lua: &Lua,
     reg: &SharedRegistry,
     lc: &LocaleConfig,
@@ -35,6 +35,7 @@ fn update_document(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
     let locale_str = get_opt_string(&opts, "locale")?;
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
@@ -44,7 +45,7 @@ fn update_document(
     let draft = get_opt_bool(&opts, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    // Collection-level access check is handled inside service::update_document_core
+    // Collection-level access check is handled inside service::update_document
     // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
     // Handle unpublish early return
@@ -67,7 +68,7 @@ fn update_document(
         password,
     } = extract_data(lua, &data_table, &def)?;
 
-    // Field write access is now checked inside service::update_document_core
+    // Field write access is now checked inside service::update_document
     // via WriteHooks::field_write_denied.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
@@ -99,18 +100,23 @@ fn update_document(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let mut ctx_builder = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
-        .build();
+        .override_access(override_access);
 
-    let (doc, _ctx) = update_document_core(&ctx, &id, write_input)
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
+
+    let (doc, _) = update_document(&ctx, &id, write_input)
         .map_err(|e| RuntimeError(format!("update error: {e:#}")))?;
 
     // Hydration and read-denied field stripping are handled inside
-    // update_document_core via WriteHooks.
+    // update_document via WriteHooks.
 
     document_to_lua_table(lua, &doc)
 }
@@ -126,7 +132,7 @@ pub(crate) fn register_update(
     let lc = locale_config.clone();
     let update_fn = lua.create_function(
         move |lua, (collection, id, data_table, opts): (String, String, Table, Option<Table>)| {
-            update_document(lua, &registry, &lc, collection, id, data_table, opts)
+            update_document_lua(lua, &registry, &lc, collection, id, data_table, opts)
         },
     )?;
 

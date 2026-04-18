@@ -27,7 +27,7 @@ impl HookRunner {
         conn: &dyn DbConnection,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         // Build context table
         let ctx = lua.create_table()?;
@@ -71,7 +71,7 @@ impl HookRunner {
         user: Option<&Document>,
     ) -> Result<String> {
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None);
+        let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None, None);
 
         lua.load(code)
             .eval::<String>()

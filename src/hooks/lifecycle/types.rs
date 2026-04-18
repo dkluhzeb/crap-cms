@@ -3,7 +3,11 @@
 use mlua::Lua;
 use serde_json::Value;
 
-use crate::{core::Document, db::DbConnection};
+use crate::{
+    core::{Document, cache::SharedCache, event::SharedEventTransport},
+    db::DbConnection,
+    service::{EventQueue, VerificationQueue},
+};
 
 /// Result of evaluating a display condition function.
 #[derive(Debug, Clone)]
@@ -135,6 +139,46 @@ pub(crate) struct LuaInvalidationTransport(
 /// so the Arc only pays off for ordinary (non-override) Lua reads.
 pub(crate) struct LuaPopulateSingleflight(pub(crate) crate::db::query::SharedPopulateSingleflight);
 
+/// Infrastructure for Lua CRUD event publishing, cache invalidation, and event
+/// queueing. Stored in Lua `app_data` alongside `TxContext` so that CRUD
+/// functions called from hooks can build a complete `ServiceContext` with event
+/// transport, cache, and the parent's event queue.
+///
+/// When present, Lua CRUD operations queue events into the parent's
+/// `event_queue` (flushed after the parent's transaction commits) and
+/// invalidate the populate cache on writes.
+#[derive(Clone)]
+pub struct LuaCrudInfra {
+    pub event_transport: Option<SharedEventTransport>,
+    pub cache: Option<SharedCache>,
+    pub event_queue: Option<EventQueue>,
+    pub verification_queue: Option<VerificationQueue>,
+}
+
+impl LuaCrudInfra {
+    /// Build from a parent `ServiceContext`, attaching the given queues.
+    /// Clones the context's event transport and cache (cheap Arc clones).
+    pub fn from_ctx(
+        ctx: &crate::service::ServiceContext,
+        event_queue: Option<EventQueue>,
+        verification_queue: Option<VerificationQueue>,
+    ) -> Self {
+        Self {
+            event_transport: ctx.event_transport.clone(),
+            cache: ctx.cache.clone(),
+            event_queue,
+            verification_queue,
+        }
+    }
+}
+
+// Safety: LuaCrudInfra contains Arc (Send+Sync) and Rc<RefCell> (not Send).
+// The Rc<RefCell<Vec>> (EventQueue) is only accessed on the same thread that
+// owns the Lua VM — mlua's `send` feature enforces this at the type level.
+// We need Send+Sync for `set_app_data` but the Rc never crosses threads.
+unsafe impl Send for LuaCrudInfra {}
+unsafe impl Sync for LuaCrudInfra {}
+
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
 pub(crate) struct HookDepth(pub(crate) u32);
@@ -177,16 +221,23 @@ pub(crate) struct TxContextGuard<'a> {
 }
 
 impl<'a> TxContextGuard<'a> {
-    /// Set TxContext, UserContext, and UiLocaleContext, returning a guard that cleans up on drop.
+    /// Set TxContext, UserContext, UiLocaleContext, and optionally LuaCrudInfra,
+    /// returning a guard that cleans up on drop.
     pub(crate) fn set(
         lua: &'a Lua,
         conn: &dyn DbConnection,
         user: Option<Document>,
         ui_locale: Option<String>,
+        infra: Option<LuaCrudInfra>,
     ) -> Self {
         lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(user));
         lua.set_app_data(UiLocaleContext(ui_locale));
+
+        if let Some(infra) = infra {
+            lua.set_app_data(infra);
+        }
+
         Self { lua }
     }
 }
@@ -196,6 +247,7 @@ impl Drop for TxContextGuard<'_> {
         self.lua.remove_app_data::<TxContext>();
         self.lua.remove_app_data::<UserContext>();
         self.lua.remove_app_data::<UiLocaleContext>();
+        self.lua.remove_app_data::<LuaCrudInfra>();
     }
 }
 

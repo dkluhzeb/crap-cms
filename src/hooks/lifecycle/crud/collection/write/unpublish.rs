@@ -16,7 +16,7 @@ use crate::{
             execution::run_hooks_inner,
         },
     },
-    service::{ServiceContext, persist_unpublish},
+    service::{LuaWriteHooks, ServiceContext, persist_unpublish, unpublish_document},
 };
 
 /// Parameters for the unpublish operation.
@@ -72,9 +72,15 @@ pub(super) fn handle_unpublish(
             .map_err(|e| RuntimeError(format!("before_change hook error: {e:#}")))?;
     }
 
-    let svc_ctx = ServiceContext::collection(ctx.collection, ctx.def)
-        .conn(conn)
-        .build();
+    let lua_infra = hook_lua_infra(lua);
+
+    let mut ctx_builder = ServiceContext::collection(ctx.collection, ctx.def).conn(conn);
+
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let svc_ctx = ctx_builder.build();
 
     persist_unpublish(&svc_ctx, ctx.id)
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
@@ -166,7 +172,7 @@ impl<'a> UnpublishCtxBuilder<'a> {
 }
 
 /// Standalone `crap.collections.unpublish(collection, id, opts?)`.
-fn unpublish_document(
+fn unpublish_document_lua(
     lua: &Lua,
     reg: &SharedRegistry,
     collection: String,
@@ -176,9 +182,11 @@ fn unpublish_document(
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
 
-    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
+    let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
+    let run_hooks = get_opt_bool(&opts, "hooks", true)?;
     let def = resolve_collection(reg, &collection)?;
 
     if !def.has_versions() {
@@ -188,29 +196,36 @@ fn unpublish_document(
         )));
     }
 
-    // Access check — unpublish requires update access
-    enforce_access(
-        lua,
-        &EnforceAccessParams {
-            slug: &collection,
-            override_access: false,
-            access_fn: def.access.update.as_deref(),
-            id: Some(&id),
-            deny_msg: "Update access denied",
-            injecting_status: false,
-        },
-        &mut vec![],
-    )?;
+    let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
 
-    handle_unpublish(
-        lua,
-        conn,
-        &UnpublishCtx::builder(&collection, &id, &def)
-            .run_hooks(run_hooks)
-            .hook_user(user.as_ref())
-            .hook_ui_locale(ui_locale.as_deref())
-            .build(),
-    )
+    let r = reg
+        .read()
+        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
+
+    let write_hooks = LuaWriteHooks::builder(lua)
+        .user(user.as_ref())
+        .ui_locale(ui_locale.as_deref())
+        .override_access(override_access)
+        .registry(Some(&r))
+        .hooks_enabled(hooks_enabled)
+        .build();
+
+    let mut ctx_builder = ServiceContext::collection(&collection, &def)
+        .conn(conn)
+        .write_hooks(&write_hooks)
+        .user(user.as_ref())
+        .override_access(override_access);
+
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
+
+    let doc = unpublish_document(&ctx, &id)
+        .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
+
+    document_to_lua_table(lua, &doc)
 }
 
 /// Register `crap.collections.unpublish(collection, id, opts?)`.
@@ -218,7 +233,7 @@ fn unpublish_document(
 pub(crate) fn register_unpublish(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
     let unpublish_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            unpublish_document(lua, &registry, collection, id, opts)
+            unpublish_document_lua(lua, &registry, collection, id, opts)
         },
     )?;
     table.set("unpublish", unpublish_fn)?;

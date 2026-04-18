@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use crate::{
     core::event::EventOperation,
     db::{AccessResult, query, query::helpers::global_table},
-    hooks::{HookContext, ValidationCtx},
+    hooks::{HookContext, LuaCrudInfra, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult,
         build_hook_data, flush_queue, helpers as svc_helpers, run_after_change_hooks,
@@ -18,21 +18,37 @@ use crate::{
 
 type Result<T> = std::result::Result<T, ServiceError>;
 
-/// Update a global document within a single transaction.
+/// Update a global document.
+///
+/// **Pool mode** (`ctx.pool` set): opens a transaction, commits after success.
+/// **Conn mode** (`ctx.conn` set, Lua CRUD path): runs on the existing connection.
 #[cfg(not(tarpaulin_include))]
 pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
+    if ctx.pool.is_some() {
+        update_global_pool(ctx, input)
+    } else {
+        update_global_conn(ctx, input)
+    }
+}
+
+fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
     let def = ctx.global_def();
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
-    let mut wh = RunnerWriteHooks::new(runner).with_conn(&tx);
+    let queue = Rc::new(RefCell::new(Vec::new()));
+
+    let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+
+    let mut wh = RunnerWriteHooks::new(runner)
+        .with_conn(&tx)
+        .with_infra(infra);
+
     if ctx.override_access {
         wh = wh.with_override_access();
     }
-
-    let queue = Rc::new(RefCell::new(Vec::new()));
 
     let inner_ctx = ServiceContext::global(ctx.slug, def)
         .conn(&tx)
@@ -51,12 +67,18 @@ pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Re
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(
-        EventOperation::Update,
-        &result.0.id,
-        result.0.fields.clone(),
-    );
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
     flush_queue(ctx, &queue);
+
+    Ok(result)
+}
+
+fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
+    let result = update_global_core(ctx, input)?;
+
+    ctx.clear_cache();
+
+    ctx.publish_mutation_event(EventOperation::Update, &result.0.id, &result.0.fields);
 
     Ok(result)
 }

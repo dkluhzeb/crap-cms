@@ -62,7 +62,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access — guard ensures cleanup on all exit paths
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         let func = resolve_hook_function(&lua, authenticate_ref)?;
 
@@ -103,7 +103,7 @@ impl HookRunner {
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         check_access_with_lua(&lua, access_ref, user, id, data)
     }
@@ -133,7 +133,7 @@ impl HookRunner {
             }
         };
 
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         check_field_read_access_with_lua(&lua, fields, user)
     }
@@ -170,7 +170,7 @@ impl HookRunner {
             }
         };
 
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         check_field_write_access_with_lua(&lua, fields, user, operation)
     }

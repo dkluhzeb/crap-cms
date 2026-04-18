@@ -72,6 +72,7 @@ fn update_many_documents(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, collection)?;
 
     let filters = build_update_filters(lua, &def, collection, override_access, query_table)?;
@@ -101,12 +102,17 @@ fn update_many_documents(
         .run_validation(run_hooks)
         .build();
 
-    let ctx = ServiceContext::collection(collection, &def)
+    let mut ctx_builder = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
-        .build();
+        .override_access(override_access);
+
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
 
     let update_opts = UpdateManyOptions {
         locale_ctx: locale_ctx.as_ref(),

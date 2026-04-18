@@ -57,7 +57,7 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
         .build();
 
     let final_ctx =
-        runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx)?;
+        runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx, None)?;
 
     unpublish_with_snapshot(
         &tx,

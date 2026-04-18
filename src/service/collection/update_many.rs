@@ -9,6 +9,7 @@ use crate::{
     config::LocaleConfig,
     core::event::EventOperation,
     db::{FilterClause, FindQuery, LocaleContext, query},
+    hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, flush_queue,
         update_many_single_core,
@@ -104,15 +105,18 @@ fn update_many_pool(
             .transaction_immediate()
             .context("Start update transaction")?;
 
+        let queue = Rc::new(RefCell::new(Vec::new()));
+
+        let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+
         let mut wh = RunnerWriteHooks::new(runner)
             .with_hooks_enabled(opts.run_hooks)
-            .with_conn(&tx);
+            .with_conn(&tx)
+            .with_infra(infra);
 
         if ctx.override_access {
             wh = wh.with_override_access();
         }
-
-        let queue = Rc::new(RefCell::new(Vec::new()));
 
         let inner_ctx = ServiceContext::collection(ctx.slug, def)
             .conn(&tx)
@@ -148,7 +152,7 @@ fn update_many_pool(
 
         // Publish events for this chunk after commit.
         for (id, fields) in chunk_results {
-            ctx.publish_mutation_event(EventOperation::Update, &id, fields);
+            ctx.publish_mutation_event(EventOperation::Update, &id, &fields);
         }
         flush_queue(ctx, &queue);
     }
@@ -190,7 +194,7 @@ fn update_many_conn(
 
         let (updated_doc, _) = update_many_single_core(ctx, &doc.id, input, locale_config)?;
 
-        ctx.publish_mutation_event(EventOperation::Update, &doc.id, updated_doc.fields.clone());
+        ctx.publish_mutation_event(EventOperation::Update, &doc.id, &updated_doc.fields);
         updated_ids.push(doc.id.to_string());
         modified += 1;
     }

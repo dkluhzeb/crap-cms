@@ -753,7 +753,7 @@ crap.collections.define("items", {
 
     // Run before_validate
     let ctx = runner
-        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeValidate, ctx, &tx)
+        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeValidate, ctx, &tx, None)
         .expect("before_validate");
 
     assert_eq!(
@@ -764,7 +764,7 @@ crap.collections.define("items", {
 
     // Run before_change -- should see context from before_validate
     let ctx = runner
-        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx)
+        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx, None)
         .expect("before_change");
 
     assert_eq!(
@@ -841,7 +841,8 @@ fn after_hook_has_crud_access() {
         user: None,
         ui_locale: None,
     };
-    let result = runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx);
+    let result =
+        runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None);
     assert!(
         result.is_ok(),
         "after_change hook with CRUD should succeed: {:?}",
@@ -909,7 +910,8 @@ fn after_hook_error_rolls_back() {
         user: None,
         ui_locale: None,
     };
-    let result = runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx);
+    let result =
+        runner.run_after_write(&hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None);
     assert!(result.is_err(), "after_change hook error should propagate");
 
     // Drop the transaction without committing (simulates rollback)
@@ -955,7 +957,7 @@ fn context_flows_to_after_hooks() {
         ui_locale: None,
     };
 
-    let result = runner.run_after_write(&hooks, &[], HookEvent::AfterChange, ctx, &tx);
+    let result = runner.run_after_write(&hooks, &[], HookEvent::AfterChange, ctx, &tx, None);
     assert!(result.is_ok(), "after_change hook should succeed");
 
     let result_ctx = result.unwrap();

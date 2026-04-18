@@ -6,14 +6,14 @@ use mlua::{Error::RuntimeError, Lua, Table};
 use crate::{
     core::SharedRegistry,
     hooks::lifecycle::crud::{get_tx_conn, helpers::*},
-    service::{self, LuaWriteHooks, ServiceContext},
+    service::{LuaWriteHooks, ServiceContext, undelete_document},
 };
 
 /// Undelete a soft-deleted document by ID.
 ///
 /// Validates that the collection supports soft delete, then delegates to
-/// `service::undelete_document_core` which handles access checks internally.
-fn undelete_document(
+/// `service::undelete_document` which handles access checks internally.
+fn undelete_document_lua(
     lua: &Lua,
     reg: &SharedRegistry,
     collection: &str,
@@ -26,6 +26,7 @@ fn undelete_document(
 
     let override_access = get_opt_bool(opts, "overrideAccess", false)?;
     let user = hook_user(lua);
+    let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, collection)?;
 
     if !def.soft_delete {
@@ -42,14 +43,19 @@ fn undelete_document(
         .run_validation(false)
         .build();
 
-    let ctx = ServiceContext::collection(collection, &def)
+    let mut ctx_builder = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&wh)
         .user(user.as_ref())
-        .override_access(override_access)
-        .build();
+        .override_access(override_access);
 
-    service::undelete_document_core(&ctx, id).map_err(|e| RuntimeError(format!("{e}")))?;
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
+
+    undelete_document(&ctx, id).map_err(|e| RuntimeError(format!("{e}")))?;
 
     Ok(true)
 }
@@ -59,7 +65,7 @@ fn undelete_document(
 pub(crate) fn register_undelete(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
     let undelete_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
-            undelete_document(lua, &registry, &collection, &id, &opts)
+            undelete_document_lua(lua, &registry, &collection, &id, &opts)
         },
     )?;
     table.set("undelete", undelete_fn)?;

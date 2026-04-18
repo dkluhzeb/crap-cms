@@ -10,7 +10,7 @@ use crate::{
         converters::document_to_lua_table,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, ServiceContext, restore_collection_version_core},
+    service::{LuaWriteHooks, ServiceContext, restore_collection_version},
 };
 
 /// Core logic for `crap.collections.restore_version`.
@@ -28,6 +28,7 @@ fn restore_version_inner(
     let conn = unsafe { &*conn_ptr };
 
     let user = hook_user(lua);
+    let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, &collection)?;
     let override_access = get_opt_bool(&opts, "overrideAccess", false)?;
 
@@ -36,14 +37,19 @@ fn restore_version_inner(
         .override_access(override_access)
         .build();
 
-    let ctx = ServiceContext::collection(&collection, &def)
+    let mut ctx_builder = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
-        .build();
+        .override_access(override_access);
 
-    let doc = restore_collection_version_core(&ctx, &id, &version_id, lc)
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
+
+    let doc = restore_collection_version(&ctx, &id, &version_id, lc)
         .map_err(|e| RuntimeError(format!("{e}")))?;
 
     Ok(Value::Table(document_to_lua_table(lua, &doc)?))

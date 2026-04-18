@@ -10,11 +10,14 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::{
-    core::{CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition,
+        event::SharedInvalidationTransport,
+    },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        HookDepth, HookDepthGuard, LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext,
-        UserContext,
+        HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport, LuaPopulateSingleflight,
+        MaxHookDepth, UiLocaleContext, UserContext,
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
@@ -56,6 +59,20 @@ pub(crate) fn hook_ui_locale(lua: &Lua) -> Option<String> {
 pub(crate) fn hook_populate_singleflight(lua: &Lua) -> Option<SharedPopulateSingleflight> {
     lua.app_data_ref::<LuaPopulateSingleflight>()
         .map(|sf| sf.0.clone())
+}
+
+/// Build a `LuaCrudInfra` from all available Lua app_data fields.
+/// Returns `None` when no infra was threaded into the VM.
+pub(crate) fn hook_lua_infra(lua: &Lua) -> Option<LuaCrudInfra> {
+    lua.app_data_ref::<LuaCrudInfra>().map(|i| i.clone())
+}
+
+/// Extract the invalidation transport from Lua app_data (if set via
+/// `HookRunner::builder().invalidation_transport(..)`). Used by delete
+/// operations to tear down live sessions for deleted auth-collection users.
+pub(crate) fn hook_invalidation_transport(lua: &Lua) -> Option<SharedInvalidationTransport> {
+    lua.app_data_ref::<LuaInvalidationTransport>()
+        .map(|t| t.0.clone())
 }
 
 /// Look up a collection definition from the shared registry, returning a

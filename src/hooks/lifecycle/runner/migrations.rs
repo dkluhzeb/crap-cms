@@ -22,7 +22,7 @@ impl HookRunner {
             .with_context(|| format!("Failed to read migration {}", path.display()))?;
 
         let lua = self.pool.acquire()?;
-        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        let _guard = TxContextGuard::set(&lua, conn, None, None, None);
 
         // Load the migration module
         let chunk = lua.load(&code).set_name(path.to_string_lossy());

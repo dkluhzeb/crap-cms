@@ -8,7 +8,7 @@ use crate::{
     core::{CollectionDefinition, SharedRegistry, upload},
     db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
     hooks::lifecycle::{
-        LuaInvalidationTransport, LuaStorage,
+        LuaStorage,
         converters::lua_table_to_find_query,
         crud::{get_tx_conn, helpers::*},
     },
@@ -88,6 +88,7 @@ fn delete_many_documents(
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);
+    let lua_infra = hook_lua_infra(lua);
     let def = resolve_collection(reg, collection)?;
     let soft_delete = def.soft_delete && !force_hard_delete;
 
@@ -120,17 +121,20 @@ fn delete_many_documents(
         service_def.soft_delete = false;
     }
 
-    let invalidation_transport = lua
-        .app_data_ref::<LuaInvalidationTransport>()
-        .map(|t| t.0.clone());
+    let invalidation_transport = hook_invalidation_transport(lua);
 
-    let ctx = ServiceContext::collection(collection, &service_def)
+    let mut ctx_builder = ServiceContext::collection(collection, &service_def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(override_access)
-        .invalidation_transport(invalidation_transport)
-        .build();
+        .invalidation_transport(invalidation_transport);
+
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
 
     let delete_opts = DeleteManyOptions {
         run_hooks: hooks_enabled,

@@ -11,7 +11,7 @@ use crate::{
         converters::*,
         crud::{get_tx_conn, helpers::*},
     },
-    service::{LuaWriteHooks, ServiceContext, WriteInput, update_global_core},
+    service::{LuaWriteHooks, ServiceContext, WriteInput, update_global_document},
 };
 
 /// Core logic for `crap.globals.update`.
@@ -27,6 +27,7 @@ fn globals_update_inner(
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
 
+    let lua_infra = hook_lua_infra(lua);
     let locale_str = get_opt_string(&opts, "locale")?;
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)
         .map_err(|e| RuntimeError(e.to_string()))?;
@@ -64,18 +65,23 @@ fn globals_update_inner(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let ctx = ServiceContext::global(&slug, &def)
+    let mut ctx_builder = ServiceContext::global(&slug, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access)
-        .build();
+        .override_access(override_access);
 
-    let (doc, _ctx) = update_global_core(&ctx, write_input)
+    if let Some(ref infra) = lua_infra {
+        ctx_builder = ctx_builder.lua_infra(infra);
+    }
+
+    let ctx = ctx_builder.build();
+
+    let (doc, _) = update_global_document(&ctx, write_input)
         .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;
 
     // Hydration and read-denied field stripping are handled inside
-    // update_global_core via WriteHooks.
+    // update_global_document via WriteHooks.
 
     document_to_lua_table(lua, &doc)
 }

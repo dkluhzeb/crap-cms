@@ -9,6 +9,7 @@ use crate::{
     config::LocaleConfig,
     core::event::EventOperation,
     db::{FilterClause, FindQuery, query},
+    hooks::LuaCrudInfra,
     service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core, flush_queue},
 };
 
@@ -101,15 +102,18 @@ fn delete_many_pool(
             break;
         }
 
+        let queue = Rc::new(RefCell::new(Vec::new()));
+
+        let infra = LuaCrudInfra::from_ctx(ctx, Some(queue.clone()), None);
+
         let mut wh = RunnerWriteHooks::new(runner)
             .with_hooks_enabled(opts.run_hooks)
-            .with_conn(&tx);
+            .with_conn(&tx)
+            .with_infra(infra);
 
         if ctx.override_access {
             wh = wh.with_override_access();
         }
-
-        let queue = Rc::new(RefCell::new(Vec::new()));
 
         let inner_ctx = ServiceContext::collection(ctx.slug, def)
             .conn(&tx)
@@ -154,7 +158,7 @@ fn delete_many_pool(
 
         // Publish events for this batch after commit.
         for id in deleted_ids.iter().skip(deleted_ids.len() - batch_deleted) {
-            ctx.publish_mutation_event(EventOperation::Delete, id, Default::default());
+            ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
         }
         flush_queue(ctx, &queue);
 

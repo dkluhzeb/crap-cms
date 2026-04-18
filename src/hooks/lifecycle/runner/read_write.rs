@@ -16,6 +16,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
+            LuaCrudInfra,
             execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
             types::FieldHookEvent,
             validation::{
@@ -140,6 +141,7 @@ impl HookRunner {
         fields: &[FieldDefinition],
         mut ctx: HookContext,
         val_ctx: &ValidationCtx,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<HookContext> {
         // Field-level before_validate (normalize inputs, CRUD available)
         let wctx = FieldWriteCtx::builder(val_ctx.conn)
@@ -154,13 +156,20 @@ impl HookRunner {
             &ctx.collection,
             &ctx.operation,
             &wctx,
+            infra.clone(),
         )?;
 
         // Run before_validate hooks on richtext node attrs (normalize attr values)
         self.run_richtext_node_attr_before_validate(fields, &mut ctx.data, &ctx.collection);
 
         // Collection-level before_validate
-        let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, val_ctx.conn)?;
+        let ctx = self.run_hooks_with_conn(
+            hooks,
+            HookEvent::BeforeValidate,
+            ctx,
+            val_ctx.conn,
+            infra.clone(),
+        )?;
 
         // Validation (skip required checks for drafts)
         self.validate_fields(fields, &ctx.data, val_ctx)?;
@@ -179,10 +188,11 @@ impl HookRunner {
             &ctx.collection,
             &ctx.operation,
             &wctx,
+            infra.clone(),
         )?;
 
         // Collection-level before_change
-        self.run_hooks_with_conn(hooks, HookEvent::BeforeChange, ctx, val_ctx.conn)
+        self.run_hooks_with_conn(hooks, HookEvent::BeforeChange, ctx, val_ctx.conn, infra)
     }
 
     /// Run after-write hooks inside the transaction (with CRUD access).
@@ -196,6 +206,7 @@ impl HookRunner {
         event: HookEvent,
         ctx: HookContext,
         conn: &dyn DbConnection,
+        infra: Option<LuaCrudInfra>,
     ) -> Result<HookContext> {
         // Run field-level after_change hooks (with CRUD access)
         if matches!(event, HookEvent::AfterChange) {
@@ -215,12 +226,13 @@ impl HookRunner {
                     &ctx.collection,
                     &ctx.operation,
                     &wctx,
+                    infra.clone(),
                 )?;
             }
         }
 
         // Run collection-level + registered hooks (with CRUD access)
-        self.run_hooks_with_conn(hooks, event, ctx, conn)
+        self.run_hooks_with_conn(hooks, event, ctx, conn, infra)
     }
 
     /// Run `before_validate` hooks on richtext node attrs within field data.
