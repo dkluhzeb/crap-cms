@@ -1,5 +1,7 @@
 //! Global document update.
 
+use std::{cell::RefCell, rc::Rc};
+
 use anyhow::Context as _;
 
 use crate::{
@@ -30,7 +32,7 @@ pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Re
         wh = wh.with_override_access();
     }
 
-    let queue = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let queue = Rc::new(RefCell::new(Vec::new()));
 
     let inner_ctx = ServiceContext::global(ctx.slug, def)
         .conn(&tx)

@@ -43,7 +43,7 @@ impl ContentService {
         let event_transport = self.event_transport.clone();
         let cache = Some(self.cache.clone());
 
-        let (doc, _auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
+        let doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
                 error!("RestoreVersion pool error: {}", e);
                 Status::internal("Internal error")
@@ -66,7 +66,7 @@ impl ContentService {
 
             let proto_doc = document_to_proto(&doc, &collection);
 
-            Ok((proto_doc, auth_user))
+            Ok(proto_doc)
         })
         .await
         .inspect_err(|e| error!("RestoreVersion task error: {}", e))

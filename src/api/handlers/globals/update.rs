@@ -52,7 +52,7 @@ impl ContentService {
         let slug = req.slug.clone();
         let def_owned = def;
 
-        let (proto_doc, _auth_user) = task::spawn_blocking(move || -> Result<_, Status> {
+        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {
                 error!("UpdateGlobal pool error: {}", e);
                 Status::internal("Internal error")
@@ -90,7 +90,7 @@ impl ContentService {
 
             let proto_doc = document_to_proto(&doc, &slug);
 
-            Ok((proto_doc, auth_user))
+            Ok(proto_doc)
         })
         .await
         .inspect_err(|e| error!("UpdateGlobal task error: {}", e))
