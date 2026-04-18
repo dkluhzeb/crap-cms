@@ -6,11 +6,15 @@ use anyhow::{Context as _, anyhow};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
+use std::sync::Arc;
+
 use crate::{
+    config::{EmailConfig, ServerConfig},
     core::{
         CollectionDefinition, Document, FieldDefinition,
         cache::SharedCache,
         collection::{GlobalDefinition, Hooks, LiveSetting},
+        email::EmailRenderer,
         event::{
             EventOperation, EventTarget, EventUser, SharedEventTransport,
             SharedInvalidationTransport,
@@ -24,6 +28,15 @@ use crate::{
         hooks::{ReadHooks, WriteHooks},
     },
 };
+
+/// Bundled email configuration for verification emails.
+/// Cloning is cheap (configs are small, renderer is Arc).
+#[derive(Clone)]
+pub struct EmailContext {
+    pub email_config: EmailConfig,
+    pub email_renderer: Arc<EmailRenderer>,
+    pub server_config: ServerConfig,
+}
 
 /// A mutation event waiting to be published after transaction commit.
 pub struct PendingEvent {
@@ -92,6 +105,9 @@ pub struct ServiceContext<'a> {
     pub user: Option<&'a Document>,
     /// Bypass all access checks (MCP, Lua `overrideAccess`).
     pub override_access: bool,
+    /// Email configuration for verification emails on auth collection
+    /// creates. `None` = verification emails are skipped.
+    pub email_ctx: Option<EmailContext>,
     /// Populate cache. When set, service-layer write operations clear
     /// the cache after commit to prevent stale relationship data.
     pub cache: Option<SharedCache>,
@@ -204,6 +220,42 @@ impl<'a> ServiceContext<'a> {
     /// Publish a mutation event to all Subscribe/SSE clients.
     ///
     /// Fire-and-forget: spawns a background task for hooks + broadcast.
+    /// Send a verification email if this is an auth collection with
+    /// `verify_email` enabled and the document has an email field.
+    /// No-op when email context is not attached.
+    pub fn maybe_send_verification(&self, doc: &Document) {
+        let Some(ref email_ctx) = self.email_ctx else {
+            return;
+        };
+        let Some(pool) = self.pool else { return };
+
+        let def = match &self.def {
+            Def::Collection(d) => d,
+            _ => return,
+        };
+
+        let should_verify =
+            def.is_auth_collection() && def.auth.as_ref().is_some_and(|a| a.verify_email);
+
+        if !should_verify {
+            return;
+        }
+
+        let Some(email) = doc.get_str("email") else {
+            return;
+        };
+
+        crate::service::send_verification_email(
+            pool.clone(),
+            email_ctx.email_config.clone(),
+            email_ctx.email_renderer.clone(),
+            email_ctx.server_config.clone(),
+            self.slug.to_string(),
+            doc.id.to_string(),
+            email.to_string(),
+        );
+    }
+
     /// Clear the populate cache after a write operation.
     /// No-op when no cache is attached.
     pub fn clear_cache(&self) {
@@ -348,6 +400,7 @@ pub struct ServiceContextBuilder<'a> {
     write_hooks: Option<&'a dyn WriteHooks>,
     user: Option<&'a Document>,
     override_access: bool,
+    email_ctx: Option<EmailContext>,
     cache: Option<SharedCache>,
     event_transport: Option<SharedEventTransport>,
     event_queue: Option<EventQueue>,
@@ -366,6 +419,7 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: None,
             user: None,
             override_access: false,
+            email_ctx: None,
             cache: None,
             event_transport: None,
             event_queue: None,
@@ -405,6 +459,12 @@ impl<'a> ServiceContextBuilder<'a> {
 
     pub fn override_access(mut self, override_access: bool) -> Self {
         self.override_access = override_access;
+        self
+    }
+
+    /// Attach email context for verification emails on auth collection creates.
+    pub fn email_ctx(mut self, ctx: Option<EmailContext>) -> Self {
+        self.email_ctx = ctx;
         self
     }
 
@@ -448,6 +508,7 @@ impl<'a> ServiceContextBuilder<'a> {
             write_hooks: self.write_hooks,
             user: self.user,
             override_access: self.override_access,
+            email_ctx: self.email_ctx,
             cache: self.cache,
             event_transport: self.event_transport,
             event_queue: self.event_queue,

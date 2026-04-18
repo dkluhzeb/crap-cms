@@ -42,6 +42,7 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
         .cache(ctx.cache.clone())
         .event_transport(ctx.event_transport.clone())
         .event_queue(queue.clone())
+        .email_ctx(ctx.email_ctx.clone())
         .build();
 
     let result = create_document_core(&inner_ctx, input)?;
@@ -58,6 +59,7 @@ pub fn create_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wr
         result.0.fields.clone(),
     );
     flush_queue(ctx, &queue);
+    ctx.maybe_send_verification(&result.0);
 
     Ok(result)
 }

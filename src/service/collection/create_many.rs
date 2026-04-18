@@ -102,6 +102,7 @@ fn create_many_pooled(
             .event_transport(ctx.event_transport.clone())
             .event_queue(queue.clone())
             .cache(ctx.cache.clone())
+            .email_ctx(ctx.email_ctx.clone())
             .build();
 
         for item in chunk {
@@ -121,6 +122,7 @@ fn create_many_pooled(
         ctx.clear_cache();
         for doc in documents.iter().skip(documents.len() - chunk.len()) {
             ctx.publish_mutation_event(EventOperation::Create, &doc.id, doc.fields.clone());
+            ctx.maybe_send_verification(doc);
         }
         flush_queue(ctx, &queue);
     }
@@ -146,6 +148,7 @@ fn create_many_on_conn(
         let (doc, _after_ctx) = create_document_core(ctx, input)?;
 
         ctx.publish_mutation_event(EventOperation::Create, &doc.id, doc.fields.clone());
+        ctx.maybe_send_verification(&doc);
         documents.push(doc);
         created += 1;
     }

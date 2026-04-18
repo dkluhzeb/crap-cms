@@ -49,12 +49,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   transaction chunking; Lua callers on an existing connection run
   single-pass.
 
+- **Verification emails moved to the service layer** -- email
+  verification for auth collections with `verify_email` enabled is
+  now triggered by `create_document` and `create_many` at the service
+  level. Previously only gRPC and admin create handlers sent
+  verification emails; Lua CRUD, MCP, and bulk creates were silently
+  skipping it.
+
 ### Fixed
 
 - **`empty_trash` now emits live events** -- previously, emptying the
   trash via the admin panel deleted documents without publishing any
   mutation events. Subscribe/SSE clients were not notified. Now handled
   automatically by the service-layer event publishing.
+
+- **Verification emails now sent from all create surfaces** -- Lua
+  `crap.collections.create()`, MCP create tools, and bulk
+  `CreateMany` now send verification emails for auth collections.
+  Previously only gRPC and admin panel creates triggered verification.
 
 - **Admin mutations now clear the populate cache** -- previously only
   gRPC handlers cleared the cache. Admin panel writes left stale

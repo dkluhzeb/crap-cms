@@ -24,7 +24,7 @@ pub mod write;
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, CountDocumentsInputBuilder, Def, EventQueue, FindByIdInput,
+    CountDocumentsInput, CountDocumentsInputBuilder, Def, EmailContext, EventQueue, FindByIdInput,
     FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
     ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
     SearchDocumentsInput, ServiceContext, ServiceContextBuilder, WriteInput, WriteInputBuilder,

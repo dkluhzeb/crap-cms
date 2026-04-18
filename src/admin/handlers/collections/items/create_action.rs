@@ -26,13 +26,12 @@ use crate::{
     },
     core::{CollectionDefinition, Document, auth::AuthUser, upload},
     db::query::{LocaleContext, LocaleMode},
-    service::{self, ServiceError},
+    service::{self, EmailContext, ServiceError},
 };
 
-/// Handle post-create success: commit upload, enqueue conversions, send verification email.
+/// Handle post-create success: commit upload and enqueue conversions.
 fn handle_create_success(
     state: &AdminState,
-    def: &CollectionDefinition,
     slug: &str,
     doc: &Document,
     upload_result: Option<UploadResult>,
@@ -47,21 +46,6 @@ fn handle_create_success(
         {
             warn!("Failed to enqueue image conversions: {}", e);
         }
-    }
-
-    if def.is_auth_collection()
-        && def.auth.as_ref().is_some_and(|a| a.verify_email)
-        && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
-    {
-        service::send_verification_email(
-            state.pool.clone(),
-            state.config.email.clone(),
-            state.email_renderer.clone(),
-            state.config.server.clone(),
-            slug.to_string(),
-            doc.id.to_string(),
-            user_email.to_string(),
-        );
     }
 }
 
@@ -112,6 +96,11 @@ async fn spawn_create(
     let runner = state.hook_runner.clone();
     let event_transport = state.event_transport.clone();
     let cache = state.cache.clone();
+    let email_ctx = Some(EmailContext {
+        email_config: state.config.email.clone(),
+        email_renderer: state.email_renderer.clone(),
+        server_config: state.config.server.clone(),
+    });
     let slug_owned = slug.to_string();
     let def_owned = def.clone();
     let user_doc = get_user_doc(auth_user).cloned();
@@ -128,6 +117,7 @@ async fn spawn_create(
             .user(user_doc.as_ref())
             .event_transport(event_transport)
             .cache(cache)
+            .email_ctx(email_ctx)
             .build();
 
         service::create_document(
@@ -229,7 +219,7 @@ pub async fn create_action(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
-            handle_create_success(&state, &def, &slug, &doc, upload_result);
+            handle_create_success(&state, &slug, &doc, upload_result);
 
             let label = def
                 .title_field()
