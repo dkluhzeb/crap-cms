@@ -77,6 +77,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **False orphan column warnings for localized fields** — the migration
+  system incorrectly warned about locale-suffixed columns (e.g.,
+  `title__en`, `title__de`) as orphans even when the field was
+  `localized = true` and the locale was configured. The expected column
+  set now correctly includes locale-suffixed variants.
+
 ## [0.1.0-alpha.7] — 2026-04-18
 
 ### Added
