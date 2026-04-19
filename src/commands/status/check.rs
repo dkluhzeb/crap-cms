@@ -36,14 +36,14 @@ impl Finding {
     }
 }
 
-/// Run all checks and print results. Returns the number of warnings.
-pub fn run_checks(
+/// Gather all findings without printing. Used by both `run_checks` and `count_warnings`.
+fn gather_findings(
     cfg: &CrapConfig,
     reg: &Registry,
     conn: &dyn DbConnection,
     pool: &DbPool,
     config_dir: &Path,
-) -> usize {
+) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     check_dev_mode(cfg, &mut findings);
@@ -61,6 +61,19 @@ pub fn run_checks(
     check_pagination(cfg, &mut findings);
     check_migrations(pool, config_dir, &mut findings);
     check_collections(reg, conn, &mut findings);
+
+    findings
+}
+
+/// Run all checks and print results. Returns the number of warnings.
+pub fn run_checks(
+    cfg: &CrapConfig,
+    reg: &Registry,
+    conn: &dyn DbConnection,
+    pool: &DbPool,
+    config_dir: &Path,
+) -> usize {
+    let findings = gather_findings(cfg, reg, conn, pool, config_dir);
 
     println!();
     cli::header("Health Check");
@@ -82,6 +95,17 @@ pub fn run_checks(
     cli::kv_status("Result", &format!("{} warning(s)", findings.len()), false);
 
     findings.len()
+}
+
+/// Count warnings without printing. Used for startup nudge.
+pub fn count_warnings(
+    cfg: &CrapConfig,
+    reg: &Registry,
+    conn: &dyn DbConnection,
+    pool: &DbPool,
+    config_dir: &Path,
+) -> usize {
+    gather_findings(cfg, reg, conn, pool, config_dir).len()
 }
 
 // ── Individual checks ──────────────────────────────────────────────────

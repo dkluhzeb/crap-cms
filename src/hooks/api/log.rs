@@ -1,8 +1,13 @@
 //! Register `crap.log` — info, warn, error.
+//!
+//! During VM pool creation, runner VMs (vm-1, vm-2, ...) re-execute init.lua
+//! and collection loading. To avoid flooding the log with N duplicates of every
+//! `crap.log.info()` call, runner VM messages are demoted to `debug`. Only the
+//! init VM logs at the requested level.
 
 use anyhow::Result;
 use mlua::{Lua, Table};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::hooks::api::VmLabel;
 
@@ -44,10 +49,20 @@ fn vm_label(lua: &Lua) -> String {
         .unwrap_or_else(|| "lua".into())
 }
 
+/// Whether this VM is the init VM (logs at requested level) or a runner VM
+/// (logs demoted to debug to avoid N duplicates during pool creation).
+fn is_init_vm(lua: &Lua) -> bool {
+    lua.app_data_ref::<VmLabel>().is_some_and(|l| l.0 == "init")
+}
+
 fn log_info(lua: &Lua, msg: &str) {
     let label = vm_label(lua);
 
-    info!("[lua:{label}] {msg}");
+    if is_init_vm(lua) {
+        info!("[lua:{label}] {msg}");
+    } else {
+        debug!("[lua:{label}] {msg}");
+    }
 }
 
 fn log_warn(lua: &Lua, msg: &str) {

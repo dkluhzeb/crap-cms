@@ -133,18 +133,30 @@ pub(crate) fn run_hooks_inner(
     mut context: HookContext,
 ) -> Result<HookContext> {
     let hook_refs = get_hook_refs(hooks, &event);
+    let timing = !hook_refs.is_empty() && tracing::enabled!(tracing::Level::DEBUG);
+    let start = if timing {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
 
     for hook_ref in hook_refs {
-        debug!(
-            "Running hook (inner): {} for {}",
-            hook_ref, context.collection
-        );
-
         context = call_hook_ref(lua, hook_ref, context)?;
     }
 
     // Run global registered hooks
     context = call_registered_hooks(lua, &event, context)?;
+
+    if let Some(start) = start {
+        let elapsed = start.elapsed();
+
+        debug!(
+            "{} {event:?}: {} hook(s) in {:.2}ms",
+            context.collection,
+            hook_refs.len(),
+            elapsed.as_secs_f64() * 1000.0,
+        );
+    }
 
     Ok(context)
 }
@@ -483,14 +495,25 @@ fn run_single_field_hook(
     let value = data.get(&data_key).cloned().unwrap_or(JsonValue::Null);
 
     let mut current = value;
+    let timing = tracing::enabled!(tracing::Level::DEBUG);
+    let start = if timing {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
+
     for hook_ref in hook_refs {
-        debug!(
-            "Running field hook: {} for {}.{}",
-            hook_ref, collection, data_key
-        );
         current = call_field_hook_ref(
             lua, hook_ref, current, &data_key, collection, operation, data,
         )?;
+    }
+
+    if let Some(start) = start {
+        debug!(
+            "{collection}.{data_key}: {} field hook(s) in {:.2}ms",
+            hook_refs.len(),
+            start.elapsed().as_secs_f64() * 1000.0,
+        );
     }
 
     // Only write back if the field was already in the data, or the hook
@@ -655,8 +678,22 @@ pub(crate) fn call_hook_ref(
     // Convert context to Lua table
     let ctx_table = context.to_lua_table(lua)?;
 
-    // Call the hook
+    // Call the hook with optional timing (zero-cost when debug is disabled)
+    let timing = tracing::enabled!(tracing::Level::DEBUG);
+    let start = if timing {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let result: Value = func.call(ctx_table)?;
+
+    if let Some(start) = start {
+        debug!(
+            "{}: {:.2}ms",
+            hook_ref,
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
 
     // Parse the result back
     match result {

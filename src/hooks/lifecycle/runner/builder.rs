@@ -87,8 +87,9 @@ impl<'a> HookRunnerBuilder<'a> {
 
         let pool_size = config.hooks.vm_pool_size.max(1);
 
-        info!("HookRunner: creating pool of {} Lua VMs", pool_size);
+        debug!("HookRunner: creating pool of {} Lua VMs", pool_size);
 
+        let start = std::time::Instant::now();
         let mut vms = Vec::with_capacity(pool_size);
 
         for i in 0..pool_size {
@@ -102,13 +103,22 @@ impl<'a> HookRunnerBuilder<'a> {
             )?);
         }
 
+        let elapsed = start.elapsed();
+
         // Cache which events have globally-registered hooks (from init.lua).
         // All VMs execute the same init.lua, so checking any VM suffices.
         let registered_events = scan_registered_events(&vms[0]);
 
-        if !registered_events.is_empty() {
-            info!("HookRunner: registered events: {:?}", registered_events);
-        }
+        info!(
+            "HookRunner ready: {} VM(s) in {:.0}ms{}",
+            pool_size,
+            elapsed.as_secs_f64() * 1000.0,
+            if registered_events.is_empty() {
+                String::new()
+            } else {
+                format!(", global events: {:?}", registered_events)
+            }
+        );
 
         let registry_snapshot = Registry::snapshot(&registry);
 

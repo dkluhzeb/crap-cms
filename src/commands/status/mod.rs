@@ -2,7 +2,7 @@
 //!
 //! With `--check`, runs a best-practice audit on the configuration and project state.
 
-mod check;
+pub(crate) mod check;
 mod display;
 
 use anyhow::{Context as _, Result, anyhow};

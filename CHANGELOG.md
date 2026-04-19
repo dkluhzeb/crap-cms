@@ -60,6 +60,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - Hooks assignments (which lifecycle hooks are wired, with function names).
   - Live event configuration (mode per target, or summary).
 
+- **Quieter startup logging** — per-collection field listings and runner
+  VM `crap.log.info()` messages demoted to `debug`. Only the init VM logs
+  at `info` level. HookRunner pool creation summarized as a single line
+  with VM count and elapsed time (e.g., "HookRunner ready: 22 VM(s) in
+  1236ms"). Loaded collections summary now includes hook count.
+
+- **Startup health check nudge** — after booting, the server runs the
+  `status --check` audit silently and logs a one-liner if warnings are
+  found (e.g., "6 health check warning(s) found — run `crap-cms status
+  --check` for details").
+
+- **Hook execution timing in dev_mode** — when `dev_mode = true`, each
+  hook invocation and per-event totals are logged at `debug` level with
+  elapsed milliseconds (e.g., "hooks.auto_slug: 0.31ms").
+
 ### Fixed
 
 ## [0.1.0-alpha.7] — 2026-04-18
