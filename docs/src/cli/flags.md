@@ -368,7 +368,7 @@ The wizard prompts for:
 | Create upload collection? | Yes | Creates a `media` collection for file/image uploads |
 | Create another collection? | No | Repeat to add more collections interactively |
 
-A 64-character auth secret is auto-generated and written to `crap.toml`.
+A 64-character auth secret is auto-generated and written to `crap.toml`. A `.mcp.json` file is also created for [Claude Code](../mcp/overview.md) integration.
 
 ```bash
 crap-cms init ./my-project

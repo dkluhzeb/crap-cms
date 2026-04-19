@@ -47,6 +47,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`init` scaffolds `.mcp.json`** — new projects include a Claude Code
+  MCP configuration file out of the box. Running Claude Code from the
+  config directory auto-connects to the CMS's MCP server.
+
 - **`status` command enhanced** — now displays:
   - Server configuration (ports, compression, rate limiting).
   - Trash count per collection (soft-deleted documents) and `soft_delete` tag.

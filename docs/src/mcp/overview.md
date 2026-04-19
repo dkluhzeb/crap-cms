@@ -36,7 +36,33 @@ Or from outside the config directory:
 crap-cms mcp -C /path/to/config
 ```
 
-For Claude Desktop, add to your `claude_desktop_config.json`:
+For **Claude Code** (CLI / IDE extensions), add via the CLI:
+
+```bash
+claude mcp add-json my-cms '{"type":"stdio","command":"crap-cms","args":["-C","/path/to/config","mcp"]}' --scope local
+```
+
+Or create a `.mcp.json` in your project root (shared with team via version control):
+
+```json
+{
+  "mcpServers": {
+    "my-cms": {
+      "type": "stdio",
+      "command": "crap-cms",
+      "args": ["-C", "/path/to/config", "mcp"]
+    }
+  }
+}
+```
+
+The `-C` path must point to a directory containing `crap.toml`. Use an absolute path or a path relative to where Claude Code is launched from.
+
+`crap-cms init` automatically generates a `.mcp.json` in the config directory, so new projects work with Claude Code out of the box.
+
+Verify with `claude mcp list`.
+
+For **Claude Desktop**, add to your `claude_desktop_config.json`:
 
 ```json
 {
