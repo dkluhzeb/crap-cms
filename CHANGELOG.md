@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Dependency patches for active advisories** —
+  - `rustls-webpki` bumped past RUSTSEC-2026-0098 / 0099 / 0104
+    (name-constraint bypass and CRL-parsing panic). The old
+    `0.101.7` line (pulled in transitively via `rust-s3 0.35`) is
+    retired by bumping `rust-s3` to `0.37`; the `0.103.x` line in
+    `reqwest` / `lettre` / `quinn` moves to `0.103.13`.
+  - `rand 0.9.x` bumped to `0.9.4` and `rand 0.10.x` to `0.10.1`
+    (RUSTSEC-2026-0097). `rand 0.8.5` remains transitively via
+    `nanoid 0.4`, which has no newer upstream; the advisory's UB
+    path requires a custom `log` provider that re-enters
+    `rand::rng()` during reseeding, which crap-cms does not use
+    (`tracing-subscriber` with default config).
 - **CSP hardening: nonce-based `script-src`** — `'unsafe-inline'` has been
   removed from the default `script-src` directive. A fresh nonce is
   generated per request, inserted into the `Content-Security-Policy`

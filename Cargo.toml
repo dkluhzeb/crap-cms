@@ -157,7 +157,7 @@ optional = true
 features = ["tokio-comp"]
 
 [dependencies.rust-s3]
-version = "0.35"
+version = "0.37"
 optional = true
 default-features = false
 features = ["tokio-rustls-tls"]
