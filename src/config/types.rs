@@ -22,6 +22,12 @@ use crate::config::{
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
 
+/// Minimum character length for `mcp.api_key` when `mcp.http` is enabled.
+/// 32 characters of the typical `base64`/`hex` alphabets give ≥ 128 bits of
+/// entropy even with low per-char entropy — well past what brute-force can
+/// reach against a key that an attacker cannot guess from context.
+const MIN_MCP_API_KEY_LEN: usize = 32;
+
 /// Top-level configuration loaded from `crap.toml` in the config directory.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -335,11 +341,32 @@ impl CrapConfig {
     }
 
     /// Validate MCP settings.
+    ///
+    /// When `mcp.http = true`, enforces both presence and a minimum length
+    /// on `mcp.api_key`. MCP operates with `overrideAccess = true` semantics
+    /// (collection- and field-level ACLs are bypassed), so a weak transport
+    /// key exposes the entire dataset — a 32-byte floor keeps brute-force
+    /// infeasible for realistic attacker budgets.
     fn validate_mcp(&self) -> Result<()> {
-        if self.mcp.enabled && self.mcp.http && self.mcp.api_key.is_empty() {
+        if !(self.mcp.enabled && self.mcp.http) {
+            return Ok(());
+        }
+
+        if self.mcp.api_key.is_empty() {
             bail!(
                 "mcp.http is enabled without an API key — \
                  set mcp.api_key in crap.toml to secure the MCP HTTP endpoint"
+            );
+        }
+
+        if self.mcp.api_key.as_ref().len() < MIN_MCP_API_KEY_LEN {
+            bail!(
+                "mcp.api_key is too short ({} chars) — require at least {} \
+                 characters. MCP bypasses collection and field ACLs, so a \
+                 short key risks exposing the entire dataset. Generate one \
+                 with `openssl rand -hex 32` or `head -c 32 /dev/urandom | base64`.",
+                self.mcp.api_key.as_ref().len(),
+                MIN_MCP_API_KEY_LEN,
             );
         }
 
@@ -772,12 +799,31 @@ dev_mode = false
     }
 
     #[test]
-    fn validate_mcp_http_with_api_key_passes() {
+    fn validate_mcp_http_with_strong_api_key_passes() {
         let mut config = CrapConfig::default();
         config.mcp.enabled = true;
         config.mcp.http = true;
-        config.mcp.api_key = crate::config::McpApiKey::from("secret-key-123");
+        // 32-char key meets MIN_MCP_API_KEY_LEN
+        config.mcp.api_key = crate::config::McpApiKey::from("0123456789abcdef0123456789abcdef");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_http_with_short_api_key_errors() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = true;
+        // 15 chars — below the 32-char floor
+        config.mcp.api_key = crate::config::McpApiKey::from("secret-key-1234");
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("too short"),
+            "Expected short-key error, got: {}",
+            msg,
+        );
+        // Error guides operators to a safe generator.
+        assert!(msg.contains("openssl rand") || msg.contains("/dev/urandom"));
     }
 
     #[test]

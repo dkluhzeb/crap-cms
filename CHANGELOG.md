@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **MCP HTTP key hardening** — `mcp.api_key` must be at least 32 characters
+  when `mcp.http = true`; startup fails with a clear message pointing at
+  `openssl rand -hex 32` / `/dev/urandom` otherwise. Failed Bearer-auth
+  attempts on `/mcp` are now logged at `warn` with the peer IP and
+  whether an Authorization header was supplied, so operators can spot
+  brute-force scans without leaking the attempted key into logs.
 - **Dependency patches for active advisories** —
   - `rustls-webpki` bumped past RUSTSEC-2026-0098 / 0099 / 0104
     (name-constraint bypass and CRL-parsing panic). The old
