@@ -27,6 +27,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `client_ip` only honours XFF when the immediate peer IP is in the
   allowlist; otherwise the TCP peer address is used, preventing clients
   from rotating per-IP rate-limit buckets by spoofing the header.
+- **JWT validation hardening** — `JwtTokenProvider` now pins the
+  algorithm to `HS256` via `Validation::new(...)` (previously used
+  `Validation::default()` which, while correct today, would silently
+  accept a different default in future jsonwebtoken releases). Tokens
+  whose header declares any other algorithm — including the classic
+  `"alg": "none"` — are rejected outright. `required_spec_claims` is
+  also no longer cleared, so any hand-crafted token without an `exp`
+  claim is refused rather than treated as a non-expiring token.
 - **SVG XXE pre-upload scan** — SVGs containing `<!DOCTYPE>` or
   `<!ENTITY>` declarations are now rejected at upload time. Closes the
   XXE / external-entity vector for any future code path that decides to
