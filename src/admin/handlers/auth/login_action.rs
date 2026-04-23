@@ -320,7 +320,7 @@ pub async fn login_action(
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
+    let ip = client_ip(&headers, &addr, &state.config.server);
 
     // Check rate limits before doing any work (both email and IP)
     if state.login_limiter.is_blocked(&form.email) || state.ip_login_limiter.is_blocked(&ip) {

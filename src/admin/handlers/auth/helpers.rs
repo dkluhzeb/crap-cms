@@ -10,6 +10,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
+use ipnet::IpNet;
 use serde_json::{Value, json};
 use tracing::error;
 
@@ -19,21 +20,45 @@ use crate::{
         context::{ContextBuilder, PageType},
         handlers::auth::{append_cookies, session_cookies, session_same_site},
     },
+    config::ServerConfig,
     core::{Document, Registry, Slug, auth::ClaimsBuilder, email},
 };
 
-/// Extract client IP from the request.
-/// When `trust_proxy` is true, uses the first entry in X-Forwarded-For (for reverse proxy setups).
-/// When false, uses the TCP socket address — XFF is ignored to prevent spoofing.
-/// The result is always a canonical IP string (parsed and re-serialized) to prevent
-/// rate limiter bypasses via alternative IPv6 representations.
+/// Extract the client IP from the request, honoring `X-Forwarded-For`
+/// only when the peer address is a configured trusted proxy.
+///
+/// Behavior:
+/// - `trust_proxy = false` (default) → always return the TCP peer IP.
+/// - `trust_proxy = true` → `trusted_proxies` is required (enforced at
+///   startup, see `CrapConfig::validate_trusted_proxies`). XFF is honored
+///   only when the direct peer IP matches an entry in `trusted_proxies`;
+///   otherwise the peer IP is returned (spoof-resistant). `trusted_proxies`
+///   accepts bare IPs, CIDR ranges, and the `"*"` wildcard for explicit
+///   opt-in "trust any peer" deployments.
+///
+/// The returned IP string is always canonical (parsed and re-serialized)
+/// so that alternative IPv6 representations can't be used to rotate
+/// per-IP rate-limit buckets.
 pub(in crate::admin::handlers) fn client_ip(
     headers: &HeaderMap,
     addr: &SocketAddr,
-    trust_proxy: bool,
+    server: &ServerConfig,
 ) -> String {
-    if trust_proxy
-        && let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+    if !server.trust_proxy {
+        return addr.ip().to_string();
+    }
+
+    let peer_ip = addr.ip();
+
+    // Require the direct peer IP to be in the configured allowlist before
+    // honoring XFF. An empty allowlist is rejected at startup — reaching
+    // here with one means no peer qualifies, so fall back to the socket
+    // address. `ip_is_trusted` also treats the `"*"` wildcard as always-true.
+    if !ip_is_trusted(peer_ip, &server.trusted_proxies) {
+        return peer_ip.to_string();
+    }
+
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
         && let Some(first) = xff.split(',').next().map(str::trim)
         && !first.is_empty()
     {
@@ -44,10 +69,28 @@ pub(in crate::admin::handlers) fn client_ip(
         return first
             .parse::<IpAddr>()
             .map(|ip| ip.to_string())
-            .unwrap_or_else(|_| addr.ip().to_string());
+            .unwrap_or_else(|_| peer_ip.to_string());
     }
 
-    addr.ip().to_string()
+    peer_ip.to_string()
+}
+
+/// Check whether an IP is allowed to set `X-Forwarded-For` per the
+/// configured allowlist. Entries are parsed as bare IPs or CIDR ranges;
+/// `"*"` is a wildcard that trusts any peer (operators opt in at
+/// startup — see `CrapConfig::validate_trusted_proxies`). Malformed
+/// entries are rejected at startup, so none should reach this code.
+fn ip_is_trusted(ip: IpAddr, trusted: &[String]) -> bool {
+    trusted.iter().any(|entry| {
+        if entry == "*" {
+            return true;
+        }
+
+        match entry.parse::<IpNet>() {
+            Ok(net) => net.contains(&ip),
+            Err(_) => entry.parse::<IpAddr>().map(|a| a == ip).unwrap_or(false),
+        }
+    })
 }
 
 pub(in crate::admin::handlers) fn login_error(
@@ -243,12 +286,28 @@ pub(in crate::admin::handlers) fn session_redirect(
 mod tests {
     use super::*;
 
+    /// Helper that mirrors the legacy "trust XFF from anyone" behaviour —
+    /// equivalent to `trusted_proxies = ["*"]` in `crap.toml`. Used to keep
+    /// the pre-existing tests focused on XFF parsing, not on allowlist
+    /// membership (which has its own tests below).
+    fn trust_all() -> ServerConfig {
+        trust_proxies(&["*"])
+    }
+
+    fn trust_proxies(entries: &[&str]) -> ServerConfig {
+        ServerConfig {
+            trust_proxy: true,
+            trusted_proxies: entries.iter().map(|s| s.to_string()).collect(),
+            ..ServerConfig::default()
+        }
+    }
+
     #[test]
     fn client_ip_trust_proxy_reads_xff() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "10.0.0.1, 192.168.1.1".parse().unwrap());
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr, true), "10.0.0.1");
+        assert_eq!(client_ip(&headers, &addr, &trust_all()), "10.0.0.1");
     }
 
     #[test]
@@ -256,14 +315,17 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "10.0.0.1, 192.168.1.1".parse().unwrap());
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr, false), "127.0.0.1");
+        assert_eq!(
+            client_ip(&headers, &addr, &ServerConfig::default()),
+            "127.0.0.1"
+        );
     }
 
     #[test]
     fn client_ip_falls_back_to_addr() {
         let headers = HeaderMap::new();
         let addr: SocketAddr = "192.168.1.5:5678".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr, true), "192.168.1.5");
+        assert_eq!(client_ip(&headers, &addr, &trust_all()), "192.168.1.5");
     }
 
     #[test]
@@ -271,7 +333,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "".parse().unwrap());
         let addr: SocketAddr = "10.0.0.2:80".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr, true), "10.0.0.2");
+        assert_eq!(client_ip(&headers, &addr, &trust_all()), "10.0.0.2");
     }
 
     #[test]
@@ -283,7 +345,7 @@ mod tests {
         );
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
         // Must normalize to canonical form to prevent rate limiter bypass
-        assert_eq!(client_ip(&headers, &addr, true), "2001:db8::1");
+        assert_eq!(client_ip(&headers, &addr, &trust_all()), "2001:db8::1");
     }
 
     #[test]
@@ -292,6 +354,71 @@ mod tests {
         headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
         // Falls back to socket address when XFF is unparseable (prevents rate limiter bypass)
-        assert_eq!(client_ip(&headers, &addr, true), "127.0.0.1");
+        assert_eq!(client_ip(&headers, &addr, &trust_all()), "127.0.0.1");
+    }
+
+    // ── H-3: trusted_proxies allowlist ────────────────────────────────────
+
+    #[test]
+    fn client_ip_allowlist_honors_xff_from_trusted_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let addr: SocketAddr = "10.0.0.5:80".parse().unwrap();
+        let cfg = trust_proxies(&["10.0.0.0/8"]);
+        assert_eq!(client_ip(&headers, &addr, &cfg), "203.0.113.5");
+    }
+
+    #[test]
+    fn client_ip_allowlist_rejects_xff_from_untrusted_peer() {
+        // Peer IP (1.2.3.4) is NOT in the allowlist, so any XFF it supplies
+        // must be ignored — otherwise an attacker hitting us directly could
+        // claim any client IP.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let addr: SocketAddr = "1.2.3.4:80".parse().unwrap();
+        let cfg = trust_proxies(&["10.0.0.0/8"]);
+        assert_eq!(client_ip(&headers, &addr, &cfg), "1.2.3.4");
+    }
+
+    #[test]
+    fn client_ip_allowlist_supports_exact_ip_entries() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let addr: SocketAddr = "127.0.0.1:80".parse().unwrap();
+        let cfg = trust_proxies(&["127.0.0.1"]);
+        assert_eq!(client_ip(&headers, &addr, &cfg), "203.0.113.5");
+    }
+
+    #[test]
+    fn client_ip_allowlist_supports_ipv6_cidr() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "2001:db8::abcd".parse().unwrap());
+        let addr: SocketAddr = "[::1]:80".parse().unwrap();
+        let cfg = trust_proxies(&["::1/128"]);
+        assert_eq!(client_ip(&headers, &addr, &cfg), "2001:db8::abcd");
+    }
+
+    #[test]
+    fn client_ip_malformed_allowlist_entry_is_ignored() {
+        // Malformed entries behave as "not trusted" at runtime. Startup
+        // validation refuses to accept them in the first place; this
+        // test documents the defensive runtime behaviour for robustness.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let addr: SocketAddr = "10.0.0.5:80".parse().unwrap();
+        let cfg = trust_proxies(&["not-a-cidr", "10.0.0.0/8"]);
+        assert_eq!(client_ip(&headers, &addr, &cfg), "203.0.113.5");
+    }
+
+    #[test]
+    fn client_ip_wildcard_trusts_any_peer() {
+        // Opt-in wildcard restores the legacy "trust XFF from anyone"
+        // behaviour for deployments that need it (dev, test, isolated
+        // networks). Startup validation warns about this setting.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5".parse().unwrap());
+        let addr: SocketAddr = "1.2.3.4:80".parse().unwrap();
+        let cfg = trust_proxies(&["*"]);
+        assert_eq!(client_ip(&headers, &addr, &cfg), "203.0.113.5");
     }
 }

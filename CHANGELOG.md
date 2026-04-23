@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Upload path traversal hardening** — `LocalStorage` now validates every
+  storage key, rejecting `..` traversal, absolute paths, backslash-based
+  separators, and null bytes before touching the filesystem. `local_path`
+  and `exists` fail safe (returning `None` / `false`) on invalid keys.
+  Attacker-controlled filenames that slip past sanitisation in a future
+  caller will no longer escape `base_dir`.
+- **Upload MIME/extension cross-check** — uploaded files whose extension
+  implies a browser-renderable type (HTML, SVG, XHTML, XML, JavaScript)
+  are rejected unless the actual content matches. Closes the "HTML
+  payload stored as `evil.html`, served as `text/html`" XSS vector for
+  `image/*`-allow-listed upload fields.
+- **`trust_proxy` requires an allowlist** — `server.trust_proxy = true`
+  now fails startup unless `server.trusted_proxies` is set. The
+  allowlist takes bare IPs, CIDR ranges (`10.0.0.0/8`, `::1/128`), or
+  the explicit `"*"` wildcard for dev / isolated-network deployments
+  that intentionally want to accept `X-Forwarded-For` from any peer.
+  `client_ip` only honours XFF when the immediate peer IP is in the
+  allowlist; otherwise the TCP peer address is used, preventing clients
+  from rotating per-IP rate-limit buckets by spoofing the header.
 - **MCP HTTP key hardening** — `mcp.api_key` must be at least 32 characters
   when `mcp.http = true`; startup fails with a clear message pointing at
   `openssl rand -hex 32` / `/dev/urandom` otherwise. Failed Bearer-auth

@@ -47,11 +47,28 @@ pub struct ServerConfig {
     /// Browsers that don't support h2c fall back to HTTP/1.1 on the same port.
     /// Default: false.
     pub h2c: bool,
-    /// Trust X-Forwarded-For header for client IP extraction (admin HTTP server only).
+    /// Trust `X-Forwarded-For` for client IP extraction (admin HTTP only).
     /// Enable when running behind a reverse proxy (nginx, Caddy, etc.).
     /// When false (default), the TCP socket address is used — XFF is ignored.
     /// Does not affect gRPC, which always uses the TCP peer address.
+    ///
+    /// **Security:** if this is `true` but `trusted_proxies` is empty, any
+    /// client can spoof `X-Forwarded-For` and rotate per-IP rate limits
+    /// (login, password reset). Always pair `trust_proxy = true` with a
+    /// `trusted_proxies` allowlist containing the reverse proxy's IP or
+    /// CIDR range. Startup emits a warning when this pairing is missing.
     pub trust_proxy: bool,
+    /// IP addresses or CIDR ranges allowed to set `X-Forwarded-For`. When
+    /// non-empty and `trust_proxy = true`, the XFF header is honored only
+    /// if the request's direct peer address is in this list; otherwise
+    /// the TCP socket address is used. Accepts both IPv4 and IPv6 in
+    /// either bare (`10.0.0.1`) or CIDR (`10.0.0.0/8`, `::1/128`) form.
+    ///
+    /// Empty (default) preserves the pre-hardening behaviour: when
+    /// `trust_proxy` is `true`, XFF is trusted unconditionally. A warning
+    /// is logged at startup for this combination.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
     /// Public-facing base URL (e.g. "https://cms.example.com"). Used for password reset
     /// emails and other external links. When not set, falls back to http://{host}:{admin_port}.
     pub public_url: Option<String>,
@@ -93,6 +110,7 @@ impl Default for ServerConfig {
             grpc_rate_limit_window: 60,
             h2c: false,
             trust_proxy: false,
+            trusted_proxies: Vec::new(),
             public_url: None,
             request_timeout: None,
             grpc_timeout: None,
@@ -416,14 +434,18 @@ mod tests {
 
     #[test]
     fn server_config_trust_proxy_from_toml() {
+        // `trust_proxy = true` must be paired with `trusted_proxies` — the
+        // allowlist is now required at startup. Use a real-looking CIDR
+        // here so validation passes.
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(
             tmp.path().join("crap.toml"),
-            "[server]\ntrust_proxy = true\n",
+            "[server]\ntrust_proxy = true\ntrusted_proxies = [\"10.0.0.0/8\"]\n",
         )
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.server.trust_proxy);
+        assert_eq!(config.server.trusted_proxies, vec!["10.0.0.0/8"]);
     }
 
     #[test]

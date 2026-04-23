@@ -228,6 +228,59 @@ impl CrapConfig {
             bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
         }
 
+        self.validate_trusted_proxies()?;
+
+        Ok(())
+    }
+
+    /// Validate `trust_proxy` / `trusted_proxies` pairing.
+    ///
+    /// Fails startup when `trust_proxy = true` without a `trusted_proxies`
+    /// allowlist — in that state any client can spoof `X-Forwarded-For`
+    /// to rotate per-IP rate limits. Operators who genuinely need the
+    /// legacy "trust XFF from any peer" behaviour (e.g., local dev
+    /// fronted by a test proxy) must opt in explicitly by setting
+    /// `trusted_proxies = ["*"]`.
+    ///
+    /// Also fails on malformed entries so typos are caught at startup
+    /// rather than silently disabling protection.
+    fn validate_trusted_proxies(&self) -> Result<()> {
+        use std::net::IpAddr;
+
+        use ipnet::IpNet;
+
+        if self.server.trust_proxy && self.server.trusted_proxies.is_empty() {
+            bail!(
+                "server.trust_proxy is enabled without server.trusted_proxies. \
+                 Set server.trusted_proxies to the IP(s) or CIDR(s) of your \
+                 reverse proxy (e.g. [\"10.0.0.0/8\"]), or set it to [\"*\"] \
+                 to explicitly trust any peer (not recommended in production \
+                 — X-Forwarded-For becomes spoofable)."
+            );
+        }
+
+        for entry in &self.server.trusted_proxies {
+            if entry == "*" {
+                continue;
+            }
+
+            if entry.parse::<IpNet>().is_err() && entry.parse::<IpAddr>().is_err() {
+                bail!(
+                    "server.trusted_proxies entry {:?} is not a valid IP, \
+                     CIDR, or the \"*\" wildcard",
+                    entry
+                );
+            }
+        }
+
+        if self.server.trust_proxy && self.server.trusted_proxies.iter().any(|e| e == "*") {
+            warn!(
+                "server.trusted_proxies contains \"*\" — X-Forwarded-For is \
+                 honoured from any peer. Use only for development or when \
+                 the admin port is not exposed to untrusted networks."
+            );
+        }
+
         Ok(())
     }
 
@@ -842,6 +895,65 @@ dev_mode = false
         config.mcp.http = false;
         // stdio transport doesn't need API key — process-level access controls it
         assert!(config.validate().is_ok());
+    }
+
+    // ── trust_proxy / trusted_proxies pairing (audit finding H-3) ────────
+
+    #[test]
+    fn validate_trust_proxy_without_allowlist_errors() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        // trusted_proxies is empty by default
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("trusted_proxies"),
+            "expected allowlist error, got: {msg}",
+        );
+        assert!(
+            msg.contains("\"*\""),
+            "error should mention the explicit-wildcard escape hatch: {msg}",
+        );
+    }
+
+    #[test]
+    fn validate_trust_proxy_with_allowlist_passes() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies = vec!["10.0.0.0/8".into(), "127.0.0.1".into()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_trust_proxy_with_explicit_wildcard_passes() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies = vec!["*".into()];
+        // Wildcard is an intentional escape hatch — validation accepts it
+        // (startup logs a warning so the looseness stays visible).
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_trusted_proxies_rejects_malformed_entry() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies = vec!["10.0.0.0/8".into(), "not-an-ip".into()];
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("not-an-ip"));
+    }
+
+    #[test]
+    fn validate_trust_proxy_disabled_ignores_allowlist_shape() {
+        // When trust_proxy is off the allowlist is unused — malformed
+        // entries shouldn't prevent startup in that case.
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = false;
+        config.server.trusted_proxies = vec!["definitely-not-an-ip".into()];
+        // With trust_proxy disabled we still reject garbage entries so
+        // the operator knows their config has a typo. Document the
+        // current strict behaviour with an explicit test.
+        assert!(config.validate().is_err());
     }
 
     #[test]

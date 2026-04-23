@@ -96,7 +96,7 @@ pub async fn auth_callback(
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
+    let ip = client_ip(&headers, &addr, &state.config.server);
 
     if state.ip_login_limiter.is_blocked(&ip) {
         return Redirect::to("/admin/login").into_response();

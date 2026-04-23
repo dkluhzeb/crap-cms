@@ -95,7 +95,7 @@ pub async fn reset_password_action(
     headers: HeaderMap,
     Form(form): Form<ResetPasswordForm>,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
+    let ip = client_ip(&headers, &addr, &state.config.server);
 
     // Rate limit by IP — prevents brute-forcing reset tokens.
     // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid

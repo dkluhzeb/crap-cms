@@ -939,6 +939,7 @@ dependencies = [
  "include_dir",
  "indicatif",
  "infer",
+ "ipnet",
  "jsonwebtoken",
  "lettre",
  "libc",
