@@ -368,6 +368,21 @@ impl CrapConfig {
             );
         }
 
+        // `0` means "no cap" — the default, silent. Finite values longer
+        // than 30 days deserve a nudge, since they materially widen the
+        // window in which a stolen session token is usable.
+        const SESSION_MAX_AGE_WARN_THRESHOLD: u64 = 30 * 86400;
+
+        if self.auth.session_absolute_max_age > SESSION_MAX_AGE_WARN_THRESHOLD {
+            warn!(
+                "auth.session_absolute_max_age is {} seconds (> 30 days) — \
+                 long caps enlarge the window in which a stolen session token \
+                 remains valid. Consider shortening, or pair with step-up \
+                 authentication for sensitive operations.",
+                self.auth.session_absolute_max_age,
+            );
+        }
+
         Ok(())
     }
 

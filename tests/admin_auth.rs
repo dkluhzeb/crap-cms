@@ -263,6 +263,38 @@ async fn login_page_returns_200() {
     );
 }
 
+/// Regression test for audit finding M-3 — the `crap_csrf` cookie's
+/// `Max-Age` must reflect `admin.csrf_cookie_lifetime` (default 86400),
+/// not a hardcoded literal. Future refactors that drop the config read
+/// would still set the same value by coincidence, but TOML-parse tests
+/// in `config::server::tests` cover the non-default path.
+#[tokio::test]
+async fn csrf_cookie_max_age_matches_configured_default() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let resp = app
+        .router
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    let cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|s| s.starts_with("crap_csrf="))
+        .expect("admin/login response must set crap_csrf cookie");
+
+    assert!(
+        cookie.contains("Max-Age=86400"),
+        "crap_csrf cookie must carry configured Max-Age, got: {cookie}",
+    );
+    assert!(
+        cookie.contains("SameSite=Strict"),
+        "crap_csrf cookie must be SameSite=Strict, got: {cookie}",
+    );
+}
+
 /// Regression test for CSP hardening — the rendered page must carry a
 /// per-request nonce in both the `Content-Security-Policy` header and
 /// every inline `<script>`, and must not fall back to `'unsafe-inline'`

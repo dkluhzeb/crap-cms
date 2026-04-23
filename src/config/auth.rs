@@ -96,6 +96,23 @@ pub struct AuthConfig {
     /// see [`SessionCookieSameSite`].
     #[serde(default)]
     pub session_cookie_samesite: SessionCookieSameSite,
+    /// Hard ceiling on the wall-clock lifetime of a session measured from
+    /// the original login, regardless of how many times the token has been
+    /// refreshed. Default: `2592000` (30 days). Set to `0` to disable the
+    /// cap — a session then remains valid until `token_expiry` elapses
+    /// without a refresh, or the user changes password. Accepts integer
+    /// seconds or human strings (`"30d"`, `"12h"`).
+    ///
+    /// Values greater than 30 days emit a startup warning, since long caps
+    /// materially enlarge the window a stolen token stays usable. Long
+    /// internal-tool sessions are a legitimate use-case — the warning is
+    /// a reminder, not a block.
+    #[serde(default = "default_session_absolute_max_age", with = "serde_duration")]
+    pub session_absolute_max_age: u64,
+}
+
+fn default_session_absolute_max_age() -> u64 {
+    30 * 86400
 }
 
 fn default_rate_limit_backend() -> String {
@@ -122,6 +139,7 @@ impl Default for AuthConfig {
             rate_limit_prefix: default_rate_limit_prefix(),
             password_policy: PasswordPolicy::default(),
             session_cookie_samesite: SessionCookieSameSite::default(),
+            session_absolute_max_age: default_session_absolute_max_age(),
         }
     }
 }

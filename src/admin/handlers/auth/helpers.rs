@@ -229,12 +229,19 @@ pub(in crate::admin::handlers) struct SessionToken {
 }
 
 /// Build a JWT session token for a user, resolving expiry from collection config or global default.
+///
+/// `auth_time` is the Unix timestamp of the **original** authentication —
+/// login paths pass `now()`, the refresh handler forwards the previous
+/// token's `auth_time`. This lets `auth.session_absolute_max_age` cap
+/// cumulative session lifetime independently of how often the token has
+/// been refreshed.
 pub(in crate::admin::handlers) fn create_session_token(
     state: &AdminState,
     user_id: String,
     collection: &str,
     email: String,
     session_version: u64,
+    auth_time: u64,
 ) -> Result<SessionToken, String> {
     let expiry = state
         .registry
@@ -245,6 +252,7 @@ pub(in crate::admin::handlers) fn create_session_token(
     let claims = ClaimsBuilder::new(user_id, Slug::new(collection))
         .email(email)
         .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
+        .auth_time(auth_time)
         .session_version(session_version)
         .build()
         .map_err(|e| format!("Claims build error: {}", e))?;

@@ -346,6 +346,18 @@ pub struct AdminConfig {
     /// specify their own `default_timezone`. Empty string means no pre-selection.
     #[serde(default)]
     pub default_timezone: String,
+    /// CSRF double-submit cookie lifetime in seconds. Default: 86400 (24h).
+    /// Accepts integer seconds or human strings ("4h", "30m").
+    ///
+    /// The cookie is tied to a `SameSite=Strict` session so longer windows
+    /// carry limited replay risk; shorten if you want to reduce the window
+    /// in which a stolen double-submit token can be used.
+    #[serde(default = "default_csrf_cookie_lifetime", with = "serde_duration")]
+    pub csrf_cookie_lifetime: u64,
+}
+
+fn default_csrf_cookie_lifetime() -> u64 {
+    86400
 }
 
 impl Default for AdminConfig {
@@ -356,6 +368,7 @@ impl Default for AdminConfig {
             access: None,
             csp: CspConfig::default(),
             default_timezone: String::new(),
+            csrf_cookie_lifetime: default_csrf_cookie_lifetime(),
         }
     }
 }
@@ -520,6 +533,38 @@ mod tests {
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.grpc_max_message_size, 8 * 1024 * 1024);
+    }
+
+    // ── CSRF cookie lifetime (audit finding M-3) ────────────────────────
+
+    #[test]
+    fn csrf_cookie_lifetime_defaults_to_24h() {
+        let admin = AdminConfig::default();
+        assert_eq!(admin.csrf_cookie_lifetime, 86400);
+    }
+
+    #[test]
+    fn csrf_cookie_lifetime_from_toml_integer_seconds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[admin]\ncsrf_cookie_lifetime = 3600\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.admin.csrf_cookie_lifetime, 3600);
+    }
+
+    #[test]
+    fn csrf_cookie_lifetime_from_toml_human_string() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[admin]\ncsrf_cookie_lifetime = \"4h\"\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.admin.csrf_cookie_lifetime, 4 * 3600);
     }
 
     #[test]

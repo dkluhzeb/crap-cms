@@ -12,6 +12,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
 };
+use chrono::Utc;
 use tokio::task;
 use tracing::error;
 
@@ -129,6 +130,7 @@ pub async fn auth_callback(
         &collection,
         email,
         session_version,
+        Utc::now().timestamp().max(0) as u64,
     ) {
         Ok(s) => s,
         Err(e) => {

@@ -302,6 +302,7 @@ fn build_session_response(
         &form.collection,
         user_email,
         session_version,
+        Utc::now().timestamp().max(0) as u64,
     ) {
         Ok(s) => s,
         Err(e) => {

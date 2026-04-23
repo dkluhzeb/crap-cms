@@ -27,6 +27,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `client_ip` only honours XFF when the immediate peer IP is in the
   allowlist; otherwise the TCP peer address is used, preventing clients
   from rotating per-IP rate-limit buckets by spoofing the header.
+- **SMTP plaintext warning** — when `email.smtp_tls = "none"` is paired
+  with a non-loopback host, startup emits a `warn!` naming the host and
+  noting that credentials travel unencrypted. Local dev SMTP
+  (`localhost`, `127.0.0.1`, `::1`) stays silent; no config change is
+  required.
+- **Configurable CSRF cookie lifetime** — new `admin.csrf_cookie_lifetime`
+  (default `86400`, 24h). Accepts integer seconds or human strings
+  (`"4h"`, `"30m"`). Previously hardcoded; shorten to narrow the replay
+  window for stolen double-submit tokens.
+- **Absolute session cap via `auth_time`** — new `auth.session_absolute_max_age`
+  config (default `2592000` = 30 days) caps cumulative session
+  lifetime from original login, regardless of how many times the token
+  has been refreshed. Claims now carry an `auth_time` field
+  (OIDC-standard name) set at login and preserved across refreshes;
+  legacy tokens without the claim fall back to `iat` on first refresh,
+  giving them up to 30 days from their most-recent issuance before the
+  cap kicks in. Set `session_absolute_max_age = 0` to disable the cap
+  for long-lived internal-tool sessions; values above 30 days emit a
+  startup `warn!`.
 - **MCP HTTP key hardening** — `mcp.api_key` must be at least 32 characters
   when `mcp.http = true`; startup fails with a clear message pointing at
   `openssl rand -hex 32` / `/dev/urandom` otherwise. Failed Bearer-auth

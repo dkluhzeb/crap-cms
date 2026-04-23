@@ -5,6 +5,7 @@ use axum::{
     http::{HeaderMap, header::COOKIE},
     response::{Html, IntoResponse, Redirect, Response},
 };
+use chrono::Utc;
 use serde_json::json;
 use tokio::task;
 use tracing::error;
@@ -133,6 +134,7 @@ fn build_mfa_session_response(state: &AdminState, pending: &Claims) -> Response 
         &pending.collection,
         pending.email.clone(),
         pending.session_version,
+        Utc::now().timestamp().max(0) as u64,
     ) {
         Ok(s) => s,
         Err(e) => {

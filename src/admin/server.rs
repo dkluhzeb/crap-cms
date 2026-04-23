@@ -652,6 +652,7 @@ async fn csrf_middleware(
 ) -> Response {
     let method = request.method().clone();
     let dev_mode = state.config.admin.dev_mode;
+    let cookie_lifetime = state.config.admin.csrf_cookie_lifetime;
 
     // Bearer-authenticated API clients can't use double-submit cookies.
     // CSRF protects browser sessions (cookies); Bearer tokens aren't auto-attached
@@ -695,7 +696,12 @@ async fn csrf_middleware(
             Ok(request) => {
                 let mut response = next.run(request).await;
 
-                ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
+                ensure_csrf_cookie(
+                    &mut response,
+                    csrf_cookie.as_deref(),
+                    dev_mode,
+                    cookie_lifetime,
+                );
 
                 return response;
             }
@@ -706,14 +712,25 @@ async fn csrf_middleware(
     // Non-mutating method — pass through and set cookie if needed
     let mut response = next.run(request).await;
 
-    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
+    ensure_csrf_cookie(
+        &mut response,
+        csrf_cookie.as_deref(),
+        dev_mode,
+        cookie_lifetime,
+    );
 
     response
 }
 
 /// Set the `crap_csrf` cookie on the response if not already present in the request.
 /// Adds `Secure` flag in production mode (same as session cookies).
-fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, dev_mode: bool) {
+/// `lifetime` is the `Max-Age` in seconds, sourced from `admin.csrf_cookie_lifetime`.
+fn ensure_csrf_cookie(
+    response: &mut Response,
+    existing_cookie: Option<&str>,
+    dev_mode: bool,
+    lifetime: u64,
+) {
     if existing_cookie.is_some() {
         return;
     }
@@ -721,8 +738,8 @@ fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, de
     let token = nanoid!(32);
     let secure = if dev_mode { "" } else { "; Secure" };
     let cookie = format!(
-        "crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400{}",
-        token, secure
+        "crap_csrf={}; Path=/; SameSite=Strict; Max-Age={}{}",
+        token, lifetime, secure
     );
 
     if let Ok(value) = cookie.parse() {
