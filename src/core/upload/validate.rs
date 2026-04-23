@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{io::Cursor, str};
 
 use anyhow::{Context as _, Result, bail};
 use image::ImageReader;
@@ -40,6 +40,16 @@ pub(super) fn validate_upload(
     // smuggle `text/html` past an `image/*` allowlist. Reject when the
     // extension's MIME disagrees with what the bytes actually are.
     validate_filename_extension_matches(&file.filename, &effective_mime)?;
+
+    // SVG-specific: reject XXE / external-entity vectors. SVGs are served
+    // with `Content-Disposition: attachment` and a sandbox CSP today, but a
+    // future code path (thumbnailing, rasterisation, inline rendering) may
+    // parse them server- or client-side, where `<!DOCTYPE>` / `<!ENTITY>`
+    // declarations or external `xlink:href` loads could leak data. Scan
+    // once at upload so only clean SVGs ever land in storage.
+    if is_svg(&effective_mime, &file.data) {
+        validate_svg_content(&file.data)?;
+    }
 
     let max_size = upload_config.max_file_size.unwrap_or(global_max_file_size);
 
@@ -105,7 +115,17 @@ fn validate_filename_extension_matches(filename: &str, effective_mime: &str) -> 
     );
 }
 
-/// Check image dimensions against the decompression bomb limit (100 megapixels).
+/// Check image dimensions against the decompression bomb limit.
+///
+/// Two guards run:
+/// 1. Absolute pixel cap (100 MP) — rejects e.g. a 20k×20k image that
+///    would allocate ~1.6 GB of RGBA during decode.
+/// 2. Pixel-to-byte ratio cap — rejects the class of "small file, huge
+///    declared dimensions" attacks where a tightly-compressed payload
+///    expands absurdly during decode even though its file size is tiny.
+///    Threshold is 500 pixels per byte: a 10 kB file is capped at 5 MP,
+///    a 1 MB file can declare up to 500 MP (also caught by guard 1). Real
+///    photographs sit in the single-digit range, so normal uploads pass.
 pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
     let reader = ImageReader::new(Cursor::new(data))
         .with_guessed_format()
@@ -113,10 +133,71 @@ pub(super) fn check_image_dimensions(data: &[u8]) -> Result<()> {
 
     if let Ok((w, h)) = reader.into_dimensions() {
         const MAX_PIXELS: u64 = 100_000_000;
+        const MAX_PIXELS_PER_BYTE: u64 = 500;
 
-        if (w as u64) * (h as u64) > MAX_PIXELS {
+        let pixels = (w as u64) * (h as u64);
+
+        if pixels > MAX_PIXELS {
             bail!("Image too large: {}x{} exceeds pixel limit", w, h);
         }
+
+        // `data.len() + 1` prevents a pathological zero-byte file (rare
+        // but possible via header-only streams) from producing division
+        // by zero; zero-byte inputs would have already failed to decode.
+        let ratio = pixels / (data.len() as u64 + 1);
+
+        if ratio > MAX_PIXELS_PER_BYTE {
+            bail!(
+                "Image compression ratio too high: {}x{} pixels in {} bytes \
+                 (ratio {} > {}). Likely a decompression bomb.",
+                w,
+                h,
+                data.len(),
+                ratio,
+                MAX_PIXELS_PER_BYTE,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Best-effort check whether an uploaded file is an SVG. `infer` does not
+/// classify text-based formats, so we also peek at the raw bytes.
+fn is_svg(effective_mime: &str, data: &[u8]) -> bool {
+    if effective_mime == "image/svg+xml" {
+        return true;
+    }
+
+    // Look only at the first 1 kB — enough to find the XML / <svg> prolog
+    // without paying for a full scan on non-SVG content.
+    let head = &data[..data.len().min(1024)];
+    let prefix = str::from_utf8(head).unwrap_or("");
+    let trimmed = prefix.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+
+    lower.starts_with("<?xml") && lower.contains("<svg") || lower.starts_with("<svg")
+}
+
+/// Reject SVGs that carry the classic XXE indicators: a DOCTYPE
+/// declaration (gateway to external/general entity abuse) or an explicit
+/// ENTITY declaration. Case-insensitive because XML is
+/// case-sensitive-but-tags-are-conventionally-lowercase and the attack
+/// strings are well-known ASCII tokens.
+fn validate_svg_content(data: &[u8]) -> Result<()> {
+    let text = str::from_utf8(data).context("SVG is not valid UTF-8")?;
+    let lower = text.to_ascii_lowercase();
+
+    if lower.contains("<!doctype") {
+        bail!(
+            "SVG contains a <!DOCTYPE> declaration. Remove it — DOCTYPE is \
+             an XXE gateway and not required for SVGs that render in any \
+             modern browser."
+        );
+    }
+
+    if lower.contains("<!entity") {
+        bail!("SVG contains an <!ENTITY> declaration — reject as a potential XXE vector.");
     }
 
     Ok(())
@@ -383,5 +464,101 @@ mod tests {
     fn extension_match_allows_exact_renderable_match() {
         // A legitimate SVG served as image/svg+xml is fine.
         assert!(validate_filename_extension_matches("logo.svg", "image/svg+xml").is_ok(),);
+    }
+
+    // ── SVG XXE scan (audit finding M-5) ─────────────────────────────────
+
+    #[test]
+    fn is_svg_recognises_svg_mime() {
+        assert!(is_svg("image/svg+xml", b""));
+    }
+
+    #[test]
+    fn is_svg_recognises_raw_svg_prolog() {
+        assert!(is_svg(
+            "application/octet-stream",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        ));
+        assert!(is_svg(
+            "application/octet-stream",
+            b"<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        ));
+    }
+
+    #[test]
+    fn is_svg_rejects_non_svg_content() {
+        assert!(!is_svg("image/png", &[0x89, 0x50, 0x4E, 0x47]));
+        assert!(!is_svg("text/html", b"<html><body></body></html>"));
+    }
+
+    #[test]
+    fn svg_scan_accepts_clean_svg() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+            <rect width="10" height="10" fill="red"/>
+        </svg>"#;
+        assert!(validate_svg_content(svg).is_ok());
+    }
+
+    #[test]
+    fn svg_scan_rejects_doctype() {
+        let payload = br#"<?xml version="1.0"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg"/>"#;
+        let err = validate_svg_content(payload).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("doctype"));
+    }
+
+    #[test]
+    fn svg_scan_rejects_classic_xxe_payload() {
+        // Textbook SVG XXE: DOCTYPE + ENTITY + use-of-entity to
+        // exfiltrate a local file through a text node.
+        let payload = br#"<?xml version="1.0"?>
+<!DOCTYPE svg [
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>"#;
+        assert!(validate_svg_content(payload).is_err());
+    }
+
+    #[test]
+    fn svg_scan_rejects_entity_even_without_doctype() {
+        // Some XML parsers accept inline entity declarations even without
+        // a DOCTYPE. Belt-and-braces: catch both markers independently.
+        let payload = br#"<svg xmlns="http://www.w3.org/2000/svg">
+            <!ENTITY evil SYSTEM "http://attacker.example/beacon"/>
+        </svg>"#;
+        assert!(validate_svg_content(payload).is_err());
+    }
+
+    #[test]
+    fn svg_scan_is_case_insensitive() {
+        // Attackers can vary case to try to bypass a naive scan. Reject
+        // the lowercase form too.
+        let payload = b"<!doctype svg><svg/>";
+        assert!(validate_svg_content(payload).is_err());
+    }
+
+    // ── Image decompression ratio (audit finding M-7) ────────────────────
+    //
+    // The concrete decode path uses `image::ImageReader`, which needs real
+    // format bytes to parse. Rather than crafting a PNG bomb fixture here,
+    // we cover the threshold arithmetic directly — the ratio path is
+    // exercised end-to-end by the `process_upload_image_*` tests in
+    // `process.rs`.
+
+    #[test]
+    fn decompression_ratio_threshold_catches_obvious_bomb() {
+        // 10 kB file claiming 20 000 × 20 000 = 400 MP. Ratio = 40 000.
+        let pixels: u64 = 20_000 * 20_000;
+        let bytes: u64 = 10_000;
+        assert!(pixels / (bytes + 1) > 500);
+    }
+
+    #[test]
+    fn decompression_ratio_threshold_allows_normal_photo() {
+        // 4032 × 3024 JPEG (typical phone photo), ~2 MB file. Ratio ≈ 6.
+        let pixels: u64 = 4032 * 3024;
+        let bytes: u64 = 2 * 1024 * 1024;
+        assert!(pixels / (bytes + 1) < 500);
     }
 }

@@ -27,6 +27,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `client_ip` only honours XFF when the immediate peer IP is in the
   allowlist; otherwise the TCP peer address is used, preventing clients
   from rotating per-IP rate-limit buckets by spoofing the header.
+- **SVG XXE pre-upload scan** — SVGs containing `<!DOCTYPE>` or
+  `<!ENTITY>` declarations are now rejected at upload time. Closes the
+  XXE / external-entity vector for any future code path that decides to
+  parse or inline-render SVGs server- or client-side, regardless of the
+  existing `Content-Disposition: attachment` + CSP-sandbox defences on
+  the serve side.
+- **Upload decompression-bomb ratio cap** — `check_image_dimensions`
+  now also rejects images whose pixel count divided by file size
+  exceeds 500 pixels/byte, closing the class of "tiny, heavily
+  compressed, absurd dimensions" attacks that slip under the 100 MP
+  absolute cap. Normal photographs sit in the single-digit range.
+- **Upload error responses scrubbed** — `/api/upload/*` endpoints no
+  longer echo inner error detail (multipart parse errors, tokio task
+  join errors, service errors, access-check errors) to the client. Full
+  detail is logged at `error` level; clients see a generic phrase with
+  the same status code, so DB / parser / backend identifiers stay out
+  of the wire.
 - **SMTP plaintext warning** — when `email.smtp_tls = "none"` is paired
   with a non-loopback host, startup emits a `warn!` naming the host and
   noting that credentials travel unencrypted. Local dev SMTP

@@ -1,5 +1,7 @@
 //! DELETE /api/upload/{slug}/{id} — delete an upload document and its files.
 
+use tracing::error;
+
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -119,14 +121,25 @@ pub(super) async fn delete_upload(
         }
         Ok(Err(e)) => {
             let msg = e.to_string();
-            json_error(
-                classify_delete_error(&msg),
-                &format!("Delete error: {}", msg),
-            )
+            let status = classify_delete_error(&msg);
+
+            // Log full detail internally; the client only learns the
+            // status code and a generic phrase. Keeps internal DB errors,
+            // stack traces, and backend identifiers off the wire.
+            error!("Upload delete failed: {}", msg);
+
+            let client_msg = match status {
+                StatusCode::NOT_FOUND => "Upload not found",
+                StatusCode::CONFLICT => "Upload is still referenced",
+                _ => "Delete failed",
+            };
+
+            json_error(status, client_msg)
         }
-        Err(e) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
-        ),
+        Err(e) => {
+            error!("Upload delete task join failed: {}", e);
+
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        }
     }
 }

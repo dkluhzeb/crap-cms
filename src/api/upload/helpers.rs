@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     admin::{AdminState, server::load_auth_user},
@@ -144,10 +144,14 @@ pub fn check_upload_access(
 
     match result {
         Ok(AccessResult::Denied) => Err(Box::new(json_error(StatusCode::FORBIDDEN, deny_msg))),
-        Err(e) => Err(Box::new(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Access check error: {}", e),
-        ))),
+        Err(e) => {
+            error!("Upload access check failed: {}", e);
+
+            Err(Box::new(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Access check failed",
+            )))
+        }
         _ => Ok(()),
     }
 }
