@@ -67,7 +67,6 @@ fn make_test_state() -> AdminState {
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        csp_header: None,
         storage: create_storage(tmp.path(), &UploadConfig::default()).unwrap(),
         token_provider: Arc::new(JwtTokenProvider::new("test-secret")),
         password_provider: Arc::new(Argon2PasswordProvider),
@@ -988,7 +987,6 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crate::core::upload::create_storage(
             tmp.path(),
             &crate::config::UploadConfig::default(),
@@ -1101,7 +1099,6 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crate::core::upload::create_storage(
             tmp.path(),
             &crate::config::UploadConfig::default(),

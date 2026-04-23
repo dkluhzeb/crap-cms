@@ -147,7 +147,6 @@ fn setup_app_with_config(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
@@ -261,6 +260,60 @@ async fn login_page_returns_200() {
     assert!(
         body.to_lowercase().contains("login"),
         "Login page should contain 'login'"
+    );
+}
+
+/// Regression test for CSP hardening — the rendered page must carry a
+/// per-request nonce in both the `Content-Security-Policy` header and
+/// every inline `<script>`, and must not fall back to `'unsafe-inline'`
+/// for scripts. Protects against future refactors that silently relax CSP.
+#[tokio::test]
+async fn login_page_csp_nonce_matches_inline_scripts() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let resp = app
+        .router
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .expect("CSP header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Extract the `script-src` directive so assertions are scoped correctly
+    // (style-src intentionally still permits `'unsafe-inline'`).
+    let script_src = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("script-src "))
+        .expect("script-src directive present");
+
+    assert!(
+        !script_src.contains("'unsafe-inline'"),
+        "script-src must not include 'unsafe-inline' — got {:?}",
+        script_src,
+    );
+
+    let nonce_prefix = "'nonce-";
+    let start = script_src
+        .find(nonce_prefix)
+        .expect("script-src carries a nonce directive");
+    let after = &script_src[start + nonce_prefix.len()..];
+    let end = after.find('\'').expect("nonce directive is closed");
+    let nonce = &after[..end];
+    assert!(!nonce.is_empty(), "nonce must not be empty");
+
+    let body = body_string(resp.into_body()).await;
+    let expected_attr = format!("nonce=\"{}\"", nonce);
+    assert!(
+        body.contains(&expected_attr),
+        "rendered HTML must carry matching nonce attribute {:?}",
+        expected_attr,
     );
 }
 
@@ -1226,7 +1279,6 @@ end"#,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),

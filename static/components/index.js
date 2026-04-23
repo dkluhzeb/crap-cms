@@ -25,6 +25,7 @@ import './session-guard.js';
 import './create-panel.js';
 
 // ── Light DOM Web Components ──
+import './password-toggle.js';
 import './time-format.js';
 import './theme.js';
 import './locale-picker.js';

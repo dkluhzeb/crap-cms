@@ -3,19 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script>
+  <script nonce="{{crap.csp_nonce}}">
     (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
   </script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link href="/static/styles.css?v={{crap.build_hash}}" rel="stylesheet" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
   <title>{{t "login_page_title"}} - Crap CMS</title>
-  <script>
+  <script nonce="{{crap.csp_nonce}}">
     (function(){
       function gc(n){var m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?m[1]:null}
       document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM')return;var t=gc('crap_csrf');if(t&&!f.querySelector('input[name="_csrf"]')){var i=document.createElement('input');i.type='hidden';i.name='_csrf';i.value=t;f.appendChild(i)}},true);
     })();
   </script>
+  <script src="/static/components/password-toggle.js?v={{crap.build_hash}}" defer></script>
 </head>
 
 <body class="auth-page">
@@ -67,14 +68,13 @@
 
       <div class="form__field">
         <label for="password">{{t "password"}}</label>
-        <div class="form__password-wrapper">
+        <crap-password-toggle class="form__password-wrapper">
           <input type="password" name="password" id="password" placeholder="{{t "password"}}" required autocomplete="current-password" />
           <button type="button" class="form__password-toggle"
-                  onclick="var i=this.previousElementSibling;var t=i.type==='password';i.type=t?'text':'password';this.querySelector('span').textContent=t?'visibility_off':'visibility'"
                   aria-label="Toggle password visibility">
             <span class="material-symbols-outlined">visibility</span>
           </button>
-        </div>
+        </crap-password-toggle>
       </div>
 
       <button type="submit" class="button button--primary auth-card__submit">{{t "login"}}</button>

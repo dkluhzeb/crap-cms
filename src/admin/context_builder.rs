@@ -9,6 +9,7 @@ use crate::{
     admin::{
         AdminState,
         context::{Breadcrumb, PageType, build_collection_context, build_global_context},
+        csp_nonce::current_nonce_or_empty,
         handlers::shared::has_read_access,
     },
     config::LocaleConfig,
@@ -30,7 +31,12 @@ impl ContextBuilder {
     pub fn new(state: &AdminState, claims: Option<&Claims>) -> Self {
         let mut data = Map::new();
 
-        // crap metadata
+        // crap metadata — including the per-request CSP nonce so inline
+        // `<script nonce="{{crap.csp_nonce}}">` tags (in built-in templates
+        // AND overlay templates) are accepted by the browser. Reads from a
+        // task-local set by the `security_headers` middleware; falls back to
+        // empty string outside request scope (tests, error paths) in which
+        // case inline scripts are CSP-blocked by design.
         data.insert(
             "crap".into(),
             json!({
@@ -38,6 +44,7 @@ impl ContextBuilder {
                 "build_hash": env!("BUILD_HASH"),
                 "dev_mode": state.config.admin.dev_mode,
                 "auth_enabled": has_auth_collections(state),
+                "csp_nonce": current_nonce_or_empty(),
             }),
         );
 
@@ -87,6 +94,7 @@ impl ContextBuilder {
                 "build_hash": env!("BUILD_HASH"),
                 "dev_mode": state.config.admin.dev_mode,
                 "auth_enabled": true,
+                "csp_nonce": current_nonce_or_empty(),
             }),
         );
 

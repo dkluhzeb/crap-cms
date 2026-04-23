@@ -111,7 +111,7 @@
 {{> collections/items_empty}}
 {{/if}}
 
-<script type="application/json" id="crap-column-options">{{{json column_options}}}</script>
-<script type="application/json" id="crap-filter-fields">{{{json filter_fields}}}</script>
+<script type="application/json" id="crap-column-options" nonce="{{crap.csp_nonce}}">{{{json column_options}}}</script>
+<script type="application/json" id="crap-filter-fields" nonce="{{crap.csp_nonce}}">{{{json filter_fields}}}</script>
 </crap-list-settings>
 {{/layout/base}}

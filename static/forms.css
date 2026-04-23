@@ -695,6 +695,7 @@ select[multiple] {
 
 /* Password toggle */
 .form__password-wrapper {
+  display: block;
   position: relative;
 }
 

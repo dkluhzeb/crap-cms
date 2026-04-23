@@ -227,11 +227,15 @@ impl Default for CspConfig {
         Self {
             enabled: true,
             default_src: vec!["'self'".into()],
-            script_src: vec![
-                "'self'".into(),
-                "'unsafe-inline'".into(),
-                "https://unpkg.com".into(),
-            ],
+            // `'unsafe-inline'` is intentionally absent — inline `<script>` tags
+            // are allowed only via the per-request nonce (see `build_header_value`).
+            // Built-in and overlay templates must mark inline scripts with
+            // `nonce="{{crap.csp_nonce}}"`.
+            script_src: vec!["'self'".into(), "https://unpkg.com".into()],
+            // Style-src still permits inline styles: the admin UI uses
+            // `style="..."` attributes for dynamic values (widths, theme
+            // swatches, conditional visibility). Moving these to classes is a
+            // larger refactor tracked separately.
             style_src: vec![
                 "'self'".into(),
                 "'unsafe-inline'".into(),
@@ -249,17 +253,40 @@ impl Default for CspConfig {
 
 impl CspConfig {
     /// Build the CSP header value string from configured directives.
-    /// Returns `None` if CSP is disabled.
-    pub fn build_header_value(&self) -> Option<String> {
+    ///
+    /// When `nonce` is `Some`, `'nonce-XYZ'` is appended to `script-src` so
+    /// inline `<script nonce="XYZ">` tags are allowed. The same nonce must be
+    /// embedded in the rendered HTML (see `crap.csp_nonce` in the template
+    /// context). When `nonce` is `None`, no nonce directive is added — any
+    /// inline script in the response will be blocked unless the user has
+    /// explicitly configured `'unsafe-inline'` in their overrides.
+    ///
+    /// Returns `None` if CSP is disabled entirely (`enabled = false`).
+    pub fn build_header_value(&self, nonce: Option<&str>) -> Option<String> {
         if !self.enabled {
             return None;
         }
+
+        let script_src_with_nonce: Vec<String>;
+        let script_src: &[String] = match nonce {
+            Some(n) => {
+                script_src_with_nonce = self
+                    .script_src
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(format!("'nonce-{}'", n)))
+                    .collect();
+
+                &script_src_with_nonce
+            }
+            None => &self.script_src,
+        };
 
         let mut directives = Vec::new();
 
         let pairs: &[(&str, &[String])] = &[
             ("default-src", &self.default_src),
-            ("script-src", &self.script_src),
+            ("script-src", script_src),
             ("style-src", &self.style_src),
             ("font-src", &self.font_src),
             ("img-src", &self.img_src),
@@ -476,11 +503,14 @@ mod tests {
     #[test]
     fn csp_config_defaults_produce_valid_header() {
         let csp = CspConfig::default();
-        let header = csp.build_header_value();
+        let header = csp.build_header_value(None);
         assert!(header.is_some());
         let h = header.unwrap();
         assert!(h.contains("default-src 'self'"));
-        assert!(h.contains("script-src 'self' 'unsafe-inline' https://unpkg.com"));
+        // Defaults no longer permit `'unsafe-inline'` for scripts — the nonce
+        // mechanism replaces it.
+        assert!(h.contains("script-src 'self' https://unpkg.com"));
+        assert!(!h.contains("script-src 'self' 'unsafe-inline'"));
         assert!(h.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"));
         assert!(h.contains("font-src 'self' https://fonts.gstatic.com"));
         assert!(h.contains("img-src 'self' data:"));
@@ -491,12 +521,32 @@ mod tests {
     }
 
     #[test]
+    fn csp_config_with_nonce_appends_nonce_to_script_src() {
+        let csp = CspConfig::default();
+        let header = csp.build_header_value(Some("abc123")).unwrap();
+        assert!(header.contains("script-src 'self' https://unpkg.com 'nonce-abc123'"));
+        // Nonce is scoped to scripts only (H-1 addresses script XSS first).
+        assert!(
+            !header
+                .contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com 'nonce-")
+        );
+    }
+
+    #[test]
+    fn csp_config_without_nonce_omits_nonce_directive() {
+        let csp = CspConfig::default();
+        let header = csp.build_header_value(None).unwrap();
+        assert!(!header.contains("'nonce-"));
+    }
+
+    #[test]
     fn csp_config_disabled_returns_none() {
         let csp = CspConfig {
             enabled: false,
             ..CspConfig::default()
         };
-        assert!(csp.build_header_value().is_none());
+        assert!(csp.build_header_value(None).is_none());
+        assert!(csp.build_header_value(Some("abc")).is_none());
     }
 
     #[test]
@@ -527,7 +577,7 @@ mod tests {
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(!config.admin.csp.enabled);
-        assert!(config.admin.csp.build_header_value().is_none());
+        assert!(config.admin.csp.build_header_value(None).is_none());
     }
 
     #[test]
@@ -544,7 +594,7 @@ mod tests {
             form_action: vec![],
             base_uri: vec![],
         };
-        let header = csp.build_header_value().unwrap();
+        let header = csp.build_header_value(None).unwrap();
         assert_eq!(header, "default-src 'self'");
         assert!(!header.contains("script-src"));
     }

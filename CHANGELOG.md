@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.8] — Unreleased
 
+### Security
+
+- **CSP hardening: nonce-based `script-src`** — `'unsafe-inline'` has been
+  removed from the default `script-src` directive. A fresh nonce is
+  generated per request, inserted into the `Content-Security-Policy`
+  header, and exposed to admin templates as `{{crap.csp_nonce}}`. Inline
+  `<script>` tags in built-in and overlay templates must now emit
+  `<script nonce="{{crap.csp_nonce}}">…</script>` to execute. Inline
+  event handlers (`onclick=`, …) are also blocked — the password
+  visibility toggle has been refactored into a proper
+  `<crap-password-toggle>` Web Component as a reference pattern.
+  `style-src` continues to permit `'unsafe-inline'` pending a separate
+  pass to move remaining inline `style="..."` attributes to classes.
+
 ### Added
 
 - **Shell completions** — `crap-cms update completions <shell>` generates

@@ -44,7 +44,7 @@ use tracing::{info, info_span, warn};
 
 use crate::{
     admin::{
-        AdminState, Translations,
+        AdminState, CSP_NONCE, CspNonce, Translations,
         handlers::{
             auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
         },
@@ -137,7 +137,6 @@ pub async fn start(
 
     let max_sse_connections = config.live.max_sse_connections;
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
-    let csp_header = config.admin.csp.build_header_value();
     let invalidation_transport: SharedInvalidationTransport =
         invalidation_transport.unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
     let state = AdminState {
@@ -160,7 +159,6 @@ pub async fn start(
         shutdown: shutdown.clone(),
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections,
-        csp_header,
         storage,
         token_provider,
         password_provider,
@@ -511,6 +509,12 @@ async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
 }
 
 /// Security headers middleware — sets protective headers on every response.
+///
+/// Generates a fresh Content-Security-Policy nonce for each request,
+/// scopes it into a task-local for the duration of the inner service so
+/// templates can emit `<script nonce="...">`, and then stamps both the
+/// nonce-bearing CSP header and the usual static protection headers onto
+/// the response.
 // Excluded from coverage: async Axum middleware.
 #[cfg(not(tarpaulin_include))]
 async fn security_headers(
@@ -518,7 +522,12 @@ async fn security_headers(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let mut response = next.run(request).await;
+    let nonce = CspNonce::generate();
+    let nonce_str = nonce.as_str().to_string();
+
+    // Scope the nonce into a task-local so `ContextBuilder` can pick it up
+    // when assembling the template context for this request.
+    let mut response = CSP_NONCE.scope(nonce, next.run(request)).await;
     let headers = response.headers_mut();
 
     headers.insert(
@@ -541,8 +550,8 @@ async fn security_headers(
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
 
-    if let Some(ref csp) = state.csp_header
-        && let Ok(value) = HeaderValue::from_str(csp)
+    if let Some(csp) = state.config.admin.csp.build_header_value(Some(&nonce_str))
+        && let Ok(value) = HeaderValue::from_str(&csp)
     {
         headers.insert(HeaderName::from_static("content-security-policy"), value);
     }
