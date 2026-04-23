@@ -58,10 +58,15 @@ pub enum UpdateCmd {
     /// Print the path of the currently active binary.
     Where,
 
-    /// Generate shell completions and print to stdout.
+    /// Generate shell completions (to stdout) or remove installed completion files.
     Completions {
-        /// Shell to generate completions for (bash, zsh, fish, elvish, powershell).
-        shell: Shell,
+        /// Shell to target (bash, zsh, fish, elvish, powershell). Omit with
+        /// `--uninstall` to remove files for every supported shell.
+        shell: Option<Shell>,
+
+        /// Remove the installed completion file(s) instead of printing.
+        #[arg(long)]
+        uninstall: bool,
     },
 }
 
@@ -80,7 +85,7 @@ pub fn run<C: CommandFactory>(cmd: Option<UpdateCmd>, yes: bool, force: bool) ->
         }
         Some(UpdateCmd::Uninstall { version }) => run_uninstall(&version),
         Some(UpdateCmd::Where) => run_where(),
-        Some(UpdateCmd::Completions { shell }) => run_completions::<C>(shell),
+        Some(UpdateCmd::Completions { shell, uninstall }) => run_completions::<C>(shell, uninstall),
         None => {
             refuse_on_windows("update")?;
             run_update_latest::<C>(yes, force)
@@ -105,8 +110,27 @@ fn refuse_on_windows(verb: &str) -> Result<()> {
     Ok(())
 }
 
-/// Print shell completions to stdout.
-fn run_completions<C: CommandFactory>(shell: Shell) -> Result<()> {
+/// Print shell completions to stdout, or remove installed completion files
+/// when `--uninstall` is passed.
+fn run_completions<C: CommandFactory>(shell: Option<Shell>, uninstall: bool) -> Result<()> {
+    if uninstall {
+        match shell {
+            Some(s) => {
+                completions::uninstall_completions_for(s);
+            }
+            None => completions::uninstall_all_completions(),
+        }
+        return Ok(());
+    }
+
+    let Some(shell) = shell else {
+        bail!(
+            "missing <SHELL> argument.\n\
+             Usage: `crap-cms update completions <SHELL>` to print completions, \
+             or `crap-cms update completions --uninstall` to remove installed files."
+        );
+    };
+
     completions::print_completions::<C>(shell);
     Ok(())
 }
@@ -281,12 +305,18 @@ fn run_use<C: CommandFactory>(version: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove a version.
+/// Remove a version. Also removes installed shell completions if no
+/// versions remain — they follow the tool, not any individual version.
 fn run_uninstall(version: &str) -> Result<()> {
     let version = normalize_tag(version);
     let store = store::Store::default_for_user()?;
     store.uninstall(&version)?;
     cli::success(&format!("Removed {version}."));
+
+    if store.installed().map(|v| v.is_empty()).unwrap_or(false) {
+        completions::uninstall_all_completions();
+    }
+
     Ok(())
 }
 

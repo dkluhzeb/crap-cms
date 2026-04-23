@@ -1034,7 +1034,7 @@ Download, verify (SHA256), and stage a version in the local store (`~/.local/sha
 crap-cms update use <VERSION>
 ```
 
-Switch the `current` symlink to the given installed version. Also auto-installs shell completions for the user's shell (bash, zsh, or fish).
+Switch the `current` symlink to the given installed version. Also auto-installs shell completions for the user's login shell (bash, zsh, or fish) — see `update completions` for where files are written and how the zsh `$fpath` is probed.
 
 #### `update uninstall`
 
@@ -1042,7 +1042,7 @@ Switch the `current` symlink to the given installed version. Also auto-installs 
 crap-cms update uninstall <VERSION>
 ```
 
-Remove an installed version from the store. Refuses to uninstall the active version.
+Remove an installed version from the store. Refuses to uninstall the active version. If this removes the last installed version, auto-installed shell completion files are cleaned up too.
 
 #### `update where`
 
@@ -1056,11 +1056,19 @@ Print the resolved path of the currently active binary.
 
 ```bash
 crap-cms update completions <SHELL>
+crap-cms update completions <SHELL> --uninstall
+crap-cms update completions --uninstall
 ```
 
-Generate shell completions and print to stdout. Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+Generate shell completions (to stdout) or remove installed files. Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
-For bash, zsh, and fish, completions are also auto-installed after `update use` and bare `update`. On first install, a hint is shown with how to activate completions in the current session.
+For bash, zsh, and fish, completions are also auto-installed after `update use` and bare `update`:
+
+- **Zsh**: the install directory is chosen by probing `$fpath` (`zsh -i -c 'print -l $fpath'`). If `~/.zfunc` is already on `$fpath`, the file goes there; otherwise the first user-owned directory on `$fpath` is used. If neither is available, the file is written to `~/.zfunc` and an activation hint (`fpath=(~/.zfunc $fpath)` before `compinit`) is shown on every install until it's wired up.
+- **Bash**: installed under `$XDG_DATA_HOME/bash-completion/completions/crap-cms`. A hint is emitted if the `bash-completion` entry point isn't present on the system.
+- **Fish**: installed under `$XDG_CONFIG_HOME/fish/completions/crap-cms.fish` — auto-loaded by fish.
+
+`--uninstall` without a shell removes every auto-installed completion file. With a shell, it removes just that shell's file. `update uninstall` of the last installed version also runs this cleanup automatically.
 
 ```bash
 crap-cms update                          # install latest + activate

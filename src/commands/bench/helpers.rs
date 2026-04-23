@@ -21,8 +21,8 @@ pub enum DataSource {
 impl DataSource {
     pub fn label(self) -> &'static str {
         match self {
-            Self::UserProvided => "",
-            Self::ExistingDocument => "",
+            Self::UserProvided => "user JSON",
+            Self::ExistingDocument => "existing document",
             Self::Synthetic => "synthetic data",
         }
     }

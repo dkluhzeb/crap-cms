@@ -10,10 +10,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Shell completions** — `crap-cms update completions <shell>` generates
   completions for bash, zsh, fish, elvish, and powershell. For bash,
-  zsh, and fish, completions are also auto-installed to the standard
-  location after `crap-cms update use` and bare `crap-cms update`.
-  On first install, a hint is shown with how to activate completions
-  in the current session.
+  zsh, and fish, completions are also auto-installed after
+  `crap-cms update use` and bare `crap-cms update`:
+  - Zsh install path is chosen by probing the user's `$fpath` (via
+    `zsh -i -c 'print -l $fpath'`). Prefers `~/.zfunc` when already
+    configured, otherwise picks the first user-owned directory on
+    `$fpath`. Falls back to `~/.zfunc` and emits an activation hint
+    on every install if nothing workable is found.
+  - Bash installs under `$XDG_DATA_HOME/bash-completion/completions/`.
+    A hint is shown if the `bash-completion` entry point isn't present
+    on the system.
+  - Fish installs under `$XDG_CONFIG_HOME/fish/completions/` (auto-loaded).
+  - `crap-cms update completions <shell> --uninstall` removes a specific
+    shell's installed file; `--uninstall` without a shell removes all.
+    `crap-cms update uninstall` of the last installed version also cleans
+    up any auto-installed completion files.
 
 - **`bench` command** — benchmark hooks, queries, and write cycles for
   developer performance profiling:

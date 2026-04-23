@@ -616,14 +616,15 @@ pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> 
                         { "name": "use", "usage": "crap-cms update use <VERSION>", "description": "Switch to an installed version" },
                         { "name": "uninstall", "usage": "crap-cms update uninstall <VERSION>", "description": "Remove an installed version" },
                         { "name": "where", "usage": "crap-cms update where", "description": "Print path of active binary" },
-                        { "name": "completions", "usage": "crap-cms update completions <SHELL>", "description": "Generate shell completions (bash, zsh, fish, elvish, powershell)" }
+                        { "name": "completions", "usage": "crap-cms update completions <SHELL> [--uninstall]", "description": "Print shell completions to stdout; --uninstall removes installed file(s). Auto-installed after `update use` and bare `update` (bash/zsh/fish)." }
                     ],
                     "examples": [
                         "crap-cms update",
                         "crap-cms update check",
                         "crap-cms update install v0.1.0-alpha.7",
                         "crap-cms update use v0.1.0-alpha.7",
-                        "crap-cms update completions bash"
+                        "crap-cms update completions bash",
+                        "crap-cms update completions --uninstall"
                     ]
                 }),
                 _ => {
