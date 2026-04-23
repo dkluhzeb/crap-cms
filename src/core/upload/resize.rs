@@ -212,20 +212,15 @@ pub(super) fn process_format_variant(
     let variant_url = format!("/uploads/{}", variant_key);
 
     if ctx.opts.queue {
-        let source_path = ctx
-            .storage
-            .local_path(ctx.size_key)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ctx.size_key.to_string());
-
-        let target_path = ctx
-            .storage
-            .local_path(&variant_key)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| variant_key.clone());
-
+        // Enqueue storage KEYS, not absolute filesystem paths. The scheduler
+        // dequeues and calls `storage.get(source_key)` / `storage.put(target_key)`,
+        // both of which require storage keys (forward-slash-separated, relative
+        // to `base_dir`). The old code called `storage.local_path(...)` to get
+        // the absolute filesystem path — this was backend-specific (returned
+        // `None` for S3) and was rejected by `LocalStorage`'s post-hardening
+        // path validator, producing persistent "Source image not found" errors.
         queued.push(
-            QueuedConversionBuilder::new(source_path, target_path)
+            QueuedConversionBuilder::new(ctx.size_key.to_string(), variant_key.clone())
                 .format(ctx.format_name)
                 .quality(ctx.opts.quality)
                 .url_column(format!("{}_{}_url", ctx.size_name, ctx.format_name))

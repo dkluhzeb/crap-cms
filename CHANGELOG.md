@@ -189,6 +189,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `localized = true` and the locale was configured. The expected column
   set now correctly includes locale-suffixed variants.
 
+- **`has_many` select lost values on save and rejected edits on validate** —
+  two reinforcing bugs in the multi-select pipeline:
+  - **Save path**: `parse_form` extracted HTML form bodies as
+    `Form<HashMap<String, String>>`, which silently drops duplicate keys.
+    `<select multiple>` submits `skills=a&skills=b` as two entries with
+    the same name, so every save was truncated to the last selection.
+    Now parsed as `Vec<(String, String)>` with duplicate keys collapsed
+    into a comma-joined string (the shape `transform_select_has_many`
+    already expected). Same fix applied to the multipart path.
+  - **Validate path**: the `<crap-validate-form>` JSON endpoint sends
+    array values as JSON arrays. `values_to_string_map` serialised those
+    via `Value::to_string()` into `["a","b"]`, which
+    `transform_select_has_many` then split on the embedded commas —
+    producing garbage like `"skills has an invalid option: \"motion\"]"`
+    because each JSON-quoted element was treated as a literal option.
+    Transform now detects a canonical JSON string array and forwards it
+    unchanged; falls back to comma-splitting only for traditional form
+    input.
+
+- **Upload error responses: scrub `Transient` too** — `/api/upload/*`
+  responses for `ServiceError::Transient` echoed the inner DB / pool
+  error text (e.g. "database is locked") to the client, inconsistent
+  with the existing scrubbing for `Internal`. Now logged at `error` and
+  replaced with a generic "Service temporarily unavailable" string; the
+  503 status and retry semantics are unchanged.
+
+- **Image conversion queue stored absolute filesystem paths** — after
+  the upload path-traversal hardening, `LocalStorage` rejects keys that
+  start with `/`. The image-variant enqueue path had been recording
+  `storage.local_path(...)` (an absolute path) instead of the storage
+  key, so every queued WebP/AVIF conversion failed with "Source image
+  not found" at dequeue time. Queue entries now record the storage key
+  directly, matching what `storage.get()` / `storage.put()` expect.
+  Also works unchanged for S3 / custom backends (where `local_path`
+  returns `None`).
+
+- **Image queue could orphan entries in `processing`** — the conversion
+  finalizer ran "update collection doc URL" and "mark entry completed"
+  as two sequential statements. If the first hit `SQLITE_BUSY` after
+  the file was already written (e.g. under write contention from
+  concurrent conversions), the row stayed in `processing` forever —
+  only a server restart's `recover_stale_images` could free it. Both
+  writes are now in a single transaction; on rollback the entry is
+  marked `failed` so startup / `crap-cms images retry` can pick it
+  back up. Image-queue errors are also logged with the full anyhow
+  cause chain so the underlying SQLite / pool reason surfaces instead
+  of just the outer "execute failed: UPDATE …" wrapper.
+
 ## [0.1.0-alpha.7] — 2026-04-18
 
 ### Added

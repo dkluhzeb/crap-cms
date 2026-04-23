@@ -638,6 +638,65 @@ mod tests {
         }
     }
 
+    /// Regression: queued conversions must record the storage *key*
+    /// (`media/foo_small.png`), not an absolute filesystem path. The scheduler
+    /// passes these straight to `storage.get()` / `storage.put()`, which reject
+    /// absolute paths post-hardening. Using `local_path(...)` here used to
+    /// produce a filesystem-absolute `source_path` that the queue runner could
+    /// no longer read, failing every queued conversion with
+    /// "Source image not found".
+    #[test]
+    fn process_upload_queue_stores_storage_keys_not_absolute_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
+        let png_data = create_test_png(80, 80);
+        let file = UploadedFileBuilder::new("photo.png", "image/png")
+            .data(png_data)
+            .build();
+        let config = CollectionUpload {
+            enabled: true,
+            image_sizes: vec![
+                ImageSizeBuilder::new("small")
+                    .width(30)
+                    .height(30)
+                    .fit(ImageFit::Cover)
+                    .build(),
+            ],
+            format_options: FormatOptions {
+                webp: Some(FormatQuality::new(80, true)),
+                avif: None,
+            },
+            ..Default::default()
+        };
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
+
+        assert!(!result.queued_conversions.is_empty());
+
+        for q in &result.queued_conversions {
+            assert!(
+                !q.source_path.starts_with('/') && !q.source_path.starts_with('\\'),
+                "source_path must be a relative storage key, got: {}",
+                q.source_path,
+            );
+            assert!(
+                !q.target_path.starts_with('/') && !q.target_path.starts_with('\\'),
+                "target_path must be a relative storage key, got: {}",
+                q.target_path,
+            );
+            assert!(
+                q.source_path.starts_with("media/"),
+                "source_path must be prefixed with the collection slug, got: {}",
+                q.source_path,
+            );
+            assert!(
+                q.target_path.starts_with("media/"),
+                "target_path must be prefixed with the collection slug, got: {}",
+                q.target_path,
+            );
+        }
+    }
+
     #[test]
     fn process_upload_guard_cleans_up_on_drop() {
         let tmp = tempfile::tempdir().expect("tempdir");
