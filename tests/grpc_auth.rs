@@ -250,6 +250,60 @@ async fn login_valid_credentials() {
     );
 }
 
+/// Regression: gRPC `login` must mint session tokens with the `auth_time`
+/// claim set to the original login instant, so `session_absolute_max_age`
+/// can cap cumulative session lifetime on refresh. Without it the cap
+/// still holds via the `iat` fallback, but loosens by one `token_expiry`
+/// interval — which is quiet, unintended drift.
+#[tokio::test]
+async fn login_token_carries_auth_time() {
+    use crap_cms::core::auth::{JwtTokenProvider, TokenProvider};
+
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "authtime@example.com"),
+                ("name", "Audit"),
+                ("password", "secret123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    let before = chrono::Utc::now().timestamp() as u64;
+
+    let resp = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "authtime@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let after = chrono::Utc::now().timestamp() as u64;
+
+    let provider = JwtTokenProvider::new("test-secret");
+    let claims = provider
+        .validate_token(&resp.token)
+        .expect("token must validate");
+
+    let auth_time = claims
+        .auth_time
+        .expect("session token must carry auth_time claim");
+    assert!(
+        auth_time >= before && auth_time <= after,
+        "auth_time {auth_time} outside login window [{before}, {after}]",
+    );
+}
+
 #[tokio::test]
 async fn login_invalid_password() {
     let ts = setup_service(vec![make_users_def()], vec![]);

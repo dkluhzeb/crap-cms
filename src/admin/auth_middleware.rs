@@ -93,9 +93,12 @@ fn try_strategy_auth(
                         .to_string();
                     let expiry = auth_config.token_expiry;
 
+                    let now = Utc::now().timestamp().max(0) as u64;
+
                     let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
                         .email(user_email)
-                        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
+                        .exp(now.saturating_add(expiry))
+                        .auth_time(now)
                         .build()
                     {
                         Ok(c) => c,
