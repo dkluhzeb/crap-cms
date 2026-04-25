@@ -29,6 +29,68 @@ function readCookie(name) {
 
 // ── Web Component ────────────────────────────────────────────────────────
 
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(`
+  :host {
+    display: contents;
+  }
+  dialog {
+    border: none;
+    border-radius: var(--radius-xl, 12px);
+    padding: 0;
+    max-width: 25rem;
+    width: 90vw;
+    box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.2));
+    font-family: inherit;
+    background: var(--bg-elevated, #fff);
+    color: var(--text-primary, rgba(0, 0, 0, 0.88));
+  }
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .body {
+    padding: var(--space-xl, 1.5rem);
+  }
+  .body p {
+    margin: 0;
+    font-size: var(--text-sm, 0.8125rem);
+    color: var(--text-primary, rgba(0, 0, 0, 0.88));
+    line-height: 1.5;
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-sm, 0.5rem);
+    padding: 0 var(--space-xl, 1.5rem) var(--space-xl, 1.5rem);
+  }
+  button {
+    font-family: inherit;
+    font-size: var(--text-sm, 0.8125rem);
+    font-weight: 500;
+    height: var(--button-height, 2.25rem);
+    padding: 0 var(--space-lg, 1rem);
+    border-radius: var(--radius-md, 6px);
+    border: none;
+    cursor: pointer;
+    transition: background var(--transition-fast, 0.15s ease);
+  }
+  .logout {
+    background: transparent;
+    color: var(--text-secondary, rgba(0, 0, 0, 0.65));
+    border: 1px solid var(--border-color-hover, #d9d9d9);
+  }
+  .logout:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  }
+  .stay {
+    background: var(--color-primary, #1677ff);
+    color: var(--text-on-primary, #fff);
+  }
+  .stay:hover {
+    background: var(--color-primary-hover, #4096ff);
+  }
+`);
+
 class CrapSessionDialog extends HTMLElement {
   constructor() {
     super();
@@ -39,67 +101,8 @@ class CrapSessionDialog extends HTMLElement {
     this._countdownId = null;
 
     this.attachShadow({ mode: 'open' });
+    this.shadowRoot.adoptedStyleSheets = [sheet];
     this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: contents;
-        }
-        dialog {
-          border: none;
-          border-radius: var(--radius-xl, 12px);
-          padding: 0;
-          max-width: 25rem;
-          width: 90vw;
-          box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.2));
-          font-family: inherit;
-          background: var(--bg-elevated, #fff);
-          color: var(--text-primary, rgba(0, 0, 0, 0.88));
-        }
-        dialog::backdrop {
-          background: rgba(0, 0, 0, 0.4);
-        }
-        .body {
-          padding: var(--space-xl, 1.5rem);
-        }
-        .body p {
-          margin: 0;
-          font-size: var(--text-sm, 0.8125rem);
-          color: var(--text-primary, rgba(0, 0, 0, 0.88));
-          line-height: 1.5;
-        }
-        .actions {
-          display: flex;
-          justify-content: flex-end;
-          gap: var(--space-sm, 0.5rem);
-          padding: 0 var(--space-xl, 1.5rem) var(--space-xl, 1.5rem);
-        }
-        button {
-          font-family: inherit;
-          font-size: var(--text-sm, 0.8125rem);
-          font-weight: 500;
-          height: var(--button-height, 2.25rem);
-          padding: 0 var(--space-lg, 1rem);
-          border-radius: var(--radius-md, 6px);
-          border: none;
-          cursor: pointer;
-          transition: background var(--transition-fast, 0.15s ease);
-        }
-        .logout {
-          background: transparent;
-          color: var(--text-secondary, rgba(0, 0, 0, 0.65));
-          border: 1px solid var(--border-color-hover, #d9d9d9);
-        }
-        .logout:hover {
-          background: var(--bg-hover, rgba(0, 0, 0, 0.04));
-        }
-        .stay {
-          background: var(--color-primary, #1677ff);
-          color: var(--text-on-primary, #fff);
-        }
-        .stay:hover {
-          background: var(--color-primary-hover, #4096ff);
-        }
-      </style>
       <dialog>
         <div class="body">
           <p></p>

@@ -250,15 +250,14 @@ impl Default for CspConfig {
             // Built-in and overlay templates must mark inline scripts with
             // `nonce="{{crap.csp_nonce}}"`.
             script_src: vec!["'self'".into(), "https://unpkg.com".into()],
-            // Style-src still permits inline styles: the admin UI uses
-            // `style="..."` attributes for dynamic values (widths, theme
-            // swatches, conditional visibility). Moving these to classes is a
-            // larger refactor tracked separately.
-            style_src: vec![
-                "'self'".into(),
-                "'unsafe-inline'".into(),
-                "https://fonts.googleapis.com".into(),
-            ],
+            // `'unsafe-inline'` is intentionally absent — every Web Component
+            // uses constructable stylesheets (`new CSSStyleSheet()` +
+            // `adoptedStyleSheets`) which are CSP-exempt, and templates use
+            // classes / the `hidden` attribute / data-attribute selectors
+            // instead of inline `style="..."`. Programmatic
+            // `element.style.foo = ...` is exempt from CSP and remains
+            // available for runtime layout.
+            style_src: vec!["'self'".into(), "https://fonts.googleapis.com".into()],
             font_src: vec!["'self'".into(), "https://fonts.gstatic.com".into()],
             img_src: vec!["'self'".into(), "data:".into()],
             connect_src: vec!["'self'".into()],
@@ -578,7 +577,8 @@ mod tests {
         // mechanism replaces it.
         assert!(h.contains("script-src 'self' https://unpkg.com"));
         assert!(!h.contains("script-src 'self' 'unsafe-inline'"));
-        assert!(h.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"));
+        assert!(h.contains("style-src 'self' https://fonts.googleapis.com"));
+        assert!(!h.contains("style-src 'self' 'unsafe-inline'"));
         assert!(h.contains("font-src 'self' https://fonts.gstatic.com"));
         assert!(h.contains("img-src 'self' data:"));
         assert!(h.contains("connect-src 'self'"));
@@ -593,10 +593,7 @@ mod tests {
         let header = csp.build_header_value(Some("abc123")).unwrap();
         assert!(header.contains("script-src 'self' https://unpkg.com 'nonce-abc123'"));
         // Nonce is scoped to scripts only (H-1 addresses script XSS first).
-        assert!(
-            !header
-                .contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com 'nonce-")
-        );
+        assert!(!header.contains("style-src 'self' https://fonts.googleapis.com 'nonce-"));
     }
 
     #[test]

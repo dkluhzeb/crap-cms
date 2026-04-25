@@ -50,8 +50,8 @@ class CrapTags extends HTMLElement {
     }
 
     // Build shadow UI
+    this.shadowRoot.adoptedStyleSheets = [sheet];
     this.shadowRoot.innerHTML = `
-      <style>${CrapTags._styles()}</style>
       <div class="tags${hasError ? ' tags--error' : ''}" id="container">
         <input
           class="tags__input"
@@ -259,5 +259,8 @@ class CrapTags extends HTMLElement {
     `;
   }
 }
+
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(CrapTags._styles());
 
 customElements.define('crap-tags', CrapTags);

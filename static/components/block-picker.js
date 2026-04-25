@@ -21,8 +21,8 @@ class CrapBlockPicker extends HTMLElement {
     if (this._connected) return;
     this._connected = true;
 
+    this.shadowRoot.adoptedStyleSheets = [sheet];
     this.shadowRoot.innerHTML = `
-      <style>${CrapBlockPicker._styles()}</style>
       <div class="picker"></div>
       <slot></slot>
     `;
@@ -210,5 +210,8 @@ class CrapBlockPicker extends HTMLElement {
     `;
   }
 }
+
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(CrapBlockPicker._styles());
 
 customElements.define('crap-block-picker', CrapBlockPicker);

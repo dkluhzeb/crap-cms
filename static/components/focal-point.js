@@ -15,6 +15,47 @@
 
 import { t } from './i18n.js';
 
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(`
+  :host {
+    display: block;
+    margin-bottom: var(--space-md, 0.75rem);
+    text-align: center;
+  }
+
+  .focal-point {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+  }
+
+  .focal-point img {
+    max-width: var(--preview-max-width-lg, 18.75rem);
+    max-height: var(--preview-max-width, 12.5rem);
+    border-radius: var(--radius-md, 6px);
+    object-fit: contain;
+    display: block;
+  }
+
+  .marker {
+    position: absolute;
+    width: var(--space-xl, 1.5rem);
+    height: var(--space-xl, 1.5rem);
+    border: 2px solid var(--bg-elevated, #fff);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(0,0,0,0.3);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    transition: left 0.15s, top 0.15s;
+  }
+
+  .hint {
+    font-size: var(--text-xs, 0.75rem);
+    color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+    margin: var(--space-xs, 0.25rem) 0 0;
+  }
+`);
+
 class CrapFocalPoint extends HTMLElement {
   constructor() {
     super();
@@ -46,8 +87,8 @@ class CrapFocalPoint extends HTMLElement {
     }
 
     // Build shadow UI — use DOM API for src to prevent XSS via attribute injection
+    this.shadowRoot.adoptedStyleSheets = [sheet];
     this.shadowRoot.innerHTML = `
-      <style>${CrapFocalPoint._styles()}</style>
       <div class="focal-point">
         <img alt="" />
         <div class="marker"></div>
@@ -81,47 +122,6 @@ class CrapFocalPoint extends HTMLElement {
     });
   }
 
-  static _styles() {
-    return `
-      :host {
-        display: block;
-        margin-bottom: var(--space-md, 0.75rem);
-        text-align: center;
-      }
-
-      .focal-point {
-        position: relative;
-        display: inline-block;
-        cursor: crosshair;
-      }
-
-      .focal-point img {
-        max-width: var(--preview-max-width-lg, 18.75rem);
-        max-height: var(--preview-max-width, 12.5rem);
-        border-radius: var(--radius-md, 6px);
-        object-fit: contain;
-        display: block;
-      }
-
-      .marker {
-        position: absolute;
-        width: var(--space-xl, 1.5rem);
-        height: var(--space-xl, 1.5rem);
-        border: 2px solid var(--bg-elevated, #fff);
-        border-radius: 50%;
-        box-shadow: 0 0 0 1px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(0,0,0,0.3);
-        transform: translate(-50%, -50%);
-        pointer-events: none;
-        transition: left 0.15s, top 0.15s;
-      }
-
-      .hint {
-        font-size: var(--text-xs, 0.75rem);
-        color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
-        margin: var(--space-xs, 0.25rem) 0 0;
-      }
-    `;
-  }
 }
 
 customElements.define('crap-focal-point', CrapFocalPoint);

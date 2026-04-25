@@ -28,12 +28,12 @@
 </div>
 {{else}}
 <crap-upload-preview class="upload-field">
-  <div class="upload-field__preview" {{#unless selected_preview_url}}style="display: none;"{{/unless}}>
+  <div class="upload-field__preview" {{#unless selected_preview_url}}hidden{{/unless}}>
     {{#if selected_preview_url}}
     <img src="{{selected_preview_url}}" alt="Preview" />
     {{/if}}
   </div>
-  <div class="upload-field__info" {{#unless selected_filename}}style="display: none;"{{/unless}}>
+  <div class="upload-field__info" {{#unless selected_filename}}hidden{{/unless}}>
     {{#if selected_filename}}
     <span class="material-symbols-outlined icon--sm">description</span>
     <span class="upload-field__filename">{{selected_filename}}</span>

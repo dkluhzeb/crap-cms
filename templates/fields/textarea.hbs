@@ -12,8 +12,7 @@
   {{#if readonly}}readonly{{/if}}
   {{#if min_length}}minlength="{{min_length}}"{{/if}}
   {{#if max_length}}maxlength="{{max_length}}"{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-  {{#unless resizable}}style="resize: none"{{/unless}}
+  class="{{#if error}}form__input--error {{/if}}{{#unless resizable}}form__textarea--no-resize{{/unless}}"
 >{{value}}</textarea>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{t description}}</p>{{/if}}

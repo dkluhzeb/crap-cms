@@ -65,10 +65,10 @@ class CrapUploadPreview extends HTMLElement {
         img.src = thumbnailUrl;
         img.alt = t('preview');
         preview.appendChild(img);
-        preview.style.display = '';
+        preview.hidden = false;
       } else {
         preview.textContent = '';
-        preview.style.display = 'none';
+        preview.hidden = true;
       }
     }
 
@@ -83,10 +83,10 @@ class CrapUploadPreview extends HTMLElement {
         nameSpan.textContent = filename;
         info.appendChild(icon);
         info.appendChild(nameSpan);
-        info.style.display = '';
+        info.hidden = false;
       } else {
         info.textContent = '';
-        info.style.display = 'none';
+        info.hidden = true;
       }
     }
   }

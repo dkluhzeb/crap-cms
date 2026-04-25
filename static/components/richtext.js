@@ -21,11 +21,11 @@ import { t } from './i18n.js';
  *
  * @example
  * <crap-richtext>
- *   <textarea name="content" style="display:none">...</textarea>
+ *   <textarea name="content" hidden>...</textarea>
  * </crap-richtext>
  *
  * <crap-richtext data-features='["bold","italic","heading","link"]'>
- *   <textarea name="content" style="display:none">...</textarea>
+ *   <textarea name="content" hidden>...</textarea>
  * </crap-richtext>
  */
 class CrapRichtext extends HTMLElement {
@@ -299,8 +299,8 @@ class CrapRichtext extends HTMLElement {
     const state = PM.EditorState.create({ doc, plugins });
 
     // Render Shadow DOM
+    this.shadowRoot.adoptedStyleSheets = [sheet];
     this.shadowRoot.innerHTML = `
-      <style>${CrapRichtext._styles()}</style>
       <div class="richtext${this.hasAttribute('data-no-resize') ? ' richtext--no-resize' : ''}">
         ${isReadonly ? '' : `<div class="richtext__toolbar">${CrapRichtext._toolbarHTML(has, customNodes)}</div>`}
         <div class="richtext__editor"></div>
@@ -747,7 +747,7 @@ class CrapRichtext extends HTMLElement {
       const ph = a.placeholder ? ` placeholder="${esc(a.placeholder)}"` : '';
       const req = a.required ? ' required' : '';
       const ro = a.readonly ? ' readonly disabled' : '';
-      const widthStyle = a.width ? ` style="width:${esc(a.width)}"` : '';
+      const widthAttr = a.width ? ` data-field-width="${esc(a.width)}"` : '';
       const inputId = `crap-node-${esc(nodeDef.name)}-${esc(a.name)}`;
 
       // Numeric bounds
@@ -812,8 +812,8 @@ class CrapRichtext extends HTMLElement {
       }
       const desc = a.description ? `<p class="crap-node-modal__help">${esc(a.description)}</p>` : '';
       const label = esc(a.label) + langSuffix;
-      if (a.type === 'checkbox') return `<div class="crap-node-modal__field"${widthStyle}>${input}${desc}</div>`;
-      return `<div class="crap-node-modal__field"${widthStyle}><label class="crap-node-modal__label" for="${inputId}">${label}${a.required ? ' *' : ''}</label>${input}${desc}</div>`;
+      if (a.type === 'checkbox') return `<div class="crap-node-modal__field"${widthAttr}>${input}${desc}</div>`;
+      return `<div class="crap-node-modal__field"${widthAttr}><label class="crap-node-modal__label" for="${inputId}">${label}${a.required ? ' *' : ''}</label>${input}${desc}</div>`;
     }).join('');
 
     modal.innerHTML = `
@@ -828,6 +828,12 @@ class CrapRichtext extends HTMLElement {
     `;
 
     this.shadowRoot.appendChild(modal);
+
+    // Apply per-field widths (CSP: programmatic style is exempt; `style="..."` in innerHTML isn't)
+    for (const fieldEl of modal.querySelectorAll('[data-field-width]')) {
+      fieldEl.style.width = fieldEl.dataset.fieldWidth;
+    }
+
     modal.showModal();
 
     // Focus first input
@@ -1578,5 +1584,8 @@ class CustomNodeView {
     return true;
   }
 }
+
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(CrapRichtext._styles());
 
 customElements.define('crap-richtext', CrapRichtext);

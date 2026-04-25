@@ -317,8 +317,8 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
         .unwrap()
         .to_string();
 
-    // Extract the `script-src` directive so assertions are scoped correctly
-    // (style-src intentionally still permits `'unsafe-inline'`).
+    // Both `script-src` and `style-src` must be free of `'unsafe-inline'`:
+    // scripts use a nonce, styles use constructable stylesheets / classes.
     let script_src = csp
         .split(';')
         .map(str::trim)
@@ -329,6 +329,18 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
         !script_src.contains("'unsafe-inline'"),
         "script-src must not include 'unsafe-inline' — got {:?}",
         script_src,
+    );
+
+    let style_src = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("style-src "))
+        .expect("style-src directive present");
+
+    assert!(
+        !style_src.contains("'unsafe-inline'"),
+        "style-src must not include 'unsafe-inline' — got {:?}",
+        style_src,
     );
 
     let nonce_prefix = "'nonce-";

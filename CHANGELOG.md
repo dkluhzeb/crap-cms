@@ -101,8 +101,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   event handlers (`onclick=`, …) are also blocked — the password
   visibility toggle has been refactored into a proper
   `<crap-password-toggle>` Web Component as a reference pattern.
-  `style-src` continues to permit `'unsafe-inline'` pending a separate
-  pass to move remaining inline `style="..."` attributes to classes.
+- **CSP hardening: `'unsafe-inline'` removed from `style-src`** — every
+  Web Component now uses constructable stylesheets (`new CSSStyleSheet()`
+  + `adoptedStyleSheets`) rather than `<style>` blocks injected via
+  `shadowRoot.innerHTML`. The dynamic page-level `<style>` element from
+  `<crap-relationship-search>` is also a constructable sheet on
+  `document.adoptedStyleSheets`. Templates use the HTML `hidden`
+  attribute or class-based show/hide instead of `style="display: none"`,
+  and the theme-picker swatches use attribute selectors keyed off
+  `data-theme-value`. `<crap-richtext>`'s custom-node modal applies
+  per-field widths via programmatic `element.style.width` (CSP-exempt)
+  rather than inline `style="..."` strings. Override authors should
+  follow the same patterns; `'unsafe-inline'` can still be re-added to
+  `style_src` in the user's `[admin.csp]` config if a third-party
+  library demands it.
 
 ### Added
 

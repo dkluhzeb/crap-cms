@@ -27,9 +27,6 @@ const MIN_QUERY_LENGTH = 0;
 const DRAWER_DEBOUNCE_MS = 300;
 const DRAWER_PAGE_SIZE = 24;
 
-/** Inline style for material icon spans (class doesn't apply inside Shadow DOM). */
-const ICON_STYLE = "font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;";
-
 class CrapRelationshipSearch extends HTMLElement {
   constructor() {
     super();
@@ -40,9 +37,9 @@ class CrapRelationshipSearch extends HTMLElement {
   static _injectStyles() {
     if (CrapRelationshipSearch._stylesInjected) return;
     CrapRelationshipSearch._stylesInjected = true;
-    const s = document.createElement('style');
-    s.textContent = CrapRelationshipSearch._styles();
-    document.head.appendChild(s);
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(CrapRelationshipSearch._styles());
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
   }
 
   /** @type {boolean} */
@@ -186,10 +183,10 @@ class CrapRelationshipSearch extends HTMLElement {
         const href = '/admin/collections/' + col + '/' + val;
         viewLink.setAttribute('href', href);
         viewLink.setAttribute('hx-get', href);
-        viewLink.style.display = '';
+        viewLink.hidden = false;
         if (typeof htmx !== 'undefined') htmx.process(viewLink);
       } else {
-        viewLink.style.display = 'none';
+        viewLink.hidden = true;
       }
     }
 
@@ -506,7 +503,10 @@ class CrapRelationshipSearch extends HTMLElement {
     browseBtn.type = 'button';
     browseBtn.className = 'relationship-search__browse';
     browseBtn.title = t('browse');
-    browseBtn.innerHTML = '<span style="' + ICON_STYLE + ' font-size: var(--icon-md, 1.125rem);">folder_open</span>';
+    const icon = document.createElement('span');
+    icon.className = 'material-symbols-outlined icon--md';
+    icon.textContent = 'folder_open';
+    browseBtn.appendChild(icon);
     row.appendChild(browseBtn);
 
     browseBtn.addEventListener('click', () => {

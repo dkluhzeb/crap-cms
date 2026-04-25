@@ -9,9 +9,45 @@
  *
  * @example
  * <crap-code data-language="json">
- *   <textarea name="content" style="display:none">...</textarea>
+ *   <textarea name="content" hidden>...</textarea>
  * </crap-code>
  */
+
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(`
+  :host {
+    display: block;
+  }
+
+  .code-editor {
+    border: 1px solid var(--input-border, #e0e0e0);
+    border-radius: var(--radius-md, 6px);
+    background: var(--input-bg, #fff);
+    box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04));
+    overflow: hidden;
+  }
+
+  .code-editor:focus-within {
+    border-color: var(--color-primary, #1677ff);
+    box-shadow: 0 0 0 2px var(--color-primary-bg, rgba(22, 119, 255, 0.06));
+  }
+
+  .code-editor .cm-editor {
+    min-height: 12.5rem;
+    max-height: 37.5rem;
+    overflow: auto;
+  }
+
+  .code-editor .cm-editor.cm-focused {
+    outline: none;
+  }
+
+  .code-editor .cm-scroller {
+    font-family: monospace;
+    line-height: 1.5;
+  }
+`);
+
 class CrapCode extends HTMLElement {
   constructor() {
     super();
@@ -118,10 +154,8 @@ class CrapCode extends HTMLElement {
     }));
 
     // Render Shadow DOM
-    this.shadowRoot.innerHTML = `
-      <style>${CrapCode._styles()}</style>
-      <div class="code-editor"></div>
-    `;
+    this.shadowRoot.adoptedStyleSheets = [sheet];
+    this.shadowRoot.innerHTML = `<div class="code-editor"></div>`;
 
     const editorEl = this.shadowRoot.querySelector('.code-editor');
 
@@ -164,45 +198,6 @@ class CrapCode extends HTMLElement {
     }
   }
 
-  /**
-   * Shadow DOM styles. Uses CSS custom properties from :root (penetrate shadow boundary).
-   * @returns {string}
-   */
-  static _styles() {
-    return `
-      :host {
-        display: block;
-      }
-
-      .code-editor {
-        border: 1px solid var(--input-border, #e0e0e0);
-        border-radius: var(--radius-md, 6px);
-        background: var(--input-bg, #fff);
-        box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04));
-        overflow: hidden;
-      }
-
-      .code-editor:focus-within {
-        border-color: var(--color-primary, #1677ff);
-        box-shadow: 0 0 0 2px var(--color-primary-bg, rgba(22, 119, 255, 0.06));
-      }
-
-      .code-editor .cm-editor {
-        min-height: 12.5rem;
-        max-height: 37.5rem;
-        overflow: auto;
-      }
-
-      .code-editor .cm-editor.cm-focused {
-        outline: none;
-      }
-
-      .code-editor .cm-scroller {
-        font-family: monospace;
-        line-height: 1.5;
-      }
-    `;
-  }
 }
 
 customElements.define('crap-code', CrapCode);

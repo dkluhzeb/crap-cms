@@ -411,6 +411,22 @@ crap-sticky-header {
   flex-shrink: 0;
 }
 
+.theme-picker__option[data-theme-value=""] .theme-picker__swatch {
+  background: #f4f7fc;
+}
+.theme-picker__option[data-theme-value="rose-pine-dawn"] .theme-picker__swatch {
+  background: #faf4ed;
+}
+.theme-picker__option[data-theme-value="tokyo-night"] .theme-picker__swatch {
+  background: #1a1b26;
+}
+.theme-picker__option[data-theme-value="catppuccin"] .theme-picker__swatch {
+  background: #1e1e2e;
+}
+.theme-picker__option[data-theme-value="gruvbox"] .theme-picker__swatch {
+  background: #282828;
+}
+
 /* ── Mobile ──────────────────────────────────────────────────── */
 
 .header__toggle {
