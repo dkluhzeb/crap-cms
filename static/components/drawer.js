@@ -1,3 +1,4 @@
+import { h, clear } from './h.js';
 import { t } from './i18n.js';
 
 const sheet = new CSSStyleSheet();
@@ -274,15 +275,20 @@ class CrapDrawer extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <dialog>
-        <div class="header">
-          <h3 class="header__title"></h3>
-          <button class="header__close" type="button" aria-label="${t('close')}">close</button>
-        </div>
-        <div class="body"></div>
-      </dialog>
-    `;
+    this.shadowRoot.append(
+      h('dialog', null,
+        h('div', { class: 'header' },
+          h('h3', { class: 'header__title' }),
+          h('button', {
+            class: 'header__close',
+            type: 'button',
+            'aria-label': t('close'),
+            text: 'close',
+          }),
+        ),
+        h('div', { class: 'body' }),
+      ),
+    );
 
     const dialog = this.shadowRoot.querySelector('dialog');
     const closeBtn = this.shadowRoot.querySelector('.header__close');
@@ -308,7 +314,7 @@ class CrapDrawer extends HTMLElement {
   open(opts) {
     const dialog = this.shadowRoot.querySelector('dialog');
     this.shadowRoot.querySelector('.header__title').textContent = opts.title || '';
-    this.shadowRoot.querySelector('.body').innerHTML = '';
+    clear(this.shadowRoot.querySelector('.body'));
     dialog.showModal();
   }
 
@@ -316,7 +322,7 @@ class CrapDrawer extends HTMLElement {
   close() {
     const dialog = this.shadowRoot.querySelector('dialog');
     dialog.close();
-    this.shadowRoot.querySelector('.body').innerHTML = '';
+    clear(this.shadowRoot.querySelector('.body'));
   }
 
   /** @returns {HTMLElement} The body content container. */

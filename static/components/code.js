@@ -13,6 +13,8 @@
  * </crap-code>
  */
 
+import { h } from './h.js';
+
 const sheet = new CSSStyleSheet();
 sheet.replaceSync(`
   :host {
@@ -155,9 +157,8 @@ class CrapCode extends HTMLElement {
 
     // Render Shadow DOM
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `<div class="code-editor"></div>`;
-
-    const editorEl = this.shadowRoot.querySelector('.code-editor');
+    const editorEl = h('div', { class: 'code-editor' });
+    this.shadowRoot.append(editorEl);
 
     this._view = new CM.EditorView({
       state: CM.EditorState.create({

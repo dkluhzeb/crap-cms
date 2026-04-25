@@ -17,6 +17,7 @@
  * @module create-panel
  */
 
+import { h, clear } from './h.js';
 import { t } from './i18n.js';
 
 class CrapCreatePanel extends HTMLElement {
@@ -34,18 +35,20 @@ class CrapCreatePanel extends HTMLElement {
 
     CrapCreatePanel._injectStyles();
 
-    this._dialog = document.createElement('dialog');
-    this._dialog.className = 'create-panel';
-    this._dialog.innerHTML = `
-      <div class="create-panel__header">
-        <h2 class="create-panel__title"></h2>
-        <button type="button" class="create-panel__close" aria-label="${t('close')}">&times;</button>
-      </div>
-      <div class="create-panel__body"></div>
-    `;
+    this._dialog = h('dialog', { class: 'create-panel' },
+      h('div', { class: 'create-panel__header' },
+        h('h2', { class: 'create-panel__title' }),
+        h('button', {
+          type: 'button',
+          class: 'create-panel__close',
+          'aria-label': t('close'),
+          text: '×',
+          onClick: () => this.close(),
+        }),
+      ),
+      h('div', { class: 'create-panel__body' }),
+    );
     this.appendChild(this._dialog);
-
-    this._dialog.querySelector('.create-panel__close').addEventListener('click', () => this.close());
 
     // Event-based discovery (same pattern as drawer/confirm-dialog)
     this._handleRequest = (e) => { e.detail.instance = this; };
@@ -108,6 +111,9 @@ class CrapCreatePanel extends HTMLElement {
    * @param {string} collection
    */
   _injectForm(body, html, collection) {
+    // SAFETY: HTML source is the trusted server admin response (same-origin,
+    // CSRF-protected, Handlebars-rendered with auto-escaping). NOT user-controlled.
+    // Do not adapt this pattern for user content without re-review.
     const doc = new DOMParser().parseFromString(html, 'text/html');
 
     // Extract the edit form
@@ -158,7 +164,7 @@ class CrapCreatePanel extends HTMLElement {
       editLayout.insertBefore(sidebar, content);
     }
 
-    body.innerHTML = '';
+    clear(body);
     body.appendChild(form);
 
     // Intercept form submission
@@ -280,11 +286,7 @@ class CrapCreatePanel extends HTMLElement {
    * @param {string} message
    */
   _setBodyMessage(body, className, message) {
-    body.innerHTML = '';
-    const el = document.createElement('p');
-    el.className = className;
-    el.textContent = message;
-    body.appendChild(el);
+    body.replaceChildren(h('p', { class: className, text: message }));
   }
 
   close() {
@@ -292,7 +294,7 @@ class CrapCreatePanel extends HTMLElement {
     if (this._abortController) this._abortController.abort();
     this._abortController = null;
     this._dialog.close();
-    this._dialog.querySelector('.create-panel__body').innerHTML = '';
+    clear(this._dialog.querySelector('.create-panel__body'));
     this._onCreated = null;
   }
 

@@ -7,6 +7,7 @@
  * @module list-settings
  */
 
+import { h, clear } from './h.js';
 import { t } from './i18n.js';
 
 /**
@@ -92,7 +93,7 @@ class CrapListSettings extends HTMLElement {
     drawer.open({ title: t('columns') });
 
     const body = drawer.body;
-    body.innerHTML = '';
+    clear(body);
 
     const form = document.createElement('form');
     form.className = 'column-picker';
@@ -182,7 +183,7 @@ class CrapListSettings extends HTMLElement {
     drawer.open({ title: t('filters') });
 
     const body = drawer.body;
-    body.innerHTML = '';
+    clear(body);
 
     const container = document.createElement('div');
     container.className = 'filter-builder';
@@ -217,7 +218,7 @@ class CrapListSettings extends HTMLElement {
         const fm = fieldMetas.find((f) => f.key === fieldKey);
         const ft = fm ? fm.field_type : 'text';
         const ops = OPS_BY_TYPE[ft] || OPS_BY_TYPE.text;
-        opSelect.innerHTML = '';
+        clear(opSelect);
         for (const [val, label] of ops) {
           const opt = document.createElement('option');
           opt.value = val;
@@ -240,7 +241,7 @@ class CrapListSettings extends HTMLElement {
       const updateValue = () => {
         const fm = fieldMetas.find((f) => f.key === fieldSelect.value);
         if (!fm) return;
-        valueWrap.innerHTML = '';
+        clear(valueWrap);
         valueWrap.appendChild(this._buildValueInput(fm, opSelect.value, preset ? preset.value : ''));
       };
 
@@ -248,11 +249,11 @@ class CrapListSettings extends HTMLElement {
       opSelect.addEventListener('change', updateValue);
 
       // Remove button
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'button button--ghost button--small filter-builder__remove';
-      removeBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
-      removeBtn.addEventListener('click', () => row.remove());
+      const removeBtn = h('button', {
+        type: 'button',
+        class: ['button', 'button--ghost', 'button--small', 'filter-builder__remove'],
+        onClick: () => row.remove(),
+      }, h('span', { class: 'material-symbols-outlined', text: 'close' }));
 
       row.appendChild(fieldSelect);
       row.appendChild(opSelect);

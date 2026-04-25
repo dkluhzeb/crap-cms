@@ -13,6 +13,7 @@
  * @module focal-point
  */
 
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 const sheet = new CSSStyleSheet();
@@ -86,21 +87,13 @@ class CrapFocalPoint extends HTMLElement {
       child.remove();
     }
 
-    // Build shadow UI — use DOM API for src to prevent XSS via attribute injection
+    // Build shadow UI — use DOM API for src so attribute injection is impossible.
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <div class="focal-point">
-        <img alt="" />
-        <div class="marker"></div>
-      </div>
-      <p class="hint"></p>
-    `;
-    this.shadowRoot.querySelector('img').src = src;
-    this.shadowRoot.querySelector('.hint').textContent = t('focal_point_hint');
-
-    const img = this.shadowRoot.querySelector('img');
-    const marker = /** @type {HTMLElement} */ (
-      this.shadowRoot.querySelector('.marker')
+    const img = h('img', { alt: '', src });
+    const marker = h('div', { class: 'marker' });
+    this.shadowRoot.append(
+      h('div', { class: 'focal-point' }, img, marker),
+      h('p', { class: 'hint', text: t('focal_point_hint') }),
     );
 
     const rawX = parseFloat(this.dataset.focalX);

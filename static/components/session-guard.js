@@ -13,6 +13,7 @@
  * HTMX navigation (which may deliver fresh cookies from the server).
  */
 
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 const WARNING_SECONDS = 5 * 60;
@@ -102,17 +103,15 @@ class CrapSessionDialog extends HTMLElement {
 
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <dialog>
-        <div class="body">
-          <p></p>
-        </div>
-        <div class="actions">
-          <button class="logout" type="button">${t('log_out')}</button>
-          <button class="stay" type="button">${t('stay_logged_in')}</button>
-        </div>
-      </dialog>
-    `;
+    this.shadowRoot.append(
+      h('dialog', null,
+        h('div', { class: 'body' }, h('p')),
+        h('div', { class: 'actions' },
+          h('button', { class: 'logout', type: 'button', text: t('log_out') }),
+          h('button', { class: 'stay', type: 'button', text: t('stay_logged_in') }),
+        ),
+      ),
+    );
   }
 
   /**

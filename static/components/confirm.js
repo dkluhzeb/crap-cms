@@ -1,3 +1,4 @@
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 const sheet = new CSSStyleSheet();
@@ -101,18 +102,16 @@ class CrapConfirm extends HTMLElement {
 
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <slot></slot>
-      <dialog>
-        <div class="dialog__body">
-          <p></p>
-        </div>
-        <div class="dialog__actions">
-          <button class="btn-cancel" type="button">${t('cancel')}</button>
-          <button class="btn-confirm" type="button">${t('confirm')}</button>
-        </div>
-      </dialog>
-    `;
+    this.shadowRoot.append(
+      h('slot'),
+      h('dialog', null,
+        h('div', { class: 'dialog__body' }, h('p')),
+        h('div', { class: 'dialog__actions' },
+          h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') }),
+          h('button', { class: 'btn-confirm', type: 'button', text: t('confirm') }),
+        ),
+      ),
+    );
   }
 
   /** @returns {void} */

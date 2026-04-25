@@ -1,3 +1,4 @@
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 const sheet = new CSSStyleSheet();
@@ -114,19 +115,19 @@ class CrapDeleteDialog extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <dialog>
-        <div class="dialog__body">
-          <p class="dialog__title"></p>
-          <p class="dialog__message"></p>
-        </div>
-        <div class="dialog__actions">
-          <button class="btn-cancel" type="button">${t('cancel')}</button>
-          <button class="btn-soft" type="button" hidden>${t('move_to_trash')}</button>
-          <button class="btn-danger" type="button">${t('delete_permanently')}</button>
-        </div>
-      </dialog>
-    `;
+    this.shadowRoot.append(
+      h('dialog', null,
+        h('div', { class: 'dialog__body' },
+          h('p', { class: 'dialog__title' }),
+          h('p', { class: 'dialog__message' }),
+        ),
+        h('div', { class: 'dialog__actions' },
+          h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') }),
+          h('button', { class: 'btn-soft', type: 'button', hidden: true, text: t('move_to_trash') }),
+          h('button', { class: 'btn-danger', type: 'button', text: t('delete_permanently') }),
+        ),
+      ),
+    );
   }
 
   /** @returns {void} */

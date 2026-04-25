@@ -11,6 +11,8 @@
  * @module block-picker
  */
 
+import { h, clear } from './h.js';
+
 class CrapBlockPicker extends HTMLElement {
   constructor() {
     super();
@@ -22,10 +24,10 @@ class CrapBlockPicker extends HTMLElement {
     this._connected = true;
 
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <div class="picker"></div>
-      <slot></slot>
-    `;
+    this.shadowRoot.append(
+      h('div', { class: 'picker' }),
+      h('slot'),
+    );
 
     const select = /** @type {HTMLSelectElement|null} */ (
       this.querySelector('.form__blocks-select')
@@ -83,7 +85,7 @@ class CrapBlockPicker extends HTMLElement {
 
     if (groups.size === 0) return;
 
-    select.innerHTML = '';
+    clear(select);
     for (const opt of ungrouped) select.appendChild(opt);
     for (const [name, opts] of groups) {
       const optgroup = document.createElement('optgroup');

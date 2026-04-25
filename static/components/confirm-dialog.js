@@ -10,6 +10,7 @@
  *
  * Usage: Add `hx-confirm="Are you sure?"` to any HTMX-powered element.
  */
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 const sheet = new CSSStyleSheet();
@@ -79,17 +80,15 @@ class CrapConfirmDialog extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <dialog>
-        <div class="body">
-          <p></p>
-        </div>
-        <div class="actions">
-          <button class="cancel" type="button">${t('cancel')}</button>
-          <button class="confirm" type="button">${t('confirm')}</button>
-        </div>
-      </dialog>
-    `;
+    this.shadowRoot.append(
+      h('dialog', null,
+        h('div', { class: 'body' }, h('p')),
+        h('div', { class: 'actions' },
+          h('button', { class: 'cancel', type: 'button', text: t('cancel') }),
+          h('button', { class: 'confirm', type: 'button', text: t('confirm') }),
+        ),
+      ),
+    );
   }
 
   /**

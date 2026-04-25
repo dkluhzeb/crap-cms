@@ -127,6 +127,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Override authors who need `'unsafe-inline'` back (e.g. for a
   third-party library that requires it) can re-add it in their
   `[admin.csp]` config.
+- **Web Components migrated from `innerHTML` to `h()` builder** — every
+  Web Component under `static/components/` now constructs DOM via a
+  small ~45-line `h()` helper (`static/components/h.js`,
+  hyperscript-shape `h(tag, props, ...children)` matching the
+  Preact/Vue 3/Mithril convention) instead of HTML-string template
+  literals. Defense-in-depth against XSS for a CMS that, by definition,
+  handles user-contributed content: with `h()`, untrusted values can
+  only enter the DOM through `textContent` / `setAttribute`, both of
+  which the browser treats as data — there is no path that interprets
+  a string as markup. The previous `richtext.js` `_esc()` static
+  helper has been deleted: no caller remains. The two trust-boundary
+  sites that legitimately parse server-rendered HTML
+  (`create-panel.js` `DOMParser`, `richtext.js` ProseMirror init) are
+  preserved with explicit `// SAFETY: …` comment blocks naming the
+  trust assumption. Net diff: 39 `innerHTML` writes removed across 14
+  components; 1 deliberately-annotated parse site remains. JSDoc
+  generic `@template {keyof HTMLElementTagNameMap} K` propagates the
+  correct element type to tsserver, so `h('button', {})` narrows to
+  `HTMLButtonElement` in IDE hover.
 
 ### Added
 

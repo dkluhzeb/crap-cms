@@ -18,6 +18,7 @@
  * @module validate-form
  */
 
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 class CrapValidateForm extends HTMLElement {
@@ -260,10 +261,14 @@ class CrapValidateForm extends HTMLElement {
         // Add error badge if not already present
         const header = row.querySelector('.form__array-row-header');
         if (header && !header.querySelector('.form__array-row-error-badge')) {
-          const badge = document.createElement('span');
-          badge.className = 'form__array-row-error-badge';
-          badge.setAttribute('data-validate-error', '');
-          badge.innerHTML = '<span class="material-symbols-outlined icon--sm" aria-hidden="true">error</span>';
+          const badge = h('span', {
+            class: 'form__array-row-error-badge',
+            'data-validate-error': '',
+          }, h('span', {
+            class: ['material-symbols-outlined', 'icon--sm'],
+            'aria-hidden': 'true',
+            text: 'error',
+          }));
           // Insert after the toggle button
           const toggle = header.querySelector('.form__array-row-toggle');
           if (toggle) toggle.after(badge);

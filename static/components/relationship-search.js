@@ -20,6 +20,7 @@
  *   data-error     — boolean attribute for error styling
  */
 
+import { h, clear } from './h.js';
 import { t } from './i18n.js';
 
 const DEBOUNCE_MS = 250;
@@ -79,60 +80,54 @@ class CrapRelationshipSearch extends HTMLElement {
     } catch { /* empty */ }
 
     // Build the DOM
-    this.innerHTML = '';
+    clear(this);
 
     // Hidden input(s) for form submission
-    const hiddenContainer = document.createElement('div');
-    hiddenContainer.className = 'relationship-search__hidden';
-    this.appendChild(hiddenContainer);
+    const hiddenContainer = h('div', { class: 'relationship-search__hidden' });
 
-    // Search input
-    const inputWrapper = document.createElement('div');
-    inputWrapper.className = 'relationship-search__input-wrapper';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.id = 'field-' + fieldName;
-    input.autocomplete = 'off';
-    input.setAttribute('role', 'combobox');
-    input.setAttribute('aria-expanded', 'false');
-    input.setAttribute('aria-autocomplete', 'list');
-    input.setAttribute('aria-controls', 'dropdown-' + fieldName);
-    if (readonly) input.disabled = true;
+    // Search input — class set per branch below.
+    const input = h('input', {
+      type: 'text',
+      id: 'field-' + fieldName,
+      autocomplete: 'off',
+      role: 'combobox',
+      'aria-expanded': 'false',
+      'aria-autocomplete': 'list',
+      'aria-controls': 'dropdown-' + fieldName,
+      disabled: readonly,
+    });
 
-    // Has-many: tag-style container with chips + inline input
+    /** @type {HTMLDivElement} */
+    let inputWrapper;
     if (hasMany) {
-      const tagsContainer = document.createElement('div');
-      tagsContainer.className = 'relationship-search__tags' + (this.hasAttribute('data-error') ? ' relationship-search__tags--error' : '');
-
-      const chipsContainer = document.createElement('div');
-      chipsContainer.className = 'relationship-search__chips';
-      tagsContainer.appendChild(chipsContainer);
-
       input.className = 'relationship-search__tags-input';
       input.placeholder = t('search_to_add');
-      tagsContainer.appendChild(input);
 
-      // Click on container focuses input
-      tagsContainer.addEventListener('click', (e) => {
-        if (/** @type {HTMLElement} */ (e.target) === tagsContainer) input.focus();
-      });
+      const tagsContainer = h('div', {
+        class: ['relationship-search__tags', this.hasAttribute('data-error') && 'relationship-search__tags--error'],
+        onClick: (e) => {
+          if (/** @type {HTMLElement} */ (e.target) === tagsContainer) input.focus();
+        },
+      },
+        h('div', { class: 'relationship-search__chips' }),
+        input,
+      );
 
-      inputWrapper.appendChild(tagsContainer);
+      inputWrapper = h('div', { class: 'relationship-search__input-wrapper' }, tagsContainer);
     } else {
       input.className = 'relationship-search__input' + errorClass;
       input.placeholder = t('search');
-      inputWrapper.appendChild(input);
+      inputWrapper = h('div', { class: 'relationship-search__input-wrapper' }, input);
     }
 
-    this.appendChild(inputWrapper);
+    const dropdown = h('div', {
+      class: 'relationship-search__dropdown',
+      id: 'dropdown-' + fieldName,
+      role: 'listbox',
+      style: { display: 'none' },
+    });
 
-    // Dropdown
-    const dropdown = document.createElement('div');
-    dropdown.className = 'relationship-search__dropdown';
-    dropdown.id = 'dropdown-' + fieldName;
-    dropdown.setAttribute('role', 'listbox');
-    dropdown.style.display = 'none';
-    this.appendChild(dropdown);
+    this.append(hiddenContainer, inputWrapper, dropdown);
 
     let debounceTimer = null;
     let activeIndex = -1;
@@ -142,7 +137,7 @@ class CrapRelationshipSearch extends HTMLElement {
     let results = [];
 
     function syncHiddenInputs() {
-      hiddenContainer.innerHTML = '';
+      clear(hiddenContainer);
       if (hasMany) {
         const hidden = document.createElement('input');
         hidden.type = 'hidden';
@@ -193,32 +188,30 @@ class CrapRelationshipSearch extends HTMLElement {
     function renderChips() {
       const chipsContainer = self.querySelector('.relationship-search__chips');
       if (!chipsContainer) return;
-      chipsContainer.innerHTML = '';
-      selected.forEach((item) => {
-        const chip = document.createElement('span');
-        chip.className = 'relationship-search__chip';
-        // Show collection tag for polymorphic
+      clear(chipsContainer);
+      for (const item of selected) {
+        const chip = h('span', { class: 'relationship-search__chip' });
         if (polymorphic && item.collection) {
-          const tag = document.createElement('span');
-          tag.className = 'relationship-search__chip-collection';
-          tag.textContent = item.collection;
-          chip.appendChild(tag);
+          chip.append(h('span', {
+            class: 'relationship-search__chip-collection',
+            text: item.collection,
+          }));
         }
-        chip.appendChild(document.createTextNode(item.label));
+        chip.append(item.label);
         if (!readonly) {
-          const removeBtn = document.createElement('button');
-          removeBtn.type = 'button';
-          removeBtn.className = 'relationship-search__chip-remove';
-          removeBtn.textContent = '\u00d7';
-          removeBtn.addEventListener('click', () => {
-            selected = selected.filter((s) => s.id !== item.id);
-            renderChips();
-            syncHiddenInputs();
-          });
-          chip.appendChild(removeBtn);
+          chip.append(h('button', {
+            type: 'button',
+            class: 'relationship-search__chip-remove',
+            text: '\u00d7',
+            onClick: () => {
+              selected = selected.filter((s) => s.id !== item.id);
+              renderChips();
+              syncHiddenInputs();
+            },
+          }));
         }
-        chipsContainer.appendChild(chip);
-      });
+        chipsContainer.append(chip);
+      }
 
       // Toggle error class on tags container
       const tagsContainer = self.querySelector('.relationship-search__tags');
@@ -241,38 +234,39 @@ class CrapRelationshipSearch extends HTMLElement {
     }
 
     function renderDropdown() {
-      dropdown.innerHTML = '';
+      clear(dropdown);
       if (results.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'relationship-search__empty';
-        empty.textContent = t('no_results');
-        dropdown.appendChild(empty);
+        dropdown.append(h('div', {
+          class: 'relationship-search__empty',
+          text: t('no_results'),
+        }));
       } else {
         let currentGroup = null;
         results.forEach((item, idx) => {
           // Group header for polymorphic results
           if (polymorphic && item.collection && item.collection !== currentGroup) {
             currentGroup = item.collection;
-            const header = document.createElement('div');
-            header.className = 'relationship-search__group-header';
-            header.textContent = item.collection;
-            dropdown.appendChild(header);
+            dropdown.append(h('div', {
+              class: 'relationship-search__group-header',
+              text: item.collection,
+            }));
           }
 
-          const option = document.createElement('div');
-          option.className = 'relationship-search__option';
-          option.setAttribute('role', 'option');
-          if (idx === activeIndex) option.classList.add('relationship-search__option--active');
-
+          const isActive = idx === activeIndex;
           const isSelected = selected.some((s) => s.id === item.id);
-          if (isSelected) option.classList.add('relationship-search__option--selected');
-
-          option.textContent = item.label;
-          option.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            selectItem(item);
-          });
-          dropdown.appendChild(option);
+          dropdown.append(h('div', {
+            class: [
+              'relationship-search__option',
+              isActive && 'relationship-search__option--active',
+              isSelected && 'relationship-search__option--selected',
+            ],
+            role: 'option',
+            text: item.label,
+            onMousedown: (e) => {
+              e.preventDefault();
+              selectItem(item);
+            },
+          }));
         });
       }
       dropdown.style.display = '';
@@ -298,7 +292,7 @@ class CrapRelationshipSearch extends HTMLElement {
     function closeDropdown() {
       searchGen++;
       dropdown.style.display = 'none';
-      dropdown.innerHTML = '';
+      clear(dropdown);
       results = [];
       activeIndex = -1;
       input.setAttribute('aria-expanded', 'false');
@@ -609,7 +603,7 @@ class CrapRelationshipSearch extends HTMLElement {
       fetchController = new AbortController();
 
       if (!append) {
-        results.innerHTML = '';
+        clear(results);
         currentOffset = 0;
       }
 

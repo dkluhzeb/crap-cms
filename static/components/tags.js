@@ -12,6 +12,8 @@
  * @module tags
  */
 
+import { h } from './h.js';
+
 class CrapTags extends HTMLElement {
   constructor() {
     super();
@@ -51,24 +53,24 @@ class CrapTags extends HTMLElement {
 
     // Build shadow UI
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <div class="tags${hasError ? ' tags--error' : ''}" id="container">
-        <input
-          class="tags__input"
-          type="${this._fieldType === 'number' ? 'number' : 'text'}"
-          placeholder="${this.dataset.placeholder || ''}"
-          ${this.dataset.minLength ? `minlength="${this.dataset.minLength}"` : ''}
-          ${this.dataset.maxLength ? `maxlength="${this.dataset.maxLength}"` : ''}
-          ${this._fieldType === 'number' && this.dataset.min ? `min="${this.dataset.min}"` : ''}
-          ${this._fieldType === 'number' && this.dataset.max ? `max="${this.dataset.max}"` : ''}
-        />
-      </div>
-    `;
+    const isNumber = this._fieldType === 'number';
+    const input = h('input', {
+      class: 'tags__input',
+      type: isNumber ? 'number' : 'text',
+      placeholder: this.dataset.placeholder || '',
+      minlength: this.dataset.minLength,
+      maxlength: this.dataset.maxLength,
+      min: isNumber ? this.dataset.min : undefined,
+      max: isNumber ? this.dataset.max : undefined,
+    });
+    const container = h('div', {
+      class: ['tags', hasError && 'tags--error'],
+      id: 'container',
+    }, input);
+    this.shadowRoot.append(container);
 
-    this._container = this.shadowRoot.getElementById('container');
-    this._input = /** @type {HTMLInputElement} */ (
-      this.shadowRoot.querySelector('.tags__input')
-    );
+    this._container = container;
+    this._input = input;
     this._hidden = hidden;
 
     this._renderChips();
@@ -145,11 +147,12 @@ class CrapTags extends HTMLElement {
       chip.textContent = value;
 
       if (!this._readonly) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'chip__remove';
-        btn.setAttribute('aria-label', 'Remove');
-        btn.innerHTML = '&times;';
+        const btn = h('button', {
+          type: 'button',
+          class: 'chip__remove',
+          'aria-label': 'Remove',
+          text: '×',
+        });
         btn.addEventListener('click', () => {
           this._values = this._values.filter((v) => v !== value);
           this._sync();

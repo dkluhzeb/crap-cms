@@ -1,3 +1,4 @@
+import { h } from './h.js';
 import { t } from './i18n.js';
 
 /**
@@ -28,21 +29,199 @@ import { t } from './i18n.js';
  *   <textarea name="content" hidden>...</textarea>
  * </crap-richtext>
  */
-class CrapRichtext extends HTMLElement {
-  /**
-   * Escape a value for safe interpolation into HTML template strings.
-   * @param {*} val
-   * @returns {string}
-   */
-  static _esc(val) {
-    return String(val ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+
+/**
+ * Build a single field element for the custom-node edit modal.
+ *
+ * The schema-driven field renderer used to interpolate every value through
+ * `_esc()` into `innerHTML` strings — that's the bug class we're closing.
+ * Here every value flows through `setAttribute` / `textContent`, so HTML
+ * injection is unwriteable regardless of what `attrs[a.name]` contains.
+ *
+ * @param {{ name: string, label: string }} nodeDef
+ * @param {Record<string, any>} attrs - current attribute values (user data)
+ * @param {{ name: string, type: string, label: string, required?: boolean, readonly?: boolean,
+ *           default?: any, placeholder?: string, description?: string, width?: string,
+ *           min?: any, max?: any, step?: any, min_length?: any, max_length?: any,
+ *           min_date?: string, max_date?: string, language?: string, rows?: number,
+ *           picker_appearance?: string, options?: Array<{value: string, label: string}> }} a
+ * @returns {HTMLDivElement}
+ */
+function buildNodeField(nodeDef, attrs, a) {
+  const val = attrs[a.name] ?? a.default ?? '';
+  const inputId = `crap-node-${nodeDef.name}-${a.name}`;
+  const ro = !!a.readonly;
+  const req = !!a.required;
+  const ph = a.placeholder || undefined;
+
+  /** @type {HTMLElement} */
+  let input;
+  switch (a.type) {
+    case 'textarea':
+      input = h('textarea', {
+        class: 'crap-node-modal__input',
+        id: inputId,
+        dataset: { attr: a.name },
+        rows: a.rows || 3,
+        placeholder: ph,
+        required: req,
+        readonly: ro,
+        disabled: ro,
+        minlength: a.min_length,
+        maxlength: a.max_length,
+      }, String(val));
+      break;
+    case 'checkbox':
+      input = h('label', { class: 'crap-node-modal__checkbox' },
+        h('input', {
+          type: 'checkbox',
+          id: inputId,
+          dataset: { attr: a.name },
+          checked: !!val,
+          readonly: ro,
+          disabled: ro,
+        }),
+        ` ${a.label}`,
+      );
+      break;
+    case 'select':
+      input = h('select', {
+        class: 'crap-node-modal__input',
+        id: inputId,
+        dataset: { attr: a.name },
+        required: req,
+        readonly: ro,
+        disabled: ro,
+      }, ...(a.options || []).map(o =>
+        h('option', { value: o.value, selected: o.value === val, text: o.label }),
+      ));
+      break;
+    case 'radio':
+      input = h('div', { class: 'crap-node-modal__radio-group', dataset: { attr: a.name } },
+        ...(a.options || []).map((o, i) =>
+          h('label', { class: 'crap-node-modal__radio' },
+            h('input', {
+              type: 'radio',
+              id: `${inputId}-${i}`,
+              name: `node-attr-${a.name}`,
+              value: o.value,
+              checked: o.value === val,
+              readonly: ro,
+              disabled: ro,
+            }),
+            ` ${o.label}`,
+          ),
+        ),
+      );
+      break;
+    case 'number':
+      input = h('input', {
+        type: 'number',
+        class: 'crap-node-modal__input',
+        id: inputId,
+        dataset: { attr: a.name },
+        value: val,
+        placeholder: ph,
+        required: req,
+        readonly: ro,
+        disabled: ro,
+        min: a.min,
+        max: a.max,
+        step: a.step,
+      });
+      break;
+    case 'email':
+      input = h('input', {
+        type: 'email',
+        class: 'crap-node-modal__input',
+        id: inputId,
+        dataset: { attr: a.name },
+        value: val,
+        placeholder: ph,
+        required: req,
+        readonly: ro,
+        disabled: ro,
+        minlength: a.min_length,
+        maxlength: a.max_length,
+      });
+      break;
+    case 'date': {
+      let dateInputType = 'date';
+      if (a.picker_appearance === 'dayAndTime') dateInputType = 'datetime-local';
+      else if (a.picker_appearance === 'timeOnly') dateInputType = 'time';
+      else if (a.picker_appearance === 'monthOnly') dateInputType = 'month';
+      input = h('input', {
+        type: dateInputType,
+        class: 'crap-node-modal__input',
+        id: inputId,
+        dataset: { attr: a.name },
+        value: val,
+        required: req,
+        readonly: ro,
+        disabled: ro,
+        min: a.min_date,
+        max: a.max_date,
+      });
+      break;
+    }
+    case 'code':
+    case 'json':
+      input = h('textarea', {
+        class: ['crap-node-modal__input', 'crap-node-modal__input--mono'],
+        id: inputId,
+        dataset: { attr: a.name },
+        rows: a.rows || 4,
+        placeholder: ph,
+        required: req,
+        readonly: ro,
+        disabled: ro,
+        minlength: a.min_length,
+        maxlength: a.max_length,
+      }, String(val));
+      break;
+    default:
+      input = h('input', {
+        type: 'text',
+        class: 'crap-node-modal__input',
+        id: inputId,
+        dataset: { attr: a.name },
+        value: val,
+        placeholder: ph,
+        required: req,
+        readonly: ro,
+        disabled: ro,
+        minlength: a.min_length,
+        maxlength: a.max_length,
+      });
   }
 
+  const desc = a.description
+    ? h('p', { class: 'crap-node-modal__help', text: a.description })
+    : null;
+  const wrapper = h('div', {
+    class: 'crap-node-modal__field',
+    dataset: a.width ? { fieldWidth: a.width } : undefined,
+  });
+
+  if (a.type === 'checkbox') {
+    wrapper.append(input);
+    if (desc) wrapper.append(desc);
+  } else {
+    const langSuffix = a.language ? ` (${a.language})` : '';
+    wrapper.append(
+      h('label', {
+        class: 'crap-node-modal__label',
+        for: inputId,
+        text: `${a.label}${langSuffix}${a.required ? ' *' : ''}`,
+      }),
+      input,
+    );
+    if (desc) wrapper.append(desc);
+  }
+  return wrapper;
+}
+
+class CrapRichtext extends HTMLElement {
   constructor() {
     super();
 
@@ -300,14 +479,15 @@ class CrapRichtext extends HTMLElement {
 
     // Render Shadow DOM
     this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.innerHTML = `
-      <div class="richtext${this.hasAttribute('data-no-resize') ? ' richtext--no-resize' : ''}">
-        ${isReadonly ? '' : `<div class="richtext__toolbar">${CrapRichtext._toolbarHTML(has, customNodes)}</div>`}
-        <div class="richtext__editor"></div>
-      </div>
-    `;
-
-    const editorEl = this.shadowRoot.querySelector('.richtext__editor');
+    const editorEl = h('div', { class: 'richtext__editor' });
+    const toolbar = isReadonly
+      ? null
+      : h('div', { class: 'richtext__toolbar' }, ...CrapRichtext._toolbarNodes(has, customNodes));
+    this.shadowRoot.append(
+      h('div', {
+        class: ['richtext', this.hasAttribute('data-no-resize') && 'richtext--no-resize'],
+      }, toolbar, editorEl),
+    );
 
     // Store custom node defs on instance for toolbar/modal use
     /** @type {typeof customNodes} */
@@ -570,42 +750,97 @@ class CrapRichtext extends HTMLElement {
     const isEdit = !!attrs.href;
     const savedSelection = this._view.state.selection;
 
-    const modal = document.createElement('dialog');
-    modal.className = 'crap-node-modal';
-    modal.setAttribute('aria-labelledby', 'crap-link-modal-heading');
+    const modal = h('dialog', {
+      class: 'crap-node-modal',
+      'aria-labelledby': 'crap-link-modal-heading',
+    });
 
-    modal.innerHTML = `
-      <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header" id="crap-link-modal-heading">${isEdit ? t('edit_link') : t('insert_link')}</div>
-        <div class="crap-node-modal__body">
-          <div class="crap-node-modal__field">
-            <label class="crap-node-modal__label" for="crap-link-href">${t('link_url')} *</label>
-            <input type="url" class="crap-node-modal__input" id="crap-link-href" data-field="href" value="${CrapRichtext._esc(attrs.href || '')}" required>
-          </div>
-          <div class="crap-node-modal__field">
-            <label class="crap-node-modal__label" for="crap-link-title">${t('link_title')}</label>
-            <input type="text" class="crap-node-modal__input" id="crap-link-title" data-field="title" value="${CrapRichtext._esc(attrs.title || '')}">
-          </div>
-          <div class="crap-node-modal__field">
-            <label class="crap-node-modal__checkbox">
-              <input type="checkbox" data-field="target" ${attrs.target === '_blank' ? 'checked' : ''}>
-              ${t('link_open_new_tab')}
-            </label>
-          </div>
-          <div class="crap-node-modal__field">
-            <label class="crap-node-modal__checkbox">
-              <input type="checkbox" data-field="rel" ${attrs.rel && attrs.rel.includes('nofollow') ? 'checked' : ''}>
-              ${t('link_nofollow')}
-            </label>
-          </div>
-        </div>
-        <div class="crap-node-modal__footer${isEdit ? ' crap-node-modal__footer--with-remove' : ''}">
-          ${isEdit ? `<button type="button" class="crap-node-modal__btn crap-node-modal__btn--danger">${t('remove_link')}</button>` : ''}
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">${t('cancel')}</button>
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--ok">${t('apply')}</button>
-        </div>
-      </div>
-    `;
+    const fieldRow = (/** @type {Node[]} */ ...children) =>
+      h('div', { class: 'crap-node-modal__field' }, ...children);
+
+    /** @type {HTMLElement[]} */
+    const footerButtons = [];
+    if (isEdit) {
+      footerButtons.push(h('button', {
+        type: 'button',
+        class: ['crap-node-modal__btn', 'crap-node-modal__btn--danger'],
+        text: t('remove_link'),
+      }));
+    }
+    footerButtons.push(h('button', {
+      type: 'button',
+      class: ['crap-node-modal__btn', 'crap-node-modal__btn--cancel'],
+      text: t('cancel'),
+    }));
+    footerButtons.push(h('button', {
+      type: 'button',
+      class: ['crap-node-modal__btn', 'crap-node-modal__btn--ok'],
+      text: t('apply'),
+    }));
+
+    modal.append(
+      h('div', { class: 'crap-node-modal__dialog' },
+        h('div', {
+          class: 'crap-node-modal__header',
+          id: 'crap-link-modal-heading',
+          text: isEdit ? t('edit_link') : t('insert_link'),
+        }),
+        h('div', { class: 'crap-node-modal__body' },
+          fieldRow(
+            h('label', {
+              class: 'crap-node-modal__label',
+              for: 'crap-link-href',
+              text: `${t('link_url')} *`,
+            }),
+            h('input', {
+              type: 'url',
+              class: 'crap-node-modal__input',
+              id: 'crap-link-href',
+              dataset: { field: 'href' },
+              value: attrs.href || '',
+              required: true,
+            }),
+          ),
+          fieldRow(
+            h('label', {
+              class: 'crap-node-modal__label',
+              for: 'crap-link-title',
+              text: t('link_title'),
+            }),
+            h('input', {
+              type: 'text',
+              class: 'crap-node-modal__input',
+              id: 'crap-link-title',
+              dataset: { field: 'title' },
+              value: attrs.title || '',
+            }),
+          ),
+          fieldRow(
+            h('label', { class: 'crap-node-modal__checkbox' },
+              h('input', {
+                type: 'checkbox',
+                dataset: { field: 'target' },
+                checked: attrs.target === '_blank',
+              }),
+              ` ${t('link_open_new_tab')}`,
+            ),
+          ),
+          fieldRow(
+            h('label', { class: 'crap-node-modal__checkbox' },
+              h('input', {
+                type: 'checkbox',
+                dataset: { field: 'rel' },
+                checked: !!(attrs.rel && attrs.rel.includes('nofollow')),
+              }),
+              ` ${t('link_nofollow')}`,
+            ),
+          ),
+        ),
+        h('div', {
+          class: ['crap-node-modal__footer', isEdit && 'crap-node-modal__footer--with-remove'],
+        }, ...footerButtons),
+      ),
+    );
 
     this.shadowRoot.appendChild(modal);
     modal.showModal();
@@ -736,100 +971,42 @@ class CrapRichtext extends HTMLElement {
     const existing = this.shadowRoot.querySelector('.crap-node-modal');
     if (existing) existing.remove();
 
-    const modal = document.createElement('dialog');
-    modal.className = 'crap-node-modal';
-    modal.setAttribute('aria-labelledby', 'crap-node-modal-heading');
+    const modal = h('dialog', {
+      class: 'crap-node-modal',
+      'aria-labelledby': 'crap-node-modal-heading',
+    });
 
-    const esc = CrapRichtext._esc;
-    const formFields = (nodeDef.attrs || []).filter(a => !a.hidden).map(a => {
-      const val = attrs[a.name] ?? a.default ?? '';
-      const eVal = esc(val);
-      const ph = a.placeholder ? ` placeholder="${esc(a.placeholder)}"` : '';
-      const req = a.required ? ' required' : '';
-      const ro = a.readonly ? ' readonly disabled' : '';
-      const widthAttr = a.width ? ` data-field-width="${esc(a.width)}"` : '';
-      const inputId = `crap-node-${esc(nodeDef.name)}-${esc(a.name)}`;
+    const formFields = (nodeDef.attrs || [])
+      .filter(a => !a.hidden)
+      .map(a => buildNodeField(nodeDef, attrs, a));
 
-      // Numeric bounds
-      const minAttr = a.min != null ? ` min="${esc(a.min)}"` : '';
-      const maxAttr = a.max != null ? ` max="${esc(a.max)}"` : '';
-      const stepAttr = a.step ? ` step="${esc(a.step)}"` : '';
-
-      // Text length bounds
-      const minLen = a.min_length != null ? ` minlength="${esc(a.min_length)}"` : '';
-      const maxLen = a.max_length != null ? ` maxlength="${esc(a.max_length)}"` : '';
-
-      // Date bounds
-      const minDate = a.min_date ? ` min="${esc(a.min_date)}"` : '';
-      const maxDate = a.max_date ? ` max="${esc(a.max_date)}"` : '';
-
-      // Language label suffix for code fields
-      const langSuffix = a.language ? ` (${esc(a.language)})` : '';
-
-      // Textarea rows (configurable, default 3 for textarea, 4 for code/json)
-      const textareaRows = a.rows || 3;
-      const codeRows = a.rows || 4;
-
-      // Date input type from picker_appearance
-      let dateInputType = 'date';
-      if (a.picker_appearance === 'dayAndTime') dateInputType = 'datetime-local';
-      else if (a.picker_appearance === 'timeOnly') dateInputType = 'time';
-      else if (a.picker_appearance === 'monthOnly') dateInputType = 'month';
-
-      let input;
-      switch (a.type) {
-        case 'textarea':
-          input = `<textarea class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" rows="${textareaRows}"${ph}${req}${ro}${minLen}${maxLen}>${eVal}</textarea>`;
-          break;
-        case 'checkbox':
-          input = `<label class="crap-node-modal__checkbox"><input type="checkbox" id="${inputId}" data-attr="${esc(a.name)}"${val ? ' checked' : ''}${ro}> ${esc(a.label)}</label>`;
-          break;
-        case 'select':
-          input = `<select class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}"${req}${ro}>
-            ${(a.options || []).map(o => `<option value="${esc(o.value)}"${o.value === val ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
-          </select>`;
-          break;
-        case 'radio':
-          input = `<div class="crap-node-modal__radio-group" data-attr="${esc(a.name)}">
-            ${(a.options || []).map((o, i) => `<label class="crap-node-modal__radio"><input type="radio" id="${inputId}-${i}" name="node-attr-${esc(a.name)}" value="${esc(o.value)}"${o.value === val ? ' checked' : ''}${ro}> ${esc(o.label)}</label>`).join('')}
-          </div>`;
-          break;
-        case 'number':
-          input = `<input type="number" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minAttr}${maxAttr}${stepAttr}>`;
-          break;
-        case 'email':
-          input = `<input type="email" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minLen}${maxLen}>`;
-          break;
-        case 'date':
-          input = `<input type="${dateInputType}" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${req}${ro}${minDate}${maxDate}>`;
-          break;
-        case 'code':
-        case 'json':
-          input = `<textarea class="crap-node-modal__input crap-node-modal__input--mono" id="${inputId}" data-attr="${esc(a.name)}" rows="${codeRows}"${ph}${req}${ro}${minLen}${maxLen}>${eVal}</textarea>`;
-          break;
-        default:
-          input = `<input type="text" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minLen}${maxLen}>`;
-      }
-      const desc = a.description ? `<p class="crap-node-modal__help">${esc(a.description)}</p>` : '';
-      const label = esc(a.label) + langSuffix;
-      if (a.type === 'checkbox') return `<div class="crap-node-modal__field"${widthAttr}>${input}${desc}</div>`;
-      return `<div class="crap-node-modal__field"${widthAttr}><label class="crap-node-modal__label" for="${inputId}">${label}${a.required ? ' *' : ''}</label>${input}${desc}</div>`;
-    }).join('');
-
-    modal.innerHTML = `
-      <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header" id="crap-node-modal-heading">${CrapRichtext._esc(nodeDef.label)}</div>
-        <div class="crap-node-modal__body">${formFields}</div>
-        <div class="crap-node-modal__footer">
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">${t('cancel')}</button>
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--ok">${t('ok')}</button>
-        </div>
-      </div>
-    `;
+    modal.append(
+      h('div', { class: 'crap-node-modal__dialog' },
+        h('div', {
+          class: 'crap-node-modal__header',
+          id: 'crap-node-modal-heading',
+          text: nodeDef.label,
+        }),
+        h('div', { class: 'crap-node-modal__body' }, ...formFields),
+        h('div', { class: 'crap-node-modal__footer' },
+          h('button', {
+            type: 'button',
+            class: ['crap-node-modal__btn', 'crap-node-modal__btn--cancel'],
+            text: t('cancel'),
+          }),
+          h('button', {
+            type: 'button',
+            class: ['crap-node-modal__btn', 'crap-node-modal__btn--ok'],
+            text: t('ok'),
+          }),
+        ),
+      ),
+    );
 
     this.shadowRoot.appendChild(modal);
 
-    // Apply per-field widths (CSP: programmatic style is exempt; `style="..."` in innerHTML isn't)
+    // Apply per-field widths programmatically (style attribute would need
+    // escaping; data-attr + JS sidesteps that and is CSP-style-src-clean).
     for (const fieldEl of modal.querySelectorAll('[data-field-width]')) {
       fieldEl.style.width = fieldEl.dataset.fieldWidth;
     }
@@ -993,61 +1170,69 @@ class CrapRichtext extends HTMLElement {
   }
 
   /**
-   * Generate toolbar button HTML based on enabled features.
+   * Generate toolbar group nodes based on enabled features.
    * @param {(name: string) => boolean} has - feature check
    * @param {Array<{name: string, label: string}>} [customNodes] - custom node defs
-   * @returns {string}
+   * @returns {HTMLElement[]}
    */
-  static _toolbarHTML(has, customNodes) {
-    let html = '';
+  static _toolbarNodes(has, customNodes) {
+    /** @type {HTMLElement[]} */
+    const groups = [];
+
+    /**
+     * @param {string} cmd
+     * @param {string} title
+     * @param {Node | string} content
+     */
+    const btn = (cmd, title, content) =>
+      h('button', { type: 'button', dataset: { cmd }, title }, content);
+
+    const group = (/** @type {HTMLElement[]} */ buttons) =>
+      h('div', { class: 'richtext__toolbar-group' }, ...buttons);
 
     // Inline marks group
+    /** @type {HTMLElement[]} */
     const inlineButtons = [];
-    if (has('bold')) inlineButtons.push('<button type="button" data-cmd="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>');
-    if (has('italic')) inlineButtons.push('<button type="button" data-cmd="italic" title="Italic (Ctrl+I)"><em>I</em></button>');
-    if (has('code')) inlineButtons.push('<button type="button" data-cmd="code" title="Inline code (Ctrl+`)"><code>&lt;/&gt;</code></button>');
-    if (has('link')) inlineButtons.push('<button type="button" data-cmd="link" title="Link">Link</button>');
-    if (inlineButtons.length > 0) {
-      html += `<div class="richtext__toolbar-group">${inlineButtons.join('')}</div>`;
-    }
+    if (has('bold')) inlineButtons.push(btn('bold', 'Bold (Ctrl+B)', h('strong', { text: 'B' })));
+    if (has('italic')) inlineButtons.push(btn('italic', 'Italic (Ctrl+I)', h('em', { text: 'I' })));
+    if (has('code')) inlineButtons.push(btn('code', 'Inline code (Ctrl+`)', h('code', { text: '</>' })));
+    if (has('link')) inlineButtons.push(btn('link', 'Link', 'Link'));
+    if (inlineButtons.length > 0) groups.push(group(inlineButtons));
 
     // Block type group
+    /** @type {HTMLElement[]} */
     const blockButtons = [];
     if (has('heading')) {
-      blockButtons.push('<button type="button" data-cmd="h1" title="Heading 1">H1</button>');
-      blockButtons.push('<button type="button" data-cmd="h2" title="Heading 2">H2</button>');
-      blockButtons.push('<button type="button" data-cmd="h3" title="Heading 3">H3</button>');
-      blockButtons.push('<button type="button" data-cmd="paragraph" title="Paragraph">P</button>');
+      blockButtons.push(btn('h1', 'Heading 1', 'H1'));
+      blockButtons.push(btn('h2', 'Heading 2', 'H2'));
+      blockButtons.push(btn('h3', 'Heading 3', 'H3'));
+      blockButtons.push(btn('paragraph', 'Paragraph', 'P'));
     }
-    if (blockButtons.length > 0) {
-      html += `<div class="richtext__toolbar-group">${blockButtons.join('')}</div>`;
-    }
+    if (blockButtons.length > 0) groups.push(group(blockButtons));
 
     // List/block group
+    /** @type {HTMLElement[]} */
     const listButtons = [];
-    if (has('bulletList')) listButtons.push('<button type="button" data-cmd="ul" title="Bullet list">UL</button>');
-    if (has('orderedList')) listButtons.push('<button type="button" data-cmd="ol" title="Ordered list">OL</button>');
-    if (has('blockquote')) listButtons.push('<button type="button" data-cmd="blockquote" title="Blockquote">Quote</button>');
-    if (has('horizontalRule')) listButtons.push('<button type="button" data-cmd="hr" title="Horizontal rule">HR</button>');
-    if (listButtons.length > 0) {
-      html += `<div class="richtext__toolbar-group">${listButtons.join('')}</div>`;
-    }
+    if (has('bulletList')) listButtons.push(btn('ul', 'Bullet list', 'UL'));
+    if (has('orderedList')) listButtons.push(btn('ol', 'Ordered list', 'OL'));
+    if (has('blockquote')) listButtons.push(btn('blockquote', 'Blockquote', 'Quote'));
+    if (has('horizontalRule')) listButtons.push(btn('hr', 'Horizontal rule', 'HR'));
+    if (listButtons.length > 0) groups.push(group(listButtons));
 
     // Custom node insert buttons
     if (customNodes && customNodes.length > 0) {
-      const insertButtons = customNodes.map(nd =>
-        `<button type="button" data-cmd="insert-${CrapRichtext._esc(nd.name)}" title="Insert ${CrapRichtext._esc(nd.label)}">${CrapRichtext._esc(nd.label)}</button>`
-      ).join('');
-      html += `<div class="richtext__toolbar-group">${insertButtons}</div>`;
+      groups.push(group(
+        customNodes.map(nd => btn(`insert-${nd.name}`, `Insert ${nd.label}`, nd.label)),
+      ));
     }
 
     // Undo/redo always present
-    html += `<div class="richtext__toolbar-group">
-      <button type="button" data-cmd="undo" title="Undo (Ctrl+Z)">Undo</button>
-      <button type="button" data-cmd="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
-    </div>`;
+    groups.push(group([
+      btn('undo', 'Undo (Ctrl+Z)', 'Undo'),
+      btn('redo', 'Redo (Ctrl+Shift+Z)', 'Redo'),
+    ]));
 
-    return html;
+    return groups;
   }
 
   /**
@@ -1546,18 +1731,17 @@ class CustomNodeView {
   }
 
   _render() {
-    const esc = CrapRichtext._esc;
-    const label = esc(this.nodeDef.label || this.nodeDef.name);
-    const attrSummary = esc(
-      (this.nodeDef.attrs || [])
-        .slice(0, 3)
-        .map(a => this.node.attrs[a.name])
-        .filter(v => v != null && v !== '')
-        .join(' | ')
-    );
-    this.dom.innerHTML =
-      `<span class="crap-custom-node__label">${label}</span>` +
-      (attrSummary ? `<span class="crap-custom-node__attrs">${attrSummary}</span>` : '');
+    const label = this.nodeDef.label || this.nodeDef.name;
+    const attrSummary = (this.nodeDef.attrs || [])
+      .slice(0, 3)
+      .map(a => this.node.attrs[a.name])
+      .filter(v => v != null && v !== '')
+      .join(' | ');
+    const children = [h('span', { class: 'crap-custom-node__label', text: label })];
+    if (attrSummary) {
+      children.push(h('span', { class: 'crap-custom-node__attrs', text: attrSummary }));
+    }
+    this.dom.replaceChildren(...children);
   }
 
   /**
