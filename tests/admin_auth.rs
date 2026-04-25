@@ -317,10 +317,12 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
         .unwrap()
         .to_string();
 
-    // `script-src` must be free of `'unsafe-inline'` — scripts use a per-request nonce.
-    // `style-src` keeps `'unsafe-inline'` because HTMX injects inline styles for swap
-    // transitions; built-in templates and components have been migrated off inline
-    // styles to constrain the residual surface to HTMX-internal usage.
+    // Both `script-src` and `style-src` are free of `'unsafe-inline'`:
+    //   - scripts use a per-request nonce
+    //   - styles use constructable stylesheets in components, classes/`hidden`
+    //     in templates, and HTMX's indicator-style injection is disabled via
+    //     `htmx.config.includeIndicatorStyles=false` (the indicator CSS rules
+    //     ship in `static/styles.css` instead).
     let script_src = csp
         .split(';')
         .map(str::trim)
@@ -331,6 +333,18 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
         !script_src.contains("'unsafe-inline'"),
         "script-src must not include 'unsafe-inline' — got {:?}",
         script_src,
+    );
+
+    let style_src = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("style-src "))
+        .expect("style-src directive present");
+
+    assert!(
+        !style_src.contains("'unsafe-inline'"),
+        "style-src must not include 'unsafe-inline' — got {:?}",
+        style_src,
     );
 
     let nonce_prefix = "'nonce-";

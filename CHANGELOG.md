@@ -101,27 +101,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   event handlers (`onclick=`, …) are also blocked — the password
   visibility toggle has been refactored into a proper
   `<crap-password-toggle>` Web Component as a reference pattern.
-- **CSP cleanup: built-in admin no longer adds inline styles** — every
-  Web Component now uses constructable stylesheets (`new CSSStyleSheet()`
-  + `adoptedStyleSheets`) rather than `<style>` blocks injected via
-  `shadowRoot.innerHTML`. The dynamic page-level `<style>` elements
-  formerly added by `<crap-relationship-search>` and `<crap-create-panel>`
-  are now constructable sheets on `document.adoptedStyleSheets`.
-  Templates use the HTML `hidden` attribute or class-based show/hide
-  instead of `style="display: none"`, and the theme-picker swatches use
-  attribute selectors keyed off `data-theme-value`. `<crap-richtext>`'s
-  custom-node modal applies per-field widths via programmatic
-  `element.style.width` (CSP-exempt) rather than inline `style="..."`.
-
-  **`style-src` keeps `'unsafe-inline'`** because vendored HTMX 1.9
-  injects inline `style="..."` attributes for swap transitions. The
-  built-in admin's surface has been narrowed off inline styles, but
-  HTMX-internal usage cannot be eliminated without dropping HTMX or
-  upstream changes. If a future HTMX release moves to programmatic
-  `element.style` (CSP-exempt) or constructable stylesheets, the
-  default `style_src` can drop `'unsafe-inline'` cleanly. `script-src`
-  is unaffected — it remains nonce-based with `'unsafe-inline'`
-  absent.
+- **CSP hardening: `'unsafe-inline'` removed from `style-src`** — the
+  default `style_src` directive is now `'self' https://fonts.googleapis.com`
+  with no `'unsafe-inline'`. Steps required to get there:
+  - **Web Components** migrated to constructable stylesheets
+    (`new CSSStyleSheet()` + `adoptedStyleSheets`) instead of `<style>`
+    blocks injected via `shadowRoot.innerHTML`. Constructable stylesheets
+    are CSP-exempt by spec.
+  - **Dynamic page-level `<style>` injection** in
+    `<crap-relationship-search>` and `<crap-create-panel>` rewritten to
+    push onto `document.adoptedStyleSheets`.
+  - **Templates** use the `hidden` attribute / classes / data-attribute
+    selectors instead of `style="..."`. Theme-picker swatches keyed off
+    `data-theme-value` attribute selectors.
+  - **`<crap-richtext>`'s custom-node modal** applies per-field widths
+    via programmatic `element.style.width` (CSP-exempt) rather than
+    inline `style="..."` strings.
+  - **HTMX's runtime indicator-style injection** disabled via
+    `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
+    in `base.hbs` (HTMX otherwise calls
+    `head.insertAdjacentHTML('beforeend', '<style>...</style>')` at boot
+    to add `.htmx-indicator` rules — the only inline-style site in the
+    HTMX 1.9 source). The equivalent `.htmx-indicator` rules now ship in
+    `static/styles.css`.
+  Override authors who need `'unsafe-inline'` back (e.g. for a
+  third-party library that requires it) can re-add it in their
+  `[admin.csp]` config.
 
 ### Added
 

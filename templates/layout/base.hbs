@@ -9,6 +9,9 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link href="/static/styles.css?v={{crap.build_hash}}" rel="stylesheet" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+  <!-- Disable HTMX's runtime `<style>` injection. Indicator rules are shipped
+       in styles.css instead, so CSP `style-src` doesn't need `'unsafe-inline'`. -->
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
   <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
   <script nonce="{{crap.csp_nonce}}">
     (function(){

@@ -250,19 +250,20 @@ impl Default for CspConfig {
             // Built-in and overlay templates must mark inline scripts with
             // `nonce="{{crap.csp_nonce}}"`.
             script_src: vec!["'self'".into(), "https://unpkg.com".into()],
-            // `'unsafe-inline'` is required here because HTMX (vendored in
-            // the admin) injects inline `style="..."` attributes for swap
-            // transitions and display toggles. Built-in templates and
-            // Web Components have been migrated off inline styles
-            // (constructable stylesheets, `hidden` attribute, class-based
-            // toggles) so the residual surface is HTMX-internal. If a future
-            // HTMX release drops inline styles — or if the admin moves off
-            // HTMX — this can drop `'unsafe-inline'`.
-            style_src: vec![
-                "'self'".into(),
-                "'unsafe-inline'".into(),
-                "https://fonts.googleapis.com".into(),
-            ],
+            // `'unsafe-inline'` is intentionally absent. The built-in admin
+            // is fully nonce/CSP-friendly:
+            //   - Web Components use constructable stylesheets
+            //     (`new CSSStyleSheet()` + `adoptedStyleSheets`) which are
+            //     CSP-exempt by spec.
+            //   - Templates use the `hidden` attribute / classes / data-attr
+            //     selectors instead of `style="..."`.
+            //   - HTMX's only inline style is the indicator-styles injection,
+            //     disabled via `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
+            //     in `base.hbs`; the equivalent CSS rules ship in
+            //     `static/styles.css`.
+            //   - Programmatic `element.style.foo = ...` is exempt from CSP
+            //     and remains available for runtime layout.
+            style_src: vec!["'self'".into(), "https://fonts.googleapis.com".into()],
             font_src: vec!["'self'".into(), "https://fonts.gstatic.com".into()],
             img_src: vec!["'self'".into(), "data:".into()],
             connect_src: vec!["'self'".into()],
@@ -582,8 +583,12 @@ mod tests {
         // mechanism replaces it.
         assert!(h.contains("script-src 'self' https://unpkg.com"));
         assert!(!h.contains("script-src 'self' 'unsafe-inline'"));
-        // `style-src` keeps `'unsafe-inline'` because HTMX injects inline styles.
-        assert!(h.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"));
+        // `style-src` is also free of `'unsafe-inline'` — HTMX's runtime style
+        // injection is disabled via `htmx.config.includeIndicatorStyles=false`
+        // (set in the layout meta tag), and the indicator CSS ships in
+        // `static/styles.css` instead.
+        assert!(h.contains("style-src 'self' https://fonts.googleapis.com"));
+        assert!(!h.contains("style-src 'self' 'unsafe-inline'"));
         assert!(h.contains("font-src 'self' https://fonts.gstatic.com"));
         assert!(h.contains("img-src 'self' data:"));
         assert!(h.contains("connect-src 'self'"));
@@ -597,11 +602,8 @@ mod tests {
         let csp = CspConfig::default();
         let header = csp.build_header_value(Some("abc123")).unwrap();
         assert!(header.contains("script-src 'self' https://unpkg.com 'nonce-abc123'"));
-        // Nonce is scoped to scripts only.
-        assert!(
-            !header
-                .contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com 'nonce-")
-        );
+        // Nonce is scoped to scripts only — style-src does not get a nonce.
+        assert!(!header.contains("style-src 'self' https://fonts.googleapis.com 'nonce-"));
     }
 
     #[test]
