@@ -64,11 +64,28 @@ async fn focal_point_click_updates_inputs() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
+    // The shadow `<img>` gets its src from the light-DOM template above, but
+    // its natural size is 1×1 (the test fixture is a 1×1 PNG). Force
+    // testable dimensions so getBoundingClientRect returns non-zero.
+    page.evaluate(
+        "() => { \
+            const fp = document.querySelector('crap-focal-point'); \
+            const img = fp.shadowRoot.querySelector('img'); \
+            img.style.width = '400px'; \
+            img.style.height = '300px'; \
+            img.style.maxWidth = 'none'; \
+            img.style.maxHeight = 'none'; \
+        }",
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
     // Simulate a click at a specific position (top-left quadrant)
     page.evaluate(
         "() => { \
             const fp = document.querySelector('crap-focal-point'); \
-            const img = fp.querySelector('img'); \
+            const img = fp.shadowRoot.querySelector('img'); \
             const rect = img.getBoundingClientRect(); \
             const clickX = rect.left + rect.width * 0.25; \
             const clickY = rect.top + rect.height * 0.25; \

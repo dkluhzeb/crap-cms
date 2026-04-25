@@ -147,10 +147,9 @@ version = "0.12"
 optional = true
 
 [dependencies.chromiumoxide]
-version = "0.7"
+version = "0.9"
 optional = true
 default-features = false
-features = ["tokio-runtime"]
 
 [dependencies.redis]
 version = "0.29"

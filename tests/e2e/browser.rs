@@ -24,7 +24,12 @@ pub async fn spawn_server(
 
     let router = app.router.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     (base_url, handle, app)
@@ -43,7 +48,12 @@ pub async fn spawn_server_with_config(
 
     let router = app.router.clone();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     (base_url, handle, app)

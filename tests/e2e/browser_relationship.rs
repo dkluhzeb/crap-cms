@@ -220,7 +220,8 @@ async fn relationship_has_many_multiple_chips() {
     page.evaluate(
         "() => { \
             const el = document.querySelector('crap-relationship-search[has-many]'); \
-            const input = el?.querySelector('.relationship-search__input'); \
+            const input = el?.querySelector('.relationship-search__tags-input') \
+                       || el?.querySelector('.relationship-search__input'); \
             if (input) input.focus(); \
         }",
     )
@@ -246,7 +247,8 @@ async fn relationship_has_many_multiple_chips() {
     page.evaluate(
         "() => { \
             const el = document.querySelector('crap-relationship-search[has-many]'); \
-            const input = el?.querySelector('.relationship-search__input'); \
+            const input = el?.querySelector('.relationship-search__tags-input') \
+                       || el?.querySelector('.relationship-search__input'); \
             if (input) { \
                 input.focus(); \
                 input.value = ''; \
@@ -325,7 +327,8 @@ async fn relationship_remove_chip() {
     page.evaluate(
         "() => { \
             const el = document.querySelector('crap-relationship-search[has-many]'); \
-            const input = el?.querySelector('.relationship-search__input'); \
+            const input = el?.querySelector('.relationship-search__tags-input') \
+                       || el?.querySelector('.relationship-search__input'); \
             if (input) input.focus(); \
         }",
     )
@@ -411,16 +414,23 @@ async fn relationship_enter_selects_first_result() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // Verify dropdown has results
-    let result = page
-        .evaluate(
-            "() => document.querySelectorAll('crap-relationship-search[has-many] .relationship-search__option').length",
-        )
-        .await
-        .unwrap();
-    let options: i64 = result.into_value().unwrap_or(0);
+    // Wait up to 3s for the search dropdown to populate (debounce + network).
+    let mut options = 0i64;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        options = page
+            .evaluate(
+                "() => document.querySelectorAll('crap-relationship-search[has-many] .relationship-search__option').length",
+            )
+            .await
+            .unwrap()
+            .into_value()
+            .unwrap_or(0);
+        if options >= 1 {
+            break;
+        }
+    }
     assert!(options >= 1, "should have search results, got {options}");
 
     // Press Enter without using arrow keys — should select first result
@@ -655,7 +665,7 @@ async fn has_many_relationship_persists() {
     // Verify in database — check join table has both references
     let conn = app.pool.get().unwrap();
     let rows = conn
-        .query_all("SELECT ref_id FROM posts_tags ORDER BY ref_id", &[])
+        .query_all("SELECT related_id FROM posts_tags ORDER BY related_id", &[])
         .unwrap();
     assert_eq!(
         rows.len(),
@@ -760,28 +770,34 @@ async fn relationship_inline_create_selects_item() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Submit the panel form
     page.evaluate(
         "() => { \
             const form = document.querySelector('.create-panel__body form'); \
-            if (form) form.requestSubmit(); \
+            if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); \
         }",
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(3000)).await;
 
-    // Panel should be closed
-    let panel_closed = page
-        .evaluate(
-            "() => { \
-                const dialog = document.querySelector('.create-panel'); \
-                return (!dialog || !dialog.open) ? 'closed' : 'open'; \
-            }",
-        )
-        .await
-        .unwrap();
-    let state2: String = panel_closed.into_value().unwrap_or_default();
+    // Poll up to 6s for the panel to close (fetch + create + DB).
+    let mut state2 = String::new();
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        state2 = page
+            .evaluate(
+                "() => { \
+                    const dialog = document.querySelector('.create-panel'); \
+                    return (!dialog || !dialog.open) ? 'closed' : 'open'; \
+                }",
+            )
+            .await
+            .unwrap()
+            .into_value()
+            .unwrap_or_default();
+        if state2 == "closed" {
+            break;
+        }
+    }
     assert_eq!(
         state2, "closed",
         "create panel should close after successful creation"

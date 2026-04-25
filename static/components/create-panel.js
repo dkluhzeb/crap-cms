@@ -204,12 +204,31 @@ class CrapCreatePanel extends HTMLElement {
         formData.set('_csrf', csrf);
       }
 
+      // Pick body encoding based on the form's content. Upload collections
+      // require multipart for file fields; everything else uses URL-encoded
+      // because the server's `parse_form` for non-upload collections only
+      // accepts `application/x-www-form-urlencoded` (axum `Form` extractor).
+      const hasFile = [...formData.values()].some((v) => v instanceof File && v.size > 0);
+      let body;
       const headers = { 'X-Inline-Create': '1' };
+      if (hasFile) {
+        body = formData;
+        // Browser sets multipart Content-Type with boundary automatically.
+      } else {
+        const params = new URLSearchParams();
+        for (const [k, v] of formData.entries()) {
+          // Skip empty File entries that FormData includes for non-uploaded fields.
+          if (v instanceof File) continue;
+          params.append(k, v);
+        }
+        body = params;
+        headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+      }
       if (csrf) headers['X-CSRF-Token'] = csrf;
 
       const resp = await fetch(action, {
         method: method.toUpperCase(),
-        body: formData,
+        body,
         headers,
         redirect: 'manual',
       });
@@ -291,8 +310,8 @@ class CrapCreatePanel extends HTMLElement {
     if (CrapCreatePanel._stylesInjected) return;
     CrapCreatePanel._stylesInjected = true;
 
-    const s = document.createElement('style');
-    s.textContent = `
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(`
       .create-panel {
         position: fixed;
         inset: 0 0 0 auto;
@@ -386,8 +405,8 @@ class CrapCreatePanel extends HTMLElement {
           width: 100vw;
         }
       }
-    `;
-    document.head.appendChild(s);
+    `);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
   }
 }
 

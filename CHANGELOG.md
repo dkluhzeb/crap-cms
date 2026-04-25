@@ -101,20 +101,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   event handlers (`onclick=`, …) are also blocked — the password
   visibility toggle has been refactored into a proper
   `<crap-password-toggle>` Web Component as a reference pattern.
-- **CSP hardening: `'unsafe-inline'` removed from `style-src`** — every
+- **CSP cleanup: built-in admin no longer adds inline styles** — every
   Web Component now uses constructable stylesheets (`new CSSStyleSheet()`
   + `adoptedStyleSheets`) rather than `<style>` blocks injected via
-  `shadowRoot.innerHTML`. The dynamic page-level `<style>` element from
-  `<crap-relationship-search>` is also a constructable sheet on
-  `document.adoptedStyleSheets`. Templates use the HTML `hidden`
-  attribute or class-based show/hide instead of `style="display: none"`,
-  and the theme-picker swatches use attribute selectors keyed off
-  `data-theme-value`. `<crap-richtext>`'s custom-node modal applies
-  per-field widths via programmatic `element.style.width` (CSP-exempt)
-  rather than inline `style="..."` strings. Override authors should
-  follow the same patterns; `'unsafe-inline'` can still be re-added to
-  `style_src` in the user's `[admin.csp]` config if a third-party
-  library demands it.
+  `shadowRoot.innerHTML`. The dynamic page-level `<style>` elements
+  formerly added by `<crap-relationship-search>` and `<crap-create-panel>`
+  are now constructable sheets on `document.adoptedStyleSheets`.
+  Templates use the HTML `hidden` attribute or class-based show/hide
+  instead of `style="display: none"`, and the theme-picker swatches use
+  attribute selectors keyed off `data-theme-value`. `<crap-richtext>`'s
+  custom-node modal applies per-field widths via programmatic
+  `element.style.width` (CSP-exempt) rather than inline `style="..."`.
+
+  **`style-src` keeps `'unsafe-inline'`** because vendored HTMX 1.9
+  injects inline `style="..."` attributes for swap transitions. The
+  built-in admin's surface has been narrowed off inline styles, but
+  HTMX-internal usage cannot be eliminated without dropping HTMX or
+  upstream changes. If a future HTMX release moves to programmatic
+  `element.style` (CSP-exempt) or constructable stylesheets, the
+  default `style_src` can drop `'unsafe-inline'` cleanly. `script-src`
+  is unaffected — it remains nonce-based with `'unsafe-inline'`
+  absent.
 
 ### Added
 
@@ -252,7 +259,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   cause chain so the underlying SQLite / pool reason surfaces instead
   of just the outer "execute failed: UPDATE …" wrapper.
 
+- **Inline create panel: form submission for non-upload collections** —
+  `<crap-create-panel>`'s `_submitForm` was sending its `FormData` body
+  via `fetch(body: formData)`, which the browser encodes as
+  `multipart/form-data`. Server-side, `parse_form` for non-upload
+  collections uses axum's `Form` extractor which only accepts
+  `application/x-www-form-urlencoded` — every inline-create POST hit the
+  parse-error path and got redirected to the create page (200 OK with
+  HTML body, no `X-Created-Id` header), so the panel never closed. Fixed:
+  `_submitForm` now picks the encoding based on whether the form
+  contains a non-empty `File` value — multipart for uploads, URL-encoded
+  otherwise. This was masked in development because the e2e browser
+  suite was effectively non-functional (see Internal section).
+
 ### Internal
+
+- **e2e browser test suite resurrected** — the entire `browser_*` test
+  modules (139 tests across 18 components) had been silently failing for
+  the whole alpha.7 → alpha.8 development cycle, masked by the fact that
+  CI doesn't run `--features browser-tests`. Three pre-existing test
+  framework bugs and several stale per-test selectors / timings:
+  - `tests/e2e/browser.rs::spawn_server` was using `axum::serve(listener,
+    router)` instead of `into_make_service_with_connect_info::<SocketAddr>()`
+    — the login handler extracts `ConnectInfo` for client-IP rate
+    limiting and panicked on every request with `Missing request
+    extension: ConnectInfo<SocketAddr>`. Broken since the `trust_proxy`
+    work in alpha.7's hardening pass.
+  - `tests/e2e/helpers.rs` initialised the test app's `token_provider`
+    with a different secret (`"test-secret"`) than `jwt_secret`
+    (`"test-jwt-secret"`). Login signed JWTs that auth middleware then
+    rejected — every authenticated request 401'd back to `/admin/login`.
+  - Test app's session cookies were emitted with `Secure` (because
+    `dev_mode = false` by default) but the test server is HTTP — browsers
+    silently dropped them. Fixed by setting `dev_mode = true` in the test
+    config.
+  - chromiumoxide bumped 0.7 → 0.9 for chromium 147 protocol compat.
+  - Stale selectors in `browser_tags.rs` (used `.form__tags-input` but
+    component renders `.tags__input` in Shadow DOM), `browser_relationship.rs`
+    (used `.relationship-search__input` for has-many fields where the
+    actual class is `.relationship-search__tags-input`; queried `ref_id`
+    column on a join table that uses `related_id`), and `browser_focal_point.rs`
+    (queried `<img>` from light DOM but it now lives in the component's
+    Shadow DOM, plus the 1×1 PNG fixture needed explicit dimensions for
+    `getBoundingClientRect`).
+  All 139 e2e tests now pass with `cargo test --test e2e --features
+  browser-tests -- --test-threads=1`.
 
 - **CI feature matrix** — `.github/workflows/ci.yml` now runs three
   additional jobs in parallel with the default `check` job:

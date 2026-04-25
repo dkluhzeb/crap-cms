@@ -34,6 +34,10 @@ pub fn setup_app(
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
+    // Test server is HTTP — disable `Secure` flag on session cookies so
+    // chromiumoxide can store them. (Without this the browser drops the
+    // session cookie on HTTP and every authenticated request 401's.)
+    config.admin.dev_mode = true;
     setup_app_with_config(collections, globals, config)
 }
 
@@ -108,8 +112,12 @@ pub fn setup_app_with_config(
             &crap_cms::config::UploadConfig::default(),
         )
         .unwrap(),
+        // Must match `jwt_secret` above — the login handler signs JWTs with the
+        // token_provider, and the auth middleware verifies with `jwt_secret`.
+        // If these diverge, every authenticated request 401's because the
+        // signature won't validate.
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
