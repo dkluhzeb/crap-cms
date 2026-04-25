@@ -86,7 +86,7 @@ tower = { version = "0.5", features = ["util", "timeout"] }
 url = "2"
 
 # Utilities
-nanoid = "0.4"
+nanoid = "0.5"
 dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 mime_guess = "2"

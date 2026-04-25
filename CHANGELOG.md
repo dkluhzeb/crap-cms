@@ -84,11 +84,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     retired by bumping `rust-s3` to `0.37`; the `0.103.x` line in
     `reqwest` / `lettre` / `quinn` moves to `0.103.13`.
   - `rand 0.9.x` bumped to `0.9.4` and `rand 0.10.x` to `0.10.1`
-    (RUSTSEC-2026-0097). `rand 0.8.5` remains transitively via
-    `nanoid 0.4`, which has no newer upstream; the advisory's UB
-    path requires a custom `log` provider that re-enters
-    `rand::rng()` during reseeding, which crap-cms does not use
-    (`tracing-subscriber` with default config).
+    (RUSTSEC-2026-0097). `nanoid 0.4` → `0.5` retires the last
+    runtime path to `rand 0.8.5`: the new release moves nanoid's
+    own dependency to `rand = "0.9"`. The 0.8.5 entry that remains
+    in `Cargo.lock` is now a build/test-only transitive (via
+    `scraper` → `html5ever` → `phf_codegen`) — not present in the
+    shipped binary. nanoid's public API (`nanoid::nanoid!()` /
+    `nanoid!(10)`) is unchanged at every call site; default-RNG
+    output is bit-identical for the alphabets we use.
 - **CSP hardening: nonce-based `script-src`** — `'unsafe-inline'` has been
   removed from the default `script-src` directive. A fresh nonce is
   generated per request, inserted into the `Content-Security-Policy`
