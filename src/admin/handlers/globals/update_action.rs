@@ -18,7 +18,7 @@ use crate::{
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 enrich_field_contexts, forbidden, get_user_doc, html_with_toast, htmx_redirect,
-                redirect_response, split_sidebar_fields, translate_validation_errors,
+                paths, redirect_response, split_sidebar_fields, translate_validation_errors,
             },
         },
     },
@@ -185,7 +185,7 @@ pub async fn update_action(
     let result = task::spawn_blocking(move || execute_update(params)).await;
 
     match result {
-        Ok(Ok(_)) => htmx_redirect(&format!("/admin/globals/{}", slug)),
+        Ok(Ok(_)) => htmx_redirect(&paths::global(&slug)),
         Ok(Err(e)) => match e {
             ServiceError::AccessDenied(_) => {
                 forbidden(&state, "You don't have permission to update this global")
@@ -195,12 +195,12 @@ pub async fn update_action(
             }
             other => {
                 error!("Global update error: {}", other);
-                redirect_response(&format!("/admin/globals/{}", slug))
+                redirect_response(&paths::global(&slug))
             }
         },
         Err(e) => {
             error!("Global update task error: {}", e);
-            redirect_response(&format!("/admin/globals/{}", slug))
+            redirect_response(&paths::global(&slug))
         }
     }
 }

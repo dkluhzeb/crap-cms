@@ -304,8 +304,9 @@ fn constrained_find_filters_results() {
         op: query::FilterOp::Equals("published".to_string()),
     })];
 
-    let mut find_query = query::FindQuery::new();
-    find_query.filters = constraint_filters;
+    let find_query = query::FindQuery::builder()
+        .filters(constraint_filters)
+        .build();
 
     let docs = ops::find_documents(&pool, "posts", &posts, &find_query, None).unwrap();
 
@@ -1094,7 +1095,7 @@ fn search_documents_excludes_drafts_by_default() {
         .user(Some(&user_a))
         .build();
 
-    let fq = FindQuery::new();
+    let fq = FindQuery::default();
     let input = SearchDocumentsInput {
         query: &fq,
         locale_ctx: None,
@@ -1138,7 +1139,7 @@ fn search_documents_includes_drafts_when_opted_in() {
         .user(Some(&user_a))
         .build();
 
-    let fq = FindQuery::new();
+    let fq = FindQuery::default();
     let input = SearchDocumentsInput {
         query: &fq,
         locale_ctx: None,

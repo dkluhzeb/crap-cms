@@ -650,8 +650,9 @@ fn select_group_prefix_in_find() {
     tx.commit().expect("Commit");
 
     // Select only "seo" -- should include all seo__* sub-fields
-    let mut q = query::FindQuery::new();
-    q.select = Some(vec!["seo".to_string()]);
+    let q = query::FindQuery::builder()
+        .select(Some(vec!["seo".to_string()]))
+        .build();
     let docs = ops::find_documents(&pool, "pages_with_seo", &def, &q, None).expect("Find");
     assert!(!docs.is_empty());
     let doc = &docs[0];
@@ -796,11 +797,12 @@ fn contains_filter_escapes_percent() {
     }
 
     // Filter with Contains("50%") -- should only match "50% off", NOT everything
-    let mut q = query::FindQuery::new();
-    q.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "title".to_string(),
-        op: query::FilterOp::Contains("50%".to_string()),
-    })];
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("50%".to_string()),
+        })])
+        .build();
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(
         docs.len(),
@@ -833,11 +835,12 @@ fn contains_filter_escapes_underscore() {
     }
 
     // Filter with Contains("a_b") -- should only match literal "a_b", NOT "axb"
-    let mut q = query::FindQuery::new();
-    q.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "title".to_string(),
-        op: query::FilterOp::Contains("a_b".to_string()),
-    })];
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("a_b".to_string()),
+        })])
+        .build();
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(
         docs.len(),
@@ -852,12 +855,13 @@ fn contains_filter_escapes_underscore() {
 #[test]
 fn validate_query_fields_passes_valid() {
     let def = make_posts_def();
-    let mut q = query::FindQuery::new();
-    q.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "title".to_string(),
-        op: query::FilterOp::Equals("test".to_string()),
-    })];
-    q.order_by = Some("status".to_string());
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Equals("test".to_string()),
+        })])
+        .order_by(Some("status".to_string()))
+        .build();
     let result = query::validate_query_fields(&def, &q, None);
     assert!(
         result.is_ok(),
@@ -869,11 +873,12 @@ fn validate_query_fields_passes_valid() {
 #[test]
 fn validate_query_fields_rejects_invalid_filter() {
     let def = make_posts_def();
-    let mut q = query::FindQuery::new();
-    q.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "nonexistent_field".to_string(),
-        op: query::FilterOp::Equals("test".to_string()),
-    })];
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "nonexistent_field".to_string(),
+            op: query::FilterOp::Equals("test".to_string()),
+        })])
+        .build();
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid filter field should be rejected");
     let err_msg = result.unwrap_err().to_string();
@@ -887,8 +892,9 @@ fn validate_query_fields_rejects_invalid_filter() {
 #[test]
 fn validate_query_fields_rejects_invalid_order() {
     let def = make_posts_def();
-    let mut q = query::FindQuery::new();
-    q.order_by = Some("nonexistent_field".to_string());
+    let q = query::FindQuery::builder()
+        .order_by(Some("nonexistent_field".to_string()))
+        .build();
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid order_by field should be rejected");
     let err_msg = result.unwrap_err().to_string();

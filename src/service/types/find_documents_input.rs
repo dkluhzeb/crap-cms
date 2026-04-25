@@ -192,7 +192,7 @@ mod tests {
     /// singleflight across concurrent populates.
     #[test]
     fn builder_threads_singleflight_through() {
-        let fq = FindQuery::new();
+        let fq = FindQuery::default();
         let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
         let before = Arc::strong_count(&sf);
 
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn builder_singleflight_defaults_to_none() {
-        let fq = FindQuery::new();
+        let fq = FindQuery::default();
         let input = FindDocumentsInput::builder(&fq).build();
         assert!(input.singleflight.is_none());
         assert!(PostProcessOpts::singleflight(&input).is_none());

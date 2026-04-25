@@ -11,7 +11,7 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
             redirect_response, render_or_error, server_error, version_to_json,
         },
     },
@@ -49,7 +49,7 @@ pub async fn list_versions_page(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/globals/{}", slug));
+        return redirect_response(&paths::global(&slug));
     }
 
     let conn = match state.pool.get() {
@@ -79,22 +79,15 @@ pub async fn list_versions_page(
         .page_title_name(def.display_name())
         .global_def(&def)
         .set("versions", json!(versions))
-        .set(
-            "restore_url_prefix",
-            json!(format!("/admin/globals/{}", slug)),
-        )
+        .set("restore_url_prefix", json!(paths::global(&slug)))
         .with_pagination(
             &pagination,
-            format!(
-                "/admin/globals/{}/versions?page={}",
-                slug,
-                pg.page.saturating_sub(1).max(1)
-            ),
-            format!("/admin/globals/{}/versions?page={}", slug, pg.page + 1),
+            paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1) as u64),
+            paths::global_versions_page(&slug, (pg.page + 1) as u64),
         )
         .breadcrumbs(vec![
             Breadcrumb::link("dashboard", "/admin"),
-            Breadcrumb::link(def.display_name(), format!("/admin/globals/{}", slug)),
+            Breadcrumb::link(def.display_name(), paths::global(&slug)),
             Breadcrumb::current("version_history"),
         ])
         .build();

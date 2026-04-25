@@ -456,11 +456,12 @@ mod tests {
         data2.insert("status".to_string(), "published".to_string());
         create(&conn, "posts", &def, &data2, None).unwrap();
 
-        let mut query = FindQuery::new();
-        query.filters = vec![FilterClause::Single(Filter {
-            field: "status".to_string(),
-            op: FilterOp::Equals("published".to_string()),
-        })];
+        let query = FindQuery::builder()
+            .filters(vec![FilterClause::Single(Filter {
+                field: "status".to_string(),
+                op: FilterOp::Equals("published".to_string()),
+            })])
+            .build();
 
         let docs = find(&conn, "posts", &def, &query, None).unwrap();
         assert_eq!(docs.len(), 1);
@@ -480,15 +481,12 @@ mod tests {
         }
 
         // Test limit
-        let mut query_limit = FindQuery::new();
-        query_limit.limit = Some(2);
+        let query_limit = FindQuery::builder().limit(Some(2)).build();
         let docs = find(&conn, "posts", &def, &query_limit, None).unwrap();
         assert_eq!(docs.len(), 2);
 
         // Test limit + offset (SQLite requires LIMIT before OFFSET)
-        let mut query_offset = FindQuery::new();
-        query_offset.limit = Some(10);
-        query_offset.offset = Some(1);
+        let query_offset = FindQuery::builder().limit(Some(10)).offset(Some(1)).build();
         let docs = find(&conn, "posts", &def, &query_offset, None).unwrap();
         assert_eq!(docs.len(), 2);
     }
@@ -512,8 +510,9 @@ mod tests {
         create(&conn, "posts", &def, &data_b, None).unwrap();
 
         // DESC order by title
-        let mut query = FindQuery::new();
-        query.order_by = Some("-title".to_string());
+        let query = FindQuery::builder()
+            .order_by(Some("-title".to_string()))
+            .build();
         let docs = find(&conn, "posts", &def, &query, None).unwrap();
         assert_eq!(docs.len(), 3);
         assert_eq!(docs[0].get_str("title"), Some("Charlie"));
@@ -529,14 +528,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut query = FindQuery::new();
-        query.after_cursor = Some(CursorData {
-            sort_col: "id".to_string(),
-            sort_dir: SortDirection::Asc,
-            sort_val: json!("abc"),
-            id: "abc".to_string(),
-        });
-        query.offset = Some(10);
+        let query = FindQuery::builder()
+            .after_cursor(Some(CursorData {
+                sort_col: "id".to_string(),
+                sort_dir: SortDirection::Asc,
+                sort_val: json!("abc"),
+                id: "abc".to_string(),
+            }))
+            .offset(Some(10))
+            .build();
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
         assert!(
@@ -561,9 +561,10 @@ mod tests {
         }
 
         // First page: limit=2, order by title ASC
-        let mut q1 = FindQuery::new();
-        q1.order_by = Some("title".to_string());
-        q1.limit = Some(2);
+        let q1 = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .limit(Some(2))
+            .build();
         let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page1[0].get_str("title"), Some("Post 01"));
@@ -577,10 +578,11 @@ mod tests {
             sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.to_string(),
         };
-        let mut q2 = FindQuery::new();
-        q2.order_by = Some("title".to_string());
-        q2.limit = Some(2);
-        q2.after_cursor = Some(cursor);
+        let q2 = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(cursor))
+            .build();
         let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].get_str("title"), Some("Post 03"));
@@ -594,10 +596,11 @@ mod tests {
             sort_val: json!(last2.get_str("title").unwrap()),
             id: last2.id.to_string(),
         };
-        let mut q3 = FindQuery::new();
-        q3.order_by = Some("title".to_string());
-        q3.limit = Some(2);
-        q3.after_cursor = Some(cursor2);
+        let q3 = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(cursor2))
+            .build();
         let page3 = find(&conn, "posts", &def, &q3, None).unwrap();
         assert_eq!(page3.len(), 1);
         assert_eq!(page3[0].get_str("title"), Some("Post 05"));
@@ -616,9 +619,10 @@ mod tests {
         }
 
         // First page DESC
-        let mut q1 = FindQuery::new();
-        q1.order_by = Some("-title".to_string());
-        q1.limit = Some(2);
+        let q1 = FindQuery::builder()
+            .order_by(Some("-title".to_string()))
+            .limit(Some(2))
+            .build();
         let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
         assert_eq!(page1[0].get_str("title"), Some("Post 04"));
         assert_eq!(page1[1].get_str("title"), Some("Post 03"));
@@ -631,10 +635,11 @@ mod tests {
             sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.to_string(),
         };
-        let mut q2 = FindQuery::new();
-        q2.order_by = Some("-title".to_string());
-        q2.limit = Some(2);
-        q2.after_cursor = Some(cursor);
+        let q2 = FindQuery::builder()
+            .order_by(Some("-title".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(cursor))
+            .build();
         let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].get_str("title"), Some("Post 02"));
@@ -647,14 +652,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut query = FindQuery::new();
-        query.order_by = Some("title".to_string());
-        query.after_cursor = Some(CursorData {
-            sort_col: "status".to_string(),
-            sort_dir: SortDirection::Asc,
-            sort_val: json!("x"),
-            id: "abc".to_string(),
-        });
+        let query = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .after_cursor(Some(CursorData {
+                sort_col: "status".to_string(),
+                sort_dir: SortDirection::Asc,
+                sort_val: json!("x"),
+                id: "abc".to_string(),
+            }))
+            .build();
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not match"));
@@ -673,9 +679,10 @@ mod tests {
         }
 
         // Forward: get page 2 (Posts 03, 04) so we have a cursor to go backward from
-        let mut p1q = FindQuery::new();
-        p1q.order_by = Some("title".to_string());
-        p1q.limit = Some(2);
+        let p1q = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .limit(Some(2))
+            .build();
         let page1 = find(&conn, "posts", &def, &p1q, None).unwrap();
         let last_p1 = &page1[1];
         let fwd_cursor = CursorData {
@@ -684,10 +691,11 @@ mod tests {
             sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.to_string(),
         };
-        let mut p2q = FindQuery::new();
-        p2q.order_by = Some("title".to_string());
-        p2q.limit = Some(2);
-        p2q.after_cursor = Some(fwd_cursor);
+        let p2q = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(fwd_cursor))
+            .build();
         let page2 = find(&conn, "posts", &def, &p2q, None).unwrap();
         assert_eq!(page2[0].get_str("title"), Some("Post 03"));
         assert_eq!(page2[1].get_str("title"), Some("Post 04"));
@@ -700,10 +708,11 @@ mod tests {
             sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.to_string(),
         };
-        let mut bq = FindQuery::new();
-        bq.order_by = Some("title".to_string());
-        bq.limit = Some(2);
-        bq.before_cursor = Some(back_cursor);
+        let bq = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .limit(Some(2))
+            .before_cursor(Some(back_cursor))
+            .build();
         let back_page = find(&conn, "posts", &def, &bq, None).unwrap();
 
         // Should get Posts 01, 02 in correct ASC order
@@ -725,9 +734,10 @@ mod tests {
         }
 
         // Forward DESC page 1: Posts 04, 03
-        let mut p1q = FindQuery::new();
-        p1q.order_by = Some("-title".to_string());
-        p1q.limit = Some(2);
+        let p1q = FindQuery::builder()
+            .order_by(Some("-title".to_string()))
+            .limit(Some(2))
+            .build();
         let page1 = find(&conn, "posts", &def, &p1q, None).unwrap();
         assert_eq!(page1[0].get_str("title"), Some("Post 04"));
         assert_eq!(page1[1].get_str("title"), Some("Post 03"));
@@ -740,10 +750,11 @@ mod tests {
             sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.to_string(),
         };
-        let mut p2q = FindQuery::new();
-        p2q.order_by = Some("-title".to_string());
-        p2q.limit = Some(2);
-        p2q.after_cursor = Some(fwd_cursor);
+        let p2q = FindQuery::builder()
+            .order_by(Some("-title".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(fwd_cursor))
+            .build();
         let page2 = find(&conn, "posts", &def, &p2q, None).unwrap();
         assert_eq!(page2[0].get_str("title"), Some("Post 02"));
         assert_eq!(page2[1].get_str("title"), Some("Post 01"));
@@ -756,10 +767,11 @@ mod tests {
             sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.to_string(),
         };
-        let mut bq = FindQuery::new();
-        bq.order_by = Some("-title".to_string());
-        bq.limit = Some(2);
-        bq.before_cursor = Some(back_cursor);
+        let bq = FindQuery::builder()
+            .order_by(Some("-title".to_string()))
+            .limit(Some(2))
+            .before_cursor(Some(back_cursor))
+            .build();
         let back_page = find(&conn, "posts", &def, &bq, None).unwrap();
 
         // Should get Posts 04, 03 in DESC order
@@ -780,9 +792,10 @@ mod tests {
             sort_val: json!("abc"),
             id: "abc".to_string(),
         };
-        let mut query = FindQuery::new();
-        query.after_cursor = Some(cursor.clone());
-        query.before_cursor = Some(cursor);
+        let query = FindQuery::builder()
+            .after_cursor(Some(cursor.clone()))
+            .before_cursor(Some(cursor))
+            .build();
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
         assert!(
@@ -850,9 +863,10 @@ mod tests {
         }
 
         // Page 1: limit 2, order by points ASC → should get 5, 9
-        let mut q1 = FindQuery::new();
-        q1.order_by = Some("points".to_string());
-        q1.limit = Some(2);
+        let q1 = FindQuery::builder()
+            .order_by(Some("points".to_string()))
+            .limit(Some(2))
+            .build();
         let page1 = find(&conn, "scores", &def, &q1, None).unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page1[0].get_str("name"), Some("five"));
@@ -865,10 +879,11 @@ mod tests {
             sort_val: json!(9),
             id: "id-nine".to_string(),
         };
-        let mut q2 = FindQuery::new();
-        q2.order_by = Some("points".to_string());
-        q2.limit = Some(2);
-        q2.after_cursor = Some(cursor);
+        let q2 = FindQuery::builder()
+            .order_by(Some("points".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(cursor))
+            .build();
         let page2 = find(&conn, "scores", &def, &q2, None).unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].get_str("name"), Some("ten"));
@@ -881,10 +896,11 @@ mod tests {
             sort_val: json!(20),
             id: "id-twenty".to_string(),
         };
-        let mut q3 = FindQuery::new();
-        q3.order_by = Some("points".to_string());
-        q3.limit = Some(2);
-        q3.after_cursor = Some(cursor2);
+        let q3 = FindQuery::builder()
+            .order_by(Some("points".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(cursor2))
+            .build();
         let page3 = find(&conn, "scores", &def, &q3, None).unwrap();
         assert_eq!(page3.len(), 1);
         assert_eq!(page3[0].get_str("name"), Some("hundred"));
@@ -903,9 +919,10 @@ mod tests {
             sort_val: Value::Null,
             id: "anyid".to_string(),
         };
-        let mut q = FindQuery::new();
-        q.order_by = Some("title".to_string());
-        q.after_cursor = Some(cursor);
+        let q = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .after_cursor(Some(cursor))
+            .build();
         let result = find(&conn, "posts", &def, &q, None);
         assert!(result.is_ok());
     }
@@ -963,10 +980,11 @@ mod tests {
             sort_val: json!(1.5),
             id: "id-low".to_string(),
         };
-        let mut q = FindQuery::new();
-        q.order_by = Some("score".to_string());
-        q.limit = Some(10);
-        q.after_cursor = Some(cursor);
+        let q = FindQuery::builder()
+            .order_by(Some("score".to_string()))
+            .limit(Some(10))
+            .after_cursor(Some(cursor))
+            .build();
         let results = find(&conn, "ratings", &def, &q, None).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].get_str("label"), Some("mid"));
@@ -986,9 +1004,10 @@ mod tests {
             sort_val: json!(true), // Bool variant
             id: "anyid".to_string(),
         };
-        let mut q = FindQuery::new();
-        q.order_by = Some("title".to_string());
-        q.after_cursor = Some(cursor);
+        let q = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .after_cursor(Some(cursor))
+            .build();
         let result = find(&conn, "posts", &def, &q, None);
         assert!(result.is_ok());
     }
@@ -1017,13 +1036,14 @@ mod tests {
             sort_val: json!("Post 01"),
             id: "~".to_string(),
         };
-        let mut q = FindQuery::new();
-        q.order_by = Some("title".to_string());
-        q.filters = vec![FilterClause::Single(Filter {
-            field: "status".to_string(),
-            op: FilterOp::Equals("active".to_string()),
-        })];
-        q.after_cursor = Some(cursor);
+        let q = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .filters(vec![FilterClause::Single(Filter {
+                field: "status".to_string(),
+                op: FilterOp::Equals("active".to_string()),
+            })])
+            .after_cursor(Some(cursor))
+            .build();
         let result = find(&conn, "posts", &def, &q, None).unwrap();
         // All posts have status=active, but cursor anchors after "Post 01"
         assert!(
@@ -1088,8 +1108,9 @@ mod tests {
         create(&conn, "posts", &def, &d2, None).unwrap();
 
         // Sorting by "id" should use single ORDER BY clause (not the tiebreaker form)
-        let mut q = FindQuery::new();
-        q.order_by = Some("id".to_string());
+        let q = FindQuery::builder()
+            .order_by(Some("id".to_string()))
+            .build();
         let docs = find(&conn, "posts", &def, &q, None).unwrap();
         assert_eq!(docs.len(), 2);
         // Just verify it executes successfully — order is nanoid-determined
@@ -1191,10 +1212,7 @@ mod tests {
         )
         .unwrap();
 
-        let query = FindQuery {
-            include_deleted: true,
-            ..Default::default()
-        };
+        let query = FindQuery::builder().include_deleted(true).build();
         let docs = find(&conn, "articles", &def, &query, None).unwrap();
         assert_eq!(docs.len(), 2);
     }
@@ -1207,10 +1225,9 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let query = FindQuery {
-            order_by: Some("nonexistent_column".to_string()),
-            ..Default::default()
-        };
+        let query = FindQuery::builder()
+            .order_by(Some("nonexistent_column".to_string()))
+            .build();
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err(), "Should reject invalid sort column");
         // Caught by validate_query_fields before reaching SQL
@@ -1227,16 +1244,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let query = FindQuery {
-            order_by: Some("title".to_string()),
-            after_cursor: Some(CursorData {
+        let query = FindQuery::builder()
+            .order_by(Some("title".to_string()))
+            .after_cursor(Some(CursorData {
                 sort_col: "title".to_string(),
                 sort_dir: SortDirection::Asc,
                 sort_val: Value::String("test".to_string()),
                 id: "abc".to_string(),
-            }),
-            ..Default::default()
-        };
+            }))
+            .build();
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_ok());
     }
@@ -1263,10 +1279,7 @@ mod tests {
         let limit = 10i64;
 
         // Page 1: initial load (no cursor, limit=10, default sort: -created_at)
-        let q1 = FindQuery {
-            limit: Some(limit),
-            ..Default::default()
-        };
+        let q1 = FindQuery::builder().limit(Some(limit)).build();
         let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
         assert_eq!(page1.len(), 10, "Page 1 should have 10 items");
         // DESC: newest first, so d14, d13, ..., d05
@@ -1276,11 +1289,10 @@ mod tests {
         // Page 2: forward with after_cursor (overfetch limit=11)
         let (_, end_cursor_p1) = build_cursors(&page1, "created_at", SortDirection::Desc);
         let end_cursor_data = CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
-        let q2 = FindQuery {
-            limit: Some(limit + 1),
-            after_cursor: Some(end_cursor_data),
-            ..Default::default()
-        };
+        let q2 = FindQuery::builder()
+            .limit(Some(limit + 1))
+            .after_cursor(Some(end_cursor_data))
+            .build();
         let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
         let page2_count = page2.len().min(limit as usize);
         assert_eq!(page2_count, 4, "Page 2 should have 4 items");
@@ -1292,11 +1304,10 @@ mod tests {
         let start_cursor_data = CursorData::decode(start_cursor_p2.as_ref().unwrap()).unwrap();
 
         // Go back: before_cursor (overfetch limit=11)
-        let q_back = FindQuery {
-            limit: Some(limit + 1),
-            before_cursor: Some(start_cursor_data),
-            ..Default::default()
-        };
+        let q_back = FindQuery::builder()
+            .limit(Some(limit + 1))
+            .before_cursor(Some(start_cursor_data))
+            .build();
         let page1_again = find(&conn, "posts", &def, &q_back, None).unwrap();
         // Trim overfetch from front (before_cursor extra is at index 0 after reversal)
         let page1_trimmed: Vec<_> = if page1_again.len() > limit as usize {
@@ -1325,11 +1336,10 @@ mod tests {
             build_cursors(&page1_trimmed, "created_at", SortDirection::Desc);
         let end_cursor_data_again =
             CursorData::decode(end_cursor_p1_again.as_ref().unwrap()).unwrap();
-        let q2_again = FindQuery {
-            limit: Some(limit + 1),
-            after_cursor: Some(end_cursor_data_again),
-            ..Default::default()
-        };
+        let q2_again = FindQuery::builder()
+            .limit(Some(limit + 1))
+            .after_cursor(Some(end_cursor_data_again))
+            .build();
         let page2_again = find(&conn, "posts", &def, &q2_again, None).unwrap();
         let page2_again_count = page2_again.len().min(limit as usize);
         assert_eq!(
@@ -1483,9 +1493,10 @@ mod tests {
         data2.insert("title".to_string(), "B".to_string());
         create(&conn, "posts", &def, &data2, None).unwrap();
 
-        let mut query = FindQuery::new();
-        query.limit = Some(-5);
-        query.offset = Some(-10);
+        let query = FindQuery::builder()
+            .limit(Some(-5))
+            .offset(Some(-10))
+            .build();
 
         let docs = find(&conn, "posts", &def, &query, None).unwrap();
         // Negative limit clamped to 0 → returns zero rows

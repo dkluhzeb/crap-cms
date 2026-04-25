@@ -11,7 +11,7 @@ use crate::{
         handlers::{
             collections::shared::{delete_action_impl, do_update},
             forms::parse_form,
-            shared::redirect_response,
+            shared::{paths, redirect_response},
         },
     },
     core::auth::AuthUser,
@@ -33,7 +33,7 @@ pub async fn update_action(
         Ok(result) => result,
         Err(e) => {
             error!("{}", e);
-            return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+            return redirect_response(&paths::collection_item(&slug, &id));
         }
     };
 

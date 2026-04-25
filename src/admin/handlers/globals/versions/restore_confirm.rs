@@ -12,8 +12,8 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, not_found, redirect_response, render_or_error,
-            server_error,
+            load_version_with_missing_relations, not_found, paths, redirect_response,
+            render_or_error, server_error,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -35,7 +35,7 @@ pub async fn restore_confirm(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/globals/{}", slug));
+        return redirect_response(&paths::global(&slug));
     }
 
     match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
@@ -66,8 +66,8 @@ pub async fn restore_confirm(
         Err(msg) => return server_error(&state, msg),
     };
 
-    let restore_url = format!("/admin/globals/{}/versions/{}/restore", slug, version_id);
-    let back_url = format!("/admin/globals/{}", slug);
+    let restore_url = paths::global_version_restore(&slug, &version_id);
+    let back_url = paths::global(&slug);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -84,7 +84,7 @@ pub async fn restore_confirm(
         .set("back_url", json!(back_url))
         .breadcrumbs(vec![
             Breadcrumb::link("dashboard", "/admin"),
-            Breadcrumb::link(def.display_name(), format!("/admin/globals/{}", slug)),
+            Breadcrumb::link(def.display_name(), paths::global(&slug)),
             Breadcrumb::current("restore_version"),
         ])
         .build();

@@ -56,31 +56,18 @@ pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Opti
             .collect()
     });
 
-    let mut builder = FindQuery::builder().filters(filters);
+    let fq = FindQuery::builder()
+        .filters(filters)
+        .order_by(tbl.get::<String>("order_by").ok())
+        .limit(tbl.get::<i64>("limit").ok())
+        .offset(offset)
+        .select(select)
+        .after_cursor(parse_cursor(tbl, "after_cursor")?)
+        .before_cursor(parse_cursor(tbl, "before_cursor")?)
+        .search(tbl.get::<String>("search").ok())
+        .build();
 
-    if let Ok(v) = tbl.get::<String>("order_by") {
-        builder = builder.order_by(v);
-    }
-    if let Ok(v) = tbl.get::<i64>("limit") {
-        builder = builder.limit(v);
-    }
-    if let Some(v) = offset {
-        builder = builder.offset(v);
-    }
-    if let Some(v) = select {
-        builder = builder.select(v);
-    }
-    if let Some(v) = parse_cursor(tbl, "after_cursor")? {
-        builder = builder.after_cursor(v);
-    }
-    if let Some(v) = parse_cursor(tbl, "before_cursor")? {
-        builder = builder.before_cursor(v);
-    }
-    if let Ok(v) = tbl.get::<String>("search") {
-        builder = builder.search(v);
-    }
-
-    Ok((builder.build(), page))
+    Ok((fq, page))
 }
 
 /// Parse the `where` clause from a Lua query table into filter clauses.

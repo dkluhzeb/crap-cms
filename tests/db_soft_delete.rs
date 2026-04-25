@@ -99,10 +99,7 @@ fn delete_document_soft_deletes_when_collection_enabled() {
     );
 
     // find with include_deleted should return it
-    let query = FindQuery {
-        include_deleted: true,
-        ..Default::default()
-    };
+    let query = FindQuery::builder().include_deleted(true).build();
     let docs = ops::find_documents(&pool, "articles", &def, &query, None).unwrap();
     assert_eq!(
         docs.len(),
@@ -131,10 +128,7 @@ fn delete_document_hard_deletes_when_collection_disabled() {
     assert!(docs.is_empty(), "hard-deleted doc should be gone");
 
     // include_deleted should also NOT return it (hard delete = gone)
-    let query = FindQuery {
-        include_deleted: true,
-        ..Default::default()
-    };
+    let query = FindQuery::builder().include_deleted(true).build();
     let docs = ops::find_documents(&pool, "notes", &def, &query, None).unwrap();
     assert!(
         docs.is_empty(),
@@ -271,10 +265,7 @@ fn bulk_delete_uses_soft_delete() {
     assert_eq!(count, 0);
 
     // include_deleted returns all 5
-    let query = FindQuery {
-        include_deleted: true,
-        ..Default::default()
-    };
+    let query = FindQuery::builder().include_deleted(true).build();
     let docs = ops::find_documents(&pool, "articles", &def, &query, None).unwrap();
     assert_eq!(
         docs.len(),
@@ -362,10 +353,10 @@ fn find_query_include_deleted_defaults_false() {
         "include_deleted should default to false"
     );
 
-    let query2 = FindQuery::new();
+    let query2 = FindQuery::default();
     assert!(
         !query2.include_deleted,
-        "FindQuery::new() should also default to false"
+        "FindQuery::default() should also default to false"
     );
 }
 
@@ -600,12 +591,15 @@ fn empty_trash_skips_referenced_documents() {
     // Simulate "empty trash": permanently delete all soft-deleted media,
     // but skip any that are still referenced.
     let mut deleted_count = 0;
-    let mut fq = FindQuery::new();
-    fq.include_deleted = true;
-    fq.filters = vec![crap_cms::db::FilterClause::Single(crap_cms::db::Filter {
-        field: "_deleted_at".to_string(),
-        op: crap_cms::db::FilterOp::Exists,
-    })];
+    let fq = FindQuery::builder()
+        .include_deleted(true)
+        .filters(vec![crap_cms::db::FilterClause::Single(
+            crap_cms::db::Filter {
+                field: "_deleted_at".to_string(),
+                op: crap_cms::db::FilterOp::Exists,
+            },
+        )])
+        .build();
 
     let docs = query::find(&conn, "media", &media_def, &fq, None).unwrap();
     assert_eq!(docs.len(), 2, "both should be in trash");

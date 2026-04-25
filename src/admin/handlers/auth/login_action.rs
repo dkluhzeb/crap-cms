@@ -14,9 +14,12 @@ use tracing::{debug, error};
 use crate::{
     admin::{
         AdminState, auth_middleware,
-        handlers::auth::{
-            LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
-            login_error, mfa_pending_cookie, session_redirect,
+        handlers::{
+            auth::{
+                LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
+                login_error, mfa_pending_cookie, session_redirect,
+            },
+            shared::paths,
         },
     },
     config::EmailConfig,
@@ -274,8 +277,7 @@ fn handle_mfa_challenge(
 
     // Set MFA pending cookie and redirect to MFA page
     let cookie = mfa_pending_cookie(&mfa_token, state.config.admin.dev_mode);
-    let mut response =
-        Redirect::to(&format!("/admin/mfa?collection={}", form.collection)).into_response();
+    let mut response = Redirect::to(&paths::mfa_with_collection(&form.collection)).into_response();
 
     append_cookies(&mut response, &[cookie]);
 

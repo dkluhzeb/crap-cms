@@ -18,7 +18,7 @@ use crate::{
             },
             shared::{
                 ListUrlContext, PaginationParams, extract_editor_locale, extract_where_params,
-                forbidden, not_found, parse_where_params, render_or_error, server_error,
+                forbidden, not_found, parse_where_params, paths, render_or_error, server_error,
                 validate_sort,
             },
         },
@@ -168,22 +168,17 @@ fn build_find_query(
     order_by: Option<String>,
     search: Option<&str>,
 ) -> FindQuery {
-    let has_cursor = pagination.has_cursor();
+    let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 
-    let mut fq = FindQuery::new();
-    fq.filters = url_filters.to_vec();
-    fq.order_by = order_by;
-    fq.limit = Some(pagination.limit);
-    fq.offset = if has_cursor {
-        None
-    } else {
-        Some(pagination.offset)
-    };
-    fq.after_cursor = pagination.after_cursor.clone();
-    fq.before_cursor = pagination.before_cursor.clone();
-    fq.search = search.map(|s| s.to_string());
-
-    fq
+    FindQuery::builder()
+        .filters(url_filters.to_vec())
+        .order_by(order_by)
+        .limit(Some(pagination.limit))
+        .offset(offset)
+        .after_cursor(pagination.after_cursor.clone())
+        .before_cursor(pagination.before_cursor.clone())
+        .search(search.map(str::to_string))
+        .build()
 }
 
 /// Load the user's saved column preferences for a collection.
@@ -316,7 +311,7 @@ pub async fn list_items(
 
     let user_columns = load_user_columns(&state, &auth_user, &slug);
 
-    let base_url = format!("/admin/collections/{}", slug);
+    let base_url = paths::collection(&slug);
     let mut where_params = extract_where_params(raw_query);
 
     if is_trash {

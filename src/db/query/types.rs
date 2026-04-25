@@ -68,11 +68,12 @@ pub struct FindQuery {
 }
 
 impl FindQuery {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a builder for constructing a `FindQuery` with named parameters.
+    ///
+    /// This is the only public construction path — `FindQuery` derives
+    /// `Default`, so tests that need an "empty" query use `FindQuery::default()`
+    /// or struct literals with `..Default::default()`. Production code must
+    /// route through the builder.
     pub fn builder() -> FindQueryBuilder {
         FindQueryBuilder::default()
     }
@@ -98,38 +99,38 @@ impl FindQueryBuilder {
         self
     }
 
-    pub fn order_by(mut self, order_by: impl Into<String>) -> Self {
-        self.order_by = Some(order_by.into());
+    pub fn order_by(mut self, order_by: Option<String>) -> Self {
+        self.order_by = order_by;
         self
     }
 
-    pub fn limit(mut self, limit: i64) -> Self {
-        self.limit = Some(limit);
+    pub fn limit(mut self, limit: Option<i64>) -> Self {
+        self.limit = limit;
         self
     }
 
-    pub fn offset(mut self, offset: i64) -> Self {
-        self.offset = Some(offset);
+    pub fn offset(mut self, offset: Option<i64>) -> Self {
+        self.offset = offset;
         self
     }
 
-    pub fn select(mut self, select: Vec<String>) -> Self {
-        self.select = Some(select);
+    pub fn select(mut self, select: Option<Vec<String>>) -> Self {
+        self.select = select;
         self
     }
 
-    pub fn after_cursor(mut self, cursor: cursor::CursorData) -> Self {
-        self.after_cursor = Some(cursor);
+    pub fn after_cursor(mut self, cursor: Option<cursor::CursorData>) -> Self {
+        self.after_cursor = cursor;
         self
     }
 
-    pub fn before_cursor(mut self, cursor: cursor::CursorData) -> Self {
-        self.before_cursor = Some(cursor);
+    pub fn before_cursor(mut self, cursor: Option<cursor::CursorData>) -> Self {
+        self.before_cursor = cursor;
         self
     }
 
-    pub fn search(mut self, search: impl Into<String>) -> Self {
-        self.search = Some(search.into());
+    pub fn search(mut self, search: Option<String>) -> Self {
+        self.search = search;
         self
     }
 

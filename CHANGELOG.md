@@ -252,6 +252,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   cause chain so the underlying SQLite / pool reason surfaces instead
   of just the outer "execute failed: UPDATE …" wrapper.
 
+### Internal
+
+- **CI feature matrix** — `.github/workflows/ci.yml` now runs three
+  additional jobs in parallel with the default `check` job:
+  `sqlite+postgres` (build + clippy + full test suite), `postgres-only`
+  (`--no-default-features --features postgres`, build + clippy — surfaces
+  sqlite-isms leaking through the `DbConnection` abstraction), and
+  `all-features` (build + clippy with `--all-features` to catch
+  feature-interaction compile errors across `s3-storage`, `redis`, and
+  `browser-tests` deps). Closes a longstanding gap where the postgres
+  backend, in the tree since alpha.6, had no CI coverage.
+
+- **Typed admin URL builders** — new `src/admin/handlers/shared/paths.rs`
+  with 10 helpers (`paths::collection`, `paths::collection_item`,
+  `paths::global_versions_page`, `paths::mfa_with_collection`, etc.).
+  Replaces 43 ad-hoc `format!("/admin/...")` strings across 18 handler
+  files. Helps with grep-ability and prevents subtle path drift between
+  call sites that reference the same route.
+
+- **`FindQuery` builder is now the only construction path** —
+  `FindQuery::new()` (a wrapper around `Default::default()` that bypassed
+  the builder) has been removed. Inherently-optional fields on
+  `FindQueryBuilder` (`order_by`, `limit`, `offset`, `select`,
+  `after_cursor`, `before_cursor`, `search`) now take `Option<T>` so
+  every call site flows through one builder chain — no more
+  `let mut fq = …; if let Some(x) = opt { fq = fq.method(x); }` and
+  no more `let mut fq = …; fq.field = …;` patterns. Required fields
+  (`filters`, `include_deleted`) stay direct-value. Sweep covered
+  19 production sites (gRPC `Find`, MCP `find` tool, Lua hook
+  converter, admin items list, populate join + batch dispatch, bulk
+  delete/update hooks, admin search, enrich types, bench commands,
+  trash CLI, service layer) plus all internal and integration test
+  sites. `FindQuery::default()` remains for the truly empty-state
+  case (e.g. `&FindQuery::default()` passed to a function that just
+  needs the default query); the builder is the path whenever any
+  field is set.
+
 ## [0.1.0-alpha.7] — 2026-04-18
 
 ### Added

@@ -63,15 +63,13 @@ fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Resul
 /// not a user filter, so it sidesteps the service-layer validator. Keep this
 /// helper private to the CLI so the bypass stays scoped.
 fn deleted_filter() -> query::FindQuery {
-    let mut fq = query::FindQuery::new();
-
-    fq.include_deleted = true;
-    fq.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "_deleted_at".to_string(),
-        op: query::FilterOp::Exists,
-    })];
-
-    fq
+    query::FindQuery::builder()
+        .include_deleted(true)
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "_deleted_at".to_string(),
+            op: query::FilterOp::Exists,
+        })])
+        .build()
 }
 
 /// List trashed (soft-deleted) documents across collections.

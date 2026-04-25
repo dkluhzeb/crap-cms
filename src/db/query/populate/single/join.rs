@@ -64,23 +64,23 @@ fn populate_join_docs(
     opts: &PopulateOpts<'_>,
     cache: &dyn CacheBackend,
 ) -> Result<Vec<Value>> {
-    let mut fq = FindQuery::new();
-
-    fq.filters = vec![FilterClause::Single(Filter {
+    let mut filters = vec![FilterClause::Single(Filter {
         field: jc.on.clone(),
         op: FilterOp::Equals(doc.id.to_string()),
     })];
 
     // Target-collection access check (SEC-G). When hooks are wired in by the
     // service layer, honor the target's `access.read`. Denied => empty array.
-    // Constrained => merge into fq.filters. Allowed => proceed as-is.
+    // Constrained => merge into filters. Allowed => proceed as-is.
     if let Some(check) = opts.join_access {
         match check.check(target_def.access.read.as_deref(), opts.user)? {
             AccessResult::Denied => return Ok(Vec::new()),
-            AccessResult::Constrained(extra) => fq.filters.extend(extra),
+            AccessResult::Constrained(extra) => filters.extend(extra),
             AccessResult::Allowed => {}
         }
     }
+
+    let fq = FindQuery::builder().filters(filters).build();
 
     let matched_docs = match find(ctx.conn, &jc.collection, target_def, &fq, opts.locale_ctx) {
         Ok(docs) => docs,

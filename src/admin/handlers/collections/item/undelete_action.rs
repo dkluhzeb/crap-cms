@@ -12,7 +12,7 @@ use tracing::{error, info};
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{forbidden, get_user_doc, htmx_redirect},
+        handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
     core::auth::AuthUser,
     service::{self, ServiceContext, ServiceError},
@@ -30,7 +30,7 @@ pub async fn undelete_action(
     };
 
     if !def.soft_delete {
-        return htmx_redirect(&format!("/admin/collections/{}", slug));
+        return htmx_redirect(&paths::collection(&slug));
     }
 
     let pool = state.pool.clone();
@@ -59,7 +59,7 @@ pub async fn undelete_action(
         Ok(Ok(_doc)) => {
             info!("Undeleted document {} in {}", id, slug);
 
-            htmx_redirect(&format!("/admin/collections/{}?trash=1", slug))
+            htmx_redirect(&paths::collection_trash(&slug))
         }
         Ok(Err(ServiceError::AccessDenied(_))) => {
             forbidden(&state, "You don't have permission to undelete this item").into_response()

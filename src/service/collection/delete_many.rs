@@ -90,7 +90,7 @@ fn delete_many_pool(
 
         let batch_query = FindQuery::builder()
             .filters(filters.clone())
-            .limit(BATCH_SIZE)
+            .limit(Some(BATCH_SIZE))
             .include_deleted(opts.include_deleted)
             .build();
 

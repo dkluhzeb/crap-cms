@@ -12,8 +12,8 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, not_found, redirect_response, render_or_error,
-            server_error,
+            load_version_with_missing_relations, not_found, paths, redirect_response,
+            render_or_error, server_error,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -37,7 +37,7 @@ pub async fn restore_confirm(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+        return redirect_response(&paths::collection_item(&slug, &id));
     }
 
     match check_access_or_forbid(
@@ -78,7 +78,7 @@ pub async fn restore_confirm(
         "/admin/collections/{}/{}/versions/{}/restore",
         slug, id, version_id
     );
-    let back_url = format!("/admin/collections/{}/{}", slug, id);
+    let back_url = paths::collection_item(&slug, &id);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
@@ -95,8 +95,8 @@ pub async fn restore_confirm(
         .set("back_url", json!(back_url))
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::link(&id, format!("/admin/collections/{}/{}", slug, id)),
+            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+            Breadcrumb::link(&id, paths::collection_item(&slug, &id)),
             Breadcrumb::current("restore_version"),
         ])
         .build();

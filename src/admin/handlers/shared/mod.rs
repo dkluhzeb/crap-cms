@@ -4,6 +4,7 @@ mod access;
 mod document;
 mod locale;
 mod pagination;
+pub(crate) mod paths;
 pub(crate) mod response;
 mod versions;
 

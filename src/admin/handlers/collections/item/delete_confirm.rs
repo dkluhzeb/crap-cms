@@ -13,7 +13,7 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden, lookup_ref_count, not_found,
-            render_or_error,
+            paths, render_or_error,
         },
     },
     core::{
@@ -113,7 +113,7 @@ pub async fn delete_confirm(
         .set("ref_count", json!(ref_count))
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
             Breadcrumb::current("delete_name").with_name(def.singular_name()),
         ])
         .build();

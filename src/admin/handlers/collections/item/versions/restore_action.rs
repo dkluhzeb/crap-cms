@@ -9,7 +9,7 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{get_user_doc, htmx_redirect, redirect_response},
+        handlers::shared::{get_user_doc, htmx_redirect, paths, redirect_response},
     },
     core::auth::AuthUser,
     service::{ServiceContext, restore_collection_version},
@@ -27,10 +27,10 @@ pub async fn restore_version(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+        return redirect_response(&paths::collection_item(&slug, &id));
     }
 
-    let redirect = format!("/admin/collections/{}/{}", slug, id);
+    let redirect = paths::collection_item(&slug, &id);
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let locale_config = state.config.locale.clone();

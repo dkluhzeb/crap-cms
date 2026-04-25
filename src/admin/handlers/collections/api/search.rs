@@ -100,9 +100,10 @@ pub async fn search_collection(
         Some(search_term.to_string())
     };
 
-    let mut fq = FindQuery::new();
-    fq.limit = Some(limit as i64);
-    fq.search = search;
+    let fq = FindQuery::builder()
+        .limit(Some(limit as i64))
+        .search(search)
+        .build();
 
     let ctx = service::ServiceContext::collection(&slug, def)
         .pool(&state.pool)

@@ -15,8 +15,8 @@ use crate::{
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, forbidden, is_non_default_locale, not_found, render_or_error,
-            split_sidebar_fields,
+            extract_editor_locale, forbidden, is_non_default_locale, not_found, paths,
+            render_or_error, split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition},
@@ -132,7 +132,7 @@ pub async fn create_form(
         .set("has_drafts", json!(def.has_drafts()))
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
             Breadcrumb::current("create_name").with_name(def.singular_name()),
         ])
         .merge(locale_data);

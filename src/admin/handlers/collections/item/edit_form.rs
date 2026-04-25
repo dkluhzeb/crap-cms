@@ -19,7 +19,7 @@ use crate::{
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
             flatten_document_values, forbidden, is_non_default_locale, lookup_ref_count, not_found,
-            render_or_error, server_error, split_sidebar_fields,
+            paths, render_or_error, server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -360,11 +360,11 @@ pub async fn edit_form(
         .set("has_more_versions", json!(total_versions > 3))
         .set(
             "restore_url_prefix",
-            json!(format!("/admin/collections/{}/{}", slug, id)),
+            json!(paths::collection_item(&slug, &id)),
         )
         .set(
             "versions_url",
-            json!(format!("/admin/collections/{}/{}/versions", slug, id)),
+            json!(paths::collection_item_versions(&slug, &id)),
         )
         .set("document_title", json!(doc_title))
         .set(
@@ -373,7 +373,7 @@ pub async fn edit_form(
         )
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
             Breadcrumb::current(doc_title.clone()),
         ])
         .merge(locale_data);

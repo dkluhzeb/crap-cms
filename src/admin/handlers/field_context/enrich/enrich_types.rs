@@ -625,11 +625,12 @@ pub(super) fn enrich_join(
     {
         let title_field = target_def.title_field().map(|s| s.to_string());
 
-        let mut fq = query::FindQuery::new();
-        fq.filters = vec![query::FilterClause::Single(query::Filter {
-            field: jc.on.clone(),
-            op: query::FilterOp::Equals(doc_id_str.to_string()),
-        })];
+        let fq = query::FindQuery::builder()
+            .filters(vec![query::FilterClause::Single(query::Filter {
+                field: jc.on.clone(),
+                op: query::FilterOp::Equals(doc_id_str.to_string()),
+            })])
+            .build();
 
         if let Ok(docs) = query::find(conn, &jc.collection, target_def, &fq, rel_locale_ctx) {
             let items: Vec<_> = docs

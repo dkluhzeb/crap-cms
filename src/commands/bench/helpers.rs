@@ -46,7 +46,7 @@ pub fn resolve_bench_data(
     }
 
     // 2. Existing document from DB
-    let find_query = FindQuery::builder().limit(1).build();
+    let find_query = FindQuery::builder().limit(Some(1)).build();
 
     if let Ok(docs) = query::find(conn, slug, def, &find_query, None)
         && let Some(doc) = docs.first()

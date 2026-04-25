@@ -12,7 +12,7 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
             redirect_response, render_or_error, server_error, version_to_json,
         },
     },
@@ -96,7 +96,7 @@ pub async fn list_versions_page(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+        return redirect_response(&paths::collection_item(&slug, &id));
     }
 
     let pg = params.resolve(&state.config.pagination);
@@ -122,7 +122,7 @@ pub async fn list_versions_page(
         .set("versions", json!(versions))
         .set(
             "restore_url_prefix",
-            json!(format!("/admin/collections/{}/{}", slug, id)),
+            json!(paths::collection_item(&slug, &id)),
         )
         .with_pagination(
             &pagination,
@@ -141,11 +141,8 @@ pub async fn list_versions_page(
         )
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::link(
-                doc_title.clone(),
-                format!("/admin/collections/{}/{}", slug, id),
-            ),
+            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+            Breadcrumb::link(doc_title.clone(), paths::collection_item(&slug, &id)),
             Breadcrumb::current("version_history"),
         ])
         .build();

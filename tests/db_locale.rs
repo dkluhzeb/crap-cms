@@ -235,11 +235,12 @@ fn filter_on_localized_field() {
     }
 
     // Filter on localized field
-    let mut q = query::FindQuery::new();
-    q.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "title".to_string(),
-        op: query::FilterOp::Contains("Hello".to_string()),
-    })];
+    let q = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("Hello".to_string()),
+        })])
+        .build();
     let docs =
         ops::find_documents(&pool, "localized_pages", &def, &q, Some(&en_ctx)).expect("Find");
     assert_eq!(docs.len(), 1);

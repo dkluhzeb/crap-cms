@@ -18,8 +18,8 @@ use crate::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
-            server_error, split_sidebar_fields,
+            flatten_document_values, forbidden, is_non_default_locale, not_found, paths,
+            render_or_error, server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -202,14 +202,8 @@ pub async fn edit_form(
         .set("has_versions", json!(has_versions))
         .set("versions", json!(versions))
         .set("has_more_versions", json!(total_versions > 3))
-        .set(
-            "restore_url_prefix",
-            json!(format!("/admin/globals/{}", slug)),
-        )
-        .set(
-            "versions_url",
-            json!(format!("/admin/globals/{}/versions", slug)),
-        )
+        .set("restore_url_prefix", json!(paths::global(&slug)))
+        .set("versions_url", json!(paths::global_versions(&slug)))
         .set("doc_status", json!(doc_status))
         .merge(locale_data)
         .build();

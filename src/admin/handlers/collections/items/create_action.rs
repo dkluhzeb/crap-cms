@@ -19,7 +19,7 @@ use crate::{
             },
             forms::{extract_join_data_from_form, parse_form, transform_select_has_many},
             shared::{
-                forbidden, get_user_doc, htmx_redirect_with_created, redirect_response,
+                forbidden, get_user_doc, htmx_redirect_with_created, paths, redirect_response,
                 toast_only_error,
             },
         },
@@ -152,7 +152,7 @@ pub async fn create_action(
         Ok(result) => result,
         Err(e) => {
             error!("{}", e);
-            return redirect_response(&format!("/admin/collections/{}/create", slug));
+            return redirect_response(&paths::collection_create(&slug));
         }
     };
 
@@ -227,7 +227,7 @@ pub async fn create_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or(&doc.id);
 
-            htmx_redirect_with_created(&format!("/admin/collections/{}", slug), &doc.id, label)
+            htmx_redirect_with_created(&paths::collection(&slug), &doc.id, label)
         }
         Ok(Err(e)) => match e {
             ServiceError::AccessDenied(_) => forbidden(
@@ -245,12 +245,12 @@ pub async fn create_action(
             ),
             other => {
                 error!("Create error: {}", other);
-                redirect_response(&format!("/admin/collections/{}/create", slug))
+                redirect_response(&paths::collection_create(&slug))
             }
         },
         Err(e) => {
             error!("Create task error: {}", e);
-            redirect_response(&format!("/admin/collections/{}/create", slug))
+            redirect_response(&paths::collection_create(&slug))
         }
     }
 }

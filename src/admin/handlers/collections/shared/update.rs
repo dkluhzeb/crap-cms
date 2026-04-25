@@ -16,7 +16,9 @@ use crate::{
         AdminState,
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
-            shared::{forbidden, get_user_doc, htmx_redirect, redirect_response, toast_only_error},
+            shared::{
+                forbidden, get_user_doc, htmx_redirect, paths, redirect_response, toast_only_error,
+            },
         },
     },
     core::{
@@ -230,7 +232,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         Ok(Ok(_)) => {
             handle_update_success(state, slug, id, upload_result);
 
-            htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
+            htmx_redirect(&paths::collection_item(slug, id))
         }
         Ok(Err(e)) => match e {
             ServiceError::AccessDenied(_) => {
@@ -248,12 +250,12 @@ pub(in crate::admin::handlers::collections) async fn do_update(
             .into_response(),
             other => {
                 error!("Update error: {}", other);
-                redirect_response(&format!("/admin/collections/{}/{}", slug, id))
+                redirect_response(&paths::collection_item(slug, id))
             }
         },
         Err(e) => {
             error!("Update task error: {}", e);
-            redirect_response(&format!("/admin/collections/{}/{}", slug, id))
+            redirect_response(&paths::collection_item(slug, id))
         }
     }
 }

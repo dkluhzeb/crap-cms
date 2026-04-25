@@ -6,7 +6,7 @@ use mlua::{Error::RuntimeError, Lua, Table};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, SharedRegistry, upload},
-    db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::lifecycle::{
         LuaStorage,
         converters::lua_table_to_find_query,
@@ -59,10 +59,7 @@ fn build_delete_filters(
         &mut find_query.filters,
     )?;
 
-    let mut find_all = FindQuery::new();
-    find_all.filters = find_query.filters;
-
-    Ok((find_all.filters, locale_ctx))
+    Ok((find_query.filters, locale_ctx))
 }
 
 /// Delete multiple documents matching a query.

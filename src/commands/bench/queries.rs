@@ -53,8 +53,11 @@ pub fn run(
         let def = &reg.collections[slug];
 
         let find_query = match &filters {
-            Some(f) => FindQuery::builder().filters(f.clone()).limit(100).build(),
-            None => FindQuery::builder().limit(100).build(),
+            Some(f) => FindQuery::builder()
+                .filters(f.clone())
+                .limit(Some(100))
+                .build(),
+            None => FindQuery::builder().limit(Some(100)).build(),
         };
 
         let start = Instant::now();

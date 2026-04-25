@@ -1570,7 +1570,7 @@ async fn group_array_crud_roundtrip() {
         &conn,
         "candidates",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -1674,7 +1674,7 @@ async fn group_collapsible_array_crud_roundtrip() {
         &conn,
         "products",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -1824,7 +1824,7 @@ async fn group_array_blocks_crud_roundtrip() {
         &conn,
         "projects",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -1984,7 +1984,7 @@ async fn group_layout_array_blocks_crud_roundtrip() {
         &conn,
         "dashboards",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -2623,7 +2623,7 @@ async fn deep_blocks_nesting_crud_roundtrip() {
         &conn,
         "layouts",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
