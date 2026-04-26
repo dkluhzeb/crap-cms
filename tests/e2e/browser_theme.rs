@@ -96,7 +96,7 @@ async fn theme_persists_across_navigation() {
         .unwrap();
 
     // Set theme via JS (equivalent to the picker)
-    page.evaluate("() => { window.CrapTheme.set('gruvbox'); }")
+    page.evaluate("() => { window.crap.theme.set('gruvbox'); }")
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;

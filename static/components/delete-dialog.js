@@ -5,14 +5,15 @@
  * (and a separate empty-trash variant). Submits via `fetch` and toasts
  * the result.
  *
- * Two ways to open it:
- *   - **Programmatic**: `window.CrapDeleteDialog.open(opts)` —
- *     thin wrapper that dispatches `crap:delete-dialog`.
+ * Three ways to open it:
+ *   - **Sugar**: `window.crap.deleteDialog.open(opts)` (preferred).
+ *   - **Discovery**: dispatch `crap:delete-dialog-request`, read
+ *     `detail.instance`, call `instance.open(opts)`.
  *   - **Event-delegated**: any `[data-delete-id]` or
  *     `[data-empty-trash-slug]` button click anywhere in the document.
  *
  * @example
- * window.CrapDeleteDialog.open({
+ * window.crap.deleteDialog.open({
  *   id: '123', title: 'My Post', slug: 'posts',
  *   softDelete: true, canPermanentlyDelete: true,
  * });
@@ -23,6 +24,8 @@
 import { css } from './css.js';
 import { h } from './h.js';
 import { t } from './i18n.js';
+import { readCsrfCookie } from './util/cookies.js';
+import { toast } from './util/toast.js';
 
 const sheet = css`
   :host { display: contents; }
@@ -115,18 +118,6 @@ const sheet = css`
 /** Sentinel id used by the empty-trash flow. */
 const EMPTY_TRASH_ID = '__empty_trash__';
 
-/** @returns {string} */
-function readCsrfCookie() {
-  const m = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
-  if (!m) return '';
-  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
-}
-
-/** @param {string} message @param {'success'|'error'} type */
-function toast(message, type) {
-  document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message, type } }));
-}
-
 /**
  * Pick the success-toast message for a completed delete.
  *
@@ -164,18 +155,31 @@ class CrapDeleteDialog extends HTMLElement {
     /** @type {HTMLButtonElement} */
     this._cancelBtn = h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') });
     /** @type {HTMLButtonElement} */
-    this._softBtn = h('button', { class: 'btn-soft', type: 'button', hidden: true, text: t('move_to_trash') });
+    this._softBtn = h('button', {
+      class: 'btn-soft',
+      type: 'button',
+      hidden: true,
+      text: t('move_to_trash'),
+    });
     /** @type {HTMLButtonElement} */
-    this._dangerBtn = h('button', { class: 'btn-danger', type: 'button', text: t('delete_permanently') });
+    this._dangerBtn = h('button', {
+      class: 'btn-danger',
+      type: 'button',
+      text: t('delete_permanently'),
+    });
     /** @type {HTMLDialogElement} */
-    this._dialog = h('dialog', null,
+    this._dialog = h(
+      'dialog',
+      null,
       h('div', { class: 'dialog__body' }, this._titleEl, this._messageEl),
       h('div', { class: 'dialog__actions' }, this._cancelBtn, this._softBtn, this._dangerBtn),
     );
     root.append(this._dialog);
 
     this._cancelBtn.addEventListener('click', () => this._cancel());
-    this._dialog.addEventListener('cancel', () => { this._pending = null; });
+    this._dialog.addEventListener('cancel', () => {
+      this._pending = null;
+    });
     this._softBtn.addEventListener('click', () => this._submit('soft_delete'));
     this._dangerBtn.addEventListener('click', () => this._submit('hard_delete'));
   }
@@ -185,14 +189,12 @@ class CrapDeleteDialog extends HTMLElement {
     this._connected = true;
 
     this._handleRequest = (e) => {
-      const detail = /** @type {CustomEvent<OpenOptions & { _handled?: boolean }>} */ (e).detail;
-      if (detail._handled) return;
-      detail._handled = true;
-      this.open(detail);
+      const detail = /** @type {CustomEvent} */ (e).detail;
+      if (!detail.instance) detail.instance = this;
     };
     this._handleClick = (e) => this._onDocumentClick(e);
 
-    document.addEventListener('crap:delete-dialog', this._handleRequest);
+    document.addEventListener('crap:delete-dialog-request', this._handleRequest);
     document.addEventListener('click', this._handleClick);
   }
 
@@ -200,7 +202,7 @@ class CrapDeleteDialog extends HTMLElement {
     if (!this._connected) return;
     this._connected = false;
     if (this._handleRequest) {
-      document.removeEventListener('crap:delete-dialog', this._handleRequest);
+      document.removeEventListener('crap:delete-dialog-request', this._handleRequest);
     }
     if (this._handleClick) {
       document.removeEventListener('click', this._handleClick);
@@ -217,9 +219,7 @@ class CrapDeleteDialog extends HTMLElement {
     this._pending = { id, slug, softDelete };
 
     this._titleEl.textContent = t('delete_confirm_title', { name: title || id });
-    this._messageEl.textContent = softDelete
-      ? t('delete_confirm_soft')
-      : t('delete_confirm_hard');
+    this._messageEl.textContent = softDelete ? t('delete_confirm_soft') : t('delete_confirm_hard');
 
     this._softBtn.hidden = !softDelete;
     this._softBtn.textContent = t('move_to_trash');
@@ -306,14 +306,14 @@ class CrapDeleteDialog extends HTMLElement {
       });
 
       if (resp.ok) {
-        toast(successMessage(isEmptyTrash, action), 'success');
+        toast({ message: successMessage(isEmptyTrash, action), type: 'success' });
         this._navigateToList(pending.slug);
         return;
       }
 
-      toast(await this._readErrorMessage(resp), 'error');
+      toast({ message: await this._readErrorMessage(resp), type: 'error' });
     } catch {
-      toast(t('delete_error'), 'error');
+      toast({ message: t('delete_error'), type: 'error' });
     } finally {
       this._dialog.close();
       this._pending = null;
@@ -374,16 +374,3 @@ class CrapDeleteDialog extends HTMLElement {
 }
 
 customElements.define('crap-delete-dialog', CrapDeleteDialog);
-
-/**
- * Global delete-dialog API. Dispatches a CustomEvent so the connected
- * `<crap-delete-dialog>` instance handles it.
- *
- * @namespace
- */
-window.CrapDeleteDialog = {
-  /** @param {OpenOptions} opts */
-  open(opts) {
-    document.dispatchEvent(new CustomEvent('crap:delete-dialog', { detail: opts }));
-  },
-};

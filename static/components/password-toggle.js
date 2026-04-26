@@ -1,66 +1,103 @@
 /**
  * Password visibility toggle — `<crap-password-toggle>`.
  *
- * Light-DOM wrapper around a password `<input>` and a toggle `<button>`.
- * Clicking the button flips the input between `password` and `text` and
- * swaps the slotted Material-Symbols icon glyph.
+ * Wraps a slotted password `<input>` (which stays in light DOM so the
+ * browser submits it with the surrounding form) and renders its own
+ * toggle button + icon in the shadow root. Consumers don't have to
+ * remember the magic button structure or wrapper class:
  *
- * Replaces per-button `onclick=` attributes that would otherwise be
- * blocked by our nonce-based `script-src` CSP.
- *
- * Required slotted markup:
- *   <crap-password-toggle class="form__password-wrapper">
- *     <input type="password" ... />
- *     <button type="button" class="form__password-toggle">
- *       <span>visibility</span>
- *     </button>
+ *   <crap-password-toggle>
+ *     <input type="password" name="password" />
  *   </crap-password-toggle>
+ *
+ * The component sets the slotted input's right-side padding via
+ * `::slotted(input)` so the toggle button doesn't overlap the text.
  *
  * @module password-toggle
  */
 
+import { css } from './css.js';
+import { h } from './h.js';
+
 const ICON_HIDDEN = 'visibility';
 const ICON_VISIBLE = 'visibility_off';
+
+const sheet = css`
+  :host {
+    display: block;
+    position: relative;
+  }
+  ::slotted(input) {
+    padding-right: var(--padding-with-icon);
+  }
+  .toggle {
+    all: unset;
+    position: absolute;
+    right: var(--space-sm);
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    width: var(--button-height-sm);
+    height: var(--button-height-sm);
+    border-radius: var(--radius-sm);
+  }
+  .toggle:hover {
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+  }
+  /* The .material-symbols-outlined class lives in a document-level
+     stylesheet (loaded from Google Fonts in the page head) and does not
+     pierce the shadow boundary. Re-declare the icon-font properties
+     here so the glyph renders instead of the literal ligature text. */
+  .toggle .material-symbols-outlined {
+    font-family: "Material Symbols Outlined";
+    font-weight: normal;
+    font-style: normal;
+    font-size: var(--icon-md);
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-feature-settings: "liga";
+    font-feature-settings: "liga";
+    -webkit-font-smoothing: antialiased;
+  }
+`;
 
 class CrapPasswordToggle extends HTMLElement {
   constructor() {
     super();
-    /** @type {boolean} */
-    this._connected = false;
-    /** @type {HTMLInputElement|null} */
-    this._input = null;
-    /** @type {((e: Event) => void)|null} */
-    this._onClick = null;
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.adoptedStyleSheets = [sheet];
+
+    this._icon = h('span', { class: 'material-symbols-outlined', text: ICON_HIDDEN });
+    this._button = h(
+      'button',
+      {
+        type: 'button',
+        class: 'toggle',
+        'aria-label': 'Toggle password visibility',
+        onClick: () => this._toggle(),
+      },
+      this._icon,
+    );
+
+    this.shadowRoot.append(h('slot'), this._button);
   }
 
-  connectedCallback() {
-    if (this._connected) return;
-    this._input = /** @type {HTMLInputElement|null} */ (this.querySelector('input'));
-    if (!this._input) return;
-    this._connected = true;
-
-    this._onClick = (e) => this._onToggle(e);
-    this.addEventListener('click', this._onClick);
-  }
-
-  disconnectedCallback() {
-    if (!this._connected) return;
-    this._connected = false;
-    if (this._onClick) this.removeEventListener('click', this._onClick);
-    this._input = null;
-    this._onClick = null;
-  }
-
-  /** @param {Event} e */
-  _onToggle(e) {
-    if (!(e.target instanceof Element)) return;
-    const button = /** @type {HTMLElement|null} */ (e.target.closest('.form__password-toggle'));
-    if (!button || !this.contains(button) || !this._input) return;
-
-    const reveal = this._input.type === 'password';
-    this._input.type = reveal ? 'text' : 'password';
-    const icon = button.querySelector('span');
-    if (icon) icon.textContent = reveal ? ICON_VISIBLE : ICON_HIDDEN;
+  _toggle() {
+    const input = /** @type {HTMLInputElement|null} */ (this.querySelector('input'));
+    if (!input) return;
+    const reveal = input.type === 'password';
+    input.type = reveal ? 'text' : 'password';
+    this._icon.textContent = reveal ? ICON_VISIBLE : ICON_HIDDEN;
   }
 }
 

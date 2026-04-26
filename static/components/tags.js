@@ -141,7 +141,9 @@ class CrapTags extends HTMLElement {
   _readConfig() {
     this._fieldType = this.dataset.fieldType || 'text';
     this._readonly = this.dataset.readonly !== undefined;
-    this._hidden = /** @type {HTMLInputElement|null} */ (this.querySelector('input[type="hidden"]'));
+    this._hidden = /** @type {HTMLInputElement|null} */ (
+      this.querySelector('input[type="hidden"]')
+    );
     if (this._hidden?.value) {
       this._values = this._hidden.value.split(',').filter(Boolean);
     }
@@ -164,10 +166,14 @@ class CrapTags extends HTMLElement {
     });
 
     const hasError = !!this.querySelector('.form__tags--error');
-    this._container = h('div', {
-      class: ['tags', hasError && 'tags--error'],
-      id: 'container',
-    }, this._input);
+    this._container = h(
+      'div',
+      {
+        class: ['tags', hasError && 'tags--error'],
+        id: 'container',
+      },
+      this._input,
+    );
 
     root.append(this._container);
   }
@@ -246,15 +252,18 @@ class CrapTags extends HTMLElement {
 
   /** @param {string} value */
   _buildChip(value) {
-    return h('span', { class: 'chip', dataset: { value } },
+    return h(
+      'span',
+      { class: 'chip', dataset: { value } },
       value,
-      !this._readonly && h('button', {
-        type: 'button',
-        class: 'chip__remove',
-        'aria-label': 'Remove',
-        text: '×',
-        onClick: () => this._removeValue(value),
-      }),
+      !this._readonly &&
+        h('button', {
+          type: 'button',
+          class: 'chip__remove',
+          'aria-label': 'Remove',
+          text: '×',
+          onClick: () => this._removeValue(value),
+        }),
     );
   }
 

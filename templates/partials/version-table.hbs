@@ -13,7 +13,7 @@
     {{#each versions}}
     <tr>
       <td><span class="edit-sidebar__version-number">v{{this.version}}</span></td>
-      <td><span class="badge badge--{{this.status}}">{{this.status}}</span></td>
+      <td>{{> partials/status-badge status=this.status}}</td>
       <td><crap-time datetime="{{this.created_at}}">{{this.created_at}}</crap-time></td>
       <td>
         {{#unless this.latest}}

@@ -140,6 +140,8 @@
 - [Static Files](admin-ui/static-files.md)
 - [Display Conditions](admin-ui/display-conditions.md)
 - [Themes](admin-ui/themes.md)
+- [Web Components](admin-ui/components.md)
+- [CSS Variables](admin-ui/css-variables.md)
 
 # Internals
 

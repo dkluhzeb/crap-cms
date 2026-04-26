@@ -81,22 +81,22 @@ function getHighlightStyle(CM) {
   if (!CM.HighlightStyle || !CM.tags) return CM.defaultHighlightStyle;
   const t = CM.tags;
   _highlightStyle = CM.HighlightStyle.define([
-    { tag: t.keyword,                       color: 'var(--code-keyword, #708)' },
+    { tag: t.keyword, color: 'var(--code-keyword, #708)' },
     { tag: [t.string, t.special(t.string)], color: 'var(--code-string, #a11)' },
-    { tag: t.number,                        color: 'var(--code-number, #164)' },
-    { tag: t.comment,                       color: 'var(--code-comment, #888)', fontStyle: 'italic' },
-    { tag: [t.atom, t.bool, t.null],        color: 'var(--code-atom, #219)' },
-    { tag: t.propertyName,                  color: 'var(--code-property, #00f)' },
-    { tag: t.function(t.variableName),      color: 'var(--code-function, #00c)' },
-    { tag: t.definition(t.variableName),    color: 'var(--code-definition, #00f)' },
-    { tag: [t.typeName, t.className],       color: 'var(--code-type, #085)' },
-    { tag: t.operator,                      color: 'var(--code-operator, #708)' },
-    { tag: t.regexp,                        color: 'var(--code-regexp, #a11)' },
-    { tag: t.meta,                          color: 'var(--code-meta, #888)' },
-    { tag: t.tagName,                       color: 'var(--code-tag, #708)' },
-    { tag: t.attributeName,                 color: 'var(--code-attribute, #00c)' },
-    { tag: t.heading,                       color: 'var(--code-heading, #708)', fontWeight: 'bold' },
-    { tag: t.link,                          color: 'var(--code-link, #00c)', textDecoration: 'underline' },
+    { tag: t.number, color: 'var(--code-number, #164)' },
+    { tag: t.comment, color: 'var(--code-comment, #888)', fontStyle: 'italic' },
+    { tag: [t.atom, t.bool, t.null], color: 'var(--code-atom, #219)' },
+    { tag: t.propertyName, color: 'var(--code-property, #00f)' },
+    { tag: t.function(t.variableName), color: 'var(--code-function, #00c)' },
+    { tag: t.definition(t.variableName), color: 'var(--code-definition, #00f)' },
+    { tag: [t.typeName, t.className], color: 'var(--code-type, #085)' },
+    { tag: t.operator, color: 'var(--code-operator, #708)' },
+    { tag: t.regexp, color: 'var(--code-regexp, #a11)' },
+    { tag: t.meta, color: 'var(--code-meta, #888)' },
+    { tag: t.tagName, color: 'var(--code-tag, #708)' },
+    { tag: t.attributeName, color: 'var(--code-attribute, #00c)' },
+    { tag: t.heading, color: 'var(--code-heading, #708)', fontWeight: 'bold' },
+    { tag: t.link, color: 'var(--code-link, #00c)', textDecoration: 'underline' },
   ]);
   return _highlightStyle;
 }
@@ -190,9 +190,11 @@ function buildExtensions(CM, textarea, language, readonly) {
   if (readonly) ext.push(CM.EditorState.readOnly.of(true));
 
   ext.push(
-    CM.EditorView.updateListener.of(/** @param {any} update */ (update) => {
-      if (update.docChanged) textarea.value = update.state.doc.toString();
-    }),
+    CM.EditorView.updateListener.of(
+      /** @param {any} update */ (update) => {
+        if (update.docChanged) textarea.value = update.state.doc.toString();
+      },
+    ),
     CM.EditorView.theme(THEME_SPEC),
   );
   return ext;

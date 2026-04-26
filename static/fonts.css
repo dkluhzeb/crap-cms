@@ -1,35 +1,35 @@
 @font-face {
-  font-family: 'Geist';
-  src: url('/static/fonts/Geist/Geist-Regular.woff2') format('woff2');
+  font-family: "Geist";
+  src: url("/static/fonts/Geist/Geist-Regular.woff2") format("woff2");
   font-weight: 400;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Geist';
-  src: url('/static/fonts/Geist/Geist-Medium.woff2') format('woff2');
+  font-family: "Geist";
+  src: url("/static/fonts/Geist/Geist-Medium.woff2") format("woff2");
   font-weight: 500;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Geist';
-  src: url('/static/fonts/Geist/Geist-SemiBold.woff2') format('woff2');
+  font-family: "Geist";
+  src: url("/static/fonts/Geist/Geist-SemiBold.woff2") format("woff2");
   font-weight: 600;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Geist';
-  src: url('/static/fonts/Geist/Geist-Bold.woff2') format('woff2');
+  font-family: "Geist";
+  src: url("/static/fonts/Geist/Geist-Bold.woff2") format("woff2");
   font-weight: 700;
   font-display: swap;
 }
 
 .material-symbols-outlined {
   font-variation-settings:
-  'FILL' 0,
-  'wght' 400,
-  'GRAD' 0,
-  'opsz' 24
+    "FILL" 0,
+    "wght" 400,
+    "GRAD" 0,
+    "opsz" 24;
 }

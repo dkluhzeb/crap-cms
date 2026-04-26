@@ -11,6 +11,7 @@
  */
 
 import { t } from './i18n.js';
+import { getHttpVerb } from './util/htmx.js';
 
 /**
  * Array/blocks row actions that should mark the form dirty when the
@@ -54,9 +55,13 @@ class CrapDirtyForm extends HTMLElement {
     // Defer arming until after child components finish initialising. Without
     // this, `crap:change` events fired during `<crap-relationship-search>`
     // setup would mark the form dirty before the user touched anything.
-    requestAnimationFrame(() => { this._armed = true; });
+    requestAnimationFrame(() => {
+      this._armed = true;
+    });
 
-    this._markDirty = () => { if (this._armed) this._dirty = true; };
+    this._markDirty = () => {
+      if (this._armed) this._dirty = true;
+    };
 
     this._form = this.querySelector('#edit-form');
     if (this._form) {
@@ -87,8 +92,7 @@ class CrapDirtyForm extends HTMLElement {
 
     this._onBeforeRequest = (e) => {
       // Form save (non-GET = POST/PUT/DELETE/PATCH) clears the dirty flag.
-      const verb = (e.detail.requestConfig?.verb || e.detail.verb || '').toUpperCase();
-      if (verb !== 'GET') this._dirty = false;
+      if (getHttpVerb(e) !== 'GET') this._dirty = false;
     };
     document.addEventListener('htmx:beforeRequest', this._onBeforeRequest);
 
@@ -107,9 +111,11 @@ class CrapDirtyForm extends HTMLElement {
     }
     if (this._markDirty) this.removeEventListener('crap:change', this._markDirty);
     if (this._onRowAction) document.removeEventListener('click', this._onRowAction);
-    if (this._onConfigRequest) document.removeEventListener('htmx:configRequest', this._onConfigRequest);
+    if (this._onConfigRequest)
+      document.removeEventListener('htmx:configRequest', this._onConfigRequest);
     if (this._onPopState) window.removeEventListener('popstate', this._onPopState);
-    if (this._onBeforeRequest) document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+    if (this._onBeforeRequest)
+      document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     if (this._onBeforeUnload) window.removeEventListener('beforeunload', this._onBeforeUnload);
   }
 
@@ -121,13 +127,15 @@ class CrapDirtyForm extends HTMLElement {
    */
   async _onHtmxConfigRequest(e) {
     if (!this._dirty || this._bypassing) return;
-    const evt = /** @type {CustomEvent} */ (e);
-    if ((evt.detail.verb || '').toUpperCase() !== 'GET') return;
+    if (getHttpVerb(e) !== 'GET') return;
     if (!this.querySelector('#edit-form')) return;
 
-    evt.preventDefault();
+    e.preventDefault();
+    const evt = /** @type {CustomEvent} */ (e);
     if (!(await this._askLeave())) return;
-    this._bypassNavigate(() => { window.location.href = evt.detail.path; });
+    this._bypassNavigate(() => {
+      window.location.href = evt.detail.path;
+    });
   }
 
   /**
@@ -151,7 +159,9 @@ class CrapDirtyForm extends HTMLElement {
     this._dirty = false;
     this._bypassing = true;
     action();
-    setTimeout(() => { this._bypassing = false; }, BYPASS_GRACE_MS);
+    setTimeout(() => {
+      this._bypassing = false;
+    }, BYPASS_GRACE_MS);
   }
 
   /**
@@ -166,10 +176,10 @@ class CrapDirtyForm extends HTMLElement {
     document.dispatchEvent(evt);
     const dialog = evt.detail.instance;
     if (!dialog) return Promise.resolve(true);
-    return dialog.prompt(
-      t('unsaved_changes'),
-      { confirmLabel: t('leave'), cancelLabel: t('stay') },
-    );
+    return dialog.prompt(t('unsaved_changes'), {
+      confirmLabel: t('leave'),
+      cancelLabel: t('stay'),
+    });
   }
 }
 

@@ -177,3 +177,8 @@ All variables that themes should override:
 | `--sidebar-active-text` | Active sidebar item text color |
 
 Variables **not** typically overridden by themes (inherited from `:root`): `--radius-*`, `--space-*`, `--transition-*`, `--text-xs` through `--text-2xl`, `--sidebar-width`, `--input-height`.
+
+See [CSS Variables](css-variables.md) for the full token catalogue,
+including the `--code-*` syntax-highlight palette consumed by
+`<crap-code>` and the size/typography tokens that don't change between
+themes.

@@ -64,18 +64,17 @@ async fn delete_shows_confirm_dialog() {
     // Wait for JS components (especially <crap-confirm>) to register
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Click the delete button (inside <crap-confirm>)
-    // Use JS to click so we can verify the confirm dialog behavior
+    // Click the delete button (the form is wrapped by <crap-confirm>; the
+    // confirm prompt is rendered by the page-singleton <crap-confirm-dialog>).
     let click_result = page
         .evaluate(
             "() => { \
             const btn = document.querySelector('button.button--danger'); \
             if (!btn) return 'no-button'; \
-            const confirm = document.querySelector('crap-confirm'); \
-            if (!confirm) return 'no-confirm'; \
-            if (!confirm.shadowRoot) return 'no-shadow'; \
             btn.click(); \
-            const dialog = confirm.shadowRoot.querySelector('dialog'); \
+            const dlgHost = document.querySelector('crap-confirm-dialog'); \
+            if (!dlgHost?.shadowRoot) return 'no-shadow'; \
+            const dialog = dlgHost.shadowRoot.querySelector('dialog'); \
             return dialog && dialog.hasAttribute('open') ? 'open' : 'closed'; \
         }",
         )
@@ -125,9 +124,9 @@ async fn confirm_cancel_stays_on_page() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Click cancel in the shadow DOM
+    // Click cancel in the confirm-dialog shadow DOM
     page.evaluate(
-        "() => document.querySelector('crap-confirm').shadowRoot.querySelector('.btn-cancel').click()",
+        "() => document.querySelector('crap-confirm-dialog').shadowRoot.querySelector('.cancel').click()",
     )
     .await
     .unwrap();
@@ -143,7 +142,7 @@ async fn confirm_cancel_stays_on_page() {
     // Dialog should be closed
     let is_open = browser::shadow_eval(
         &page,
-        "crap-confirm",
+        "crap-confirm-dialog",
         "return root.querySelector('dialog')?.hasAttribute('open') ? 'true' : 'false';",
     )
     .await;
@@ -187,9 +186,9 @@ async fn confirm_accept_deletes() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Click confirm in shadow DOM
+    // Click confirm in the confirm-dialog shadow DOM
     page.evaluate(
-        "() => document.querySelector('crap-confirm').shadowRoot.querySelector('.btn-confirm').click()",
+        "() => document.querySelector('crap-confirm-dialog').shadowRoot.querySelector('.confirm').click()",
     )
     .await
     .unwrap();

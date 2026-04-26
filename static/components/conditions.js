@@ -16,6 +16,8 @@
  * @module conditions
  */
 
+import { readCsrfCookie } from './util/cookies.js';
+
 /**
  * @typedef {{ field?: string, equals?: any, not_equals?: any,
  *   in?: any[], not_in?: any[], is_truthy?: boolean, is_falsy?: boolean }} ConditionRow
@@ -67,9 +69,7 @@ function evaluate(condition, formData) {
   if (Array.isArray(condition)) {
     return condition.every((c) => evaluate(c, formData));
   }
-  const fieldVal = condition.field !== undefined
-    ? formData[condition.field] ?? ''
-    : '';
+  const fieldVal = condition.field !== undefined ? (formData[condition.field] ?? '') : '';
 
   if ('equals' in condition) return fieldVal === condition.equals;
   if ('not_equals' in condition) return fieldVal !== condition.not_equals;
@@ -91,7 +91,7 @@ function collectFields(condition, out) {
     for (const c of condition) collectFields(c, out);
     return;
   }
-  if (condition && condition.field) out.add(condition.field);
+  if (condition?.field) out.add(condition.field);
 }
 
 /**
@@ -123,13 +123,6 @@ function collectFormData(form) {
     data[cb.name] = cb.checked ? 'on' : '';
   }
   return data;
-}
-
-/** @returns {string|null} */
-function readCsrfCookie() {
-  const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-  if (!m) return null;
-  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
 }
 
 class CrapConditions extends HTMLElement {
@@ -182,9 +175,7 @@ class CrapConditions extends HTMLElement {
 
   /** @returns {HTMLFormElement|null} */
   _getForm() {
-    return /** @type {HTMLFormElement|null} */ (
-      this.querySelector('form') || this.closest('form')
-    );
+    return /** @type {HTMLFormElement|null} */ (this.querySelector('form') || this.closest('form'));
   }
 
   /**

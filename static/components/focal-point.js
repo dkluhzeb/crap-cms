@@ -102,8 +102,12 @@ class CrapFocalPoint extends HTMLElement {
 
     const img = /** @type {HTMLImageElement|null} */ (this.querySelector('img'));
     if (!img) return;
-    const inputX = /** @type {HTMLInputElement|null} */ (this.querySelector('input[name="focal_x"]'));
-    const inputY = /** @type {HTMLInputElement|null} */ (this.querySelector('input[name="focal_y"]'));
+    const inputX = /** @type {HTMLInputElement|null} */ (
+      this.querySelector('input[name="focal_x"]')
+    );
+    const inputY = /** @type {HTMLInputElement|null} */ (
+      this.querySelector('input[name="focal_y"]')
+    );
 
     const setMarker = (/** @type {number} */ x, /** @type {number} */ y) => {
       this._marker.style.left = `${x * 100}%`;

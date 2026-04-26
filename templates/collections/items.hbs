@@ -6,35 +6,29 @@
   <div class="page-header__actions">
     {{#if has_soft_delete}}
     {{#if is_trash}}
-    <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
-      hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">arrow_back</span>
-      {{t "back_to_list"}}
-    </a>
+    {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug) label_key="back_to_list" icon="arrow_back"}}
     {{#if docs}}
     {{#if collection.can_permanently_delete}}
-    <button type="button" class="button button--danger"
-      data-empty-trash-slug="{{collection.slug}}"
-      data-empty-trash-count="{{pagination.total_docs}}">
+    <button type="button"
+            class="button button--danger"
+            data-empty-trash-slug="{{collection.slug}}"
+            data-empty-trash-count="{{pagination.total_docs}}">
       <span class="material-symbols-outlined">delete_forever</span>
       {{t "empty_trash"}}
     </button>
     {{/if}}
     {{/if}}
     {{else}}
-    <a class="button button--ghost" href="/admin/collections/{{collection.slug}}?trash=1"
-      hx-get="/admin/collections/{{collection.slug}}?trash=1" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">delete</span>
-      {{t "trash"}}
-    </a>
+    {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug "?trash=1") label_key="trash" icon="delete"}}
     {{/if}}
     {{/if}}
+
     {{#unless is_trash}}
-    <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
-      hx-get="/admin/collections/{{collection.slug}}/create" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">add</span>
-      {{t "create"}} {{collection.singular_name}}
-    </a>
+    {{> partials/htmx-nav-link
+        href=(concat "/admin/collections/" collection.slug "/create")
+        label=(concat (t "create") " " collection.singular_name)
+        variant="primary"
+        icon="add"}}
     {{/unless}}
   </div>
 </div>
@@ -85,7 +79,7 @@
       {{t "columns"}}
     </button>
   </div>
-  </div>
+</div>
 
 {{#if active_filters}}
 <div class="filter-pills">
@@ -106,7 +100,7 @@
 
 {{#if docs}}
 {{> collections/items_table}}
-{{> components/pagination}}
+{{> partials/pagination}}
 {{else}}
 {{> collections/items_empty}}
 {{/if}}

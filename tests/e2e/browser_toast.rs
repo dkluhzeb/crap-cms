@@ -113,3 +113,50 @@ async fn toast_on_successful_save() {
 
     server_handle.abort();
 }
+
+// ── window_crap_namespace_dispatches_toast ───────────────────────────────
+//
+// Regression test for the `window.crap.toast({...})` convenience layer.
+// Asserts that calling the namespaced sugar produces a visible toast in
+// the singleton component's shadow root.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn window_crap_namespace_dispatches_toast() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_toast_def(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "bcrapns@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "bcrapns@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "bcrapns@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Call the sugar — should dispatch crap:toast-request and the
+    // singleton renders it.
+    page.evaluate("() => window.crap.toast({ message: 'hello from crap', type: 'info' })")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let result = browser::shadow_eval(
+        &page,
+        "crap-toast",
+        "const t = root.querySelector('.toast'); return t ? t.textContent : 'no-toast';",
+    )
+    .await;
+    assert_eq!(
+        result, "hello from crap",
+        "window.crap.toast should render a toast with the given message; got: '{result}'"
+    );
+
+    server_handle.abort();
+}

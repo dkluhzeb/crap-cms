@@ -87,13 +87,13 @@ crap-focal-point:not(:defined) {
 
   /* Spacing (base × n) */
   --space-2xs: calc(var(--base) * 0.5);
-  --space-xs:  var(--base);
+  --space-xs: var(--base);
   --space-xs2: calc(var(--base) * 1.5);
-  --space-sm:  calc(var(--base) * 2);
+  --space-sm: calc(var(--base) * 2);
   --space-sm2: calc(var(--base) * 2.5);
-  --space-md:  calc(var(--base) * 3);
-  --space-lg:  calc(var(--base) * 4);
-  --space-xl:  calc(var(--base) * 6);
+  --space-md: calc(var(--base) * 3);
+  --space-lg: calc(var(--base) * 4);
+  --space-xl: calc(var(--base) * 6);
   --space-2xl: calc(var(--base) * 8);
 
   /* Icon sizes (base × n) */
@@ -167,26 +167,26 @@ crap-focal-point:not(:defined) {
   /* Code-editor syntax-highlight palette (light defaults; dark themes
      override in themes.css). Consumed by the HighlightStyle in
      static/components/code.js. */
-  --code-keyword:    #708;
-  --code-string:     #a11;
-  --code-number:     #164;
-  --code-comment:    #888;
-  --code-atom:       #219;
-  --code-property:   #00f;
-  --code-function:   #00c;
+  --code-keyword: #708;
+  --code-string: #a11;
+  --code-number: #164;
+  --code-comment: #888;
+  --code-atom: #219;
+  --code-property: #00f;
+  --code-function: #00c;
   --code-definition: #00f;
-  --code-type:       #085;
-  --code-operator:   #708;
-  --code-regexp:     #a11;
-  --code-meta:       #888;
-  --code-tag:        #708;
-  --code-attribute:  #00c;
-  --code-heading:    #708;
-  --code-link:       #00c;
+  --code-type: #085;
+  --code-operator: #708;
+  --code-regexp: #a11;
+  --code-meta: #888;
+  --code-tag: #708;
+  --code-attribute: #00c;
+  --code-heading: #708;
+  --code-link: #00c;
 }
 
 html {
-  font-family: 'Geist', system-ui, -apple-system, sans-serif;
+  font-family: "Geist", system-ui, -apple-system, sans-serif;
   color: var(--text-primary);
 }
 
@@ -203,8 +203,12 @@ html {
 }
 
 /* Text utilities */
-.text--muted { color: var(--text-tertiary); }
-.text--sm    { font-size: var(--text-sm); }
+.text--muted {
+  color: var(--text-tertiary);
+}
+.text--sm {
+  font-size: var(--text-sm);
+}
 
 /* Screen-reader-only utility — visually hidden but accessible to assistive tech */
 .sr-only {
@@ -219,14 +223,20 @@ html {
   border: 0;
 }
 
-/* Respect user motion preferences */
+/* Respect user motion preferences. The `!important` here is load-bearing:
+   the override must outrank every animation/transition rule set elsewhere.
+   This is the documented MDN pattern for prefers-reduced-motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
     animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
     transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
     scroll-behavior: auto !important;
   }
 }
@@ -247,15 +257,29 @@ html {
 }
 
 /* Icon size modifiers for Material Symbols */
-.icon--xs { font-size: var(--icon-xs); }
-.icon--sm { font-size: var(--icon-sm); }
-.icon--md { font-size: var(--icon-md); }
-.icon--lg { font-size: var(--icon-lg); }
-.icon--xl { font-size: var(--icon-xl); }
+.icon--xs {
+  font-size: var(--icon-xs);
+}
+.icon--sm {
+  font-size: var(--icon-sm);
+}
+.icon--md {
+  font-size: var(--icon-md);
+}
+.icon--lg {
+  font-size: var(--icon-lg);
+}
+.icon--xl {
+  font-size: var(--icon-xl);
+}
 
 /* Icon color modifiers */
-.icon--success { color: var(--color-success); }
-.icon--muted   { color: var(--text-tertiary); }
+.icon--success {
+  color: var(--color-success);
+}
+.icon--muted {
+  color: var(--text-tertiary);
+}
 
 /* HTMX request indicators.
  * Replaces the inline `<style>` block HTMX would otherwise inject at boot

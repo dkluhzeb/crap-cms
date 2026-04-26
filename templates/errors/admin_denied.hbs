@@ -1,36 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script nonce="{{crap.csp_nonce}}">
-    (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link href="/static/styles.css?v={{crap.build_hash}}" rel="stylesheet" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
-  <title>{{t "error_admin_access_denied_title"}} - Crap CMS</title>
-  <script nonce="{{crap.csp_nonce}}">
-    (function(){
-      function gc(n){var m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?m[1]:null}
-      document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM')return;var t=gc('crap_csrf');if(t&&!f.querySelector('input[name="_csrf"]')){var i=document.createElement('input');i.type='hidden';i.name='_csrf';i.value=t;f.appendChild(i)}},true);
-    })();
-  </script>
-</head>
+{{#> layout/auth title=(t "error_admin_access_denied_title") header_icon_kind="material" header_icon="memory"}}
 
-<body class="auth-page">
-  <div class="auth-card">
-    <div class="auth-card__header">
-      <span class="material-symbols-outlined auth-card__icon">memory</span>
-      <h1 class="auth-card__title">Crap CMS</h1>
-    </div>
+<h2 class="auth-card__subtitle">{{t "error_admin_access_denied_title"}}</h2>
+<p class="auth-card__message">{{t "error_admin_access_denied"}}</p>
 
-    <h2 class="auth-card__subtitle">{{t "error_admin_access_denied_title"}}</h2>
-    <p class="auth-card__message">{{t "error_admin_access_denied"}}</p>
+<form method="POST" action="/admin/logout" class="auth-card__logout-form">
+  <button type="submit" class="button button--primary auth-card__submit">{{t "logout"}}</button>
+</form>
 
-    <form method="POST" action="/admin/logout" class="auth-card__logout-form">
-      <button type="submit" class="button button--primary auth-card__submit">{{t "logout"}}</button>
-    </form>
-  </div>
-</body>
-</html>
+{{/layout/auth}}

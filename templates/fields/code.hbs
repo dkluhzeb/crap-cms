@@ -1,8 +1,4 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
+{{#> partials/field}}
 <crap-code data-language="{{language}}">
   <textarea
     id="field-{{name}}"
@@ -16,5 +12,4 @@
     {{#if error}}class="form__input--error"{{/if}}
   >{{value}}</textarea>
 </crap-code>
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{/partials/field}}

@@ -281,7 +281,9 @@ crap-sticky-header {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .locale-picker__toggle:hover {
@@ -351,7 +353,9 @@ crap-sticky-header {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .theme-picker__toggle:hover {
@@ -509,7 +513,9 @@ crap-sticky-header {
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
+    transition:
+      background var(--transition-fast),
+      color var(--transition-fast);
     margin-right: var(--space-sm);
     flex-shrink: 0;
   }

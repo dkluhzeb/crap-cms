@@ -22,7 +22,7 @@
  */
 
 import { css } from './css.js';
-import { h, clear } from './h.js';
+import { clear, h } from './h.js';
 import { t } from './i18n.js';
 
 /** Debounce window for the inline search input. */
@@ -437,7 +437,9 @@ class CrapRelationshipSearch extends HTMLElement {
       try {
         const raw = JSON.parse(this.getAttribute('collections') || '[]');
         if (Array.isArray(raw) && raw.length > 0) this._collections = raw;
-      } catch { /* fallback to single */ }
+      } catch {
+        /* fallback to single */
+      }
     }
 
     try {
@@ -480,12 +482,17 @@ class CrapRelationshipSearch extends HTMLElement {
   /** @param {HTMLInputElement} input */
   _buildTagsWrapper(input) {
     this._chipsContainer = h('div', { class: 'relationship-search__chips' });
-    this._tagsContainer = h('div', {
-      class: ['relationship-search__tags', this._hasError && 'relationship-search__tags--error'],
-      onClick: (e) => {
-        if (e.target === this._tagsContainer) input.focus();
+    this._tagsContainer = h(
+      'div',
+      {
+        class: ['relationship-search__tags', this._hasError && 'relationship-search__tags--error'],
+        onClick: (e) => {
+          if (e.target === this._tagsContainer) input.focus();
+        },
       },
-    }, this._chipsContainer, input);
+      this._chipsContainer,
+      input,
+    );
     return h('div', { class: 'relationship-search__input-wrapper' }, this._tagsContainer);
   }
 
@@ -571,22 +578,27 @@ class CrapRelationshipSearch extends HTMLElement {
 
   /** @param {Item} item */
   _buildChip(item) {
-    return h('span', { class: 'relationship-search__chip' },
-      this._polymorphic && item.collection && h('span', {
-        class: 'relationship-search__chip-collection',
-        text: item.collection,
-      }),
+    return h(
+      'span',
+      { class: 'relationship-search__chip' },
+      this._polymorphic &&
+        item.collection &&
+        h('span', {
+          class: 'relationship-search__chip-collection',
+          text: item.collection,
+        }),
       item.label,
-      !this._readonly && h('button', {
-        type: 'button',
-        class: 'relationship-search__chip-remove',
-        text: '×',
-        onClick: () => {
-          this._selected = this._selected.filter((s) => s.id !== item.id);
-          this._renderChips();
-          this._syncHiddenInputs();
-        },
-      }),
+      !this._readonly &&
+        h('button', {
+          type: 'button',
+          class: 'relationship-search__chip-remove',
+          text: '×',
+          onClick: () => {
+            this._selected = this._selected.filter((s) => s.id !== item.id);
+            this._renderChips();
+            this._syncHiddenInputs();
+          },
+        }),
     );
   }
 
@@ -594,7 +606,7 @@ class CrapRelationshipSearch extends HTMLElement {
     if (this._hasMany || !this._input) return;
     const item = this._selected[0];
     if (item) {
-      const prefix = (this._polymorphic && item.collection) ? `[${item.collection}] ` : '';
+      const prefix = this._polymorphic && item.collection ? `[${item.collection}] ` : '';
       this._input.value = prefix + item.label;
       this._input.dataset.selectedId = item.id;
     } else {
@@ -607,19 +619,23 @@ class CrapRelationshipSearch extends HTMLElement {
     if (!this._dropdown || !this._input) return;
     clear(this._dropdown);
     if (this._results.length === 0) {
-      this._dropdown.append(h('div', {
-        class: 'relationship-search__empty',
-        text: t('no_results'),
-      }));
+      this._dropdown.append(
+        h('div', {
+          class: 'relationship-search__empty',
+          text: t('no_results'),
+        }),
+      );
     } else {
       let currentGroup = null;
       this._results.forEach((item, idx) => {
         if (this._polymorphic && item.collection && item.collection !== currentGroup) {
           currentGroup = item.collection;
-          this._dropdown?.append(h('div', {
-            class: 'relationship-search__group-header',
-            text: item.collection,
-          }));
+          this._dropdown?.append(
+            h('div', {
+              class: 'relationship-search__group-header',
+              text: item.collection,
+            }),
+          );
         }
         this._dropdown?.append(this._buildOption(item, idx));
       });
@@ -726,22 +742,26 @@ class CrapRelationshipSearch extends HTMLElement {
    * @returns {Promise<Item[]>}
    */
   async _searchPolymorphic(query, signal) {
-    const buckets = await Promise.all(this._collections.map(async (col) => {
-      try {
-        const items = await this._searchSingle(col, query, signal);
-        return items.map((item) => ({
-          id: `${col}/${item.id}`,
-          label: item.label,
-          collection: col,
-        }));
-      } catch {
-        return [];
-      }
-    }));
+    const buckets = await Promise.all(
+      this._collections.map(async (col) => {
+        try {
+          const items = await this._searchSingle(col, query, signal);
+          return items.map((item) => ({
+            id: `${col}/${item.id}`,
+            label: item.label,
+            collection: col,
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
     if (signal.aborted) return [];
     const flat = buckets.flat();
-    flat.sort((a, b) =>
-      this._collections.indexOf(a.collection || '') - this._collections.indexOf(b.collection || ''),
+    flat.sort(
+      (a, b) =>
+        this._collections.indexOf(a.collection || '') -
+        this._collections.indexOf(b.collection || ''),
     );
     return flat;
   }
@@ -774,9 +794,7 @@ class CrapRelationshipSearch extends HTMLElement {
 
   _onFocus() {
     if (this._readonly || this._suppressFocus || !this._input) return;
-    const query = (!this._hasMany && this._input.dataset.selectedId)
-      ? ''
-      : this._input.value.trim();
+    const query = !this._hasMany && this._input.dataset.selectedId ? '' : this._input.value.trim();
     this._doSearch(query);
   }
 
@@ -861,7 +879,9 @@ class CrapRelationshipSearch extends HTMLElement {
     this.addEventListener('crap:pick', (e) => {
       this._suppressFocus = true;
       this._selectItem(/** @type {CustomEvent<Item>} */ (e).detail);
-      setTimeout(() => { this._suppressFocus = false; }, SUPPRESS_FOCUS_MS);
+      setTimeout(() => {
+        this._suppressFocus = false;
+      }, SUPPRESS_FOCUS_MS);
     });
   }
 
@@ -871,12 +891,16 @@ class CrapRelationshipSearch extends HTMLElement {
     if (this._pickerMode !== 'drawer' || this._readonly) return;
     if (!this._inputWrapper?.parentNode) return;
 
-    const browseBtn = h('button', {
-      type: 'button',
-      class: 'relationship-search__browse',
-      title: t('browse'),
-      onClick: () => this._openDrawerPicker(),
-    }, h('span', { class: ['material-symbols-outlined', 'icon--md'], text: 'folder_open' }));
+    const browseBtn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'relationship-search__browse',
+        title: t('browse'),
+        onClick: () => this._openDrawerPicker(),
+      },
+      h('span', { class: ['material-symbols-outlined', 'icon--md'], text: 'folder_open' }),
+    );
 
     const row = h('div', { class: 'relationship-search__input-row' });
     this._inputWrapper.parentNode.insertBefore(row, this._inputWrapper);
@@ -922,7 +946,10 @@ class CrapRelationshipSearch extends HTMLElement {
 
   _buildDrawerResults() {
     return h('div', {
-      class: ['rs-drawer__results', this._isUpload ? 'rs-drawer__results--grid' : 'rs-drawer__results--list'],
+      class: [
+        'rs-drawer__results',
+        this._isUpload ? 'rs-drawer__results--grid' : 'rs-drawer__results--list',
+      ],
     });
   }
 
@@ -958,25 +985,33 @@ class CrapRelationshipSearch extends HTMLElement {
         offset = 0;
       }
       try {
-        const url = `/admin/api/search/${encodeURIComponent(this._collection)}`
-          + `?q=${encodeURIComponent(query)}&limit=${DRAWER_PAGE_SIZE}&offset=${offset}`;
+        const url =
+          `/admin/api/search/${encodeURIComponent(this._collection)}` +
+          `?q=${encodeURIComponent(query)}&limit=${DRAWER_PAGE_SIZE}&offset=${offset}`;
         const resp = await fetch(url, { signal: fetchCtrl.signal });
         if (!resp.ok) return;
         /** @type {Item[]} */
         const items = await resp.json();
         for (const item of items) {
-          ctx.results.appendChild(this._isUpload
-            ? this._buildUploadCard(item, ctx.currentIds, ctx.drawer)
-            : this._buildListItem(item, ctx.currentIds, ctx.drawer));
+          ctx.results.appendChild(
+            this._isUpload
+              ? this._buildUploadCard(item, ctx.currentIds, ctx.drawer)
+              : this._buildListItem(item, ctx.currentIds, ctx.drawer),
+          );
         }
         offset += items.length;
         ctx.loadMore.hidden = items.length < DRAWER_PAGE_SIZE;
-      } catch { /* aborted or network error */ }
+      } catch {
+        /* aborted or network error */
+      }
     };
 
     ctx.searchInput.addEventListener('input', () => {
       if (debounceTimer != null) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => fetchPage(ctx.searchInput.value.trim(), false), DRAWER_DEBOUNCE_MS);
+      debounceTimer = setTimeout(
+        () => fetchPage(ctx.searchInput.value.trim(), false),
+        DRAWER_DEBOUNCE_MS,
+      );
     });
     ctx.loadMore.addEventListener('click', () => fetchPage(ctx.searchInput.value.trim(), true));
     fetchPage('', false);
@@ -989,17 +1024,27 @@ class CrapRelationshipSearch extends HTMLElement {
    */
   _buildUploadCard(item, currentIds, drawer) {
     const isSelected = currentIds.has(item.id);
-    const visual = item.thumbnail_url && item.is_image
-      ? h('img', { class: 'rs-drawer__card-img', src: item.thumbnail_url, alt: item.label || '' })
-      : h('span', { class: ['rs-drawer__card-icon', 'material-symbols-outlined'], text: 'description' });
+    const visual =
+      item.thumbnail_url && item.is_image
+        ? h('img', { class: 'rs-drawer__card-img', src: item.thumbnail_url, alt: item.label || '' })
+        : h('span', {
+            class: ['rs-drawer__card-icon', 'material-symbols-outlined'],
+            text: 'description',
+          });
 
-    return h('div', {
-      class: ['rs-drawer__card', isSelected && 'rs-drawer__card--selected'],
-      onClick: () => this._onDrawerPick(item, drawer),
-    },
+    return h(
+      'div',
+      {
+        class: ['rs-drawer__card', isSelected && 'rs-drawer__card--selected'],
+        onClick: () => this._onDrawerPick(item, drawer),
+      },
       visual,
       h('span', { class: 'rs-drawer__card-label', text: item.label || item.id }),
-      isSelected && h('span', { class: ['rs-drawer__card-check', 'material-symbols-outlined'], text: 'check_circle' }),
+      isSelected &&
+        h('span', {
+          class: ['rs-drawer__card-check', 'material-symbols-outlined'],
+          text: 'check_circle',
+        }),
     );
   }
 
@@ -1010,12 +1055,15 @@ class CrapRelationshipSearch extends HTMLElement {
    */
   _buildListItem(item, currentIds, drawer) {
     const isSelected = currentIds.has(item.id);
-    return h('div', {
-      class: ['rs-drawer__row', isSelected && 'rs-drawer__row--selected'],
-      onClick: () => this._onDrawerPick(item, drawer),
-    },
+    return h(
+      'div',
+      {
+        class: ['rs-drawer__row', isSelected && 'rs-drawer__row--selected'],
+        onClick: () => this._onDrawerPick(item, drawer),
+      },
       h('span', { text: item.label || item.id }),
-      isSelected && h('span', { class: ['rs-drawer__row-check', 'material-symbols-outlined'], text: 'check' }),
+      isSelected &&
+        h('span', { class: ['rs-drawer__row-check', 'material-symbols-outlined'], text: 'check' }),
     );
   }
 

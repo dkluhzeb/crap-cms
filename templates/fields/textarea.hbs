@@ -1,8 +1,4 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
+{{#> partials/field}}
 <textarea
   id="field-{{name}}"
   name="{{name}}"
@@ -14,5 +10,4 @@
   {{#if max_length}}maxlength="{{max_length}}"{{/if}}
   class="{{#if error}}form__input--error {{/if}}{{#unless resizable}}form__textarea--no-resize{{/unless}}"
 >{{value}}</textarea>
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{/partials/field}}

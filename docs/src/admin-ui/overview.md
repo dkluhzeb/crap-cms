@@ -126,8 +126,10 @@ See [Versions & Drafts](../collections/versions.md) for the full configuration a
 - `static/components/index.js` entry point loaded with `<script type="module">`
 - Each feature is a separate module under `static/components/` (individually overridable)
 - JSDoc annotations for all types
-- Web Components (Shadow DOM, CSS variables for theming):
-  - `<crap-toast>` — toast notifications (listens for `htmx:afterRequest`, reads `X-Crap-Toast` header)
-  - `<crap-confirm>` — confirmation dialogs (wraps forms, intercepts submit)
-  - `<crap-confirm-dialog>` — standalone confirm for `hx-confirm` attributes (replaces native `window.confirm`)
-  - `<crap-richtext>` — ProseMirror WYSIWYG editor
+- Web Components (Shadow DOM, CSS variables for theming) — see
+  [Web Components](components.md) for the full reference, including
+  the singleton discovery contract, the `crap:change` form-field event,
+  the `window.crap` namespace, and the override pattern. The library
+  ships ~30 components: `<crap-toast>`, `<crap-confirm>`,
+  `<crap-confirm-dialog>`, `<crap-richtext>`, `<crap-code>`,
+  `<crap-tags>`, `<crap-array-field>`, `<crap-validate-form>`, …

@@ -35,18 +35,19 @@
  */
 
 import { h } from './h.js';
-import { sheet } from './richtext/styles.js';
-import { buildSchema } from './richtext/schema.js';
-import { buildPlugins } from './richtext/plugins.js';
-import {
-  buildToolbarNodes,
-  isCommandActive,
-  markActive,
-  getMarkAttrs,
-} from './richtext/toolbar.js';
 import { openLinkModal } from './richtext/link-modal.js';
 import { openNodeEditModal } from './richtext/node-modal.js';
 import { CustomNodeView } from './richtext/node-view.js';
+import { buildPlugins } from './richtext/plugins.js';
+import { buildSchema } from './richtext/schema.js';
+import { sheet } from './richtext/styles.js';
+import {
+  buildToolbarNodes,
+  getMarkAttrs,
+  isCommandActive,
+  markActive,
+} from './richtext/toolbar.js';
+import { parseJsonAttribute } from './util/json.js';
 
 /**
  * @typedef {(name: string) => boolean} FeatureCheck
@@ -67,13 +68,8 @@ import { CustomNodeView } from './richtext/node-view.js';
  * @returns {Set<string>|null}
  */
 function readEnabledFeatures(host) {
-  const raw = host.getAttribute('data-features');
-  if (!raw) return null;
-  try {
-    const arr = JSON.parse(raw);
-    if (Array.isArray(arr) && arr.length > 0) return new Set(arr);
-  } catch { /* ignore */ }
-  return null;
+  const arr = parseJsonAttribute(host, 'data-features', null);
+  return Array.isArray(arr) && arr.length > 0 ? new Set(arr) : null;
 }
 
 /**
@@ -84,14 +80,8 @@ function readEnabledFeatures(host) {
  * @returns {CustomNodeDef[]}
  */
 function readCustomNodes(host) {
-  const raw = host.getAttribute('data-nodes');
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  const arr = parseJsonAttribute(host, 'data-nodes', []);
+  return Array.isArray(arr) ? arr : [];
 }
 
 class CrapRichtext extends HTMLElement {
@@ -128,7 +118,9 @@ class CrapRichtext extends HTMLElement {
     const schema = buildSchema(PM, has, this._customNodes);
     const format = this.getAttribute('data-format') || 'html';
     const doc = this._parseInitialDoc(PM, textarea, schema, format);
-    const plugins = buildPlugins(PM, schema, has, (view) => this._updateToolbar(view.state, schema, has));
+    const plugins = buildPlugins(PM, schema, has, (view) =>
+      this._updateToolbar(view.state, schema, has),
+    );
     const state = PM.EditorState.create({ doc, plugins });
     const isReadonly = textarea.hasAttribute('readonly');
 
@@ -187,9 +179,14 @@ class CrapRichtext extends HTMLElement {
       ? null
       : h('div', { class: 'richtext__toolbar' }, ...buildToolbarNodes(has, this._customNodes));
     root.append(
-      h('div', {
-        class: ['richtext', this.hasAttribute('data-no-resize') && 'richtext--no-resize'],
-      }, toolbar, this._editorEl),
+      h(
+        'div',
+        {
+          class: ['richtext', this.hasAttribute('data-no-resize') && 'richtext--no-resize'],
+        },
+        toolbar,
+        this._editorEl,
+      ),
     );
   }
 
@@ -301,7 +298,10 @@ class CrapRichtext extends HTMLElement {
     let minDist = Infinity;
     for (let i = 0; i < positions.length; i++) {
       const dist = Math.abs(positions[i] - pos);
-      if (dist < minDist) { minDist = dist; closestIdx = i; }
+      if (dist < minDist) {
+        minDist = dist;
+        closestIdx = i;
+      }
     }
     return closestIdx;
   }
@@ -354,12 +354,16 @@ class CrapRichtext extends HTMLElement {
       cmds.link = () => {
         const state = stateFn();
         const markType = schema.marks.link;
-        openLinkModal(this, schema, markActive(state, markType) ? getMarkAttrs(state, markType) : {});
+        openLinkModal(
+          this,
+          schema,
+          markActive(state, markType) ? getMarkAttrs(state, markType) : {},
+        );
       };
     }
     if (has('heading') && schema.nodes.heading) {
-      const setHeading = (/** @type {number} */ level) =>
-        () => PM.setBlockType(schema.nodes.heading, { level })(stateFn(), dispatchFn());
+      const setHeading = (/** @type {number} */ level) => () =>
+        PM.setBlockType(schema.nodes.heading, { level })(stateFn(), dispatchFn());
       cmds.h1 = setHeading(1);
       cmds.h2 = setHeading(2);
       cmds.h3 = setHeading(3);
@@ -400,9 +404,7 @@ class CrapRichtext extends HTMLElement {
     const view = this._view;
     const nodeType = schema.nodes[nd.name];
     if (!nodeType) return;
-    const defaults = Object.fromEntries(
-      (nd.attrs || []).map((a) => [a.name, a.default ?? '']),
-    );
+    const defaults = Object.fromEntries((nd.attrs || []).map((a) => [a.name, a.default ?? '']));
     view.dispatch(view.state.tr.replaceSelectionWith(nodeType.create(defaults)));
 
     // For block atoms, replaceSelectionWith may split paragraphs, so mapping
@@ -429,7 +431,10 @@ class CrapRichtext extends HTMLElement {
     for (const btn of /** @type {NodeListOf<HTMLButtonElement>} */ (
       toolbar.querySelectorAll('button[data-cmd]')
     )) {
-      btn.classList.toggle('active', isCommandActive(btn.getAttribute('data-cmd') || '', state, schema, has));
+      btn.classList.toggle(
+        'active',
+        isCommandActive(btn.getAttribute('data-cmd') || '', state, schema, has),
+      );
     }
   }
 
@@ -473,7 +478,9 @@ class CrapRichtext extends HTMLElement {
         }
       }
       if (node) dispatch(state.tr.setNodeMarkup(resolvedPos, null, newAttrs));
-    } catch { /* position drifted out of bounds */ }
+    } catch {
+      /* position drifted out of bounds */
+    }
   }
 }
 

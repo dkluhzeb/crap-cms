@@ -1,3 +1,5 @@
+/* biome-ignore-all format: column-aligned palettes are intentional for scannability. */
+
 /* ── Tokyo Night ─────────────────────────────────────────────── */
 
 html[data-theme="tokyo-night"] {
@@ -77,7 +79,6 @@ html[data-theme="tokyo-night"] {
   --code-link:       #7aa2f7;
 }
 
-
 /* ── Catppuccin Mocha ───────────────────────────────────────── */
 
 html[data-theme="catppuccin"] {
@@ -139,24 +140,23 @@ html[data-theme="catppuccin"] {
   --sidebar-active-text: #cba6f7;
 
   /* Code-editor syntax-highlight palette (Catppuccin Mocha) */
-  --code-keyword:    #cba6f7;
-  --code-string:     #a6e3a1;
-  --code-number:     #fab387;
-  --code-comment:    #6c7086;
-  --code-atom:       #f38ba8;
-  --code-property:   #89dceb;
-  --code-function:   #89b4fa;
+  --code-keyword: #cba6f7;
+  --code-string: #a6e3a1;
+  --code-number: #fab387;
+  --code-comment: #6c7086;
+  --code-atom: #f38ba8;
+  --code-property: #89dceb;
+  --code-function: #89b4fa;
   --code-definition: #89b4fa;
-  --code-type:       #94e2d5;
-  --code-operator:   #89dceb;
-  --code-regexp:     #f5c2e7;
-  --code-meta:       #6c7086;
-  --code-tag:        #f38ba8;
-  --code-attribute:  #f9e2af;
-  --code-heading:    #cba6f7;
-  --code-link:       #89b4fa;
+  --code-type: #94e2d5;
+  --code-operator: #89dceb;
+  --code-regexp: #f5c2e7;
+  --code-meta: #6c7086;
+  --code-tag: #f38ba8;
+  --code-attribute: #f9e2af;
+  --code-heading: #cba6f7;
+  --code-link: #89b4fa;
 }
-
 
 /* ── Rosé Pine Dawn ─────────────────────────────────────────── */
 /* https://rosepinetheme.com/palette/ — Dawn variant            */
@@ -227,24 +227,23 @@ html[data-theme="rose-pine-dawn"] {
   accent-color: #907aa9;
 
   /* Code-editor syntax-highlight palette (Rosé Pine Dawn) */
-  --code-keyword:    #907aa9;
-  --code-string:     #ea9d34;
-  --code-number:     #d7827e;
-  --code-comment:    #9893a5;
-  --code-atom:       #b4637a;
-  --code-property:   #286983;
-  --code-function:   #56949f;
+  --code-keyword: #907aa9;
+  --code-string: #ea9d34;
+  --code-number: #d7827e;
+  --code-comment: #9893a5;
+  --code-atom: #b4637a;
+  --code-property: #286983;
+  --code-function: #56949f;
   --code-definition: #56949f;
-  --code-type:       #56949f;
-  --code-operator:   #907aa9;
-  --code-regexp:     #d7827e;
-  --code-meta:       #9893a5;
-  --code-tag:        #b4637a;
-  --code-attribute:  #ea9d34;
-  --code-heading:    #907aa9;
-  --code-link:       #56949f;
+  --code-type: #56949f;
+  --code-operator: #907aa9;
+  --code-regexp: #d7827e;
+  --code-meta: #9893a5;
+  --code-tag: #b4637a;
+  --code-attribute: #ea9d34;
+  --code-heading: #907aa9;
+  --code-link: #56949f;
 }
-
 
 /* ── Gruvbox Dark ───────────────────────────────────────────── */
 
@@ -307,20 +306,20 @@ html[data-theme="gruvbox"] {
   --sidebar-active-text: #fe8019;
 
   /* Code-editor syntax-highlight palette (Gruvbox) */
-  --code-keyword:    #fb4934;
-  --code-string:     #b8bb26;
-  --code-number:     #d3869b;
-  --code-comment:    #928374;
-  --code-atom:       #d3869b;
-  --code-property:   #83a598;
-  --code-function:   #fabd2f;
+  --code-keyword: #fb4934;
+  --code-string: #b8bb26;
+  --code-number: #d3869b;
+  --code-comment: #928374;
+  --code-atom: #d3869b;
+  --code-property: #83a598;
+  --code-function: #fabd2f;
   --code-definition: #fabd2f;
-  --code-type:       #fabd2f;
-  --code-operator:   #fe8019;
-  --code-regexp:     #b8bb26;
-  --code-meta:       #928374;
-  --code-tag:        #fb4934;
-  --code-attribute:  #8ec07c;
-  --code-heading:    #fb4934;
-  --code-link:       #83a598;
+  --code-type: #fabd2f;
+  --code-operator: #fe8019;
+  --code-regexp: #b8bb26;
+  --code-meta: #928374;
+  --code-tag: #fb4934;
+  --code-attribute: #8ec07c;
+  --code-heading: #fb4934;
+  --code-link: #83a598;
 }

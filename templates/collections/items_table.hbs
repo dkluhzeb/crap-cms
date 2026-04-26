@@ -1,28 +1,56 @@
 <table class="table">
   <thead>
     <tr>
-      <th{{#if title_sort_url}}{{#if title_sorted_asc}} aria-sort="ascending"{{else}}{{#if title_sorted_desc}} aria-sort="descending"{{/if}}{{/if}}{{/if}}>
+      <th
         {{#if title_sort_url}}
-        <a class="table__sort-link" href="{{title_sort_url}}"
-           hx-get="{{title_sort_url}}" hx-target="body" hx-push-url="true">
+          {{#if title_sorted_asc}}aria-sort="ascending"
+          {{else if title_sorted_desc}}aria-sort="descending"{{/if}}
+        {{/if}}>
+        {{#if title_sort_url}}
+        <a class="table__sort-link"
+           href="{{title_sort_url}}"
+           hx-get="{{title_sort_url}}"
+           hx-target="body"
+           hx-push-url="true">
           {{#if collection.title_field}}{{collection.title_field}}{{else}}{{t "id"}}{{/if}}
-          {{#if title_sorted_asc}}<span class="material-symbols-outlined table__sort-icon table__sort-icon--active" aria-label="{{t "sorted_ascending"}}">arrow_upward</span>{{/if}}
-          {{#if title_sorted_desc}}<span class="material-symbols-outlined table__sort-icon table__sort-icon--active" aria-label="{{t "sorted_descending"}}">arrow_downward</span>{{/if}}
-          {{#unless title_sorted_asc}}{{#unless title_sorted_desc}}<span class="material-symbols-outlined table__sort-icon" aria-label="{{t "sort"}}">unfold_more</span>{{/unless}}{{/unless}}
+          {{#if title_sorted_asc}}
+          <span class="material-symbols-outlined table__sort-icon table__sort-icon--active"
+                aria-label="{{t "sorted_ascending"}}">arrow_upward</span>
+          {{else if title_sorted_desc}}
+          <span class="material-symbols-outlined table__sort-icon table__sort-icon--active"
+                aria-label="{{t "sorted_descending"}}">arrow_downward</span>
+          {{else}}
+          <span class="material-symbols-outlined table__sort-icon"
+                aria-label="{{t "sort"}}">unfold_more</span>
+          {{/if}}
         </a>
         {{else}}
         {{#if collection.title_field}}{{collection.title_field}}{{else}}{{t "id"}}{{/if}}
         {{/if}}
       </th>
       {{#each table_columns}}
-      <th{{#if this.sortable}}{{#if this.is_sorted_asc}} aria-sort="ascending"{{else}}{{#if this.is_sorted_desc}} aria-sort="descending"{{/if}}{{/if}}{{/if}}>
+      <th
         {{#if this.sortable}}
-        <a class="table__sort-link" href="{{this.sort_url}}"
-           hx-get="{{this.sort_url}}" hx-target="body" hx-push-url="true">
+          {{#if this.is_sorted_asc}}aria-sort="ascending"
+          {{else if this.is_sorted_desc}}aria-sort="descending"{{/if}}
+        {{/if}}>
+        {{#if this.sortable}}
+        <a class="table__sort-link"
+           href="{{this.sort_url}}"
+           hx-get="{{this.sort_url}}"
+           hx-target="body"
+           hx-push-url="true">
           {{t this.label}}
-          {{#if this.is_sorted_asc}}<span class="material-symbols-outlined table__sort-icon table__sort-icon--active" aria-label="{{t "sorted_ascending"}}">arrow_upward</span>{{/if}}
-          {{#if this.is_sorted_desc}}<span class="material-symbols-outlined table__sort-icon table__sort-icon--active" aria-label="{{t "sorted_descending"}}">arrow_downward</span>{{/if}}
-          {{#unless this.is_sorted_asc}}{{#unless this.is_sorted_desc}}<span class="material-symbols-outlined table__sort-icon" aria-label="{{t "sort"}}">unfold_more</span>{{/unless}}{{/unless}}
+          {{#if this.is_sorted_asc}}
+          <span class="material-symbols-outlined table__sort-icon table__sort-icon--active"
+                aria-label="{{t "sorted_ascending"}}">arrow_upward</span>
+          {{else if this.is_sorted_desc}}
+          <span class="material-symbols-outlined table__sort-icon table__sort-icon--active"
+                aria-label="{{t "sorted_descending"}}">arrow_downward</span>
+          {{else}}
+          <span class="material-symbols-outlined table__sort-icon"
+                aria-label="{{t "sort"}}">unfold_more</span>
+          {{/if}}
         </a>
         {{else}}
         {{this.label}}

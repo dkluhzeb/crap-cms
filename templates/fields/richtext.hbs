@@ -1,9 +1,9 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
-<crap-richtext{{#if features}} data-features='{{json features}}'{{/if}} data-format="{{richtext_format}}"{{#if custom_nodes}} data-nodes='{{json custom_nodes}}'{{/if}}{{#unless resizable}} data-no-resize{{/unless}}>
+{{#> partials/field}}
+<crap-richtext
+  {{#if features}}data-features='{{json features}}'{{/if}}
+  data-format="{{richtext_format}}"
+  {{#if custom_nodes}}data-nodes='{{json custom_nodes}}'{{/if}}
+  {{#unless resizable}}data-no-resize{{/unless}}>
   <textarea
     id="field-{{name}}"
     name="{{name}}"
@@ -16,5 +16,4 @@
     {{#if error}}class="form__input--error"{{/if}}
   >{{value}}</textarea>
 </crap-richtext>
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{/partials/field}}

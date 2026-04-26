@@ -1,56 +1,22 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script nonce="{{crap.csp_nonce}}">
-    (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link href="/static/styles.css?v={{crap.build_hash}}" rel="stylesheet" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
-  <title>{{t "mfa_page_title"}} - Crap CMS</title>
-  <script nonce="{{crap.csp_nonce}}">
-    (function(){
-      function gc(n){var m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?m[1]:null}
-      document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM')return;var t=gc('crap_csrf');if(t&&!f.querySelector('input[name="_csrf"]')){var i=document.createElement('input');i.type='hidden';i.name='_csrf';i.value=t;f.appendChild(i)}},true);
-    })();
-  </script>
-</head>
+{{#> layout/auth title=(t "mfa_page_title")}}
 
-<body class="auth-page">
-  <div class="auth-card">
-    <div class="auth-card__header">
-      <svg class="auth-card__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-        <path fill="currentColor" d="M4.5 10 L12 4.8 L19.5 10 L17.8 10 L12 6.6 L6.2 10 Z"/>
-        <path fill="currentColor" d="M7.8 10 L16.2 10 L15 20 L9 20 Z M10 11.2 H14 V19 H10 Z" fill-rule="evenodd"/>
-        <mask id="heart-mask">
-          <rect width="24" height="24" fill="white"/>
-          <path d="M12 13.5 C12 13.1 11.5 12.8 11.2 13.2 C10.9 13.6 11.3 14.1 12 14.9 C12.7 14.1 13.1 13.6 12.8 13.2 C12.5 12.8 12 13.1 12 13.5 Z" fill="black"/>
-        </mask>
-        <path fill="currentColor" d="M10.3 11.5 H13.7 V18.7 H10.3 Z" mask="url(#heart-mask)"/>
-      </svg>
-      <h1 class="auth-card__title">Crap CMS</h1>
-    </div>
+{{#if error}}
+<div class="auth-card__error">{{t error}}</div>
+{{/if}}
 
-    {{#if error}}
-    <div class="auth-card__error">{{t error}}</div>
-    {{/if}}
+<p class="auth-card__message">{{t "mfa_enter_code"}}</p>
 
-    <p class="auth-card__message">{{t "mfa_enter_code"}}</p>
-
-    <form class="auth-card__form" method="POST" action="/admin/mfa">
-      <div class="form__field">
-        <label for="code">{{t "mfa_code_label"}}</label>
-        <input type="text" name="code" id="code" placeholder="000000" required
-               autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}"
-               maxlength="6" autofocus />
-      </div>
-
-      <button type="submit" class="button button--primary auth-card__submit">{{t "mfa_verify"}}</button>
-
-      <p class="auth-card__link"><a href="/admin/login">{{t "back_to_login"}}</a></p>
-    </form>
+<form class="auth-card__form" method="POST" action="/admin/mfa">
+  <div class="form__field">
+    <label for="code">{{t "mfa_code_label"}}</label>
+    <input type="text" name="code" id="code" placeholder="000000" required
+           autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}"
+           maxlength="6" autofocus />
   </div>
-</body>
-</html>
+
+  <button type="submit" class="button button--primary auth-card__submit">{{t "mfa_verify"}}</button>
+
+  <p class="auth-card__link"><a href="/admin/login">{{t "back_to_login"}}</a></p>
+</form>
+
+{{/layout/auth}}

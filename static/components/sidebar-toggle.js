@@ -44,7 +44,8 @@ class CrapSidebar extends HTMLElement {
     if (!this._connected) return;
     this._connected = false;
     if (this._onDocClick) document.removeEventListener('click', this._onDocClick);
-    if (this._onEscape) document.removeEventListener('keydown', /** @type {EventListener} */ (this._onEscape));
+    if (this._onEscape)
+      document.removeEventListener('keydown', /** @type {EventListener} */ (this._onEscape));
     if (this._onNav) document.removeEventListener('htmx:beforeRequest', this._onNav);
   }
 

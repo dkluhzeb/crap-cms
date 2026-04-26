@@ -1,0 +1,16 @@
+{{!-- partials/error-page
+     Shared error-page card (404, 403, 500, etc.).
+
+     Params:
+       code         — string error code shown as <h1>
+       message_key  — translation key for the main message
+       detail       — optional plain detail string (used by 500 to surface
+                      a runtime message) --}}
+{{#> layout/base title=(t message_key)}}
+<div class="error-page">
+  <h1>{{code}}</h1>
+  <p>{{t message_key}}</p>
+  {{#if detail}}<p class="error-detail">{{detail}}</p>{{/if}}
+  {{> partials/htmx-nav-link href="/admin" label_key="go_to_dashboard" variant="primary"}}
+</div>
+{{/layout/base}}

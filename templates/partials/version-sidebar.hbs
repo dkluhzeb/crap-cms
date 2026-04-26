@@ -1,0 +1,28 @@
+{{!-- Shared version history sidebar panel used by both collections and globals edit sidebars.
+     Expects: versions (array), has_more_versions (bool), restore_url_prefix (string), versions_url (string) --}}
+{{#> partials/sidebar-panel icon="history" label_key="version_history"}}
+  {{#if versions}}
+  <div class="edit-sidebar__versions">
+    {{#each versions}}
+    <div class="edit-sidebar__version-row">
+      <div class="edit-sidebar__version-info">
+        <span class="edit-sidebar__version-number">v{{this.version}}</span>
+        {{> partials/status-badge status=this.status}}
+      </div>
+      <div class="edit-sidebar__version-meta"><crap-time datetime="{{this.created_at}}">{{this.created_at}}</crap-time></div>
+      {{#unless this.latest}}
+      {{> partials/htmx-nav-link href=(concat ../restore_url_prefix "/versions/" this.id "/restore") label_key="restore" size="small"}}
+      {{/unless}}
+    </div>
+    {{/each}}
+  </div>
+  {{#if has_more_versions}}
+  <a class="edit-sidebar__versions-link"
+    href="{{versions_url}}"
+    hx-get="{{versions_url}}"
+    hx-target="body" hx-push-url="true">
+    {{t "view_all_versions"}}
+  </a>
+  {{/if}}
+  {{/if}}
+{{/partials/sidebar-panel}}

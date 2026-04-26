@@ -40,6 +40,15 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Install Biome
+        run: |
+          curl -fsSL "https://github.com/biomejs/biome/releases/download/cli%2Fv2.3.15/biome-linux-x64" -o /usr/local/bin/biome
+          chmod +x /usr/local/bin/biome
+          biome --version
+
+      - name: Biome (JS + CSS format + lint)
+        run: biome ci
+
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 

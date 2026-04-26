@@ -1,8 +1,4 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
+{{#> partials/field}}
 <textarea
   id="field-{{name}}"
   name="{{name}}"
@@ -12,5 +8,4 @@
   {{#if required}}required{{/if}}
   {{#if readonly}}readonly{{/if}}
 >{{value}}</textarea>
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{/partials/field}}

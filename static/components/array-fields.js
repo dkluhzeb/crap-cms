@@ -99,11 +99,14 @@ class CrapArrayField extends HTMLElement {
     this.addEventListener('dragend', this._onDragEnd.bind(this));
     this.addEventListener('dragover', this._onDragOver.bind(this));
     this.addEventListener('drop', this._onDrop.bind(this));
-    this.addEventListener('crap:request-add-block', /** @param {Event} e */(e) => {
-      const ce = /** @type {CustomEvent} */ (e);
-      if (/** @type {HTMLElement} */ (ce.target).closest('crap-array-field') !== this) return;
-      this._addBlockRow(ce.detail.templateId);
-    });
+    this.addEventListener(
+      'crap:request-add-block',
+      /** @param {Event} e */ (e) => {
+        const ce = /** @type {CustomEvent} */ (e);
+        if (/** @type {HTMLElement} */ (ce.target).closest('crap-array-field') !== this) return;
+        this._addBlockRow(ce.detail.templateId);
+      },
+    );
     this._initLabelWatchers();
   }
 
@@ -128,14 +131,29 @@ class CrapArrayField extends HTMLElement {
     if (el.closest('crap-array-field') !== this) return;
 
     switch (el.dataset.action) {
-      case 'toggle-array-row': this._toggleRow(el); break;
-      case 'toggle-all-rows': this._toggleAllRows(el); break;
-      case 'move-row-up': this._moveRowUp(el); break;
-      case 'move-row-down': this._moveRowDown(el); break;
-      case 'duplicate-row': this._duplicateRow(el); break;
-      case 'remove-array-row': this._removeRow(el); break;
-      case 'add-array-row': this._addArrayRow(el.dataset.templateId || ''); break;
-      case 'noop': break;
+      case 'toggle-array-row':
+        this._toggleRow(el);
+        break;
+      case 'toggle-all-rows':
+        this._toggleAllRows(el);
+        break;
+      case 'move-row-up':
+        this._moveRowUp(el);
+        break;
+      case 'move-row-down':
+        this._moveRowDown(el);
+        break;
+      case 'duplicate-row':
+        this._duplicateRow(el);
+        break;
+      case 'remove-array-row':
+        this._removeRow(el);
+        break;
+      case 'add-array-row':
+        this._addArrayRow(el.dataset.templateId || '');
+        break;
+      case 'noop':
+        break;
     }
   }
 
@@ -202,7 +220,7 @@ class CrapArrayField extends HTMLElement {
     const rowsEl = fs.querySelector('[id^="array-rows-"]');
     const templateId = rowsEl?.id?.replace('array-rows-', '');
     if (!templateId || !container) return;
-    const badge = this.querySelector('#array-count-' + templateId);
+    const badge = this.querySelector(`#array-count-${templateId}`);
     if (badge) badge.textContent = String(container.children.length);
   }
 
@@ -244,9 +262,7 @@ class CrapArrayField extends HTMLElement {
   _replaceTemplateIndex(html, index) {
     html.setAttribute('data-row-index', String(index));
 
-    const replaceIdx = /** @type {RefRewriter} */ (
-      (s) => s.replaceAll('__INDEX__', String(index))
-    );
+    const replaceIdx = /** @type {RefRewriter} */ ((s) => s.replaceAll('__INDEX__', String(index)));
     rewriteRefs(html, replaceIdx, false);
 
     const fieldName = this._fieldset?.getAttribute('data-field-name') || '';

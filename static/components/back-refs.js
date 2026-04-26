@@ -113,17 +113,21 @@ class CrapBackRefs extends HTMLElement {
     }
 
     const docs = t('documents');
-    root.appendChild(h(
-      'ul',
-      null,
-      refs.map((item) => h(
-        'li',
+    root.appendChild(
+      h(
+        'ul',
         null,
-        h('strong', { text: item.owner_label }),
-        ` — ${item.count} ${docs}`,
-        item.field_label && h('span', { class: 'muted', text: ` (${item.field_label})` }),
-      )),
-    ));
+        refs.map((item) =>
+          h(
+            'li',
+            null,
+            h('strong', { text: item.owner_label }),
+            ` — ${item.count} ${docs}`,
+            item.field_label && h('span', { class: 'muted', text: ` (${item.field_label})` }),
+          ),
+        ),
+      ),
+    );
   }
 }
 

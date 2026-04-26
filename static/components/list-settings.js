@@ -16,8 +16,11 @@
  * @module list-settings
  */
 
-import { h, clear } from './h.js';
+import { clear, h } from './h.js';
 import { t } from './i18n.js';
+import { readCsrfCookie } from './util/cookies.js';
+import { discoverSingleton } from './util/discover.js';
+import { readDataIsland } from './util/json.js';
 
 /**
  * Operator options per field type. Tuple shape: `[opValue, labelKey]`.
@@ -26,16 +29,53 @@ import { t } from './i18n.js';
  * @type {Record<string, ReadonlyArray<readonly [string, string]>>}
  */
 const OPS_BY_TYPE = {
-  text:         [['equals', 'op_is'], ['not_equals', 'op_is_not'], ['contains', 'op_contains']],
-  email:        [['equals', 'op_is'], ['not_equals', 'op_is_not'], ['contains', 'op_contains']],
-  textarea:     [['equals', 'op_is'], ['contains', 'op_contains']],
-  number:       [['equals', 'op_equals'], ['gt', 'op_gt'], ['lt', 'op_lt'], ['gte', 'op_gte'], ['lte', 'op_lte']],
-  select:       [['equals', 'op_is'], ['not_equals', 'op_is_not']],
-  radio:        [['equals', 'op_is'], ['not_equals', 'op_is_not']],
-  checkbox:     [['equals', 'op_is']],
-  date:         [['equals', 'op_is'], ['gt', 'op_after'], ['lt', 'op_before'], ['gte', 'op_on_or_after'], ['lte', 'op_on_or_before']],
-  relationship: [['equals', 'op_is'], ['not_equals', 'op_is_not'], ['exists', 'op_exists'], ['not_exists', 'op_not_exists']],
-  upload:       [['exists', 'op_exists'], ['not_exists', 'op_not_exists']],
+  text: [
+    ['equals', 'op_is'],
+    ['not_equals', 'op_is_not'],
+    ['contains', 'op_contains'],
+  ],
+  email: [
+    ['equals', 'op_is'],
+    ['not_equals', 'op_is_not'],
+    ['contains', 'op_contains'],
+  ],
+  textarea: [
+    ['equals', 'op_is'],
+    ['contains', 'op_contains'],
+  ],
+  number: [
+    ['equals', 'op_equals'],
+    ['gt', 'op_gt'],
+    ['lt', 'op_lt'],
+    ['gte', 'op_gte'],
+    ['lte', 'op_lte'],
+  ],
+  select: [
+    ['equals', 'op_is'],
+    ['not_equals', 'op_is_not'],
+  ],
+  radio: [
+    ['equals', 'op_is'],
+    ['not_equals', 'op_is_not'],
+  ],
+  checkbox: [['equals', 'op_is']],
+  date: [
+    ['equals', 'op_is'],
+    ['gt', 'op_after'],
+    ['lt', 'op_before'],
+    ['gte', 'op_on_or_after'],
+    ['lte', 'op_on_or_before'],
+  ],
+  relationship: [
+    ['equals', 'op_is'],
+    ['not_equals', 'op_is_not'],
+    ['exists', 'op_exists'],
+    ['not_exists', 'op_not_exists'],
+  ],
+  upload: [
+    ['exists', 'op_exists'],
+    ['not_exists', 'op_not_exists'],
+  ],
 };
 
 /** Operators that take no value input. */
@@ -61,44 +101,6 @@ const NO_VALUE_OPS = new Set(['exists', 'not_exists']);
  *   body: HTMLElement,
  * }} DrawerInstance
  */
-
-/** @returns {string} */
-function readCsrfCookie() {
-  const m = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
-  if (!m) return '';
-  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
-}
-
-/**
- * Discover the page's `<crap-drawer>` via the `crap:drawer-request` event.
- *
- * @returns {DrawerInstance|null}
- */
-function discoverDrawer() {
-  const evt = new CustomEvent('crap:drawer-request', { detail: {} });
-  document.dispatchEvent(evt);
-  return /** @type {any} */ (evt).detail.instance ?? null;
-}
-
-/**
- * Read a JSON data island. Tries scoped lookup first (in case the island
- * is inside `host`), then document-wide.
- *
- * @template T
- * @param {Element} host
- * @param {string} id
- * @param {T} fallback
- * @returns {T}
- */
-function readDataIsland(host, id, fallback) {
-  const el = host.querySelector(`#${id}`) || document.getElementById(id);
-  if (!el) return fallback;
-  try {
-    return JSON.parse(el.textContent || '');
-  } catch {
-    return fallback;
-  }
-}
 
 /**
  * HTMX-aware navigation. Falls back to a full reload if HTMX isn't loaded.
@@ -136,7 +138,8 @@ class CrapListSettings extends HTMLElement {
   disconnectedCallback() {
     if (!this._connected) return;
     this._connected = false;
-    if (this._onBeforeRequest) document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+    if (this._onBeforeRequest)
+      document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     if (this._onAfterSettle) document.removeEventListener('htmx:afterSettle', this._onAfterSettle);
   }
 
@@ -152,8 +155,12 @@ class CrapListSettings extends HTMLElement {
     const btn = /** @type {HTMLElement|null} */ (e.target.closest('[data-action]'));
     if (!btn) return;
     switch (btn.dataset.action) {
-      case 'open-column-picker':  this._openColumnPicker(); break;
-      case 'open-filter-builder': this._openFilterBuilder(); break;
+      case 'open-column-picker':
+        this._openColumnPicker();
+        break;
+      case 'open-filter-builder':
+        this._openFilterBuilder();
+        break;
     }
   }
 
@@ -170,7 +177,9 @@ class CrapListSettings extends HTMLElement {
     this._onAfterSettle = () => {
       if (!this._searchWasActive) return;
       this._searchWasActive = false;
-      const input = /** @type {HTMLInputElement|null} */ (document.getElementById('list-search-input'));
+      const input = /** @type {HTMLInputElement|null} */ (
+        document.getElementById('list-search-input')
+      );
       if (!input) return;
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
@@ -186,7 +195,7 @@ class CrapListSettings extends HTMLElement {
     if (!slug) return;
     /** @type {ColumnOption[]} */
     const options = readDataIsland(this, 'crap-column-options', []);
-    const drawer = discoverDrawer();
+    const drawer = discoverSingleton('crap:drawer-request');
     if (!drawer) return;
     drawer.open({ title: t('columns') });
     clear(drawer.body);
@@ -199,14 +208,24 @@ class CrapListSettings extends HTMLElement {
    * @param {DrawerInstance} drawer
    */
   _buildColumnPickerForm(options, slug, drawer) {
-    const form = h('form', { class: 'column-picker' },
-      h('div', { class: 'column-picker__list' },
-        options.map((opt) => h('label', { class: 'column-picker__item' },
-          h('input', { type: 'checkbox', name: 'column', value: opt.key, checked: opt.selected }),
-          h('span', { text: t(opt.label) }),
-        )),
+    const form = h(
+      'form',
+      { class: 'column-picker' },
+      h(
+        'div',
+        { class: 'column-picker__list' },
+        options.map((opt) =>
+          h(
+            'label',
+            { class: 'column-picker__item' },
+            h('input', { type: 'checkbox', name: 'column', value: opt.key, checked: opt.selected }),
+            h('span', { text: t(opt.label) }),
+          ),
+        ),
       ),
-      h('div', { class: 'column-picker__footer' },
+      h(
+        'div',
+        { class: 'column-picker__footer' },
         h('button', {
           type: 'submit',
           class: ['button', 'button--primary', 'button--small'],
@@ -256,7 +275,7 @@ class CrapListSettings extends HTMLElement {
     /** @type {FieldMeta[]} */
     const fieldMetas = readDataIsland(this, 'crap-filter-fields', []);
     if (!fieldMetas.length) return;
-    const drawer = discoverDrawer();
+    const drawer = discoverSingleton('crap:drawer-request');
     if (!drawer) return;
     drawer.open({ title: t('filters') });
     clear(drawer.body);
@@ -271,10 +290,15 @@ class CrapListSettings extends HTMLElement {
   _buildFilterUI(fieldMetas, slug, drawer) {
     const presets = this._parseCurrentFilters();
     const initial = presets.length > 0 ? presets : [null];
-    const rowsEl = h('div', { class: 'filter-builder__rows' },
-      initial.map((p) => this._buildFilterRow(fieldMetas, p)));
+    const rowsEl = h(
+      'div',
+      { class: 'filter-builder__rows' },
+      initial.map((p) => this._buildFilterRow(fieldMetas, p)),
+    );
 
-    return h('div', { class: 'filter-builder' },
+    return h(
+      'div',
+      { class: 'filter-builder' },
       rowsEl,
       this._buildAddRowButton(rowsEl, fieldMetas),
       this._buildFilterFooter(rowsEl, slug, drawer),
@@ -286,11 +310,13 @@ class CrapListSettings extends HTMLElement {
    * @param {FieldMeta[]} fieldMetas
    */
   _buildAddRowButton(rowsEl, fieldMetas) {
-    return h('button', {
-      type: 'button',
-      class: ['button', 'button--ghost', 'button--small'],
-      onClick: () => rowsEl.appendChild(this._buildFilterRow(fieldMetas, null)),
-    },
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: ['button', 'button--ghost', 'button--small'],
+        onClick: () => rowsEl.appendChild(this._buildFilterRow(fieldMetas, null)),
+      },
       h('span', { class: 'material-symbols-outlined', text: 'add' }),
       ` ${t('add_condition')}`,
     );
@@ -302,7 +328,9 @@ class CrapListSettings extends HTMLElement {
    * @param {DrawerInstance} drawer
    */
   _buildFilterFooter(rowsEl, slug, drawer) {
-    return h('div', { class: 'filter-builder__footer' },
+    return h(
+      'div',
+      { class: 'filter-builder__footer' },
       h('a', {
         class: ['button', 'button--ghost', 'button--small'],
         href: `/admin/collections/${slug}`,
@@ -340,15 +368,22 @@ class CrapListSettings extends HTMLElement {
 
     renderOp();
     renderValue();
-    fieldSelect.addEventListener('change', () => { renderOp(); renderValue(); });
+    fieldSelect.addEventListener('change', () => {
+      renderOp();
+      renderValue();
+    });
     opSelect.addEventListener('change', renderValue);
 
     const row = h('div', { class: 'filter-builder__row' });
-    const removeBtn = h('button', {
-      type: 'button',
-      class: ['button', 'button--ghost', 'button--small', 'filter-builder__remove'],
-      onClick: () => row.remove(),
-    }, h('span', { class: 'material-symbols-outlined', text: 'close' }));
+    const removeBtn = h(
+      'button',
+      {
+        type: 'button',
+        class: ['button', 'button--ghost', 'button--small', 'filter-builder__remove'],
+        onClick: () => row.remove(),
+      },
+      h('span', { class: 'material-symbols-outlined', text: 'close' }),
+    );
     row.append(fieldSelect, opSelect, valueWrap, removeBtn);
     return row;
   }
@@ -358,14 +393,20 @@ class CrapListSettings extends HTMLElement {
    * @param {Filter|null} preset
    */
   _buildFieldSelect(fieldMetas, preset) {
-    return h('select', {
-      class: 'filter-builder__field',
-      name: 'filter-field',
-    }, fieldMetas.map((fm) => h('option', {
-      value: fm.key,
-      selected: !!(preset && fm.key === preset.field),
-      text: t(fm.label),
-    })));
+    return h(
+      'select',
+      {
+        class: 'filter-builder__field',
+        name: 'filter-field',
+      },
+      fieldMetas.map((fm) =>
+        h('option', {
+          value: fm.key,
+          selected: !!(preset && fm.key === preset.field),
+          text: t(fm.label),
+        }),
+      ),
+    );
   }
 
   /**
@@ -375,11 +416,15 @@ class CrapListSettings extends HTMLElement {
    */
   _renderOpsInto(opSelect, fieldType, currentOp) {
     const ops = OPS_BY_TYPE[fieldType] || OPS_BY_TYPE.text;
-    opSelect.replaceChildren(...ops.map(([val, label]) => h('option', {
-      value: val,
-      selected: val === currentOp,
-      text: t(label),
-    })));
+    opSelect.replaceChildren(
+      ...ops.map(([val, label]) =>
+        h('option', {
+          value: val,
+          selected: val === currentOp,
+          text: t(label),
+        }),
+      ),
+    );
   }
 
   /**
@@ -417,18 +462,24 @@ class CrapListSettings extends HTMLElement {
    * @param {string} currentValue
    */
   _buildSelectInput(options, currentValue) {
-    return h('select', { name: 'filter-value' },
-      options.map((opt) => h('option', {
-        value: opt.value,
-        selected: opt.value === currentValue,
-        text: t(opt.label),
-      })),
+    return h(
+      'select',
+      { name: 'filter-value' },
+      options.map((opt) =>
+        h('option', {
+          value: opt.value,
+          selected: opt.value === currentValue,
+          text: t(opt.label),
+        }),
+      ),
     );
   }
 
   /** @param {string} currentValue */
   _buildBooleanSelect(currentValue) {
-    return h('select', { name: 'filter-value' },
+    return h(
+      'select',
+      { name: 'filter-value' },
       h('option', { value: '1', selected: currentValue === '1', text: t('yes') }),
       h('option', { value: '0', selected: currentValue === '0', text: t('no') }),
     );
@@ -507,10 +558,14 @@ class CrapListSettings extends HTMLElement {
     /** @type {Filter[]} */
     const filters = [];
     for (const row of rowsEl.querySelectorAll('.filter-builder__row')) {
-      const fieldEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__field'));
+      const fieldEl = /** @type {HTMLSelectElement|null} */ (
+        row.querySelector('.filter-builder__field')
+      );
       const opEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__op'));
       if (!fieldEl || !opEl) continue;
-      const valueEl = /** @type {HTMLInputElement|null} */ (row.querySelector('[name="filter-value"]'));
+      const valueEl = /** @type {HTMLInputElement|null} */ (
+        row.querySelector('[name="filter-value"]')
+      );
       filters.push({ field: fieldEl.value, op: opEl.value, value: valueEl?.value || '' });
     }
     return filters;

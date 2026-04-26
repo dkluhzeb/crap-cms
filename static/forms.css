@@ -19,7 +19,9 @@ textarea {
   line-height: 1.5;
   color: var(--text-primary);
   background-color: var(--input-bg);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 input,
@@ -40,8 +42,6 @@ textarea {
   min-height: calc(var(--base) * 30);
   resize: vertical;
 }
-
-
 
 input:focus,
 select:focus,
@@ -288,7 +288,9 @@ input[type="checkbox"]:disabled {
   color: var(--text-secondary);
   border-bottom: 2px solid transparent;
   margin-bottom: -2px;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
 .form__tabs-tab:hover {
@@ -366,7 +368,9 @@ input[type="checkbox"]:disabled {
 .form__group-chevron {
   font-size: var(--icon-md);
   color: var(--text-tertiary);
-  transition: transform var(--transition-fast), color var(--transition-fast);
+  transition:
+    transform var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .form__group--collapsed .form__group-chevron {
@@ -697,40 +701,7 @@ select[multiple] {
   color: var(--text-primary);
 }
 
-/* Password toggle */
-.form__password-wrapper {
-  display: block;
-  position: relative;
-}
-
-.form__password-wrapper input {
-  padding-right: var(--padding-with-icon);
-}
-
-.form__password-toggle {
-  all: unset;
-  position: absolute;
-  right: var(--space-sm);
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--text-tertiary);
-  width: var(--button-height-sm);
-  height: var(--button-height-sm);
-  border-radius: var(--radius-sm);
-}
-
-.form__password-toggle:hover {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
-}
-
-.form__password-toggle span {
-  font-size: var(--icon-md);
-}
+/* Password toggle: see static/components/password-toggle.js (shadow DOM). */
 
 /* Auth / Login page */
 .auth-page {
@@ -920,7 +891,9 @@ select[multiple] {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Stale warning styles are injected by <crap-live-events> (live-events.js) */
@@ -957,7 +930,9 @@ select[multiple] {
   background: var(--surface-secondary);
   color: var(--text-primary);
   text-decoration: none;
-  transition: border-color var(--transition-fast), background var(--transition-fast);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .form__join-item:hover {
@@ -1009,7 +984,6 @@ select[multiple] {
   .search-bar__form {
     max-width: none;
   }
-
 
   .filter-builder__row {
     flex-wrap: wrap;

@@ -1,18 +1,15 @@
 {{#if ref_count}}
-<div class="card card--warning">
-  <div class="card__body">
-    <p><strong>{{t "delete_has_references"}}</strong></p>
-    <p>{{t "referenced_by_count" count=ref_count}}</p>
+{{#> partials/warning-card title_key="delete_has_references"}}
+  <p>{{t "referenced_by_count" count=ref_count}}</p>
 
-    <crap-back-refs slug="{{collection.slug}}" doc-id="{{document_id}}">
-      <button type="button" class="button button--ghost button--small">
-        {{t "show_details"}}
-      </button>
-    </crap-back-refs>
+  <crap-back-refs slug="{{collection.slug}}" doc-id="{{document_id}}">
+    <button type="button" class="button button--ghost button--small">
+      {{t "show_details"}}
+    </button>
+  </crap-back-refs>
 
-    <p class="text--muted">{{t "delete_references_warning"}}</p>
-  </div>
-</div>
+  <p class="text--muted">{{t "delete_references_warning"}}</p>
+{{/partials/warning-card}}
 {{/if}}
 
 <div class="card">
@@ -24,7 +21,7 @@
     <p><strong>{{document_id}}</strong></p>
     {{/if}}
 
-    <div class="form__actions">
+    {{#> partials/form-actions cancel_href=(concat "/admin/collections/" collection.slug)}}
       {{#if ref_count}}
       <button type="button" class="button button--danger" disabled
         title="{{t "cannot_delete_referenced"}}">
@@ -41,10 +38,6 @@
         </form>
       </crap-confirm>
       {{/if}}
-      <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
-        hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
-        {{t "cancel"}}
-      </a>
-    </div>
+    {{/partials/form-actions}}
   </div>
 </div>

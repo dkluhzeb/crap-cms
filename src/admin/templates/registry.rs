@@ -217,4 +217,352 @@ mod tests {
             result.err()
         );
     }
+
+    #[test]
+    fn htmx_nav_link_partial_renders_button_with_hx_attrs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            r#"{{> partials/htmx-nav-link href="/admin/foo" label_key="cancel" variant="primary" icon="arrow_back"}}"#,
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(html.contains(r#"href="/admin/foo""#), "{html}");
+        assert!(html.contains(r#"hx-get="/admin/foo""#), "{html}");
+        assert!(html.contains(r#"hx-target="body""#), "{html}");
+        assert!(html.contains(r#"hx-push-url="true""#), "{html}");
+        assert!(html.contains(r#"button button--primary"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="material-symbols-outlined">arrow_back</span>"#),
+            "default-size icon (no size param given): {html}"
+        );
+    }
+
+    #[test]
+    fn htmx_nav_link_partial_small_size_uses_small_icon_class() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            r#"{{> partials/htmx-nav-link href="/admin" label="View" size="small" icon="open_in_new"}}"#,
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(html.contains("button--small"), "{html}");
+        assert!(
+            html.contains(r#"<span class="material-symbols-outlined icon--sm">"#),
+            "small button gets small icon: {html}"
+        );
+    }
+
+    #[test]
+    fn htmx_nav_link_partial_defaults_to_ghost_variant() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            r#"{{> partials/htmx-nav-link href="/admin" label="Back"}}"#,
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(html.contains(r#"button button--ghost"#), "{html}");
+        assert!(html.contains("Back"), "{html}");
+        assert!(
+            !html.contains("material-symbols"),
+            "no icon expected: {html}"
+        );
+    }
+
+    #[test]
+    fn status_badge_partial_renders_badge_with_status_modifier() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/status-badge status="published"}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert!(
+            html.contains(r#"<span class="badge badge--published">published</span>"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn warning_card_partial_renders_title_and_slot_body() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            r#"{{#> partials/warning-card title_key="delete_has_references"}}<p>3 incoming refs</p>{{/partials/warning-card}}"#,
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(
+            html.contains(r#"<div class="card card--warning">"#),
+            "{html}"
+        );
+        assert!(html.contains("<strong>"), "{html}");
+        assert!(html.contains("<p>3 incoming refs</p>"), "{html}");
+    }
+
+    #[test]
+    fn loading_indicator_partial_inline_variant_is_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/loading-indicator}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(html.contains(r#"id="upload-loading""#), "{html}");
+        assert!(html.contains(r#"class="loading-indicator""#), "{html}");
+        assert!(
+            !html.contains("edit-sidebar__save-indicator"),
+            "inline variant must not use sidebar class: {html}"
+        );
+    }
+
+    #[test]
+    fn loading_indicator_partial_sidebar_variant_uses_sidebar_class() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/loading-indicator variant="sidebar"}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(
+            html.contains(r#"class="edit-sidebar__save-indicator""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn array_row_header_partial_renders_drag_toggle_buttons() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            "{{#> partials/array-row-header expanded=true has_errors=true}}Title 0{{/partials/array-row-header}}",
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(html.contains(r#"data-action="toggle-array-row""#), "{html}");
+        assert!(
+            html.contains(r#"<span class="form__array-row-drag""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"aria-expanded="true""#), "{html}");
+        assert!(
+            html.contains(r#"<span class="form__array-row-title">Title 0</span>"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"form__array-row-error-badge"#), "{html}");
+        assert!(html.contains(r#"data-action="move-row-up""#), "{html}");
+        assert!(html.contains(r#"data-action="move-row-down""#), "{html}");
+        assert!(html.contains(r#"data-action="duplicate-row""#), "{html}");
+        assert!(html.contains(r#"data-action="remove-array-row""#), "{html}");
+    }
+
+    #[test]
+    fn array_row_header_partial_collapsed_no_errors() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            "{{#> partials/array-row-header expanded=false has_errors=false}}foo{{/partials/array-row-header}}",
+        )
+        .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+
+        assert!(html.contains(r#"aria-expanded="false""#), "{html}");
+        assert!(!html.contains("form__array-row-error-badge"), "{html}");
+    }
+
+    #[test]
+    fn field_partial_fieldset_variant_wraps_radio_in_legend() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+
+        let html = hbs
+            .render(
+                "fields/radio",
+                &json!({
+                    "name": "color",
+                    "label": "Color",
+                    "required": true,
+                    "locale_locked": true,
+                    "error": "pick one",
+                    "options": [
+                        { "value": "red", "label": "Red", "selected": false },
+                        { "value": "blue", "label": "Blue", "selected": true },
+                    ],
+                }),
+            )
+            .expect("render");
+
+        assert!(
+            html.contains(r#"<fieldset class="form__radio-group">"#),
+            "{html}"
+        );
+        assert!(html.contains("<legend>"), "{html}");
+        assert!(
+            html.contains(r#"<span class="required">*</span>"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"form__locale-badge"#), "{html}");
+        assert!(html.contains(r#"type="radio""#), "{html}");
+        assert!(
+            html.contains(r#"<p class="form__error">pick one</p>"#),
+            "{html}"
+        );
+        assert!(
+            !html.contains(r#"<label for="field-color">"#),
+            "fieldset variant must not emit a label-for: {html}"
+        );
+    }
+
+    #[test]
+    fn field_partial_checkbox_variant_renders_input_then_label() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+
+        let html = hbs
+            .render(
+                "fields/checkbox",
+                &json!({
+                    "name": "tos",
+                    "label": "I agree",
+                    "required": true,
+                    "checked": false,
+                    "description": "Terms of service",
+                }),
+            )
+            .expect("render");
+
+        assert!(html.contains(r#"<div class="form__checkbox">"#), "{html}");
+        assert!(html.contains(r#"type="checkbox""#), "{html}");
+        assert!(html.contains(r#"<label for="field-tos">"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="required">*</span>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<p class="form__help">Terms of service</p>"#),
+            "{html}"
+        );
+
+        let input_pos = html.find("<input").expect("input present");
+        let label_pos = html
+            .find(r#"<label for="field-tos""#)
+            .expect("label present");
+        assert!(
+            input_pos < label_pos,
+            "input must come before label in checkbox variant: {html}"
+        );
+    }
+
+    #[test]
+    fn field_partial_explicit_params_override_inherited_context() {
+        // Locks in the documented behaviour that explicit `{{#> partials/field
+        // label="..." error="..."}}` arguments win over keys with the same
+        // name in the parent context.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        hbs.register_template_string(
+            "t",
+            r#"{{#> partials/field name="custom" label="Override Label" error="explicit error"}}<input type="text" />{{/partials/field}}"#,
+        )
+        .expect("register caller");
+
+        // Parent context has different label/error values; the explicit
+        // partial-call values must take precedence.
+        let html = hbs
+            .render(
+                "t",
+                &json!({
+                    "name": "inherited",
+                    "label": "Inherited Label",
+                    "error": "inherited error",
+                }),
+            )
+            .expect("render");
+
+        assert!(html.contains(r#"<label for="field-custom">"#), "{html}");
+        assert!(html.contains("Override Label"), "{html}");
+        assert!(
+            !html.contains("Inherited Label"),
+            "must not render inherited label: {html}"
+        );
+        assert!(
+            html.contains(r#"<p class="form__error">explicit error</p>"#),
+            "{html}"
+        );
+        assert!(
+            !html.contains("inherited error"),
+            "must not render inherited error: {html}"
+        );
+    }
+
+    #[test]
+    fn field_partial_wraps_label_required_locale_badge_error_help() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+
+        let html = hbs
+            .render(
+                "fields/email",
+                &json!({
+                    "name": "contact",
+                    "label": "Contact",
+                    "value": "a@b.c",
+                    "required": true,
+                    "locale_locked": true,
+                    "error": "bad",
+                    "description": "help text",
+                }),
+            )
+            .expect("render");
+
+        assert!(html.contains(r#"<label for="field-contact">"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="required">*</span>"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"form__locale-badge"#), "{html}");
+        assert!(
+            html.contains(r#"<input"#) && html.contains(r#"type="email""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"<p class="form__error">bad</p>"#), "{html}");
+        assert!(
+            html.contains(r#"<p class="form__help">help text</p>"#),
+            "{html}"
+        );
+    }
 }

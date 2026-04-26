@@ -19,7 +19,7 @@
  */
 
 import { css } from './css.js';
-import { h, clear } from './h.js';
+import { clear, h } from './h.js';
 import { t } from './i18n.js';
 
 const sheet = css`
@@ -303,7 +303,9 @@ class CrapDrawer extends HTMLElement {
       text: 'close',
     });
     /** @type {HTMLDialogElement} */
-    this._dialog = h('dialog', null,
+    this._dialog = h(
+      'dialog',
+      null,
       h('div', { class: 'header' }, this._titleEl, this._closeBtn),
       this._bodyEl,
     );
@@ -365,4 +367,3 @@ class CrapDrawer extends HTMLElement {
 }
 
 customElements.define('crap-drawer', CrapDrawer);
-

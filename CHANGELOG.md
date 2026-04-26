@@ -199,6 +199,213 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **BREAKING: `templates/components/` directory removed — the four
+  partials it held (`breadcrumb`, `pagination`, `version_sidebar`,
+  `version_table`) moved to `templates/partials/` for naming
+  consistency.** The two `_`-named files were renamed to use `-` to
+  match other partials. Update overlay references:
+  - `{{> components/breadcrumb}}` → `{{> partials/breadcrumb}}`
+  - `{{> components/pagination}}` → `{{> partials/pagination}}`
+  - `{{> components/version_sidebar}}` → `{{> partials/version-sidebar}}`
+  - `{{> components/version_table}}` → `{{> partials/version-table}}`
+
+- **Six new partials cover the most common template duplications.**
+  Override authors get one place to retheme each pattern.
+  - `partials/htmx-nav-link.hbs` — the
+    `<a class="button button--…" href="…" hx-get="…" hx-target="body"
+    hx-push-url="true">…</a>` pattern that was hand-written 30× across
+    the templates. Accepts `href`, `label_key`/`label`, `variant`,
+    `size`, `icon` parameters.
+  - `partials/status-badge.hbs` — `<span class="badge badge--{status}">
+    {status}</span>` pill, repeated 5× across sidebars and table rows.
+  - `partials/error-page.hbs` — full error-page card (h1 + message +
+    optional detail + back-to-dashboard button) used by
+    `errors/404.hbs`, `errors/403.hbs`, `errors/500.hbs`. Each error
+    page collapsed to a one-liner `{{> partials/error-page code=…
+    message_key=…}}`.
+  - `partials/warning-card.hbs` — `<div class="card card--warning">`
+    container with title and slotted body. Used by `delete_confirm` and
+    both `restore_confirm` templates.
+  - `partials/loading-indicator.hbs` — `<div id="upload-loading"
+    class="loading-indicator|edit-sidebar__save-indicator">…</div>`
+    target for HTMX `hx-indicator`. `variant="sidebar"` parameter
+    selects the compact sidebar styling.
+  - `partials/form-actions.hbs` — `<div class="form__actions">` wrapper
+    + cancel link, with action buttons in a partial-block slot. Used
+    by all three confirm pages.
+
+- **`layout/auth.hbs` consolidates head + auth-card chrome.** The four
+  auth pages (`login`, `forgot_password`, `reset_password`, `mfa`) and
+  two auth-style error pages (`auth_required`, `admin_denied`) each
+  re-stated ~35 LOC of identical head boilerplate (theme-FOUC script,
+  CSRF auto-injection script, stylesheet + module-script tags) plus
+  the `<div class="auth-card">` outer wrapper and CMS-logo header. All
+  six pages now extend `{{#> layout/auth title=…}}…{{/}}`. The layout
+  accepts `header_icon_kind="material"` (with `header_icon=…`) for the
+  two error pages that prefer a Material-Symbol over the SVG logo, and
+  optional `header_title` to override the default "Crap CMS" title.
+
+- **`partials/field.hbs` accepts explicit-param overrides** in addition
+  to the inherited field-context values it already used. Calling
+  `{{#> partials/field label="My Label" error="bad"}}…{{/}}` with
+  explicit args now works as documented (it always did, but wasn't
+  spelled out — handlebars-rust merges partial-block params into the
+  parent context). Unit test
+  `field_partial_explicit_params_override_inherited_context` locks
+  this in.
+
+- **Auth pages: CSRF cookie regex normalised.** The inline auth-page
+  CSRF auto-injection script used `(?:^|; )` (single-space form) for
+  the cookie match, while `static/components/util/cookies.js` (and the
+  rest of the codebase) uses `(?:^|;\s*)`. Auth pages were the last
+  hold-out; now consistent.
+
+- **BREAKING: Web Component admin library — singleton API harmonization.**
+  The `static/components/` admin-UI library now has a single singleton
+  discovery convention and a unified `window.crap` namespace. Migration
+  of any custom overlays:
+  - Event `crap:toast` → renamed to `crap:toast-request`. The detail
+    shape is unchanged: `{ message, type?, duration? }`.
+  - Event `crap:delete-dialog` → renamed to `crap:delete-dialog-request`.
+    The new event is **discovery-only** (`detail.instance` is filled in
+    by the singleton); to open the dialog, call
+    `instance.open(opts)` after discovery, or use the convenience
+    `window.crap.deleteDialog.open(opts)`.
+  - `<crap-toast>` instance method `show(message, type, duration)`
+    (positional) → removed. Use `show({ message, type, duration })`.
+  - Global `window.CrapTheme` → moved to `window.crap.theme` (same
+    `get` / `set` / `apply` methods).
+  - Global `window.CrapDeleteDialog` → moved to
+    `window.crap.deleteDialog` (same `open(opts)` method).
+  - `<crap-confirm>` no longer renders its own dialog — it delegates
+    to the page-singleton `<crap-confirm-dialog>` via the discovery
+    pattern. Falls back to native `window.confirm()` (with
+    `console.warn`) if no `<crap-confirm-dialog>` is mounted.
+  - New `static/components/global.js` builds the `window.crap`
+    namespace at admin-page load. Properties: `toast(opts)`,
+    `confirm(message, opts?)` (returns `Promise<boolean>`),
+    `drawer.{open, close}`, `deleteDialog.{open}`,
+    `createPanel.{open, close}`, `theme.{get, set, apply}`, `csrf()`.
+    Documented as **sugar** over the canonical event-discovery + module
+    APIs.
+
+- **Field templates — shared `partials/field` wrapper with three
+  structural variants.** The label + required marker + locale badge +
+  error + help boilerplate (~250 lines, repeated across 14 templates)
+  now lives in `templates/partials/field.hbs`. The partial accepts a
+  `variant` parameter:
+  - `default` (no variant arg) — `<label for=…>` above the slot. Used
+    by `text`, `textarea`, `email`, `password`, `number`, `date`,
+    `json`, `code`, `richtext`, `select`, `relationship`, `upload`.
+  - `variant="fieldset"` — `<fieldset class="form__radio-group"><legend>…`
+    wrapping the slot. Used by `radio`.
+  - `variant="checkbox"` — `<div class="form__checkbox">` with the
+    slot then `<label for=…>` inline. Used by `checkbox`.
+  All three variants share the same required-marker, locale-badge,
+  error-paragraph, and help-paragraph logic, so overrides to the
+  contract apply uniformly. Layout fields (`array`, `blocks`, `group`,
+  `row`, `tabs`, `collapsible`, `join`) keep their custom rendering.
+  Override authors can replace the partial in their config-dir
+  `templates/partials/field.hbs` to retheme every field in one place.
+
+- **`<crap-password-toggle>` — shadow DOM, self-styling, no markup
+  contract.** The component now renders its own toggle button + icon
+  inside its shadow root and styles the slotted input via
+  `::slotted(input)`. The required template shape collapsed from:
+
+  ```html
+  <crap-password-toggle class="form__password-wrapper">
+    <input type="password" name="password" />
+    <button type="button" class="form__password-toggle"
+            aria-label="Toggle password visibility">
+      <span class="material-symbols-outlined">visibility</span>
+    </button>
+  </crap-password-toggle>
+  ```
+
+  to:
+
+  ```html
+  <crap-password-toggle>
+    <input type="password" name="password" />
+  </crap-password-toggle>
+  ```
+
+  Migrated `templates/fields/password.hbs`, `templates/auth/login.hbs`,
+  `templates/auth/reset_password.hbs`. The `.form__password-wrapper`
+  class and the `.form__password-toggle` rule set in `static/forms.css`
+  have been removed (component-owned now). Auth pages now load
+  `/static/components/index.js` like the admin pages instead of
+  cherry-picking `password-toggle.js`. New regression test
+  `browser_password_toggle::password_toggle_reveals_and_hides_value`.
+
+- **Picker base class — three pickers consolidated.** The shared
+  toggle / dropdown / outside-click logic that was duplicated across
+  `<crap-locale-picker>`, `<crap-ui-locale-picker>`, and
+  `<crap-theme-picker>` (~50 LOC apiece, ~150 LOC total of near-
+  identical code) now lives in `static/components/picker-base.js`
+  (`CrapPickerBase`). Each subclass declares the toggle/dropdown/item
+  selectors, the open-class, and the `dataset` key holding the option
+  value as static class properties; the only behaviour each provides
+  is `_onValue(value)` and an optional `_afterToggle()` hook for
+  per-toggle state refresh (the theme picker uses this to highlight
+  the active option). Per-picker tags stay distinct because templates
+  and tests reference them, only behaviour is deduplicated.
+
+- **Sidebar panels — shared `partials/sidebar-panel` wrapper.** The
+  `<div class="edit-sidebar__panel">…<panel-header><icon> <label></panel-header>…<panel-body>…</panel-body></div>`
+  shell that recurred 8 times across `collections/edit_sidebar.hbs`,
+  `globals/edit_sidebar.hbs`, and `components/version_sidebar.hbs`
+  now lives in `templates/partials/sidebar-panel.hbs`. Callers pass
+  optional `icon` and `label_key` (translation key) parameters and
+  slot the body content. Saves ~100 LOC, gives overlay authors a
+  single retheme target for sidebar panel chrome.
+
+- **Array/blocks row header — shared `partials/array-row-header` wrapper.**
+  The drag handle + toggle + title + error-badge + 4 action buttons
+  (`move-up`, `move-down`, `duplicate-row`, `remove-array-row`) that
+  recurred 4× across `array.hbs` and `blocks.hbs` (initial render +
+  `<template>` clone in each) now lives in
+  `templates/partials/array-row-header.hbs`. Callers pass `expanded`
+  (bool), `has_errors` (bool), and slot the row title content. Saves
+  ~80 LOC. Action buttons remain `data-action` attributes delegated
+  to `array-fields.js` — markup is pure HTML, so a server-rendered
+  partial fits cleanly (per the project rule: no JS logic → partial,
+  JS logic → Web Component).
+
+- **`password`, `radio`, `checkbox` field templates — alignment with
+  the standard wrapper.** Adopting `partials/field` fixes several
+  pre-existing inconsistencies:
+  - `password.hbs` — `locale_locked` badge is now rendered (was
+    silently dropped); error/description paragraphs now in the
+    canonical order (error first, then help).
+  - `checkbox.hbs` — required-marker (`*`) is now rendered when the
+    field is required (was silently dropped); the input now carries
+    the HTML `required` attribute when the field is required, so the
+    browser blocks submit instead of relying solely on server-side
+    validation feedback.
+
+- **Admin-UI util module — six near-identical helpers consolidated.**
+  Cross-cutting helpers previously inlined across 12 component files
+  now live in `static/components/util/`:
+  - `cookies.js` — `readCsrfCookie()`, `readCookie(name)`. Replaces 6
+    duplicate CSRF readers (delete-dialog, validate-form, conditions,
+    list-settings, create-panel, ui-locale-picker, session-guard).
+  - `toast.js` — `toast({ message, type, duration })`. Replaces 4
+    inline `dispatchEvent(new CustomEvent('crap:toast', ...))` blocks.
+  - `htmx.js` — `getHttpVerb(e)`. Replaces 3 sites with subtly
+    different verb-extraction / case-handling.
+  - `discover.js` — `discoverSingleton(eventName)`. Standardizes the
+    event-discovery dance for callers of `<crap-drawer>`,
+    `<crap-confirm-dialog>`, `<crap-create-panel>`,
+    `<crap-delete-dialog>`.
+  - `json.js` — `parseJsonAttribute(el, attr, fallback)`,
+    `readDataIsland(host, id, fallback)`. Replaces 3 inline JSON-attr
+    parsers (richtext × 2, list-settings) and consolidates the
+    data-island read pattern.
+  Override authors can drop a replacement file at the matching path
+  inside their config directory's `static/components/util/` folder.
+
 - **`init` scaffolds `.mcp.json`** — new projects include a Claude Code
   MCP configuration file out of the box. Running Claude Code from the
   config directory auto-connects to the CMS's MCP server.
@@ -228,6 +435,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   elapsed milliseconds (e.g., "hooks.auto_slug: 0.31ms").
 
 ### Fixed
+
+- **Globals edit form: missing loading indicator.** `globals/edit.hbs`
+  had no `hx-indicator="#upload-loading"` attribute on the form, and
+  `globals/edit_sidebar.hbs` was missing the indicator markup, so the
+  user got zero visual feedback during a global save. Both gaps fixed;
+  regression test
+  `html_globals::global_edit_form_has_loading_indicator` covers it.
+
+- **Dead templates removed.** `templates/collections/edit_actions.hbs`
+  and `templates/globals/edit_actions.hbs` were stale duplicates of
+  the live save-panel logic that lives inside `*/edit_sidebar.hbs`.
+  Confirmed via grep that no template, helper, or handler referenced
+  them. Deleted.
 
 - **False orphan column warnings for localized fields** — the migration
   system incorrectly warned about locale-suffixed columns (e.g.,

@@ -192,22 +192,29 @@ class CrapBlockPicker extends HTMLElement {
       ? h('img', { class: 'card__img', src: opt.dataset.imageUrl, alt: label })
       : h('span', { class: 'card__icon', text: 'widgets' });
 
-    return h('button', {
-      type: 'button',
-      class: 'card',
-      onClick: () => {
-        select.value = opt.value;
-        this._requestAddBlock(templateId);
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: 'card',
+        onClick: () => {
+          select.value = opt.value;
+          this._requestAddBlock(templateId);
+        },
       },
-    }, visual, h('span', { class: 'card__label', text: label }));
+      visual,
+      h('span', { class: 'card__label', text: label }),
+    );
   }
 
   /** @param {string} templateId */
   _requestAddBlock(templateId) {
-    this.dispatchEvent(new CustomEvent('crap:request-add-block', {
-      bubbles: true,
-      detail: { templateId },
-    }));
+    this.dispatchEvent(
+      new CustomEvent('crap:request-add-block', {
+        bubbles: true,
+        detail: { templateId },
+      }),
+    );
   }
 }
 

@@ -2,21 +2,17 @@
 <div class="empty-state">
   <span class="material-symbols-outlined empty-state__icon">delete</span>
   <p>{{t "trash_empty"}}</p>
-  <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
-    hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
-    <span class="material-symbols-outlined">arrow_back</span>
-    {{t "back_to_list"}}
-  </a>
+  {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug) label_key="back_to_list" icon="arrow_back"}}
 </div>
 {{else}}
 <div class="empty-state">
   <span class="material-symbols-outlined empty-state__icon">folder_open</span>
   <p>{{t "no_items_yet" name=collection.display_name}}</p>
   <p class="empty-state__hint">{{t "create_first_item"}}</p>
-  <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
-    hx-get="/admin/collections/{{collection.slug}}/create" hx-target="body" hx-push-url="true">
-    <span class="material-symbols-outlined">add</span>
-    {{t "create"}} {{collection.singular_name}}
-  </a>
+  {{> partials/htmx-nav-link
+      href=(concat "/admin/collections/" collection.slug "/create")
+      label=(concat (t "create") " " collection.singular_name)
+      variant="primary"
+      icon="add"}}
 </div>
 {{/if}}

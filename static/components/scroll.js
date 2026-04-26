@@ -9,12 +9,14 @@
  * @module scroll
  */
 
+import { getHttpVerb } from './util/htmx.js';
+
 const STORAGE_KEY = 'crap-form-state';
 
 /** Modifier classes that mark "collapsed" on the two collapsible kinds. */
 const COLLAPSED_CLASS_FOR = {
-  'form__collapsible': 'form__collapsible--collapsed',
-  'form__group': 'form__group--collapsed',
+  form__collapsible: 'form__collapsible--collapsed',
+  form__group: 'form__group--collapsed',
 };
 
 /**
@@ -45,8 +47,7 @@ class CrapScrollRestore extends HTMLElement {
     this._connected = true;
 
     this._onBeforeRequest = (e) => {
-      const verb = (/** @type {CustomEvent} */ (e).detail.requestConfig?.verb || '').toUpperCase();
-      if (verb === 'GET') return;
+      if (getHttpVerb(e) === 'GET') return;
       this._pendingRedirect = true;
       this._saveFormState();
     };
@@ -65,7 +66,8 @@ class CrapScrollRestore extends HTMLElement {
   disconnectedCallback() {
     if (!this._connected) return;
     this._connected = false;
-    if (this._onBeforeRequest) document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+    if (this._onBeforeRequest)
+      document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     if (this._onAfterSettle) document.removeEventListener('htmx:afterSettle', this._onAfterSettle);
   }
 
@@ -82,7 +84,9 @@ class CrapScrollRestore extends HTMLElement {
     };
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch { /* private browsing or quota exceeded */ }
+    } catch {
+      /* private browsing or quota exceeded */
+    }
   }
 
   /** @returns {Record<string, string>} */
@@ -129,7 +133,9 @@ class CrapScrollRestore extends HTMLElement {
       )) {
         const idx = row.getAttribute('data-row-index');
         if (idx == null) continue;
-        rows[`${fieldName}[${idx}]`] = row.classList.contains('form__array-row--collapsed') ? '1' : '0';
+        rows[`${fieldName}[${idx}]`] = row.classList.contains('form__array-row--collapsed')
+          ? '1'
+          : '0';
       }
     }
     return rows;
@@ -156,9 +162,15 @@ class CrapScrollRestore extends HTMLElement {
     try {
       raw = sessionStorage.getItem(STORAGE_KEY);
       sessionStorage.removeItem(STORAGE_KEY);
-    } catch { return null; }
+    } catch {
+      return null;
+    }
     if (!raw) return null;
-    try { return JSON.parse(raw); } catch { return null; }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
   }
 
   /** @param {Record<string, string>} tabs */
@@ -199,7 +211,9 @@ class CrapScrollRestore extends HTMLElement {
       if (!m) continue;
       const [, fieldName, idx] = m;
       const fs = document.querySelector(`.form__array[data-field-name="${fieldName}"]`);
-      const row = fs?.querySelector(`:scope > .form__array-rows > .form__array-row[data-row-index="${idx}"]`);
+      const row = fs?.querySelector(
+        `:scope > .form__array-rows > .form__array-row[data-row-index="${idx}"]`,
+      );
       row?.classList.toggle('form__array-row--collapsed', val === '1');
     }
   }

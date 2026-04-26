@@ -71,15 +71,17 @@ function buildLinkMarkSpec() {
       rel: { default: null },
     },
     inclusive: false,
-    parseDOM: [{
-      tag: 'a[href]',
-      getAttrs: (/** @type {Element} */ dom) => ({
-        href: dom.getAttribute('href'),
-        title: dom.getAttribute('title'),
-        target: dom.getAttribute('target'),
-        rel: dom.getAttribute('rel'),
-      }),
-    }],
+    parseDOM: [
+      {
+        tag: 'a[href]',
+        getAttrs: (/** @type {Element} */ dom) => ({
+          href: dom.getAttribute('href'),
+          title: dom.getAttribute('title'),
+          target: dom.getAttribute('target'),
+          rel: dom.getAttribute('rel'),
+        }),
+      },
+    ],
     toDOM: (/** @type {any} */ node) => {
       const { href, title, target, rel } = node.attrs;
       /** @type {Record<string, string>} */
@@ -98,19 +100,25 @@ function buildCustomNodeSpec(def) {
     group: def.inline ? 'inline' : 'block',
     inline: def.inline,
     atom: true,
-    attrs: Object.fromEntries(
-      (def.attrs || []).map((a) => [a.name, { default: a.default ?? '' }]),
-    ),
-    toDOM: (/** @type {any} */ node) => ['crap-node', {
-      'data-type': def.name,
-      'data-attrs': JSON.stringify(node.attrs),
-    }],
-    parseDOM: [{
-      tag: `crap-node[data-type="${def.name}"]`,
-      getAttrs: (/** @type {Element} */ dom) => {
-        try { return JSON.parse(dom.getAttribute('data-attrs') || '{}'); }
-        catch { return {}; }
+    attrs: Object.fromEntries((def.attrs || []).map((a) => [a.name, { default: a.default ?? '' }])),
+    toDOM: (/** @type {any} */ node) => [
+      'crap-node',
+      {
+        'data-type': def.name,
+        'data-attrs': JSON.stringify(node.attrs),
       },
-    }],
+    ],
+    parseDOM: [
+      {
+        tag: `crap-node[data-type="${def.name}"]`,
+        getAttrs: (/** @type {Element} */ dom) => {
+          try {
+            return JSON.parse(dom.getAttribute('data-attrs') || '{}');
+          } catch {
+            return {};
+          }
+        },
+      },
+    ],
   };
 }

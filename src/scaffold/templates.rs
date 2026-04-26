@@ -90,9 +90,9 @@ const TEMPLATE_CATEGORIES: &[FileCategory] = &[
         prefixes: &["email/"],
     },
     FileCategory {
-        label: "Components",
-        description: "Breadcrumb, pagination, version history partials",
-        prefixes: &["components/"],
+        label: "Partials",
+        description: "Field wrapper, sidebar panel, breadcrumb, pagination, etc.",
+        prefixes: &["partials/"],
     },
 ];
 
@@ -105,8 +105,18 @@ const STATIC_CATEGORIES: &[FileCategory] = &[
     },
     FileCategory {
         label: "Components",
-        description: "JS modules (toast, confirm dialog, richtext editor, ...)",
+        description: "JS modules — Web Components, helpers, util/* (toast, confirm, richtext, ...)",
         prefixes: &["components/"],
+    },
+    FileCategory {
+        label: "Vendor",
+        description: "Bundled libraries (CodeMirror, ProseMirror) — replace to swap implementations",
+        prefixes: &[".js"],
+    },
+    FileCategory {
+        label: "Assets",
+        description: "Favicon and brand SVGs",
+        prefixes: &[".svg"],
     },
     FileCategory {
         label: "Fonts",

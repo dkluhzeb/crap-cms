@@ -14,6 +14,8 @@
 import { css } from './css.js';
 import { h } from './h.js';
 import { t } from './i18n.js';
+import { getHttpVerb } from './util/htmx.js';
+import { toast } from './util/toast.js';
 
 /** Within this window after a save, our own update events are filtered out. */
 const SAVE_GRACE_MS = 5000;
@@ -88,11 +90,6 @@ const sheet = css`
  * }} EditFormCtx
  */
 
-/** @param {string} message @param {'info'|'success'|'error'} type */
-function toast(message, type) {
-  document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message, type } }));
-}
-
 /**
  * Read the relevant identifiers off `#edit-form` so we can decide
  * whether an SSE event targets the document the user is editing.
@@ -152,9 +149,7 @@ class CrapLiveEvents extends HTMLElement {
     if (!document.querySelector('[data-admin-layout]')) return;
 
     this._onBeforeRequest = (e) => {
-      const detail = /** @type {CustomEvent} */ (e).detail;
-      const verb = (detail.requestConfig?.verb || detail.verb || '').toUpperCase();
-      if (verb !== 'GET') this._lastSaveTime = Date.now();
+      if (getHttpVerb(e) !== 'GET') this._lastSaveTime = Date.now();
     };
     document.addEventListener('htmx:beforeRequest', this._onBeforeRequest);
 
@@ -190,7 +185,11 @@ class CrapLiveEvents extends HTMLElement {
   _onMutation(e) {
     /** @type {MutationEvent|null} */
     let event;
-    try { event = JSON.parse(e.data); } catch { return; }
+    try {
+      event = JSON.parse(e.data);
+    } catch {
+      return;
+    }
     if (!event) return;
 
     const ctx = readEditFormCtx();
@@ -216,7 +215,7 @@ class CrapLiveEvents extends HTMLElement {
     if (op !== 'update' && op !== 'delete') return false;
     if (!eventTargetsCurrentDoc(event, ctx)) return false;
     const isSelf = ctx.currentUserId && event.edited_by?.id === ctx.currentUserId;
-    const isOwnSave = isSelf && (Date.now() - this._lastSaveTime < SAVE_GRACE_MS);
+    const isOwnSave = isSelf && Date.now() - this._lastSaveTime < SAVE_GRACE_MS;
     return !isOwnSave;
   }
 
@@ -228,7 +227,10 @@ class CrapLiveEvents extends HTMLElement {
       update: t('op_updated'),
       delete: t('op_deleted'),
     };
-    toast(`${event.collection} ${labels[event.operation] || event.operation}`, 'info');
+    toast({
+      message: `${event.collection} ${labels[event.operation] || event.operation}`,
+      type: 'info',
+    });
   }
 
   _onSseError() {
@@ -280,13 +282,16 @@ class CrapLiveEvents extends HTMLElement {
     return [
       h('span', { class: 'stale-warning__icon', text: '⚠' }),
       h('span', { class: 'stale-warning__text', text: message }),
-      h('span', { class: 'stale-warning__actions' },
-        !isDeleted && h('button', {
-          type: 'button',
-          class: ['stale-warning__reload', 'button', 'button--ghost', 'button--small'],
-          text: t('reload'),
-          onClick: () => location.reload(),
-        }),
+      h(
+        'span',
+        { class: 'stale-warning__actions' },
+        !isDeleted &&
+          h('button', {
+            type: 'button',
+            class: ['stale-warning__reload', 'button', 'button--ghost', 'button--small'],
+            text: t('reload'),
+            onClick: () => location.reload(),
+          }),
         h('button', {
           type: 'button',
           class: 'stale-warning__dismiss',

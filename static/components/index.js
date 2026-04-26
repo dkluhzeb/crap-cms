@@ -59,3 +59,9 @@ import './time-format.js';
 import './ui-locale-picker.js';
 import './uploads.js';
 import './validate-form.js';
+
+// ── window.crap namespace ─────────────────────────────────────────
+// Convenience layer for inline scripts and console use. Imports last
+// so all referenced singletons are registered before the namespace
+// dispatches discovery events.
+import './global.js';

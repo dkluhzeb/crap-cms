@@ -52,12 +52,15 @@ function buildInputRules(PM, schema, has) {
     rules.push(PM.wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote));
   }
   if (has('orderedList') && schema.nodes.ordered_list) {
-    rules.push(PM.wrappingInputRule(
-      /^(\d+)\.\s$/,
-      schema.nodes.ordered_list,
-      (/** @type {RegExpExecArray} */ m) => ({ order: +m[1] }),
-      (/** @type {RegExpExecArray} */ m, /** @type {any} */ node) => node.childCount + node.attrs.order === +m[1],
-    ));
+    rules.push(
+      PM.wrappingInputRule(
+        /^(\d+)\.\s$/,
+        schema.nodes.ordered_list,
+        (/** @type {RegExpExecArray} */ m) => ({ order: +m[1] }),
+        (/** @type {RegExpExecArray} */ m, /** @type {any} */ node) =>
+          node.childCount + node.attrs.order === +m[1],
+      ),
+    );
   }
   if (has('bulletList') && schema.nodes.bullet_list) {
     rules.push(PM.wrappingInputRule(/^\s*([-*])\s$/, schema.nodes.bullet_list));
@@ -66,11 +69,13 @@ function buildInputRules(PM, schema, has) {
     rules.push(PM.textblockTypeInputRule(/^```$/, schema.nodes.code_block));
   }
   if (has('heading') && schema.nodes.heading) {
-    rules.push(PM.textblockTypeInputRule(
-      /^(#{1,3})\s$/,
-      schema.nodes.heading,
-      (/** @type {RegExpExecArray} */ m) => ({ level: m[1].length }),
-    ));
+    rules.push(
+      PM.textblockTypeInputRule(
+        /^(#{1,3})\s$/,
+        schema.nodes.heading,
+        (/** @type {RegExpExecArray} */ m) => ({ level: m[1].length }),
+      ),
+    );
   }
   return rules;
 }
@@ -80,8 +85,8 @@ function buildListKeymap(PM, schema) {
   /** @type {Record<string, any>} */
   const keymap = {};
   if (schema.nodes.list_item) {
-    keymap['Enter'] = PM.splitListItem(schema.nodes.list_item);
-    keymap['Tab'] = PM.sinkListItem(schema.nodes.list_item);
+    keymap.Enter = PM.splitListItem(schema.nodes.list_item);
+    keymap.Tab = PM.sinkListItem(schema.nodes.list_item);
     keymap['Shift-Tab'] = PM.liftListItem(schema.nodes.list_item);
   }
   return keymap;

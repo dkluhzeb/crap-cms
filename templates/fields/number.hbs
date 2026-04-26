@@ -1,10 +1,12 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
+{{#> partials/field}}
 {{#if has_many}}
-<crap-tags data-field-type="number"{{#if has_min}} data-min="{{min}}"{{/if}}{{#if has_max}} data-max="{{max}}"{{/if}}{{#if placeholder}} data-placeholder="{{placeholder}}"{{else}} data-placeholder="{{t "type_and_press_enter"}}"{{/if}}{{#if readonly}} data-readonly{{/if}}{{#if error}} data-error{{/if}}>
+<crap-tags
+  data-field-type="number"
+  {{#if has_min}}data-min="{{min}}"{{/if}}
+  {{#if has_max}}data-max="{{max}}"{{/if}}
+  {{#if placeholder}}data-placeholder="{{placeholder}}"{{else}}data-placeholder="{{t "type_and_press_enter"}}"{{/if}}
+  {{#if readonly}}data-readonly{{/if}}
+  {{#if error}}data-error{{/if}}>
   <input type="hidden" name="{{name}}" value="{{value}}" />
 </crap-tags>
 {{else}}
@@ -22,5 +24,4 @@
   {{#if error}}class="form__input--error"{{/if}}
 />
 {{/if}}
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{/partials/field}}

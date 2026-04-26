@@ -42,10 +42,13 @@ function invalidate() {
   loaded = false;
 }
 
-document.addEventListener('htmx:afterSettle', /** @param {Event} e */ (e) => {
-  const detail = /** @type {CustomEvent} */ (e).detail;
-  if (detail.target === document.body) invalidate();
-});
+document.addEventListener(
+  'htmx:afterSettle',
+  /** @param {Event} e */ (e) => {
+    const detail = /** @type {CustomEvent} */ (e).detail;
+    if (detail.target === document.body) invalidate();
+  },
+);
 
 /**
  * Look up a translated string by key. Falls back to the key itself if

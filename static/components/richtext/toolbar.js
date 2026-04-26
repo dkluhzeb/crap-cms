@@ -72,14 +72,23 @@ export function getMarkAttrs(state, markType) {
  */
 export function isCommandActive(cmd, state, schema, has) {
   switch (cmd) {
-    case 'bold':   return !!(has('bold') && schema.marks.strong && markActive(state, schema.marks.strong));
-    case 'italic': return !!(has('italic') && schema.marks.em && markActive(state, schema.marks.em));
-    case 'code':   return !!(has('code') && schema.marks.code && markActive(state, schema.marks.code));
-    case 'link':   return !!(has('link') && schema.marks.link && markActive(state, schema.marks.link));
-    case 'h1': case 'h2': case 'h3':
-      return !!(has('heading') && schema.nodes.heading
-        && state.selection.$from.parent.type === schema.nodes.heading
-        && state.selection.$from.parent.attrs.level === Number(cmd[1]));
+    case 'bold':
+      return !!(has('bold') && schema.marks.strong && markActive(state, schema.marks.strong));
+    case 'italic':
+      return !!(has('italic') && schema.marks.em && markActive(state, schema.marks.em));
+    case 'code':
+      return !!(has('code') && schema.marks.code && markActive(state, schema.marks.code));
+    case 'link':
+      return !!(has('link') && schema.marks.link && markActive(state, schema.marks.link));
+    case 'h1':
+    case 'h2':
+    case 'h3':
+      return !!(
+        has('heading') &&
+        schema.nodes.heading &&
+        state.selection.$from.parent.type === schema.nodes.heading &&
+        state.selection.$from.parent.attrs.level === Number(cmd[1])
+      );
     case 'paragraph':
       return state.selection.$from.parent.type === schema.nodes.paragraph;
     default:
@@ -142,8 +151,5 @@ function customNodeGroup(customNodes) {
 }
 
 function historyGroup() {
-  return group([
-    btn('undo', 'Undo (Ctrl+Z)', 'Undo'),
-    btn('redo', 'Redo (Ctrl+Shift+Z)', 'Redo'),
-  ]);
+  return group([btn('undo', 'Undo (Ctrl+Z)', 'Undo'), btn('redo', 'Redo (Ctrl+Shift+Z)', 'Redo')]);
 }

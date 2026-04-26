@@ -73,13 +73,18 @@ export function openNodeEditModal(host, nodeDef, attrs, pos) {
   const firstInput = modal.querySelector('input, textarea, select');
   firstInput?.focus();
 
-  const close = () => { modal.close(); modal.remove(); };
-  modal.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  const close = () => {
+    modal.close();
+    modal.remove();
+  };
+  modal.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    close();
+  });
   modal.querySelector('.crap-node-modal__btn--cancel')?.addEventListener('click', close);
-  modal.querySelector('.crap-node-modal__btn--ok')?.addEventListener(
-    'click',
-    () => submitNodeEdit(host, modal, nodeDef, attrs, pos, close),
-  );
+  modal
+    .querySelector('.crap-node-modal__btn--ok')
+    ?.addEventListener('click', () => submitNodeEdit(host, modal, nodeDef, attrs, pos, close));
 }
 
 /* ── Modal construction ─────────────────────────────────────────── */
@@ -93,18 +98,24 @@ function buildNodeModal(nodeDef, attrs) {
     .filter((a) => !a.hidden)
     .map((a) => buildNodeField(nodeDef, attrs, a));
 
-  return h('dialog', {
-    class: 'crap-node-modal',
-    'aria-labelledby': 'crap-node-modal-heading',
-  },
-    h('div', { class: 'crap-node-modal__dialog' },
+  return h(
+    'dialog',
+    {
+      class: 'crap-node-modal',
+      'aria-labelledby': 'crap-node-modal-heading',
+    },
+    h(
+      'div',
+      { class: 'crap-node-modal__dialog' },
       h('div', {
         class: 'crap-node-modal__header',
         id: 'crap-node-modal-heading',
         text: nodeDef.label,
       }),
       h('div', { class: 'crap-node-modal__body' }, ...fields),
-      h('div', { class: 'crap-node-modal__footer' },
+      h(
+        'div',
+        { class: 'crap-node-modal__footer' },
         h('button', {
           type: 'button',
           class: ['crap-node-modal__btn', 'crap-node-modal__btn--cancel'],
@@ -203,7 +214,7 @@ async function submitNodeEdit(host, modal, nodeDef, attrs, pos, close) {
 function collectNodeAttrs(modal, nodeDef, attrs) {
   /** @type {Record<string, any>} */
   const newAttrs = {};
-  for (const a of (nodeDef.attrs || [])) {
+  for (const a of nodeDef.attrs || []) {
     if (a.hidden) {
       newAttrs[a.name] = attrs[a.name] ?? a.default ?? '';
       continue;
@@ -213,7 +224,9 @@ function collectNodeAttrs(modal, nodeDef, attrs) {
     if (a.type === 'checkbox') {
       newAttrs[a.name] = /** @type {HTMLInputElement} */ (el).checked;
     } else if (a.type === 'radio') {
-      const checked = /** @type {HTMLInputElement|null} */ (el.querySelector('input[type="radio"]:checked'));
+      const checked = /** @type {HTMLInputElement|null} */ (
+        el.querySelector('input[type="radio"]:checked')
+      );
       newAttrs[a.name] = checked?.value || '';
     } else {
       newAttrs[a.name] = /** @type {HTMLInputElement} */ (el).value;
@@ -316,14 +329,20 @@ function buildNodeFieldInput(a, val, inputId, ro, req, ph) {
 
   switch (a.type) {
     case 'textarea':
-      return h('textarea', {
-        ...common,
-        rows: a.rows || 3,
-        minlength: a.min_length,
-        maxlength: a.max_length,
-      }, String(val));
+      return h(
+        'textarea',
+        {
+          ...common,
+          rows: a.rows || 3,
+          minlength: a.min_length,
+          maxlength: a.max_length,
+        },
+        String(val),
+      );
     case 'checkbox':
-      return h('label', { class: 'crap-node-modal__checkbox' },
+      return h(
+        'label',
+        { class: 'crap-node-modal__checkbox' },
         h('input', {
           type: 'checkbox',
           id: inputId,
@@ -335,15 +354,21 @@ function buildNodeFieldInput(a, val, inputId, ro, req, ph) {
         ` ${a.label}`,
       );
     case 'select':
-      return h('select', common,
+      return h(
+        'select',
+        common,
         ...(a.options || []).map((o) =>
           h('option', { value: o.value, selected: o.value === val, text: o.label }),
         ),
       );
     case 'radio':
-      return h('div', { class: 'crap-node-modal__radio-group', dataset: { attr: a.name } },
+      return h(
+        'div',
+        { class: 'crap-node-modal__radio-group', dataset: { attr: a.name } },
         ...(a.options || []).map((o, i) =>
-          h('label', { class: 'crap-node-modal__radio' },
+          h(
+            'label',
+            { class: 'crap-node-modal__radio' },
             h('input', {
               type: 'radio',
               id: `${inputId}-${i}`,
@@ -359,13 +384,20 @@ function buildNodeFieldInput(a, val, inputId, ro, req, ph) {
       );
     case 'number':
       return h('input', {
-        ...common, type: 'number', value: val,
-        min: a.min, max: a.max, step: a.step,
+        ...common,
+        type: 'number',
+        value: val,
+        min: a.min,
+        max: a.max,
+        step: a.step,
       });
     case 'email':
       return h('input', {
-        ...common, type: 'email', value: val,
-        minlength: a.min_length, maxlength: a.max_length,
+        ...common,
+        type: 'email',
+        value: val,
+        minlength: a.min_length,
+        maxlength: a.max_length,
       });
     case 'date':
       return h('input', {
@@ -377,17 +409,24 @@ function buildNodeFieldInput(a, val, inputId, ro, req, ph) {
       });
     case 'code':
     case 'json':
-      return h('textarea', {
-        ...common,
-        class: ['crap-node-modal__input', 'crap-node-modal__input--mono'],
-        rows: a.rows || 4,
-        minlength: a.min_length,
-        maxlength: a.max_length,
-      }, String(val));
+      return h(
+        'textarea',
+        {
+          ...common,
+          class: ['crap-node-modal__input', 'crap-node-modal__input--mono'],
+          rows: a.rows || 4,
+          minlength: a.min_length,
+          maxlength: a.max_length,
+        },
+        String(val),
+      );
     default:
       return h('input', {
-        ...common, type: 'text', value: val,
-        minlength: a.min_length, maxlength: a.max_length,
+        ...common,
+        type: 'text',
+        value: val,
+        minlength: a.min_length,
+        maxlength: a.max_length,
       });
   }
 }
@@ -395,10 +434,14 @@ function buildNodeFieldInput(a, val, inputId, ro, req, ph) {
 /** @param {string|undefined} appearance */
 function dateInputType(appearance) {
   switch (appearance) {
-    case 'dayAndTime': return 'datetime-local';
-    case 'timeOnly':   return 'time';
-    case 'monthOnly':  return 'month';
-    default:           return 'date';
+    case 'dayAndTime':
+      return 'datetime-local';
+    case 'timeOnly':
+      return 'time';
+    case 'monthOnly':
+      return 'month';
+    default:
+      return 'date';
   }
 }
 

@@ -1,0 +1,16 @@
+{{!-- partials/warning-card
+     Highlighted warning card for confirm pages (delete with refs,
+     restore with missing relations, …). Body is slotted so the caller
+     supplies the situation-specific content (refs list, missing-
+     relations list, …).
+
+     Params:
+       title_key — translation key for the bold heading line
+
+     Slot: explanatory body content (paragraphs, lists, etc.). --}}
+<div class="card card--warning">
+  <div class="card__body">
+    <p><strong>{{t title_key}}</strong></p>
+    {{> @partial-block }}
+  </div>
+</div>

@@ -15,8 +15,8 @@
  * class used to mark the collapsed state.
  */
 const COLLAPSED_CLASS = {
-  'form__collapsible': 'form__collapsible--collapsed',
-  'form__group': 'form__group--collapsed',
+  form__collapsible: 'form__collapsible--collapsed',
+  form__group: 'form__group--collapsed',
 };
 
 class CrapCollapsible extends HTMLElement {

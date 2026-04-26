@@ -26,18 +26,8 @@
 
 import { h } from './h.js';
 import { t } from './i18n.js';
-
-/** @returns {string} */
-function readCsrfCookie() {
-  const m = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
-  if (!m) return '';
-  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
-}
-
-/** @param {string} message @param {'error'|'success'|'info'} type */
-function toast(message, type) {
-  document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message, type } }));
-}
+import { readCsrfCookie } from './util/cookies.js';
+import { toast } from './util/toast.js';
 
 /**
  * @typedef {{
@@ -118,7 +108,7 @@ class CrapValidateForm extends HTMLElement {
 
       const errors = await this.getValidationErrors();
       if (errors === null) {
-        toast(t('validation.server_error'), 'error');
+        toast({ message: t('validation.server_error'), type: 'error' });
         return;
       }
       if (Object.keys(errors).length === 0) {
@@ -176,7 +166,7 @@ class CrapValidateForm extends HTMLElement {
       });
       if (!res.ok) return null;
       const result = await res.json();
-      return result.valid ? {} : (result.errors || {});
+      return result.valid ? {} : result.errors || {};
     } catch {
       return null;
     }
@@ -239,7 +229,7 @@ class CrapValidateForm extends HTMLElement {
     for (const [field, message] of Object.entries(directErrors)) {
       if (this._renderFieldError(field, message)) count++;
     }
-    if (count > 0) toast(t('validation.error_summary'), 'error');
+    if (count > 0) toast({ message: t('validation.error_summary'), type: 'error' });
   }
 
   /**
@@ -257,7 +247,8 @@ class CrapValidateForm extends HTMLElement {
     for (const [field, message] of Object.entries(errors)) {
       const parent = this._resolveNodeAttrParent(field);
       if (parent) {
-        (nodeAttrErrors[parent] ??= []).push(message);
+        nodeAttrErrors[parent] ??= [];
+        nodeAttrErrors[parent].push(message);
       } else {
         directErrors[field] = message;
       }
@@ -284,7 +275,9 @@ class CrapValidateForm extends HTMLElement {
       const perNode = {};
       for (const [key, message] of Object.entries(errors)) {
         const m = key.match(re);
-        if (m) (perNode[m[1]] ??= []).push(message);
+        if (!m) continue;
+        perNode[m[1]] ??= [];
+        perNode[m[1]].push(message);
       }
       richtextEl.markNodeErrors(perNode);
     }
@@ -318,12 +311,14 @@ class CrapValidateForm extends HTMLElement {
 
     // Replace any server-rendered error already there.
     wrapper.querySelector(':scope > .form__error')?.remove();
-    wrapper.appendChild(h('p', {
-      class: 'form__error',
-      'data-validate-error': true,
-      role: 'alert',
-      text: message,
-    }));
+    wrapper.appendChild(
+      h('p', {
+        class: 'form__error',
+        'data-validate-error': true,
+        role: 'alert',
+        text: message,
+      }),
+    );
 
     this._markArrayRowErrors(wrapper);
     return true;
@@ -348,14 +343,18 @@ class CrapValidateForm extends HTMLElement {
     const header = row.querySelector('.form__array-row-header');
     if (!header || header.querySelector('.form__array-row-error-badge')) return;
 
-    const badge = h('span', {
-      class: 'form__array-row-error-badge',
-      'data-validate-error': true,
-    }, h('span', {
-      class: ['material-symbols-outlined', 'icon--sm'],
-      'aria-hidden': true,
-      text: 'error',
-    }));
+    const badge = h(
+      'span',
+      {
+        class: 'form__array-row-error-badge',
+        'data-validate-error': true,
+      },
+      h('span', {
+        class: ['material-symbols-outlined', 'icon--sm'],
+        'aria-hidden': true,
+        text: 'error',
+      }),
+    );
 
     // Insert after the toggle button (so the badge sits next to the chevron).
     const toggle = header.querySelector('.form__array-row-toggle');

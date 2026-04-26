@@ -52,11 +52,12 @@ function isAllowedLinkProto(href) {
  */
 function buildLinkModal(attrs, isEdit) {
   const footerButtons = [
-    isEdit && h('button', {
-      type: 'button',
-      class: ['crap-node-modal__btn', 'crap-node-modal__btn--danger'],
-      text: t('remove_link'),
-    }),
+    isEdit &&
+      h('button', {
+        type: 'button',
+        class: ['crap-node-modal__btn', 'crap-node-modal__btn--danger'],
+        text: t('remove_link'),
+      }),
     h('button', {
       type: 'button',
       class: ['crap-node-modal__btn', 'crap-node-modal__btn--cancel'],
@@ -69,34 +70,52 @@ function buildLinkModal(attrs, isEdit) {
     }),
   ];
 
-  return h('dialog', {
-    class: 'crap-node-modal',
-    'aria-labelledby': 'crap-link-modal-heading',
-  },
-    h('div', { class: 'crap-node-modal__dialog' },
+  return h(
+    'dialog',
+    {
+      class: 'crap-node-modal',
+      'aria-labelledby': 'crap-link-modal-heading',
+    },
+    h(
+      'div',
+      { class: 'crap-node-modal__dialog' },
       h('div', {
         class: 'crap-node-modal__header',
         id: 'crap-link-modal-heading',
         text: isEdit ? t('edit_link') : t('insert_link'),
       }),
-      h('div', { class: 'crap-node-modal__body' },
-        labelledField('crap-link-href', `${t('link_url')} *`, h('input', {
-          type: 'url',
-          class: 'crap-node-modal__input',
-          id: 'crap-link-href',
-          dataset: { field: 'href' },
-          value: attrs.href || '',
-          required: true,
-        })),
-        labelledField('crap-link-title', t('link_title'), h('input', {
-          type: 'text',
-          class: 'crap-node-modal__input',
-          id: 'crap-link-title',
-          dataset: { field: 'title' },
-          value: attrs.title || '',
-        })),
-        h('div', { class: 'crap-node-modal__field' },
-          h('label', { class: 'crap-node-modal__checkbox' },
+      h(
+        'div',
+        { class: 'crap-node-modal__body' },
+        labelledField(
+          'crap-link-href',
+          `${t('link_url')} *`,
+          h('input', {
+            type: 'url',
+            class: 'crap-node-modal__input',
+            id: 'crap-link-href',
+            dataset: { field: 'href' },
+            value: attrs.href || '',
+            required: true,
+          }),
+        ),
+        labelledField(
+          'crap-link-title',
+          t('link_title'),
+          h('input', {
+            type: 'text',
+            class: 'crap-node-modal__input',
+            id: 'crap-link-title',
+            dataset: { field: 'title' },
+            value: attrs.title || '',
+          }),
+        ),
+        h(
+          'div',
+          { class: 'crap-node-modal__field' },
+          h(
+            'label',
+            { class: 'crap-node-modal__checkbox' },
             h('input', {
               type: 'checkbox',
               dataset: { field: 'target' },
@@ -105,20 +124,28 @@ function buildLinkModal(attrs, isEdit) {
             ` ${t('link_open_new_tab')}`,
           ),
         ),
-        h('div', { class: 'crap-node-modal__field' },
-          h('label', { class: 'crap-node-modal__checkbox' },
+        h(
+          'div',
+          { class: 'crap-node-modal__field' },
+          h(
+            'label',
+            { class: 'crap-node-modal__checkbox' },
             h('input', {
               type: 'checkbox',
               dataset: { field: 'rel' },
-              checked: !!(attrs.rel && attrs.rel.includes('nofollow')),
+              checked: !!attrs.rel?.includes('nofollow'),
             }),
             ` ${t('link_nofollow')}`,
           ),
         ),
       ),
-      h('div', {
-        class: ['crap-node-modal__footer', isEdit && 'crap-node-modal__footer--with-remove'],
-      }, ...footerButtons),
+      h(
+        'div',
+        {
+          class: ['crap-node-modal__footer', isEdit && 'crap-node-modal__footer--with-remove'],
+        },
+        ...footerButtons,
+      ),
     ),
   );
 }
@@ -129,7 +156,9 @@ function buildLinkModal(attrs, isEdit) {
  * @param {HTMLElement} input
  */
 function labelledField(forId, label, input) {
-  return h('div', { class: 'crap-node-modal__field' },
+  return h(
+    'div',
+    { class: 'crap-node-modal__field' },
     h('label', { class: 'crap-node-modal__label', for: forId, text: label }),
     input,
   );
@@ -144,11 +173,17 @@ function labelledField(forId, label, input) {
  * @param {boolean} isEdit
  */
 function wireLinkModal(host, modal, schema, attrs, savedSelection, isEdit) {
-  const close = () => { modal.close(); modal.remove(); };
+  const close = () => {
+    modal.close();
+    modal.remove();
+  };
   const apply = () => applyLink(host, modal, schema, attrs, savedSelection, isEdit, close);
   const remove = () => removeLink(host, schema, savedSelection, close);
 
-  modal.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  modal.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    close();
+  });
   modal.querySelector('.crap-node-modal__btn--cancel')?.addEventListener('click', close);
   modal.querySelector('.crap-node-modal__btn--ok')?.addEventListener('click', apply);
   modal.querySelector('.crap-node-modal__btn--danger')?.addEventListener('click', remove);
@@ -156,7 +191,10 @@ function wireLinkModal(host, modal, schema, attrs, savedSelection, isEdit) {
   /** @type {HTMLInputElement|null} */
   const hrefInput = modal.querySelector('[data-field="href"]');
   hrefInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); apply(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      apply();
+    }
   });
 }
 

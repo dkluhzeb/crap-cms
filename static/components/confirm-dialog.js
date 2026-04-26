@@ -84,7 +84,9 @@ class CrapConfirmDialog extends HTMLElement {
     /** @type {HTMLButtonElement} */
     this._confirmBtn = h('button', { class: 'confirm', type: 'button', text: t('confirm') });
     /** @type {HTMLDialogElement} */
-    this._dialog = h('dialog', null,
+    this._dialog = h(
+      'dialog',
+      null,
       h('div', { class: 'body' }, this._messageEl),
       h('div', { class: 'actions' }, this._cancelBtn, this._confirmBtn),
     );
@@ -119,15 +121,23 @@ class CrapConfirmDialog extends HTMLElement {
         resolve(value);
       };
 
-      this._cancelBtn.addEventListener('click', () => {
-        this._dialog.close();
-        settle(false);
-      }, { signal: ctrl.signal });
+      this._cancelBtn.addEventListener(
+        'click',
+        () => {
+          this._dialog.close();
+          settle(false);
+        },
+        { signal: ctrl.signal },
+      );
 
-      this._confirmBtn.addEventListener('click', () => {
-        this._dialog.close();
-        settle(true);
-      }, { signal: ctrl.signal });
+      this._confirmBtn.addEventListener(
+        'click',
+        () => {
+          this._dialog.close();
+          settle(true);
+        },
+        { signal: ctrl.signal },
+      );
 
       // ESC key fires `cancel` and auto-closes the dialog.
       this._dialog.addEventListener('cancel', () => settle(false), { signal: ctrl.signal });

@@ -18,8 +18,10 @@
  */
 
 import { css } from './css.js';
-import { h, clear } from './h.js';
+import { clear, h } from './h.js';
 import { t } from './i18n.js';
+import { readCsrfCookie } from './util/cookies.js';
+import { toast } from './util/toast.js';
 
 /**
  * @typedef {{ id: string, label: string }} CreatedItem
@@ -121,13 +123,6 @@ const UNWRAP_TAGS = 'crap-dirty-form, crap-scroll-restore';
 /** HTMX attributes to strip so HTMX doesn't intercept submission inside the panel. */
 const HTMX_ATTRS = ['hx-post', 'hx-put', 'hx-get', 'hx-target', 'hx-indicator', 'hx-push-url'];
 
-/** @returns {string} */
-function readCsrfCookie() {
-  const m = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
-  if (!m) return '';
-  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
-}
-
 /**
  * Choose the right body encoding for a fetch:
  *  - `multipart/form-data` (FormData) when any non-empty file is present;
@@ -179,8 +174,12 @@ class CrapCreatePanel extends HTMLElement {
     /** @type {HTMLDivElement} */
     this._bodyEl = h('div', { class: 'create-panel__body' });
     /** @type {HTMLDialogElement} */
-    this._dialog = h('dialog', { class: 'create-panel' },
-      h('div', { class: 'create-panel__header' },
+    this._dialog = h(
+      'dialog',
+      { class: 'create-panel' },
+      h(
+        'div',
+        { class: 'create-panel__header' },
         this._titleEl,
         h('button', {
           type: 'button',
@@ -359,7 +358,7 @@ class CrapCreatePanel extends HTMLElement {
       const resp = await this._sendForm(form, collection);
       await this._handleSubmitResponse(resp, collection);
     } catch {
-      this._toast(t('error') || 'Error', 'error');
+      toast({ message: t('error') || 'Error', type: 'error' });
     } finally {
       for (const btn of submitBtns) {
         btn.disabled = false;
@@ -396,7 +395,7 @@ class CrapCreatePanel extends HTMLElement {
       const rawLabel = resp.headers.get('X-Created-Label');
       const label = rawLabel ? decodeURIComponent(rawLabel) : createdId;
       if (this._onCreated) this._onCreated({ id: createdId, label });
-      this._toast(label, 'success');
+      toast({ message: label, type: 'success' });
       this.close();
       return;
     }
@@ -410,13 +409,10 @@ class CrapCreatePanel extends HTMLElement {
     if (!toastHeader) return;
     try {
       const parsed = JSON.parse(toastHeader);
-      this._toast(parsed.message, parsed.type || 'error');
-    } catch { /* ignore */ }
-  }
-
-  /** @param {string} message @param {'success'|'error'|'info'} type */
-  _toast(message, type) {
-    document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message, type } }));
+      toast({ message: parsed.message, type: parsed.type || 'error' });
+    } catch {
+      /* ignore */
+    }
   }
 
   /** @type {boolean} */

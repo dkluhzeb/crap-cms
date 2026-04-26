@@ -3,8 +3,10 @@
  *
  * Renders fixed-position toast messages with type-based colouring and
  * auto-dismiss. Two ways to show one:
- *  - **Programmatic**: dispatch `crap:toast` with
- *    `{ message, type?, duration? }` in `detail`.
+ *  - **Programmatic**: dispatch `crap:toast-request` with
+ *    `{ message, type?, duration? }` in `detail`. Sugar:
+ *    `import { toast } from './util/toast.js'; toast({ ... })` or
+ *    `window.crap.toast({ ... })`.
  *  - **HTMX response header**: `X-Crap-Toast` carrying either a plain
  *    string message or a JSON `{ "message": "…", "type": "…" }`.
  *
@@ -12,7 +14,7 @@
  * <crap-toast></crap-toast>
  *
  * @example
- * document.dispatchEvent(new CustomEvent('crap:toast', {
+ * document.dispatchEvent(new CustomEvent('crap:toast-request', {
  *   detail: { message: 'Item created', type: 'success' },
  * }));
  *
@@ -100,19 +102,21 @@ class CrapToast extends HTMLElement {
       const detail = /** @type {CustomEvent<ToastDetail & { _handled?: boolean }>} */ (e).detail;
       if (detail._handled) return;
       detail._handled = true;
-      this.show(detail.message, detail.type, detail.duration);
+      this.show(detail);
     };
     this._onAfterRequest = (e) => this._handleHtmxResponse(e);
 
-    document.addEventListener('crap:toast', this._onToastRequest);
+    document.addEventListener('crap:toast-request', this._onToastRequest);
     document.body.addEventListener('htmx:afterRequest', this._onAfterRequest);
   }
 
   disconnectedCallback() {
     if (!this._connected) return;
     this._connected = false;
-    if (this._onToastRequest) document.removeEventListener('crap:toast', this._onToastRequest);
-    if (this._onAfterRequest) document.body.removeEventListener('htmx:afterRequest', this._onAfterRequest);
+    if (this._onToastRequest)
+      document.removeEventListener('crap:toast-request', this._onToastRequest);
+    if (this._onAfterRequest)
+      document.body.removeEventListener('htmx:afterRequest', this._onAfterRequest);
     this._onToastRequest = null;
     this._onAfterRequest = null;
   }
@@ -120,12 +124,10 @@ class CrapToast extends HTMLElement {
   /**
    * Show a toast.
    *
-   * @param {string} message
-   * @param {ToastType} [type='info']
-   * @param {number} [duration=DEFAULT_DURATION_MS] Auto-dismiss delay in ms.
-   *   Use `0` for a persistent toast (only dismissed by click).
+   * @param {ToastDetail} opts
    */
-  show(message, type = 'info', duration = DEFAULT_DURATION_MS) {
+  show(opts) {
+    const { message, type = 'info', duration = DEFAULT_DURATION_MS } = opts;
     const toast = h('div', { class: ['toast', `toast--${type}`], text: message });
     /** @type {ShadowRoot} */ (this.shadowRoot).appendChild(toast);
 
@@ -159,9 +161,9 @@ class CrapToast extends HTMLElement {
     try {
       /** @type {{ message: string, type?: ToastType }} */
       const data = JSON.parse(header);
-      this.show(data.message, data.type || fallbackType);
+      this.show({ message: data.message, type: data.type || fallbackType });
     } catch {
-      this.show(header, fallbackType);
+      this.show({ message: header, type: fallbackType });
     }
   }
 }

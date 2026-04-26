@@ -56,7 +56,9 @@ class CrapUploadPreview extends HTMLElement {
 
     // Legacy `<select>` path used for locale-locked fields. If present,
     // it owns the picker and the search-widget path doesn't apply.
-    const select = /** @type {HTMLSelectElement|null} */ (this.querySelector('[data-upload-select]'));
+    const select = /** @type {HTMLSelectElement|null} */ (
+      this.querySelector('[data-upload-select]')
+    );
     if (select) {
       this._setupSelect(select);
       return;

@@ -34,6 +34,8 @@ mod browser_list_settings;
 #[cfg(feature = "browser-tests")]
 mod browser_locale;
 #[cfg(feature = "browser-tests")]
+mod browser_password_toggle;
+#[cfg(feature = "browser-tests")]
 mod browser_relationship;
 #[cfg(feature = "browser-tests")]
 mod browser_richtext;

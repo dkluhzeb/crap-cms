@@ -1,26 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script nonce="{{crap.csp_nonce}}">
-    (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link href="/static/styles.css?v={{crap.build_hash}}" rel="stylesheet" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
-  <title>{{t "error_auth_required_title"}} - Crap CMS</title>
-</head>
+{{#> layout/auth title=(t "error_auth_required_title") header_icon_kind="material" header_icon="memory"}}
 
-<body class="auth-page">
-  <div class="auth-card">
-    <div class="auth-card__header">
-      <span class="material-symbols-outlined auth-card__icon">memory</span>
-      <h1 class="auth-card__title">Crap CMS</h1>
-    </div>
+<h2 class="auth-card__subtitle">{{t "error_auth_required_title"}}</h2>
+<p class="auth-card__message">{{t "error_auth_required"}}</p>
 
-    <h2 class="auth-card__subtitle">{{t "error_auth_required_title"}}</h2>
-    <p class="auth-card__message">{{t "error_auth_required"}}</p>
-  </div>
-</body>
-</html>
+{{/layout/auth}}

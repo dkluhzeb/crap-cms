@@ -59,11 +59,16 @@ class CrapTabs extends HTMLElement {
    */
   _neighborTab(key, tabs, idx) {
     switch (key) {
-      case 'ArrowRight': return tabs[(idx + 1) % tabs.length];
-      case 'ArrowLeft':  return tabs[(idx - 1 + tabs.length) % tabs.length];
-      case 'Home':       return tabs[0];
-      case 'End':        return tabs[tabs.length - 1];
-      default:           return null;
+      case 'ArrowRight':
+        return tabs[(idx + 1) % tabs.length];
+      case 'ArrowLeft':
+        return tabs[(idx - 1 + tabs.length) % tabs.length];
+      case 'Home':
+        return tabs[0];
+      case 'End':
+        return tabs[tabs.length - 1];
+      default:
+        return null;
     }
   }
 

@@ -17,6 +17,7 @@
 import { css } from './css.js';
 import { h } from './h.js';
 import { t } from './i18n.js';
+import { readCookie, readCsrfCookie } from './util/cookies.js';
 
 /** Show the warning this many seconds before expiry. */
 const WARNING_SECONDS = 5 * 60;
@@ -89,16 +90,6 @@ const sheet = css`
   }
 `;
 
-/**
- * Read a cookie value by name.
- * @param {string} name
- * @returns {string | null}
- */
-function readCookie(name) {
-  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match ? match[1] : null;
-}
-
 /** Read the session expiry timestamp from the cookie, or `null` if absent/malformed. */
 function readSessionExpiry() {
   const raw = readCookie('crap_session_exp');
@@ -145,7 +136,9 @@ class CrapSessionDialog extends HTMLElement {
     /** @type {HTMLButtonElement} */
     this._stayBtn = h('button', { class: 'stay', type: 'button', text: t('stay_logged_in') });
     /** @type {HTMLDialogElement} */
-    this._dialog = h('dialog', null,
+    this._dialog = h(
+      'dialog',
+      null,
       h('div', { class: 'body' }, this._messageEl),
       h('div', { class: 'actions' }, this._logoutBtn, this._stayBtn),
     );
@@ -171,8 +164,14 @@ class CrapSessionDialog extends HTMLElement {
   }
 
   _cancelTimers() {
-    if (this._timerId != null) { clearTimeout(this._timerId); this._timerId = null; }
-    if (this._countdownId != null) { clearInterval(this._countdownId); this._countdownId = null; }
+    if (this._timerId != null) {
+      clearTimeout(this._timerId);
+      this._timerId = null;
+    }
+    if (this._countdownId != null) {
+      clearInterval(this._countdownId);
+      this._countdownId = null;
+    }
   }
 
   /* ── Public dialog API ──────────────────────────────────────── */
@@ -189,24 +188,39 @@ class CrapSessionDialog extends HTMLElement {
     this._messageEl.textContent = message;
 
     const ctrl = new AbortController();
-    const settle = (fn) => { ctrl.abort(); fn(); };
+    const settle = (fn) => {
+      ctrl.abort();
+      fn();
+    };
 
-    this._logoutBtn.addEventListener('click', () => {
-      this._dialog.close();
-      settle(onLogout);
-    }, { signal: ctrl.signal });
+    this._logoutBtn.addEventListener(
+      'click',
+      () => {
+        this._dialog.close();
+        settle(onLogout);
+      },
+      { signal: ctrl.signal },
+    );
 
-    this._stayBtn.addEventListener('click', () => {
-      this._dialog.close();
-      settle(onStay);
-    }, { signal: ctrl.signal });
+    this._stayBtn.addEventListener(
+      'click',
+      () => {
+        this._dialog.close();
+        settle(onStay);
+      },
+      { signal: ctrl.signal },
+    );
 
     // ESC fires `cancel`. Treat as "stay" — opt-out of accidental logout.
-    this._dialog.addEventListener('cancel', (e) => {
-      e.preventDefault();
-      this._dialog.close();
-      settle(onStay);
-    }, { signal: ctrl.signal });
+    this._dialog.addEventListener(
+      'cancel',
+      (e) => {
+        e.preventDefault();
+        this._dialog.close();
+        settle(onStay);
+      },
+      { signal: ctrl.signal },
+    );
 
     this._dialog.showModal();
   }
@@ -271,8 +285,14 @@ class CrapSessionDialog extends HTMLElement {
     this._startCountdown(exp);
 
     this.show(expiryMessage(secsLeft), {
-      onStay: () => { this._cancelCountdown(); this._handleStay(); },
-      onLogout: () => { this._cancelCountdown(); this._handleLogout(); },
+      onStay: () => {
+        this._cancelCountdown();
+        this._handleStay();
+      },
+      onLogout: () => {
+        this._cancelCountdown();
+        this._handleLogout();
+      },
     });
   }
 
@@ -308,7 +328,7 @@ class CrapSessionDialog extends HTMLElement {
 
   /** POST the refresh endpoint, then re-schedule. */
   async _handleStay() {
-    const csrf = readCookie('crap_csrf');
+    const csrf = readCsrfCookie();
     try {
       const res = await fetch(REFRESH_URL, {
         method: 'POST',
@@ -318,7 +338,9 @@ class CrapSessionDialog extends HTMLElement {
         this._scheduleWarning();
         return;
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
     window.location.href = LOGIN_URL;
   }
 
