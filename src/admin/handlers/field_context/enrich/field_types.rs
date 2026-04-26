@@ -16,7 +16,7 @@ use crate::{
                 SubFieldOpts, children::build_enriched_children_from_data,
                 nested::build_enriched_sub_field_context,
             },
-            inject_timezone_values_from_row, safe_template_id,
+            inject_lang_values_from_row, inject_timezone_values_from_row, safe_template_id,
         },
         shared::auto_label_from_name,
     },
@@ -173,6 +173,7 @@ fn build_nested_array_row(
         .collect();
 
     inject_timezone_values_from_row(&mut sub_values, &sf.fields, nested_row_obj);
+    inject_lang_values_from_row(&mut sub_values, &sf.fields, nested_row_obj);
 
     let row_has_errors = sub_values
         .iter()
@@ -302,6 +303,7 @@ fn build_nested_blocks_row(
 
     if let Some(bd) = block_def {
         inject_timezone_values_from_row(&mut sub_values, &bd.fields, nested_row_obj);
+        inject_lang_values_from_row(&mut sub_values, &bd.fields, nested_row_obj);
     }
 
     let row_has_errors = sub_values

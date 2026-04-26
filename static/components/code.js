@@ -43,6 +43,31 @@ const sheet = css`
     font-family: monospace;
     line-height: 1.5;
   }
+
+  /* Editor-time language picker — rendered above the editor when the host
+     has a non-empty data-languages attribute. */
+  .lang-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs, 0.25rem);
+    margin-bottom: var(--space-xs, 0.25rem);
+    font-size: var(--text-xs, 0.75rem);
+    color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+  }
+  .lang-picker__select {
+    height: var(--button-height-sm, 1.75rem);
+    padding: 0 var(--space-sm, 0.5rem);
+    background: var(--input-bg, #fff);
+    border: 1px solid var(--input-border, #e0e0e0);
+    border-radius: var(--radius-sm, 4px);
+    color: var(--text-primary, rgba(0, 0, 0, 0.88));
+    font: inherit;
+    cursor: pointer;
+  }
+  .lang-picker__select:focus-visible {
+    outline: 2px solid var(--color-primary, #1677ff);
+    outline-offset: 1px;
+  }
 `;
 
 /**
@@ -131,6 +156,50 @@ const THEME_SPEC = {
   '.cm-activeLine': {
     backgroundColor: 'var(--bg-hover, rgba(0,0,0,0.02))',
   },
+
+  /* Autocompletion popup. CM6 ships unstyled defaults that look like
+     OS-native browser dropdowns (white-on-white in dark themes). Pin
+     every visible surface to the admin tokens so the popup follows the
+     active theme. */
+  '.cm-tooltip': {
+    backgroundColor: 'var(--bg-elevated, #fff)',
+    border: '1px solid var(--border-color, #e0e0e0)',
+    borderRadius: 'var(--radius-md, 6px)',
+    boxShadow: 'var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.08))',
+    color: 'var(--text-primary, rgba(0,0,0,0.88))',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+    fontFamily: 'monospace',
+    maxHeight: 'var(--dropdown-max-height, 15rem)',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+    padding: 'var(--space-2xs, 0.125rem) var(--space-sm, 0.5rem)',
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+    backgroundColor: 'var(--color-primary-bg, rgba(22,119,255,0.12))',
+    color: 'var(--color-primary, #1677ff)',
+  },
+  '.cm-completionLabel': {
+    color: 'inherit',
+  },
+  '.cm-completionMatchedText': {
+    color: 'var(--color-primary, #1677ff)',
+    textDecoration: 'none',
+    fontWeight: '600',
+  },
+  '.cm-completionDetail': {
+    color: 'var(--text-tertiary, rgba(0,0,0,0.45))',
+    fontStyle: 'normal',
+    marginLeft: 'var(--space-sm, 0.5rem)',
+  },
+  '.cm-completionInfo': {
+    backgroundColor: 'var(--bg-elevated, #fff)',
+    border: '1px solid var(--border-color, #e0e0e0)',
+    borderRadius: 'var(--radius-md, 6px)',
+    boxShadow: 'var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.08))',
+    color: 'var(--text-secondary, rgba(0,0,0,0.65))',
+    padding: 'var(--space-sm, 0.5rem)',
+  },
 };
 
 /**
@@ -150,10 +219,13 @@ function getLanguageExtension(CM, language) {
  *
  * @param {any} CM
  * @param {HTMLTextAreaElement} textarea Sync target for `docChanged` updates.
+ * @param {any} languageCompartment A CodeMirror `Compartment` reserved for
+ *   the language extension. Allows runtime reconfigure (used by the
+ *   editor-time language picker).
  * @param {string} language
  * @param {boolean} readonly
  */
-function buildExtensions(CM, textarea, language, readonly) {
+function buildExtensions(CM, textarea, languageCompartment, language, readonly) {
   const ext = [
     CM.lineNumbers(),
     CM.highlightActiveLineGutter(),
@@ -181,10 +253,11 @@ function buildExtensions(CM, textarea, language, readonly) {
     ]),
   ];
 
-  // Language must register before `syntaxHighlighting` so the parser's
-  // tokens are available when the highlight style is applied.
-  const langExt = getLanguageExtension(CM, language);
-  if (langExt) ext.push(langExt);
+  // Language wrapped in a Compartment so we can swap it at runtime when
+  // the editor uses the language picker. Must register before
+  // `syntaxHighlighting` so the parser's tokens are available when the
+  // highlight style is applied.
+  ext.push(languageCompartment.of(getLanguageExtension(CM, language) || []));
   ext.push(CM.syntaxHighlighting(getHighlightStyle(CM)));
 
   if (readonly) ext.push(CM.EditorState.readOnly.of(true));
@@ -200,11 +273,33 @@ function buildExtensions(CM, textarea, language, readonly) {
   return ext;
 }
 
+/**
+ * Parse the `data-languages` attribute into a string array. Empty / missing
+ * / malformed → `[]`.
+ *
+ * @param {Element} host
+ * @returns {string[]}
+ */
+function parseLanguagesAttr(host) {
+  const raw = host.getAttribute('data-languages');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 class CrapCode extends HTMLElement {
   constructor() {
     super();
     /** @type {any} */
     this._view = null;
+    /** @type {any} */
+    this._langCompartment = null;
+    /** @type {any} */
+    this._CM = null;
     this.attachShadow({ mode: 'open' });
   }
 
@@ -223,19 +318,82 @@ class CrapCode extends HTMLElement {
     }
 
     textarea.hidden = true;
+    this._CM = CM;
+    this._langCompartment = new CM.Compartment();
+
     const language = this.getAttribute('data-language') || 'json';
     const readonly = textarea.hasAttribute('readonly');
-    const extensions = buildExtensions(CM, textarea, language, readonly);
+    const extensions = buildExtensions(CM, textarea, this._langCompartment, language, readonly);
 
-    const editorEl = h('div', { class: 'code-editor' });
     const root = /** @type {ShadowRoot} */ (this.shadowRoot);
     root.adoptedStyleSheets = [sheet];
+
+    const languages = parseLanguagesAttr(this);
+    if (languages.length > 0) {
+      root.append(this._renderLanguagePicker(languages, language));
+    }
+
+    const editorEl = h('div', { class: 'code-editor' });
     root.append(editorEl);
 
     this._view = new CM.EditorView({
       state: CM.EditorState.create({ doc: textarea.value || '', extensions }),
       parent: editorEl,
     });
+  }
+
+  /**
+   * Build the picker DOM and wire change-handling. Returns the wrapper
+   * element to append to the shadow root.
+   *
+   * @param {string[]} languages
+   * @param {string} current
+   */
+  _renderLanguagePicker(languages, current) {
+    const options = languages.includes(current) ? languages : [current, ...languages];
+    const select = h(
+      'select',
+      {
+        class: 'lang-picker__select',
+        'aria-label': 'Editor language',
+        onChange: (/** @type {Event} */ e) =>
+          this._onLanguageChange(/** @type {HTMLSelectElement} */ (e.target).value),
+      },
+      ...options.map((lang) =>
+        h('option', { value: lang, ...(lang === current ? { selected: true } : {}) }, lang),
+      ),
+    );
+    return h('label', { class: 'lang-picker' }, 'Language: ', select);
+  }
+
+  /**
+   * Reconfigure the editor to a new language and persist the choice in the
+   * sibling hidden `<input name="...{name}_lang">`. Dispatches a bubbling
+   * `crap:change` event so `<crap-dirty-form>` notices the unsaved edit.
+   *
+   * @param {string} language
+   */
+  _onLanguageChange(language) {
+    const CM = this._CM;
+    if (!CM || !this._view || !this._langCompartment) return;
+
+    this._view.dispatch({
+      effects: this._langCompartment.reconfigure(getLanguageExtension(CM, language) || []),
+    });
+
+    // The hidden input is a sibling in light DOM (rendered by code.hbs when
+    // languages are configured). Find it via the shared parent.
+    const parent = this.parentElement;
+    const hidden = parent?.querySelector('input[type="hidden"][name$="_lang"]');
+    if (hidden instanceof HTMLInputElement) {
+      hidden.value = language;
+      this.dispatchEvent(
+        new CustomEvent('crap:change', {
+          bubbles: true,
+          detail: { name: hidden.name, value: language },
+        }),
+      );
+    }
   }
 
   /*

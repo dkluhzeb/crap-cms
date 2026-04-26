@@ -385,9 +385,33 @@ fn apply_upload(sf: &FieldDefinition, ctx: &mut Value) {
     }
 }
 
-/// Set the language for Code sub-fields.
-fn apply_code(sf: &FieldDefinition, ctx: &mut Value) {
-    ctx["language"] = json!(sf.admin.language.as_deref().unwrap_or("json"));
+/// Set the editor language for Code sub-fields plus the optional editor-time
+/// language picker. Sources the chosen language in priority order:
+///
+///   1. Per-document value in the `<name_prefix><name>_lang` companion column.
+///   2. Operator-configured default `admin.language`.
+///   3. `"json"`.
+///
+/// When `admin.languages` is non-empty, the allow-list is also emitted as
+/// `ctx["languages"]`. Mirrors `single_code` in `single.rs`.
+fn apply_code(sf: &FieldDefinition, ctx: &mut Value, extras: &FieldRecursionCtx) {
+    let default_lang = sf.admin.language.as_deref().unwrap_or("json");
+    let full_name = if extras.name_prefix.is_empty() {
+        sf.name.clone()
+    } else {
+        format!("{}.{}", extras.name_prefix, sf.name)
+    };
+    let chosen = extras
+        .values
+        .get(&format!("{}_lang", full_name))
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_lang);
+    ctx["language"] = json!(chosen);
+
+    if !sf.admin.languages.is_empty() {
+        ctx["languages"] = json!(sf.admin.languages);
+    }
 }
 
 /// Parse JSON array value into tag list for Text/Number has_many sub-fields.
@@ -425,7 +449,7 @@ pub fn apply_field_type_extras(
         FieldType::Blocks => apply_blocks(sf, sub_ctx, extras),
         FieldType::Relationship => apply_relationship(sf, sub_ctx),
         FieldType::Upload => apply_upload(sf, sub_ctx),
-        FieldType::Code => apply_code(sf, sub_ctx),
+        FieldType::Code => apply_code(sf, sub_ctx, extras),
         FieldType::Text | FieldType::Number if sf.has_many => apply_tags(value, sub_ctx),
         _ => {}
     }

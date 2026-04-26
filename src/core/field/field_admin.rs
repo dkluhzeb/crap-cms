@@ -59,9 +59,18 @@ pub struct FieldAdmin {
     /// For textarea fields: number of visible rows (default 8).
     #[serde(default)]
     pub rows: Option<u32>,
-    /// For code fields: the language mode (e.g., "json", "javascript", "html", "css", "python").
+    /// For code fields: the default language mode (e.g., "json", "javascript", "html", "css", "python").
+    /// When `languages` is non-empty, this is the initial value; the editor
+    /// can switch to any other language in the allow-list at edit time.
     #[serde(default)]
     pub language: Option<String>,
+    /// For code fields: an allow-list of languages the editor can pick from
+    /// at edit time. When set, the form renders a `<select>` next to the
+    /// editor and the editor's choice persists in a `<name>_lang` companion
+    /// column. When empty, the language is fixed to `language` (or `"json"`
+    /// if neither is set).
+    #[serde(default)]
+    pub languages: Vec<String>,
     /// For richtext fields: enabled toolbar features.
     /// When empty, all features are enabled. Possible values:
     /// "bold", "italic", "code", "link", "heading", "blockquote",
@@ -110,6 +119,7 @@ impl Default for FieldAdmin {
             step: None,
             rows: None,
             language: None,
+            languages: Vec::new(),
             features: Vec::new(),
             picker: None,
             richtext_format: None,

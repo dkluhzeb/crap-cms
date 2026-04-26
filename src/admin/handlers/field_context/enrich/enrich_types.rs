@@ -13,7 +13,7 @@ use crate::{
                 EnrichCtx, SubFieldOpts, build_enriched_sub_field_context, enrich_nested_fields,
                 enrich_polymorphic_selected,
             },
-            inject_timezone_values_from_row,
+            inject_lang_values_from_row, inject_timezone_values_from_row,
         },
         shared::compute_row_label,
     },
@@ -189,6 +189,7 @@ fn build_array_row_sub_fields(
         .collect();
 
     inject_timezone_values_from_row(&mut sub_values, &field_def.fields, row_obj);
+    inject_lang_values_from_row(&mut sub_values, &field_def.fields, row_obj);
     sub_values
 }
 
@@ -482,6 +483,7 @@ fn build_blocks_row_sub_fields(
         .collect();
 
     inject_timezone_values_from_row(&mut sub_values, &block_def.fields, row_obj);
+    inject_lang_values_from_row(&mut sub_values, &block_def.fields, row_obj);
     sub_values
 }
 

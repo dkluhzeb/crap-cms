@@ -75,6 +75,16 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
         builder = builder.language(v);
     }
 
+    let languages: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "languages") {
+        tbl.sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    builder = builder.languages(languages);
+
     if let Some(v) = get_string(admin_tbl, "picker") {
         builder = builder.picker(v);
     }
@@ -138,6 +148,28 @@ mod tests {
         assert_eq!(admin.language.as_deref(), Some("en"));
         assert_eq!(admin.rows, Some(5));
         assert!(admin.resizable);
+    }
+
+    #[test]
+    fn test_parse_field_admin_languages_array() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let langs = lua.create_table().unwrap();
+        langs.set(1, "javascript").unwrap();
+        langs.set(2, "python").unwrap();
+        langs.set(3, "html").unwrap();
+        admin_tbl.set("languages", langs).unwrap();
+
+        let admin = parse_field_admin(&admin_tbl).unwrap();
+        assert_eq!(admin.languages, vec!["javascript", "python", "html"]);
+    }
+
+    #[test]
+    fn test_parse_field_admin_languages_default_empty() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
+        assert!(admin.languages.is_empty());
     }
 
     #[test]

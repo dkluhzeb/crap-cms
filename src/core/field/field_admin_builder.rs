@@ -119,6 +119,13 @@ impl FieldAdminBuilder {
         self
     }
 
+    /// Set the allow-list of languages the editor can pick from at edit time
+    /// for code fields. When non-empty, the form renders a language picker.
+    pub fn languages(mut self, v: Vec<String>) -> Self {
+        self.inner.languages = v;
+        self
+    }
+
     /// Set enabled toolbar features for richtext fields.
     pub fn features(mut self, v: Vec<String>) -> Self {
         self.inner.features = v;

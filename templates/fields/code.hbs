@@ -1,5 +1,6 @@
 {{#> partials/field}}
-<crap-code data-language="{{language}}">
+<crap-code data-language="{{language}}"
+  {{#if languages}}data-languages='{{json languages}}'{{/if}}>
   <textarea
     id="field-{{name}}"
     name="{{name}}"
@@ -12,4 +13,7 @@
     {{#if error}}class="form__input--error"{{/if}}
   >{{value}}</textarea>
 </crap-code>
+{{#if languages}}
+<input type="hidden" name="{{name}}_lang" value="{{language}}" />
+{{/if}}
 {{/partials/field}}

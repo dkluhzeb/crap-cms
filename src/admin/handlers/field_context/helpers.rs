@@ -139,6 +139,42 @@ pub fn inject_timezone_values_from_row(
     }
 }
 
+/// Inject stored language picks and the picker allow-list into code sub-field
+/// contexts from a parent row object.
+///
+/// For each sub-field definition that is a code field with a non-empty
+/// `admin.languages` allow-list, looks up `{field_name}_lang` in the parent
+/// row and sets `language` on the context (when present and non-empty), plus
+/// emits the `languages` allow-list so the template can render the picker.
+/// Mirrors the timezone pattern; both companions are stored as adjacent JSON
+/// keys when the field is nested inside an array/blocks row.
+pub fn inject_lang_values_from_row(
+    sub_ctxs: &mut [Value],
+    field_defs: &[FieldDefinition],
+    parent_row: Option<&Map<String, Value>>,
+) {
+    let Some(row_obj) = parent_row else {
+        return;
+    };
+
+    for (ctx, fd) in sub_ctxs.iter_mut().zip(field_defs.iter()) {
+        if fd.field_type != FieldType::Code || fd.admin.languages.is_empty() {
+            continue;
+        }
+
+        ctx["languages"] = json!(fd.admin.languages);
+
+        let lang_key = format!("{}_lang", fd.name);
+        if let Some(lang_val) = row_obj
+            .get(&lang_key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            ctx["language"] = json!(lang_val);
+        }
+    }
+}
+
 // ── Display conditions ──────────────────────────────────────────────
 
 /// Evaluate display conditions for field contexts and inject condition data.
@@ -205,7 +241,7 @@ fn apply_single_condition(
 mod tests {
     use serde_json::json;
 
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::field::{FieldAdmin, FieldDefinition, FieldType};
 
     use super::*;
 
@@ -318,5 +354,67 @@ mod tests {
         inject_timezone_values_from_row(&mut ctxs, &field_defs, None);
 
         assert_eq!(ctxs[0]["timezone_value"], "");
+    }
+
+    fn code_field_with_languages(name: &str, langs: Vec<&str>) -> FieldDefinition {
+        let admin = FieldAdmin {
+            languages: langs.into_iter().map(str::to_string).collect(),
+            ..Default::default()
+        };
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Code,
+            admin,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn inject_lang_values_from_row_sets_language_and_languages() {
+        let field_defs = vec![
+            code_field_with_languages("snippet", vec!["javascript", "python"]),
+            code_field_with_languages("notes", vec![]), // no languages → no picker, untouched
+        ];
+
+        let mut ctxs = vec![
+            json!({"name": "items[0][snippet]", "language": "javascript"}),
+            json!({"name": "items[0][notes]", "language": "json"}),
+        ];
+
+        let row: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "snippet": "print(1)",
+            "snippet_lang": "python",
+            "notes": "{}",
+        }))
+        .unwrap();
+
+        inject_lang_values_from_row(&mut ctxs, &field_defs, Some(&row));
+
+        // First field: picker enabled → languages emitted, per-row pick wins.
+        assert_eq!(ctxs[0]["language"], "python");
+        assert_eq!(ctxs[0]["languages"], json!(["javascript", "python"]));
+
+        // Second field: no allow-list → context unchanged.
+        assert_eq!(ctxs[1]["language"], "json");
+        assert!(ctxs[1].get("languages").is_none());
+    }
+
+    #[test]
+    fn inject_lang_values_from_row_keeps_default_when_lang_value_missing() {
+        let field_defs = vec![code_field_with_languages(
+            "snippet",
+            vec!["javascript", "python"],
+        )];
+        let mut ctxs = vec![json!({"name": "items[0][snippet]", "language": "javascript"})];
+
+        // Row exists but `_lang` key is absent — keep the operator default but
+        // still emit `languages` so the picker renders.
+        let row: serde_json::Map<String, Value> =
+            serde_json::from_value(json!({"snippet": "console.log(1)"})).unwrap();
+
+        inject_lang_values_from_row(&mut ctxs, &field_defs, Some(&row));
+
+        assert_eq!(ctxs[0]["language"], "javascript");
+        assert_eq!(ctxs[0]["languages"], json!(["javascript", "python"]));
     }
 }

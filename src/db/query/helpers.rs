@@ -309,6 +309,14 @@ pub(crate) fn tz_column(name: &str) -> String {
     format!("{name}_tz")
 }
 
+/// Build a code-language companion column name: `"snippet_lang"`,
+/// `"meta__example_lang"`. Used by code fields with a non-empty
+/// `admin.languages` allow-list — see `apply_code` in the field-context
+/// builder.
+pub(crate) fn lang_column(name: &str) -> String {
+    format!("{name}_lang")
+}
+
 /// Build a join table name: `"collection_field"`, `"posts_tags"`.
 pub(crate) fn join_table(collection: &str, field: &str) -> String {
     format!("{collection}_{field}")
