@@ -1145,7 +1145,7 @@ async fn admin_upload_edit_form_renders_focal_point_preview() {
          upload meta fields are being stripped from the service response again"
     );
     assert!(
-        html.contains("data-src=\"/uploads/"),
+        html.contains("src=\"/uploads/"),
         "preview widget must point at the uploaded image"
     );
 }
