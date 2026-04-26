@@ -6,8 +6,8 @@
   {{#if upload.preview}}
   <crap-focal-point class="upload-section__preview"
     data-focal-x="{{upload.focal_x}}"
-    data-focal-y="{{upload.focal_y}}"
-    data-src="{{upload.preview}}">
+    data-focal-y="{{upload.focal_y}}">
+    <img src="{{upload.preview}}" alt="" />
     <input type="hidden" name="focal_x" value="{{upload.focal_x}}" />
     <input type="hidden" name="focal_y" value="{{upload.focal_y}}" />
   </crap-focal-point>

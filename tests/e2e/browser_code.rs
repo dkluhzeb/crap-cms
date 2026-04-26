@@ -108,3 +108,74 @@ async fn code_typing_updates_hidden_input() {
 
     server_handle.abort();
 }
+
+// ── code_syntax_highlighting_renders ─────────────────────────────────────
+//
+// Regression test for CodeMirror syntax highlighting. CM's
+// `defaultHighlightStyle` decorates parsed tokens with `.tok-*` classes
+// (`.tok-keyword`, `.tok-string`, …); we assert at least one is present
+// after typing a snippet of JSON.
+//
+// Caught by past refactors that reordered the extension array so the
+// language extension was registered AFTER the fallback style — meaning
+// no language was active and no token classes were emitted.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn code_syntax_highlighting_renders() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_code_def(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "bcode3@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "bcode3@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "bcode3@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/snippets/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Insert a JSON snippet with at least a string and a number — both
+    // should be tagged by the parser.
+    page.evaluate(
+        "() => { \
+            const host = document.querySelector('crap-code'); \
+            const view = host._view; \
+            if (view) { \
+                view.dispatch({ changes: { from: 0, insert: '{\"name\":\"hello\",\"n\":42}' } }); \
+            } \
+        }",
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Look for any highlighted span. CodeMirror's HighlightStyle generates
+    // scoped class names (`ͼ` Greek-iota prefix from style-mod). The real
+    // test is whether the span has a non-default `color` — meaning the
+    // highlight style actually applied.
+    let result = browser::shadow_eval(
+        &page,
+        "crap-code",
+        "const line = root.querySelector('.cm-line'); \
+         if (!line) return 'no-line'; \
+         const span = line.querySelector('span[class*=\"ͼ\"]'); \
+         if (!span) return 'no-span'; \
+         const color = getComputedStyle(span).color; \
+         return color === 'rgb(0, 0, 0)' || color === 'inherit' || color === '' \
+           ? 'unstyled' \
+           : 'colored';",
+    )
+    .await;
+    assert_eq!(
+        result, "colored",
+        "expected highlighted tokens to have a non-default color; got: '{result}'"
+    );
+
+    server_handle.abort();
+}

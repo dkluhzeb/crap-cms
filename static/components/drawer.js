@@ -1,8 +1,28 @@
+/**
+ * Slide-in drawer panel — `<crap-drawer>`.
+ *
+ * Renders a native `<dialog>` slid in from the right edge with a
+ * heading + body. The component is intended to be a singleton: any
+ * page can find the connected instance by dispatching a
+ * `crap:drawer-request` event whose `detail.instance` the drawer
+ * fills in.
+ *
+ * @example
+ * const evt = new CustomEvent('crap:drawer-request', { detail: {} });
+ * document.dispatchEvent(evt);
+ * const drawer = evt.detail.instance;
+ * drawer?.open({ title: 'Browse Media' });
+ * drawer?.body.append(myList);   // mount content into the drawer body
+ * // ... user closes, or call `drawer.close()`.
+ *
+ * @module drawer
+ */
+
+import { css } from './css.js';
 import { h, clear } from './h.js';
 import { t } from './i18n.js';
 
-const sheet = new CSSStyleSheet();
-sheet.replaceSync(`
+const sheet = css`
   :host {
     display: contents;
   }
@@ -253,94 +273,94 @@ sheet.replaceSync(`
     direction: ltr;
     -webkit-font-smoothing: antialiased;
   }
-`);
+`;
 
-/**
- * <crap-drawer> — Slide-in drawer panel using native <dialog>.
- *
- * Uses Shadow DOM with CSS custom properties from :root for theming.
- *
- * Instance-safe: each connected instance self-registers via
- * connectedCallback/disconnectedCallback. The getDrawer() helper
- * dispatches a synchronous event to find a connected instance.
- *
- * API:
- *   const drawer = getDrawer();
- *   drawer.open({ title: 'Browse Media' });
- *   drawer.body;        // content container element
- *   drawer.close();
- */
 class CrapDrawer extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
-    this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.append(
-      h('dialog', null,
-        h('div', { class: 'header' },
-          h('h3', { class: 'header__title' }),
-          h('button', {
-            class: 'header__close',
-            type: 'button',
-            'aria-label': t('close'),
-            text: 'close',
-          }),
-        ),
-        h('div', { class: 'body' }),
-      ),
-    );
 
-    const dialog = this.shadowRoot.querySelector('dialog');
-    const closeBtn = this.shadowRoot.querySelector('.header__close');
+    /** @type {boolean} */
+    this._connected = false;
+    /** @type {((e: Event) => void)|null} */
+    this._handleRequest = null;
 
-    closeBtn.addEventListener('click', () => this.close());
+    const root = this.attachShadow({ mode: 'open' });
+    root.adoptedStyleSheets = [sheet];
 
-    // Close on backdrop click
-    dialog.addEventListener('click', (e) => {
-      if (e.target === dialog) this.close();
+    /** @type {HTMLHeadingElement} */
+    this._titleEl = h('h3', { class: 'header__title' });
+    /** @type {HTMLDivElement} */
+    this._bodyEl = h('div', { class: 'body' });
+    /**
+     * "close" is the Material Symbols glyph name; the font-family on
+     * `.header__close` renders it as the X icon.
+     * @type {HTMLButtonElement}
+     */
+    this._closeBtn = h('button', {
+      class: 'header__close',
+      type: 'button',
+      'aria-label': t('close'),
+      text: 'close',
     });
+    /** @type {HTMLDialogElement} */
+    this._dialog = h('dialog', null,
+      h('div', { class: 'header' }, this._titleEl, this._closeBtn),
+      this._bodyEl,
+    );
+    root.append(this._dialog);
 
-    // Close on Escape
-    dialog.addEventListener('cancel', (e) => {
+    this._closeBtn.addEventListener('click', () => this.close());
+    // Backdrop click closes (target === dialog only when the user clicks
+    // the area outside the dialog's content rectangle).
+    this._dialog.addEventListener('click', (e) => {
+      if (e.target === this._dialog) this.close();
+    });
+    // ESC fires `cancel`; pre-empt the default close so we route through
+    // our `close()` and clear the body.
+    this._dialog.addEventListener('cancel', (e) => {
       e.preventDefault();
       this.close();
     });
   }
 
-  /**
-   * Open the drawer with a title.
-   * @param {{ title: string }} opts
-   */
-  open(opts) {
-    const dialog = this.shadowRoot.querySelector('dialog');
-    this.shadowRoot.querySelector('.header__title').textContent = opts.title || '';
-    clear(this.shadowRoot.querySelector('.body'));
-    dialog.showModal();
-  }
-
-  /** Close the drawer. */
-  close() {
-    const dialog = this.shadowRoot.querySelector('dialog');
-    dialog.close();
-    clear(this.shadowRoot.querySelector('.body'));
-  }
-
-  /** @returns {HTMLElement} The body content container. */
-  get body() {
-    return this.shadowRoot.querySelector('.body');
-  }
-
-  /** @returns {void} */
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
     this._handleRequest = (e) => {
-      if (!e.detail.instance) e.detail.instance = this;
+      const detail = /** @type {CustomEvent} */ (e).detail;
+      if (!detail.instance) detail.instance = this;
     };
     document.addEventListener('crap:drawer-request', this._handleRequest);
   }
 
-  /** @returns {void} */
   disconnectedCallback() {
-    document.removeEventListener('crap:drawer-request', this._handleRequest);
+    if (!this._connected) return;
+    this._connected = false;
+    if (this._handleRequest) {
+      document.removeEventListener('crap:drawer-request', this._handleRequest);
+    }
+  }
+
+  /**
+   * Open the drawer with `opts.title`. The body is cleared so the
+   * caller mounts fresh content into `drawer.body` after this returns.
+   *
+   * @param {{ title: string }} opts
+   */
+  open(opts) {
+    this._titleEl.textContent = opts.title || '';
+    clear(this._bodyEl);
+    this._dialog.showModal();
+  }
+
+  close() {
+    this._dialog.close();
+    clear(this._bodyEl);
+  }
+
+  /** Body content container — mount points for callers. */
+  get body() {
+    return this._bodyEl;
   }
 }
 

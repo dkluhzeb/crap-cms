@@ -1,8 +1,29 @@
+/**
+ * <crap-confirm> — Confirmation dialog that wraps destructive form actions.
+ *
+ * Intercepts `submit` events from a slotted child form, shows a styled
+ * dialog, and only re-submits if the user confirms.
+ *
+ * For standalone HTMX buttons (not inside a child form), use
+ * `hx-confirm` — `<crap-confirm-dialog>` handles those.
+ *
+ * @attr message - Confirmation prompt text (default: "Are you sure?").
+ *
+ * @example
+ * <crap-confirm message="Delete this item permanently?">
+ *   <form method="post" action="/delete/123">
+ *     <button type="submit" class="button button--danger">Delete</button>
+ *   </form>
+ * </crap-confirm>
+ *
+ * @module confirm
+ */
+
+import { css } from './css.js';
 import { h } from './h.js';
 import { t } from './i18n.js';
 
-const sheet = new CSSStyleSheet();
-sheet.replaceSync(`
+const sheet = css`
   :host { display: contents; }
   dialog {
     border: none;
@@ -15,12 +36,8 @@ sheet.replaceSync(`
     background: var(--bg-elevated, #fff);
     color: var(--text-primary, rgba(0, 0, 0, 0.88));
   }
-  dialog::backdrop {
-    background: rgba(0, 0, 0, 0.4);
-  }
-  .dialog__body {
-    padding: var(--space-xl, 1.5rem);
-  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+  .dialog__body { padding: var(--space-xl, 1.5rem); }
   .dialog__body p {
     margin: 0;
     font-size: var(--text-base, 0.875rem);
@@ -55,115 +72,83 @@ sheet.replaceSync(`
     color: var(--text-on-primary, #fff);
   }
   .btn-confirm:hover { background: var(--color-danger-hover, #ef4444); }
-`);
+`;
 
-/**
- * <crap-confirm> — Confirmation dialog that wraps destructive form actions.
- *
- * Intercepts `submit` events from child forms, shows a styled dialog,
- * and only allows submission through if the user confirms.
- *
- * For standalone HTMX buttons (not inside a child form), use `hx-confirm`
- * instead — the <crap-confirm-dialog> component handles those.
- *
- * @attr {string} message - Confirmation prompt text (default: "Are you sure?").
- *
- * @example
- * <crap-confirm message="Delete this item permanently?">
- *   <form method="post" action="/delete/123">
- *     <button type="submit" class="button button--danger">Delete</button>
- *   </form>
- * </crap-confirm>
- */
 class CrapConfirm extends HTMLElement {
   constructor() {
     super();
 
-    /**
-     * Flag to bypass interception on confirmed re-submit.
-     * @type {boolean}
-     * @private
-     */
+    // Set to true between confirm-click and the resulting requestSubmit so
+    // the re-fired submit event passes through without re-prompting.
+    /** @type {boolean} */
     this._confirmed = false;
 
-    /**
-     * Reference to the form that triggered the confirmation.
-     * @type {HTMLFormElement | null}
-     * @private
-     */
+    /** @type {HTMLFormElement|null} */
     this._pendingForm = null;
 
-    /**
-     * Guard against duplicate listener registration on reconnection.
-     * @type {boolean}
-     * @private
-     */
+    /** @type {boolean} */
     this._connected = false;
 
-    this.attachShadow({ mode: 'open' });
-    this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.append(
-      h('slot'),
-      h('dialog', null,
-        h('div', { class: 'dialog__body' }, h('p')),
-        h('div', { class: 'dialog__actions' },
-          h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') }),
-          h('button', { class: 'btn-confirm', type: 'button', text: t('confirm') }),
-        ),
-      ),
+    const root = this.attachShadow({ mode: 'open' });
+    root.adoptedStyleSheets = [sheet];
+
+    /** @type {HTMLParagraphElement} */
+    this._messageEl = h('p');
+    /** @type {HTMLButtonElement} */
+    this._cancelBtn = h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') });
+    /** @type {HTMLButtonElement} */
+    this._confirmBtn = h('button', { class: 'btn-confirm', type: 'button', text: t('confirm') });
+    /** @type {HTMLDialogElement} */
+    this._dialog = h('dialog', null,
+      h('div', { class: 'dialog__body' }, this._messageEl),
+      h('div', { class: 'dialog__actions' }, this._cancelBtn, this._confirmBtn),
     );
+    root.append(h('slot'), this._dialog);
   }
 
-  /** @returns {void} */
   connectedCallback() {
     if (this._connected) return;
     this._connected = true;
 
-    /** @type {HTMLDialogElement} */
-    const dialog = this.shadowRoot.querySelector('dialog');
-    /** @type {HTMLParagraphElement} */
-    const messageEl = this.shadowRoot.querySelector('.dialog__body p');
-    /** @type {HTMLButtonElement} */
-    const cancelBtn = this.shadowRoot.querySelector('.btn-cancel');
-    /** @type {HTMLButtonElement} */
-    const confirmBtn = this.shadowRoot.querySelector('.btn-confirm');
-
-    // Use capture phase so this runs before HTMX's handler on the child
-    // form. Without capture, HTMX's direct listener on the form fires
-    // first (target phase) and sends the request before we can intercept.
-    this.addEventListener('submit', (e) => {
-      if (this._confirmed) {
-        this._confirmed = false;
-        return; // let re-submit through
-      }
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      this._pendingForm = /** @type {HTMLFormElement} */ (e.target);
-      messageEl.textContent = this.getAttribute('message') || t('are_you_sure');
-      dialog.showModal();
-    }, true);
-
-    cancelBtn.addEventListener('click', () => {
-      this._pendingForm = null;
-      dialog.close();
-    });
-
-    confirmBtn.addEventListener('click', () => {
-      dialog.close();
-      if (this._pendingForm) {
-        const form = this._pendingForm;
-        this._pendingForm = null;
-        this._confirmed = true;
-        form.requestSubmit();
-      }
-    });
+    // Capture phase so we run before HTMX's direct listener on the child
+    // form. In the target phase, HTMX's handler fires first and sends the
+    // request before we get a chance to intercept.
+    this.addEventListener('submit', (e) => this._onSubmit(e), true);
+    this._cancelBtn.addEventListener('click', () => this._onCancel());
+    this._confirmBtn.addEventListener('click', () => this._onConfirm());
   }
 
-  /** @returns {void} */
   disconnectedCallback() {
-    // Do NOT reset _connected — listeners on `this` and shadow DOM elements
-    // survive DOM moves. Resetting causes duplicate submit interception on
-    // reconnect, which blocks confirmed form submissions.
+    // Do NOT reset _connected — listeners on `this` and on shadow-DOM
+    // elements survive DOM moves. Resetting causes duplicate submit
+    // interception on reconnect, which blocks confirmed submissions.
+  }
+
+  /** @param {Event} e */
+  _onSubmit(e) {
+    if (this._confirmed) {
+      this._confirmed = false;
+      return; // let the confirmed re-submit through
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    this._pendingForm = /** @type {HTMLFormElement} */ (e.target);
+    this._messageEl.textContent = this.getAttribute('message') || t('are_you_sure');
+    this._dialog.showModal();
+  }
+
+  _onCancel() {
+    this._pendingForm = null;
+    this._dialog.close();
+  }
+
+  _onConfirm() {
+    this._dialog.close();
+    const form = this._pendingForm;
+    if (!form) return;
+    this._pendingForm = null;
+    this._confirmed = true;
+    form.requestSubmit();
   }
 }
 

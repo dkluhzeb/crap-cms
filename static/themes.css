@@ -57,6 +57,24 @@ html[data-theme="tokyo-night"] {
   --sidebar-bg: transparent;
   --sidebar-active-bg: rgba(122, 162, 247, 0.12);
   --sidebar-active-text: #7aa2f7;
+
+  /* Code-editor syntax-highlight palette (Tokyo Night) */
+  --code-keyword:    #bb9af7;
+  --code-string:     #9ece6a;
+  --code-number:     #ff9e64;
+  --code-comment:    #565f89;
+  --code-atom:       #f7768e;
+  --code-property:   #7dcfff;
+  --code-function:   #7aa2f7;
+  --code-definition: #7aa2f7;
+  --code-type:       #2ac3de;
+  --code-operator:   #89ddff;
+  --code-regexp:     #b4f9f8;
+  --code-meta:       #565f89;
+  --code-tag:        #f7768e;
+  --code-attribute:  #e0af68;
+  --code-heading:    #bb9af7;
+  --code-link:       #7aa2f7;
 }
 
 
@@ -119,6 +137,24 @@ html[data-theme="catppuccin"] {
   --sidebar-bg: transparent;
   --sidebar-active-bg: rgba(203, 166, 247, 0.12);
   --sidebar-active-text: #cba6f7;
+
+  /* Code-editor syntax-highlight palette (Catppuccin Mocha) */
+  --code-keyword:    #cba6f7;
+  --code-string:     #a6e3a1;
+  --code-number:     #fab387;
+  --code-comment:    #6c7086;
+  --code-atom:       #f38ba8;
+  --code-property:   #89dceb;
+  --code-function:   #89b4fa;
+  --code-definition: #89b4fa;
+  --code-type:       #94e2d5;
+  --code-operator:   #89dceb;
+  --code-regexp:     #f5c2e7;
+  --code-meta:       #6c7086;
+  --code-tag:        #f38ba8;
+  --code-attribute:  #f9e2af;
+  --code-heading:    #cba6f7;
+  --code-link:       #89b4fa;
 }
 
 
@@ -189,6 +225,24 @@ html[data-theme="rose-pine-dawn"] {
 
   /* Checkbox accent */
   accent-color: #907aa9;
+
+  /* Code-editor syntax-highlight palette (Rosé Pine Dawn) */
+  --code-keyword:    #907aa9;
+  --code-string:     #ea9d34;
+  --code-number:     #d7827e;
+  --code-comment:    #9893a5;
+  --code-atom:       #b4637a;
+  --code-property:   #286983;
+  --code-function:   #56949f;
+  --code-definition: #56949f;
+  --code-type:       #56949f;
+  --code-operator:   #907aa9;
+  --code-regexp:     #d7827e;
+  --code-meta:       #9893a5;
+  --code-tag:        #b4637a;
+  --code-attribute:  #ea9d34;
+  --code-heading:    #907aa9;
+  --code-link:       #56949f;
 }
 
 
@@ -251,4 +305,22 @@ html[data-theme="gruvbox"] {
   --sidebar-bg: transparent;
   --sidebar-active-bg: rgba(254, 128, 25, 0.12);
   --sidebar-active-text: #fe8019;
+
+  /* Code-editor syntax-highlight palette (Gruvbox) */
+  --code-keyword:    #fb4934;
+  --code-string:     #b8bb26;
+  --code-number:     #d3869b;
+  --code-comment:    #928374;
+  --code-atom:       #d3869b;
+  --code-property:   #83a598;
+  --code-function:   #fabd2f;
+  --code-definition: #fabd2f;
+  --code-type:       #fabd2f;
+  --code-operator:   #fe8019;
+  --code-regexp:     #b8bb26;
+  --code-meta:       #928374;
+  --code-tag:        #fb4934;
+  --code-attribute:  #8ec07c;
+  --code-heading:    #fb4934;
+  --code-link:       #83a598;
 }

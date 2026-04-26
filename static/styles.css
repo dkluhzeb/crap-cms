@@ -163,6 +163,26 @@ crap-focal-point:not(:defined) {
   /* Semantic - Header */
   --header-bg: var(--bg-elevated);
   --header-border: var(--border-color);
+
+  /* Code-editor syntax-highlight palette (light defaults; dark themes
+     override in themes.css). Consumed by the HighlightStyle in
+     static/components/code.js. */
+  --code-keyword:    #708;
+  --code-string:     #a11;
+  --code-number:     #164;
+  --code-comment:    #888;
+  --code-atom:       #219;
+  --code-property:   #00f;
+  --code-function:   #00c;
+  --code-definition: #00f;
+  --code-type:       #085;
+  --code-operator:   #708;
+  --code-regexp:     #a11;
+  --code-meta:       #888;
+  --code-tag:        #708;
+  --code-attribute:  #00c;
+  --code-heading:    #708;
+  --code-link:       #00c;
 }
 
 html {
@@ -181,6 +201,10 @@ html {
   font-size: 1em;
   vertical-align: middle;
 }
+
+/* Text utilities */
+.text--muted { color: var(--text-tertiary); }
+.text--sm    { font-size: var(--text-sm); }
 
 /* Screen-reader-only utility — visually hidden but accessible to assistive tech */
 .sr-only {

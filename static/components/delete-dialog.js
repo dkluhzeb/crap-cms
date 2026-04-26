@@ -1,8 +1,30 @@
+/**
+ * <crap-delete-dialog> — Singleton delete confirmation dialog.
+ *
+ * Shows a native `<dialog>` modal with soft-delete / hard-delete options
+ * (and a separate empty-trash variant). Submits via `fetch` and toasts
+ * the result.
+ *
+ * Two ways to open it:
+ *   - **Programmatic**: `window.CrapDeleteDialog.open(opts)` —
+ *     thin wrapper that dispatches `crap:delete-dialog`.
+ *   - **Event-delegated**: any `[data-delete-id]` or
+ *     `[data-empty-trash-slug]` button click anywhere in the document.
+ *
+ * @example
+ * window.CrapDeleteDialog.open({
+ *   id: '123', title: 'My Post', slug: 'posts',
+ *   softDelete: true, canPermanentlyDelete: true,
+ * });
+ *
+ * @module delete-dialog
+ */
+
+import { css } from './css.js';
 import { h } from './h.js';
 import { t } from './i18n.js';
 
-const sheet = new CSSStyleSheet();
-sheet.replaceSync(`
+const sheet = css`
   :host { display: contents; }
 
   dialog {
@@ -16,22 +38,15 @@ sheet.replaceSync(`
     background: var(--bg-elevated, #fff);
     color: var(--text-primary, rgba(0, 0, 0, 0.88));
   }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 
-  dialog::backdrop {
-    background: rgba(0, 0, 0, 0.4);
-  }
-
-  .dialog__body {
-    padding: var(--space-xl, 1.5rem);
-  }
-
+  .dialog__body { padding: var(--space-xl, 1.5rem); }
   .dialog__title {
     margin: 0 0 var(--space-sm, 0.5rem);
     font-size: var(--text-base, 0.875rem);
     font-weight: 600;
     color: var(--text-primary, rgba(0, 0, 0, 0.88));
   }
-
   .dialog__message {
     margin: 0;
     font-size: var(--text-sm, 0.8125rem);
@@ -57,18 +72,13 @@ sheet.replaceSync(`
     cursor: pointer;
     transition: background var(--transition-fast, 0.15s ease);
   }
-
-  button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .btn-cancel {
     background: transparent;
     color: var(--text-secondary, rgba(0, 0, 0, 0.65));
     border: 1px solid var(--border-color-hover, #d9d9d9);
   }
-
   .btn-cancel:hover:not(:disabled) {
     background: var(--bg-hover, rgba(0, 0, 0, 0.04));
   }
@@ -77,7 +87,6 @@ sheet.replaceSync(`
     background: var(--color-primary, #1677ff);
     color: var(--text-on-primary, #fff);
   }
-
   .btn-soft:hover:not(:disabled) {
     background: var(--color-primary-hover, #4096ff);
   }
@@ -86,274 +95,295 @@ sheet.replaceSync(`
     background: var(--color-danger, #dc2626);
     color: var(--text-on-primary, #fff);
   }
-
   .btn-danger:hover:not(:disabled) {
     background: var(--color-danger-hover, #ef4444);
   }
-`);
+`;
 
 /**
- * <crap-delete-dialog> — Singleton delete confirmation dialog.
+ * @typedef {{
+ *   id: string,
+ *   title?: string,
+ *   slug: string,
+ *   softDelete: boolean,
+ *   canPermanentlyDelete?: boolean,
+ * }} OpenOptions
  *
- * Shows a native `<dialog>` modal with soft-delete / hard-delete options.
- * Submits via fetch() POST and shows toast feedback on completion.
- *
- * Opened programmatically via `window.CrapDeleteDialog.open({ id, title, slug, softDelete, canPermanentlyDelete })`.
- * Also listens for clicks on `[data-delete-id]` buttons via event delegation.
- *
- * @example
- * window.CrapDeleteDialog.open({
- *   id: '123',
- *   title: 'My Post',
- *   slug: 'posts',
- *   softDelete: true,
- *   canPermanentlyDelete: true,
- * });
+ * @typedef {{ id: string, slug: string, softDelete: boolean }} PendingState
  */
+
+/** Sentinel id used by the empty-trash flow. */
+const EMPTY_TRASH_ID = '__empty_trash__';
+
+/** @returns {string} */
+function readCsrfCookie() {
+  const m = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
+  if (!m) return '';
+  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+}
+
+/** @param {string} message @param {'success'|'error'} type */
+function toast(message, type) {
+  document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message, type } }));
+}
+
+/**
+ * Pick the success-toast message for a completed delete.
+ *
+ * @param {boolean} isEmptyTrash
+ * @param {'soft_delete' | 'hard_delete' | null} action
+ */
+function successMessage(isEmptyTrash, action) {
+  if (isEmptyTrash) return t('trash_emptied');
+  if (action === 'soft_delete') return t('moved_to_trash');
+  return t('deleted_permanently');
+}
+
 class CrapDeleteDialog extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: 'open' });
-    this.shadowRoot.adoptedStyleSheets = [sheet];
-    this.shadowRoot.append(
-      h('dialog', null,
-        h('div', { class: 'dialog__body' },
-          h('p', { class: 'dialog__title' }),
-          h('p', { class: 'dialog__message' }),
-        ),
-        h('div', { class: 'dialog__actions' },
-          h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') }),
-          h('button', { class: 'btn-soft', type: 'button', hidden: true, text: t('move_to_trash') }),
-          h('button', { class: 'btn-danger', type: 'button', text: t('delete_permanently') }),
-        ),
-      ),
+
+    /** @type {boolean} */
+    this._connected = false;
+    /** @type {boolean} */
+    this._submitting = false;
+    /** @type {PendingState|null} */
+    this._pending = null;
+    /** @type {((e: Event) => void)|null} */
+    this._handleRequest = null;
+    /** @type {((e: Event) => void)|null} */
+    this._handleClick = null;
+
+    const root = this.attachShadow({ mode: 'open' });
+    root.adoptedStyleSheets = [sheet];
+
+    /** @type {HTMLParagraphElement} */
+    this._titleEl = h('p', { class: 'dialog__title' });
+    /** @type {HTMLParagraphElement} */
+    this._messageEl = h('p', { class: 'dialog__message' });
+    /** @type {HTMLButtonElement} */
+    this._cancelBtn = h('button', { class: 'btn-cancel', type: 'button', text: t('cancel') });
+    /** @type {HTMLButtonElement} */
+    this._softBtn = h('button', { class: 'btn-soft', type: 'button', hidden: true, text: t('move_to_trash') });
+    /** @type {HTMLButtonElement} */
+    this._dangerBtn = h('button', { class: 'btn-danger', type: 'button', text: t('delete_permanently') });
+    /** @type {HTMLDialogElement} */
+    this._dialog = h('dialog', null,
+      h('div', { class: 'dialog__body' }, this._titleEl, this._messageEl),
+      h('div', { class: 'dialog__actions' }, this._cancelBtn, this._softBtn, this._dangerBtn),
     );
+    root.append(this._dialog);
+
+    this._cancelBtn.addEventListener('click', () => this._cancel());
+    this._dialog.addEventListener('cancel', () => { this._pending = null; });
+    this._softBtn.addEventListener('click', () => this._submit('soft_delete'));
+    this._dangerBtn.addEventListener('click', () => this._submit('hard_delete'));
   }
 
-  /** @returns {void} */
   connectedCallback() {
-    /** @type {HTMLDialogElement} */
-    const dialog = this.shadowRoot.querySelector('dialog');
-    /** @type {HTMLParagraphElement} */
-    const titleEl = this.shadowRoot.querySelector('.dialog__title');
-    /** @type {HTMLParagraphElement} */
-    const messageEl = this.shadowRoot.querySelector('.dialog__message');
-    /** @type {HTMLButtonElement} */
-    const cancelBtn = this.shadowRoot.querySelector('.btn-cancel');
-    /** @type {HTMLButtonElement} */
-    const softBtn = this.shadowRoot.querySelector('.btn-soft');
-    /** @type {HTMLButtonElement} */
-    const dangerBtn = this.shadowRoot.querySelector('.btn-danger');
+    if (this._connected) return;
+    this._connected = true;
 
-    /**
-     * Current dialog state.
-     * @type {{ id: string, slug: string, softDelete: boolean, canPermanentlyDelete: boolean } | null}
-     * @private
-     */
-    let pending = null;
-
-    /**
-     * Read the CSRF token from the `crap_csrf` cookie.
-     * @returns {string}
-     */
-    const getCsrf = () => {
-      const match = document.cookie.match(/(?:^|;\s*)crap_csrf=([^;]*)/);
-      if (!match) return '';
-      try { return decodeURIComponent(match[1]); } catch { return match[1]; }
-    };
-
-    /**
-     * Set disabled state on all action buttons.
-     * @param {boolean} disabled
-     */
-    const setButtonsDisabled = (disabled) => {
-      cancelBtn.disabled = disabled;
-      softBtn.disabled = disabled;
-      dangerBtn.disabled = disabled;
-    };
-
-    /**
-     * Submit the delete action via fetch.
-     * @param {'soft_delete' | 'hard_delete'} action
-     * @returns {Promise<void>}
-     */
-    let submitting = false;
-    const submit = async (action) => {
-      if (!pending || submitting) return;
-      submitting = true;
-
-      const { id, slug } = pending;
-      const isEmptyTrash = id === '__empty_trash__';
-      const url = isEmptyTrash
-        ? `/admin/collections/${slug}/empty-trash`
-        : `/admin/collections/${slug}/${id}`;
-      const body = new URLSearchParams({
-        _csrf: getCsrf(),
-        ...(isEmptyTrash ? {} : { _method: 'DELETE', _action: action }),
-      });
-
-      setButtonsDisabled(true);
-
-      try {
-        const resp = await fetch(url, {
-          method: isEmptyTrash ? 'POST' : 'DELETE',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Delete-Dialog': '1',
-          },
-          body,
-        });
-
-        dialog.close();
-        pending = null;
-        submitting = false;
-        setButtonsDisabled(false);
-
-        if (resp.ok) {
-          const toastMsg = isEmptyTrash
-            ? t('trash_emptied')
-            : action === 'soft_delete'
-              ? t('moved_to_trash')
-              : t('deleted_permanently');
-          document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: toastMsg, type: 'success' } }));
-
-          // Navigate back to the collection list
-          const listUrl = `/admin/collections/${slug}`;
-          if (typeof htmx !== 'undefined') {
-            htmx.ajax('GET', listUrl, { target: 'body', swap: 'innerHTML' });
-            history.pushState({}, '', listUrl);
-          } else {
-            window.location.href = listUrl;
-          }
-        } else {
-          let errMsg = '';
-          try {
-            const text = await resp.text();
-            const json = JSON.parse(text);
-            errMsg = json.error || '';
-          } catch {
-            // text() already consumed; parsing failed — use fallback
-          }
-          document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: errMsg || t('delete_error'), type: 'error' } }));
-        }
-      } catch {
-        dialog.close();
-        pending = null;
-        submitting = false;
-        setButtonsDisabled(false);
-        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('delete_error'), type: 'error' } }));
-      }
-    };
-
-    cancelBtn.addEventListener('click', () => {
-      pending = null;
-      dialog.close();
-    });
-
-    dialog.addEventListener('cancel', () => {
-      pending = null;
-    });
-
-    softBtn.addEventListener('click', () => submit('soft_delete'));
-    dangerBtn.addEventListener('click', () => submit('hard_delete'));
-
-    /**
-     * Open the delete dialog.
-     * @param {{ id: string, title: string, slug: string, softDelete: boolean, canPermanentlyDelete?: boolean }} opts
-     * @returns {void}
-     */
-    this._open = (opts) => {
-      const { id, title, slug, softDelete, canPermanentlyDelete = true } = opts;
-      pending = { id, slug, softDelete, canPermanentlyDelete };
-
-      const displayTitle = title || id;
-      titleEl.textContent = t('delete_confirm_title', { name: displayTitle });
-      messageEl.textContent = softDelete
-        ? t('delete_confirm_soft')
-        : t('delete_confirm_hard');
-
-      softBtn.hidden = !softDelete;
-      softBtn.textContent = t('move_to_trash');
-
-      // Hide "Delete permanently" when soft-delete is on but hard-delete is not allowed
-      dangerBtn.hidden = softDelete && !canPermanentlyDelete;
-      dangerBtn.textContent = t('delete_permanently');
-
-      dialog.showModal();
-    };
-
-    // Register for global API requests
     this._handleRequest = (e) => {
-      if (!e.detail._handled) {
-        e.detail._handled = true;
-        this._open(e.detail);
-      }
+      const detail = /** @type {CustomEvent<OpenOptions & { _handled?: boolean }>} */ (e).detail;
+      if (detail._handled) return;
+      detail._handled = true;
+      this.open(detail);
     };
+    this._handleClick = (e) => this._onDocumentClick(e);
+
     document.addEventListener('crap:delete-dialog', this._handleRequest);
-
-    // Event delegation: listen for clicks on [data-delete-id] and [data-empty-trash-slug] buttons
-    this._handleClick = (e) => {
-      // Single document delete
-      const deleteBtn = /** @type {HTMLElement | null} */ (
-        e.target.closest?.('[data-delete-id]')
-      );
-      if (deleteBtn) {
-        e.preventDefault();
-        e.stopPropagation();
-        this._open({
-          id: deleteBtn.dataset.deleteId,
-          title: deleteBtn.dataset.deleteTitle || '',
-          slug: deleteBtn.dataset.deleteSlug,
-          softDelete: deleteBtn.dataset.deleteSoft === 'true',
-          canPermanentlyDelete: deleteBtn.dataset.deleteCanPerm !== 'false',
-        });
-        return;
-      }
-
-      // Empty trash
-      const emptyBtn = /** @type {HTMLElement | null} */ (
-        e.target.closest?.('[data-empty-trash-slug]')
-      );
-      if (emptyBtn) {
-        e.preventDefault();
-        e.stopPropagation();
-        const slug = emptyBtn.dataset.emptyTrashSlug;
-        const count = emptyBtn.dataset.emptyTrashCount || '?';
-
-        titleEl.textContent = t('empty_trash_confirm_title');
-        messageEl.textContent = t('empty_trash_confirm', { count });
-        softBtn.hidden = true;
-        dangerBtn.textContent = t('empty_trash');
-        pending = { id: '__empty_trash__', slug, softDelete: false };
-        dialog.showModal();
-      }
-    };
     document.addEventListener('click', this._handleClick);
   }
 
-  /** @returns {void} */
   disconnectedCallback() {
-    document.removeEventListener('crap:delete-dialog', this._handleRequest);
-    document.removeEventListener('click', this._handleClick);
+    if (!this._connected) return;
+    this._connected = false;
+    if (this._handleRequest) {
+      document.removeEventListener('crap:delete-dialog', this._handleRequest);
+    }
+    if (this._handleClick) {
+      document.removeEventListener('click', this._handleClick);
+    }
+  }
+
+  /**
+   * Open the dialog with delete options for one document.
+   *
+   * @param {OpenOptions} opts
+   */
+  open(opts) {
+    const { id, title, slug, softDelete, canPermanentlyDelete = true } = opts;
+    this._pending = { id, slug, softDelete };
+
+    this._titleEl.textContent = t('delete_confirm_title', { name: title || id });
+    this._messageEl.textContent = softDelete
+      ? t('delete_confirm_soft')
+      : t('delete_confirm_hard');
+
+    this._softBtn.hidden = !softDelete;
+    this._softBtn.textContent = t('move_to_trash');
+    // Hide "Delete permanently" when soft-delete is on AND hard-delete is forbidden.
+    this._dangerBtn.hidden = softDelete && !canPermanentlyDelete;
+    this._dangerBtn.textContent = t('delete_permanently');
+
+    this._dialog.showModal();
+  }
+
+  /**
+   * Open the dialog in empty-trash mode for `slug`.
+   *
+   * @param {{ slug: string, count?: string }} opts
+   */
+  openEmptyTrash({ slug, count = '?' }) {
+    this._pending = { id: EMPTY_TRASH_ID, slug, softDelete: false };
+    this._titleEl.textContent = t('empty_trash_confirm_title');
+    this._messageEl.textContent = t('empty_trash_confirm', { count });
+    this._softBtn.hidden = true;
+    this._dangerBtn.hidden = false;
+    this._dangerBtn.textContent = t('empty_trash');
+    this._dialog.showModal();
+  }
+
+  _cancel() {
+    this._pending = null;
+    this._dialog.close();
+  }
+
+  /**
+   * @param {Event} e
+   */
+  _onDocumentClick(e) {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+
+    const deleteBtn = /** @type {HTMLElement|null} */ (target.closest('[data-delete-id]'));
+    if (deleteBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.open({
+        id: deleteBtn.dataset.deleteId || '',
+        title: deleteBtn.dataset.deleteTitle || '',
+        slug: deleteBtn.dataset.deleteSlug || '',
+        softDelete: deleteBtn.dataset.deleteSoft === 'true',
+        canPermanentlyDelete: deleteBtn.dataset.deleteCanPerm !== 'false',
+      });
+      return;
+    }
+
+    const emptyBtn = /** @type {HTMLElement|null} */ (target.closest('[data-empty-trash-slug]'));
+    if (!emptyBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.openEmptyTrash({
+      slug: emptyBtn.dataset.emptyTrashSlug || '',
+      count: emptyBtn.dataset.emptyTrashCount,
+    });
+  }
+
+  /**
+   * Submit the delete action. Toasts on success and navigates back to
+   * the collection list; toasts the server error message on failure.
+   *
+   * @param {'soft_delete' | 'hard_delete'} action
+   */
+  async _submit(action) {
+    if (!this._pending || this._submitting) return;
+    this._submitting = true;
+    this._setButtonsDisabled(true);
+
+    const pending = this._pending;
+    const isEmptyTrash = pending.id === EMPTY_TRASH_ID;
+
+    try {
+      const resp = await fetch(this._buildUrl(pending, isEmptyTrash), {
+        method: isEmptyTrash ? 'POST' : 'DELETE',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Delete-Dialog': '1',
+        },
+        body: this._buildBody(action, isEmptyTrash),
+      });
+
+      if (resp.ok) {
+        toast(successMessage(isEmptyTrash, action), 'success');
+        this._navigateToList(pending.slug);
+        return;
+      }
+
+      toast(await this._readErrorMessage(resp), 'error');
+    } catch {
+      toast(t('delete_error'), 'error');
+    } finally {
+      this._dialog.close();
+      this._pending = null;
+      this._submitting = false;
+      this._setButtonsDisabled(false);
+    }
+  }
+
+  /** @param {boolean} disabled */
+  _setButtonsDisabled(disabled) {
+    this._cancelBtn.disabled = disabled;
+    this._softBtn.disabled = disabled;
+    this._dangerBtn.disabled = disabled;
+  }
+
+  /** @param {PendingState} pending @param {boolean} isEmptyTrash */
+  _buildUrl(pending, isEmptyTrash) {
+    return isEmptyTrash
+      ? `/admin/collections/${pending.slug}/empty-trash`
+      : `/admin/collections/${pending.slug}/${pending.id}`;
+  }
+
+  /** @param {'soft_delete' | 'hard_delete'} action @param {boolean} isEmptyTrash */
+  _buildBody(action, isEmptyTrash) {
+    const params = new URLSearchParams({ _csrf: readCsrfCookie() });
+    if (!isEmptyTrash) {
+      params.set('_method', 'DELETE');
+      params.set('_action', action);
+    }
+    return params;
+  }
+
+  /**
+   * Decode the server's error message from a non-OK response. Returns
+   * the localised fallback if the body isn't JSON or has no `error` key.
+   *
+   * @param {Response} resp
+   */
+  async _readErrorMessage(resp) {
+    try {
+      const json = JSON.parse(await resp.text());
+      return json.error || t('delete_error');
+    } catch {
+      return t('delete_error');
+    }
+  }
+
+  /** @param {string} slug */
+  _navigateToList(slug) {
+    const url = `/admin/collections/${slug}`;
+    if (typeof htmx !== 'undefined') {
+      htmx.ajax('GET', url, { target: 'body', swap: 'innerHTML' });
+      history.pushState({}, '', url);
+      return;
+    }
+    window.location.href = url;
   }
 }
 
 customElements.define('crap-delete-dialog', CrapDeleteDialog);
 
 /**
- * Global delete dialog API.
- * Dispatches a CustomEvent that the connected <crap-delete-dialog> instance handles.
+ * Global delete-dialog API. Dispatches a CustomEvent so the connected
+ * `<crap-delete-dialog>` instance handles it.
+ *
  * @namespace
  */
 window.CrapDeleteDialog = {
-  /**
-   * Open the delete confirmation dialog.
-   * @param {{ id: string, title: string, slug: string, softDelete: boolean, canPermanentlyDelete?: boolean }} opts
-   * @returns {void}
-   */
+  /** @param {OpenOptions} opts */
   open(opts) {
-    document.dispatchEvent(new CustomEvent('crap:delete-dialog', {
-      detail: opts,
-    }));
+    document.dispatchEvent(new CustomEvent('crap:delete-dialog', { detail: opts }));
   },
 };

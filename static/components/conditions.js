@@ -1,55 +1,156 @@
 /**
  * Display conditions — `<crap-conditions>`.
  *
- * Supports two modes:
- * - Client-side (data-condition): JSON condition table, evaluated instantly.
- * - Server-side (data-condition-ref): Lua function ref, debounced POST.
+ * Toggles the visibility of fields whose `[data-condition]` (client-side
+ * JSON) or `[data-condition-ref]` (server-side Lua function) evaluates
+ * to false.
+ *
+ *  - **Client-side**: condition rows are JSON dictionaries combined with
+ *    AND when wrapped in an array. Re-evaluated synchronously on every
+ *    `input`/`change` of any watched field.
+ *  - **Server-side**: every interaction triggers a debounced
+ *    `POST /admin/{collections|globals}/{slug}/evaluate-conditions`
+ *    with the current form data. Results override field visibility per
+ *    field name.
  *
  * @module conditions
  */
 
-class CrapConditions extends HTMLElement {
-  connectedCallback() {
-    // Idempotency guard: skip re-init on DOM reconnection
-    if (this._initialized) return;
-    this._initialized = true;
+/**
+ * @typedef {{ field?: string, equals?: any, not_equals?: any,
+ *   in?: any[], not_in?: any[], is_truthy?: boolean, is_falsy?: boolean }} ConditionRow
+ * @typedef {ConditionRow | ConditionRow[]} Condition
+ *
+ * @typedef {{ el: Element, type: string, fn: EventListener }} TrackedListener
+ */
 
-    /** @type {number|null} */
+const SERVER_DEBOUNCE_MS = 300;
+
+/**
+ * Parse a `[data-condition]` JSON blob, returning `null` if the blob is
+ * missing or malformed.
+ *
+ * @param {Element} el
+ * @returns {Condition | null}
+ */
+function parseCondition(el) {
+  const raw = /** @type {HTMLElement} */ (el).dataset.condition;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Drop "object-coerces-to-truthy" oddities that don't make sense for
+ * field-presence checks (empty arrays, the literal string `''`, etc.)
+ * while preserving the legacy semantics for other types.
+ *
+ * @param {unknown} val
+ * @returns {boolean}
+ */
+function isTruthy(val) {
+  if (Array.isArray(val)) return val.length > 0;
+  return val !== null && val !== undefined && val !== '' && val !== false && val !== 0;
+}
+
+/**
+ * Evaluate one condition row (or AND-array of rows) against form data.
+ *
+ * @param {Condition} condition
+ * @param {Record<string, unknown>} formData
+ * @returns {boolean}
+ */
+function evaluate(condition, formData) {
+  if (Array.isArray(condition)) {
+    return condition.every((c) => evaluate(c, formData));
+  }
+  const fieldVal = condition.field !== undefined
+    ? formData[condition.field] ?? ''
+    : '';
+
+  if ('equals' in condition) return fieldVal === condition.equals;
+  if ('not_equals' in condition) return fieldVal !== condition.not_equals;
+  if ('in' in condition) return /** @type {any[]} */ (condition.in).includes(fieldVal);
+  if ('not_in' in condition) return !(/** @type {any[]} */ (condition.not_in).includes(fieldVal));
+  if (condition.is_truthy) return isTruthy(fieldVal);
+  if (condition.is_falsy) return !isTruthy(fieldVal);
+  return true;
+}
+
+/**
+ * Walk a condition tree collecting every `field` reference into `out`.
+ *
+ * @param {Condition} condition
+ * @param {Set<string>} out
+ */
+function collectFields(condition, out) {
+  if (Array.isArray(condition)) {
+    for (const c of condition) collectFields(c, out);
+    return;
+  }
+  if (condition && condition.field) out.add(condition.field);
+}
+
+/**
+ * Snapshot a form into a plain object. Internal fields (`_csrf`,
+ * `_action`, …) are skipped. Repeated keys produce arrays; checkboxes
+ * absent from `FormData` are emitted as `''` so unchecked state is
+ * observable in conditions.
+ *
+ * @param {HTMLFormElement} form
+ * @returns {Record<string, string | string[]>}
+ */
+function collectFormData(form) {
+  /** @type {Record<string, string | string[]>} */
+  const data = {};
+  for (const [key, val] of new FormData(form).entries()) {
+    if (key.startsWith('_')) continue;
+    const str = /** @type {string} */ (val);
+    if (key in data) {
+      const cur = data[key];
+      data[key] = Array.isArray(cur) ? [...cur, str] : [cur, str];
+    } else {
+      data[key] = str;
+    }
+  }
+  for (const cb of /** @type {NodeListOf<HTMLInputElement>} */ (
+    form.querySelectorAll('input[type="checkbox"]')
+  )) {
+    if (cb.name.startsWith('_') || cb.name in data) continue;
+    data[cb.name] = cb.checked ? 'on' : '';
+  }
+  return data;
+}
+
+/** @returns {string|null} */
+function readCsrfCookie() {
+  const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+}
+
+class CrapConditions extends HTMLElement {
+  constructor() {
+    super();
+    /** @type {boolean} */
+    this._initialized = false;
+    /** @type {ReturnType<typeof setTimeout>|null} */
     this._serverTimer = null;
     /** @type {AbortController|null} */
     this._serverAbort = null;
-    /** @type {Array<{el: Element, type: string, fn: Function}>} */
+    /** @type {TrackedListener[]} */
     this._clientListeners = [];
-    this._init();
+    /** @type {EventListener|null} */
+    this._debouncedServer = null;
   }
 
-  disconnectedCallback() {
-    if (this._serverTimer) clearTimeout(this._serverTimer);
-    if (this._serverAbort) this._serverAbort.abort();
-    if (this._debouncedServer) {
-      const form = this._getForm();
-      if (form) {
-        form.removeEventListener('input', this._debouncedServer);
-        form.removeEventListener('change', this._debouncedServer);
-      }
-    }
-    for (const { el, type, fn } of this._clientListeners) {
-      el.removeEventListener(type, fn);
-    }
-    this._clientListeners = [];
-    this._initialized = false;
-  }
+  connectedCallback() {
+    if (this._initialized) return;
+    this._initialized = true;
 
-  /**
-   * @returns {HTMLFormElement|null}
-   */
-  _getForm() {
-    return /** @type {HTMLFormElement|null} */ (
-      this.querySelector('form') || this.closest('form')
-    );
-  }
-
-  _init() {
     const form = this._getForm();
     if (!form) return;
 
@@ -57,168 +158,127 @@ class CrapConditions extends HTMLElement {
     const serverFields = this.querySelectorAll('[data-condition-ref]');
     if (clientFields.length === 0 && serverFields.length === 0) return;
 
-    // --- Client-side conditions (instant) ---
+    if (clientFields.length > 0) this._setupClient(form, clientFields);
+    if (serverFields.length > 0) this._setupServer(form, serverFields);
+  }
 
+  disconnectedCallback() {
+    if (this._serverTimer) clearTimeout(this._serverTimer);
+    if (this._serverAbort) this._serverAbort.abort();
+
+    const form = this._debouncedServer ? this._getForm() : null;
+    if (form && this._debouncedServer) {
+      form.removeEventListener('input', this._debouncedServer);
+      form.removeEventListener('change', this._debouncedServer);
+    }
+
+    for (const { el, type, fn } of this._clientListeners) {
+      el.removeEventListener(type, fn);
+    }
+    this._clientListeners = [];
+    this._debouncedServer = null;
+    this._initialized = false;
+  }
+
+  /** @returns {HTMLFormElement|null} */
+  _getForm() {
+    return /** @type {HTMLFormElement|null} */ (
+      this.querySelector('form') || this.closest('form')
+    );
+  }
+
+  /**
+   * Wire client-side conditions. Each row is re-evaluated on `input`/
+   * `change` of any field its condition references.
+   *
+   * @param {HTMLFormElement} form
+   * @param {NodeListOf<Element>} clientFields
+   */
+  _setupClient(form, clientFields) {
     /** @type {Set<string>} */
-    const watchedFields = new Set();
-    clientFields.forEach((el) => {
-      try {
-        const cond = JSON.parse(/** @type {HTMLElement} */ (el).dataset.condition);
-        this._extractWatchedFields(cond, watchedFields);
-      } catch { /* skip malformed JSON */ }
-    });
+    const watched = new Set();
+    for (const el of clientFields) {
+      const cond = parseCondition(el);
+      if (cond) collectFields(cond, watched);
+    }
 
-    const runClient = () => {
-      const data = this._collectFormData(form);
-      clientFields.forEach((el) => {
-        try {
-          const cond = JSON.parse(/** @type {HTMLElement} */ (el).dataset.condition);
-          el.classList.toggle('form__field--hidden', !this._evaluate(cond, data));
-        } catch { /* skip */ }
-      });
+    const run = () => {
+      const data = collectFormData(form);
+      for (const el of clientFields) {
+        const cond = parseCondition(el);
+        if (!cond) continue;
+        el.classList.toggle('form__field--hidden', !evaluate(cond, data));
+      }
     };
 
-    watchedFields.forEach((fieldName) => {
-      const input = form.querySelector('[name="' + CSS.escape(fieldName) + '"]');
-      if (input) {
-        input.addEventListener('input', runClient);
-        input.addEventListener('change', runClient);
-        this._clientListeners.push({ el: input, type: 'input', fn: runClient });
-        this._clientListeners.push({ el: input, type: 'change', fn: runClient });
+    for (const fieldName of watched) {
+      const input = form.querySelector(`[name="${CSS.escape(fieldName)}"]`);
+      if (!input) continue;
+      for (const type of /** @type {const} */ (['input', 'change'])) {
+        input.addEventListener(type, run);
+        this._clientListeners.push({ el: input, type, fn: run });
       }
-    });
+    }
+  }
 
-    // --- Server-side conditions (debounced) ---
+  /**
+   * Wire server-side conditions. The form posts the current data to the
+   * evaluate-conditions endpoint with a {@link SERVER_DEBOUNCE_MS}
+   * debounce; each new evaluation aborts any in-flight request so a
+   * stale response can't overwrite a newer result.
+   *
+   * @param {HTMLFormElement} form
+   * @param {NodeListOf<Element>} serverFields
+   */
+  _setupServer(form, serverFields) {
+    const slug = this.getAttribute('collection') || form.dataset.collectionSlug || '';
+    const isGlobal = this.getAttribute('type') === 'global';
+    const url = `${isGlobal ? '/admin/globals/' : '/admin/collections/'}${slug}/evaluate-conditions`;
 
-    if (serverFields.length > 0) {
-      const slug = this.getAttribute('collection') || form.dataset.collectionSlug || '';
-      const prefix = this.getAttribute('type') === 'global' ? '/admin/globals/' : '/admin/collections/';
+    const run = async () => {
+      /** @type {Record<string, string>} */
+      const refs = {};
+      for (const el of /** @type {NodeListOf<HTMLElement>} */ (serverFields)) {
+        const name = el.dataset.fieldName;
+        const ref = el.dataset.conditionRef;
+        if (name && ref) refs[name] = ref;
+      }
 
-      const runServer = () => {
-        const data = this._collectFormData(form);
-        /** @type {Object<string, string>} */
-        const refs = {};
-        serverFields.forEach((el) => {
-          const name = /** @type {HTMLElement} */ (el).dataset.fieldName;
-          const ref = /** @type {HTMLElement} */ (el).dataset.conditionRef;
-          if (name && ref) refs[name] = ref;
-        });
+      if (this._serverAbort) this._serverAbort.abort();
+      this._serverAbort = new AbortController();
 
-        const csrf = this._getCsrf();
-        /** @type {Record<string, string>} */
-        const headers = { 'Content-Type': 'application/json' };
-        if (csrf) headers['X-CSRF-Token'] = csrf;
+      const csrf = readCsrfCookie();
+      /** @type {Record<string, string>} */
+      const headers = { 'Content-Type': 'application/json' };
+      if (csrf) headers['X-CSRF-Token'] = csrf;
 
-        // Cancel any in-flight request so stale responses don't overwrite
-        // the result of a newer evaluation.
-        if (this._serverAbort) this._serverAbort.abort();
-        this._serverAbort = new AbortController();
-
-        fetch(prefix + slug + '/evaluate-conditions', {
+      try {
+        const res = await fetch(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ form_data: data, conditions: refs }),
+          body: JSON.stringify({ form_data: collectFormData(form), conditions: refs }),
           signal: this._serverAbort.signal,
-        })
-        .then((r) => r.json())
-        .then((result) => {
-          for (const fieldName in result) {
-            const el = this.querySelector(
-              '[data-field-name="' + CSS.escape(fieldName) + '"][data-condition-ref]'
-            );
-            if (el) el.classList.toggle('form__field--hidden', !result[fieldName]);
-          }
-        })
-        .catch(() => { /* silent fail — keep current visibility */ });
-      };
-
-      this._debouncedServer = () => {
-        clearTimeout(this._serverTimer);
-        this._serverTimer = setTimeout(runServer, 300);
-      };
-
-      form.addEventListener('input', this._debouncedServer);
-      form.addEventListener('change', this._debouncedServer);
-    }
-  }
-
-  /**
-   * @param {*} val
-   * @returns {boolean}
-   */
-  _conditionIsTruthy(val) {
-    if (val == null || val === '' || val === false || val === 0) return false;
-    if (Array.isArray(val)) return val.length > 0;
-    return true;
-  }
-
-  /**
-   * @param {Object|Array} condition
-   * @param {Object} formData
-   * @returns {boolean}
-   */
-  _evaluate(condition, formData) {
-    if (Array.isArray(condition)) {
-      return condition.every((c) => this._evaluate(c, formData));
-    }
-    let fieldVal = formData[condition.field];
-    if (fieldVal === undefined) fieldVal = '';
-    if ('equals' in condition) return fieldVal === condition.equals;
-    if ('not_equals' in condition) return fieldVal !== condition.not_equals;
-    if ('in' in condition) return condition['in'].includes(fieldVal);
-    if ('not_in' in condition) return !condition['not_in'].includes(fieldVal);
-    if (condition.is_truthy) return this._conditionIsTruthy(fieldVal);
-    if (condition.is_falsy) return !this._conditionIsTruthy(fieldVal);
-    return true;
-  }
-
-  /**
-   * @param {HTMLFormElement} form
-   * @returns {Object<string, string>}
-   */
-  _collectFormData(form) {
-    const data = {};
-    const fd = new FormData(form);
-    for (const [key, val] of fd.entries()) {
-      if (key.startsWith('_')) continue;
-      if (key in data) {
-        data[key] = Array.isArray(data[key])
-          ? [...data[key], val]
-          : [data[key], val];
-      } else {
-        data[key] = /** @type {string} */ (val);
-      }
-    }
-    form.querySelectorAll('input[type="checkbox"]').forEach(
-      /** @param {HTMLInputElement} cb */ (cb) => {
-        if (!cb.name.startsWith('_') && !(cb.name in data)) {
-          data[cb.name] = cb.checked ? 'on' : '';
+        });
+        /** @type {Record<string, boolean>} */
+        const result = await res.json();
+        for (const [fieldName, visible] of Object.entries(result)) {
+          const el = this.querySelector(
+            `[data-field-name="${CSS.escape(fieldName)}"][data-condition-ref]`,
+          );
+          if (el) el.classList.toggle('form__field--hidden', !visible);
         }
+      } catch {
+        // Silent fail — keep current visibility on network/abort errors.
       }
-    );
-    return data;
-  }
+    };
 
-  /**
-   * Read the CSRF cookie value.
-   * @returns {string|null}
-   */
-  _getCsrf() {
-    const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-    if (!m) return null;
-    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
-  }
+    this._debouncedServer = () => {
+      if (this._serverTimer) clearTimeout(this._serverTimer);
+      this._serverTimer = setTimeout(run, SERVER_DEBOUNCE_MS);
+    };
 
-  /**
-   * @param {Object|Array} condition
-   * @param {Set<string>} set
-   */
-  _extractWatchedFields(condition, set) {
-    if (Array.isArray(condition)) {
-      condition.forEach((c) => this._extractWatchedFields(c, set));
-    } else if (condition && condition.field) {
-      set.add(condition.field);
-    }
+    form.addEventListener('input', this._debouncedServer);
+    form.addEventListener('change', this._debouncedServer);
   }
 }
 
