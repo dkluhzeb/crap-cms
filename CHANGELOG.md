@@ -657,6 +657,14 @@ to the detailed entry with full migration steps.
   `browser-tests` deps). Closes a longstanding gap where the postgres
   backend, in the tree since alpha.6, had no CI coverage.
 
+- **CI: dedicated e2e browser-test job** — new `e2e` job in
+  `.github/workflows/ci.yml` installs Chrome via
+  `browser-actions/setup-chrome@v1` and runs `cargo test --test e2e
+  --features browser-tests`. The 139 resurrected browser tests now
+  gate every PR alongside the unit/integration suite; the longstanding
+  "compile-only, runs in a separate job" comment in the CI feature
+  matrix is now true.
+
 - **Typed admin URL builders** — new `src/admin/handlers/shared/paths.rs`
   with 10 helpers (`paths::collection`, `paths::collection_item`,
   `paths::global_versions_page`, `paths::mfa_with_collection`, etc.).

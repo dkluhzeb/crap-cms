@@ -76,7 +76,8 @@ jobs:
             test: false
           # all features — catches feature-interaction compile errors across
           # s3-storage, redis, browser-tests, and both backends. Compile-only;
-          # browser-tests needs Chrome at runtime and runs in a separate job.
+          # browser-tests needs Chrome at runtime and runs in the dedicated
+          # `e2e` job below.
           - label: all-features
             flags: --all-features
             test: false
@@ -112,3 +113,37 @@ jobs:
       - name: Test
         if: matrix.test
         run: cargo test ${{ matrix.flags }} --workspace
+
+  e2e:
+    name: e2e (browser tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
+
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-registry-
+
+      # chromiumoxide finds Chrome via PATH; setup-chrome puts the
+      # `chrome` binary on PATH and prints its path for debug output.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Run browser e2e tests
+        run: cargo test --test e2e --features browser-tests
