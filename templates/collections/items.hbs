@@ -32,10 +32,10 @@
           {{/if}}
           {{#unless is_trash}}
             {{> partials/htmx-nav-link
-        href=(concat "/admin/collections/" collection.slug "/create")
-        label=(concat (t "create") " " collection.singular_name)
-        variant="primary"
-        icon="add"}}
+              href=(concat "/admin/collections/" collection.slug "/create")
+              label=(concat (t "create") " " collection.singular_name)
+              variant="primary"
+              icon="add"}}
           {{/unless}}
         </div>
       </div>
