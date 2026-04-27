@@ -25,11 +25,15 @@ let loaded = false;
 function load() {
   if (loaded) return;
   loaded = true;
+  const el = document.getElementById(DATA_ISLAND_ID);
+  if (!el) return;
   try {
-    const el = document.getElementById(DATA_ISLAND_ID);
-    if (el) translations = JSON.parse(el.textContent || '{}');
-  } catch {
-    // Malformed JSON — leave `translations` as whatever was there before.
+    translations = JSON.parse(el.textContent || '{}');
+  } catch (err) {
+    // Page still works (every t() call falls back to the raw key) but
+    // shipping malformed JSON in the data island means every label is
+    // shown verbatim. Surface loudly so it's caught in dev.
+    console.error('crap-i18n: failed to parse translations data island', err);
   }
 }
 

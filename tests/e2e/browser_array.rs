@@ -88,16 +88,22 @@ async fn remove_row_button_removes_row() {
         .await
         .unwrap();
 
-    // Add 2 rows
-    for _ in 0..2 {
-        page.find_element("button[data-action=\"add-array-row\"]")
-            .await
-            .unwrap()
-            .click()
-            .await
-            .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
+    // Add 2 rows. The first find_element uses the post-nav retry helper
+    // because chromiumoxide can transiently see a stale frame just after
+    // `wait_for_navigation()` returns; subsequent loops are fine.
+    browser::find_element_after_nav(&page, "button[data-action=\"add-array-row\"]")
+        .await
+        .click()
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    page.find_element("button[data-action=\"add-array-row\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     let rows = page.find_elements(".form__array-row").await.unwrap();
     assert_eq!(rows.len(), 2, "should have 2 rows");
@@ -138,16 +144,22 @@ async fn reorder_rows_updates_indices() {
         .await
         .unwrap();
 
-    // Add 2 rows and fill them
-    for _ in 0..2 {
-        page.find_element("button[data-action=\"add-array-row\"]")
-            .await
-            .unwrap()
-            .click()
-            .await
-            .unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
+    // Add 2 rows and fill them. First iteration uses the post-nav
+    // retry helper to absorb the brief stale-frame window after
+    // `wait_for_navigation()` returns.
+    browser::find_element_after_nav(&page, "button[data-action=\"add-array-row\"]")
+        .await
+        .click()
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    page.find_element("button[data-action=\"add-array-row\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Type into first row
     let inputs = page

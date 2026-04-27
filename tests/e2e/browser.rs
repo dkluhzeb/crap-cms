@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use chromiumoxide::Browser;
 use chromiumoxide::BrowserConfig;
+use chromiumoxide::Element;
 use chromiumoxide::Page;
 use tokio::task::JoinHandle;
 use tokio_stream::StreamExt;
@@ -57,6 +59,23 @@ pub async fn spawn_server_with_config(
     });
 
     (base_url, handle, app)
+}
+
+/// Find an element by selector, retrying briefly while the document
+/// settles. Use right after `page.goto()` where chromiumoxide can
+/// transiently report stale-node errors against the previous frame's
+/// DOM before the new document has finished installing. Sleeps between
+/// attempts so the CDP transport has time to process navigation events.
+/// Panics with the selector after exhausting the retry budget — the
+/// caller's intent ("this element must be present") is unchanged.
+pub async fn find_element_after_nav(page: &Page, selector: &str) -> Element {
+    for _ in 0..40 {
+        if let Ok(el) = page.find_element(selector).await {
+            return el;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("element not found after retry budget: {selector}");
 }
 
 /// Evaluate JS that returns a string from within a shadow root.

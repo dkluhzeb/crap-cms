@@ -47,6 +47,12 @@ to the detailed entry with full migration steps.
   (`onclick=`, …) are blocked outright — port them to Web Components
   or addEventListener-based wiring. See *Security → CSP hardening:
   nonce-based `script-src`*.
+- Overlays that replace `templates/layout/base.hbs` and reproduce the
+  `<script id="crap-i18n">` data island must call `{{{admin_i18n}}}`
+  inside the script tag (replacing the previous per-key `"key":
+  "{{t \"key\"}}"` JSON). Without this, the admin JS `t(key)`
+  helper falls back to raw keys and every translatable label
+  shows up untranslated.
 
 **Web Components / overlay JS**
 
@@ -246,6 +252,29 @@ to the detailed entry with full migration steps.
   alongside `cargo fmt --check` / `clippy` / `biome ci`. All 72
   built-in templates were re-formatted with the new tool. Documentation
   in `docs/src/admin-ui/template-formatter.md` and the CLI reference.
+
+  **Raw-content elements** — the body of `<script>`, `<style>`,
+  `<pre>`, and `<textarea>` is captured verbatim and passes through
+  the formatter without re-indentation, mustache parsing, or
+  whitespace collapse. These elements have their own grammar
+  (JS/CSS/JSON/preformatted text) that the formatter must not
+  rewrite. The matching close tag (`</script>` etc.) is found by a
+  case-insensitive linear scan, mirroring the HTML5 parser's
+  raw-text content model. Without this, a `<script
+  type="application/json">` data island with mustache
+  interpolations inside JSON string values (or any non-trivial
+  inline `<script>` body) would be reformatted into invalid output.
+
+- **`{{{admin_i18n}}}` helper** — emits the admin-JS translation
+  bundle as a single JSON object string, scoped to the current
+  `_locale`. Used by `templates/layout/base.hbs` to populate the
+  `<script id="crap-i18n">` data island that `static/components/i18n.js`
+  reads via `t(key)`. Replaces the previous hand-rolled per-key
+  `"key": "{{t \"key\"}}"` JSON construction, which couldn't survive
+  the template formatter. Overlay authors who replace the
+  `crap-i18n` data island markup must call `{{{admin_i18n}}}`
+  inside it to keep `t()` working in the admin UI; the curated key
+  list is in `src/admin/templates/helpers/admin_i18n.rs`.
 
 - **Shell completions** — `crap-cms update completions <shell>` generates
   completions for bash, zsh, fish, elvish, and powershell. For bash,

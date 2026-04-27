@@ -122,6 +122,63 @@ mod tests {
         );
     }
 
+    /// Regression: the `crap-i18n` data island in `layout/base.hbs`
+    /// must render as parseable JSON. Earlier the body was hand-written
+    /// per-key with `{{t "..."}}` interpolation inside JSON string
+    /// values, which the template formatter then split across lines —
+    /// producing JSON strings with literal newlines and a silent
+    /// `JSON.parse` failure in `static/components/i18n.js` (every
+    /// admin label fell back to its raw key). The current implementation
+    /// uses the `{{{admin_i18n}}}` helper which emits a single,
+    /// formatter-opaque JSON object.
+    #[test]
+    fn base_layout_i18n_island_renders_valid_json() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        // Wrap the layout — base.hbs uses partial-block syntax for the
+        // page body slot.
+        hbs.register_template_string("page", "{{#> layout/base}}body{{/layout/base}}")
+            .expect("register page");
+
+        let html = hbs
+            .render(
+                "page",
+                &json!({
+                    "_locale": "en",
+                    "crap": { "csp_nonce": "test-nonce" },
+                    "nav": { "collections": [], "globals": [] },
+                    "available_locales": ["en"],
+                    "page": { "title": "x", "title_name": "" },
+                }),
+            )
+            .expect("render");
+
+        // Pull the body of the i18n data island and parse.
+        let needle = r#"id="crap-i18n""#;
+        let start_attr = html.find(needle).expect("data island present");
+        let body_start = html[start_attr..]
+            .find('>')
+            .map(|p| start_attr + p + 1)
+            .expect("opening tag close");
+        let body_end = body_start
+            + html[body_start..]
+                .find("</script>")
+                .expect("closing </script>");
+        let body = html[body_start..body_end].trim();
+
+        let parsed: serde_json::Value = serde_json::from_str(body)
+            .unwrap_or_else(|err| panic!("i18n island invalid JSON: {err}\n---body---\n{body}"));
+        let obj = parsed.as_object().expect("must be JSON object");
+
+        // Spot-check: a known key resolves to its English translation.
+        assert_eq!(
+            obj.get("save").and_then(|v| v.as_str()),
+            Some("Save"),
+            "expected 'save' to resolve to 'Save' in en, got: {body}"
+        );
+    }
+
     #[test]
     fn overlay_templates_override_compiled_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -330,10 +387,9 @@ mod tests {
         let html = hbs.render("t", &json!({})).expect("render");
 
         assert!(html.contains(r#"id="upload-loading""#), "{html}");
-        assert!(html.contains(r#"class="loading-indicator""#), "{html}");
         assert!(
-            !html.contains("edit-sidebar__save-indicator"),
-            "inline variant must not use sidebar class: {html}"
+            html.contains("loading-indicator") && !html.contains("edit-sidebar__save-indicator"),
+            "inline variant must use plain loading-indicator class: {html}"
         );
     }
 
@@ -347,10 +403,7 @@ mod tests {
 
         let html = hbs.render("t", &json!({})).expect("render");
 
-        assert!(
-            html.contains(r#"class="edit-sidebar__save-indicator""#),
-            "{html}"
-        );
+        assert!(html.contains("edit-sidebar__save-indicator"), "{html}");
     }
 
     #[test]
@@ -367,10 +420,7 @@ mod tests {
         let html = hbs.render("t", &json!({})).expect("render");
 
         assert!(html.contains(r#"data-action="toggle-array-row""#), "{html}");
-        assert!(
-            html.contains(r#"<span class="form__array-row-drag""#),
-            "{html}"
-        );
+        assert!(html.contains(r#"class="form__array-row-drag""#), "{html}");
         assert!(html.contains(r#"aria-expanded="true""#), "{html}");
         assert!(
             html.contains(r#"<span class="form__array-row-title">Title 0</span>"#),

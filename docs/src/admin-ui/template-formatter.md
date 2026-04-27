@@ -173,9 +173,16 @@ spacing rules, no escaping.
 
 - **Text content reflow.** Prose inside text nodes is preserved as-is,
   not wrapped at any column.
-- **Embedded `<script>` and `<style>` formatting.** Their bodies are
-  passed through verbatim. Standalone JS/CSS files are formatted by
-  Biome.
+- **Raw-content elements (`<script>`, `<style>`, `<pre>`,
+  `<textarea>`).** Their bodies are captured at tokenisation time and
+  passed through the formatter verbatim — no indent normalisation, no
+  mustache parsing, no whitespace collapse, no quote conversion. These
+  elements have their own grammar (JS/CSS/JSON/preformatted text) that
+  the formatter must not rewrite. Standalone JS/CSS files are
+  formatted by Biome. The matching close tag (`</script>` etc.) is
+  located by a case-insensitive linear scan, mirroring the HTML5
+  parser's raw-text content model. Empty bodies (whitespace-only)
+  collapse to nothing so `<script src="..."></script>` renders cleanly.
 - **Whitespace-control mustaches** (`{{~ ... ~}}`). Rare; passed
   through unchanged.
 - **Complex expression re-flow inside `{{...}}`.** Only outer-delimiter

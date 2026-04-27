@@ -73,6 +73,10 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
                 emit_text(s, &mut out, &mut at_line_start, depth);
             }
 
+            Token::RawText(s) => {
+                emit_raw_text(s, &mut out, &mut at_line_start);
+            }
+
             Token::HtmlComment(raw) => {
                 ensure_line_indent(&mut out, &mut at_line_start, depth);
                 emit_verbatim_block(raw, &mut out, depth);
@@ -264,6 +268,9 @@ fn try_render_inline(
             Token::HbsElse(raw) => buf.push_str(&normalize_mustache(raw)),
             Token::HbsPartialOpen(raw) => buf.push_str(&normalize_mustache(raw)),
             Token::HbsPartialClose(raw) => buf.push_str(&normalize_mustache(raw)),
+            // Unreachable: body_is_single_logical_line bails on RawText
+            // before we get here.
+            Token::RawText(_) => return Ok(None),
         }
     }
     // Append the matching closer (`tokens[j]`).
@@ -321,6 +328,9 @@ fn body_is_single_logical_line(body: &[Token<'_>]) -> Result<bool> {
                 }
             }
             Token::HbsBlockOpen(_) | Token::HbsPartialOpen(_) => return Ok(false),
+            // RawText body (inside <script>/<style>/<pre>/<textarea>)
+            // is verbatim and never collapses to inline form.
+            Token::RawText(_) => return Ok(false),
             _ => {}
         }
     }
@@ -448,6 +458,32 @@ fn collapse_inline_whitespace(s: &str) -> String {
         .replace("  ", " ")
         .trim_matches(' ')
         .to_string()
+}
+
+/// Emit raw-content body (`<script>`, `<style>`, `<pre>`, `<textarea>`)
+/// verbatim. The start tag's `newline()` already left `at_line_start =
+/// true`, so we strip a single leading newline from the body to avoid
+/// doubling. We also strip a trailing whitespace-only run after the
+/// last newline — that's the source's indent before `</tag>` and is
+/// contextual rather than content. Preserving it would render a blank
+/// line before the close tag once `post_process` trims the trailing
+/// spaces. Whitespace-only bodies (empty `<script>` tags whose source
+/// happened to span multiple lines) are dropped entirely. Trailing
+/// state is set by whether the body ends on a newline.
+fn emit_raw_text(s: &str, out: &mut String, at_line_start: &mut bool) {
+    if s.trim().is_empty() {
+        return;
+    }
+    let body = s.strip_prefix('\n').unwrap_or(s);
+    let body = match body.rfind('\n') {
+        Some(i) if body[i + 1..].trim().is_empty() => &body[..=i],
+        _ => body,
+    };
+    if body.is_empty() {
+        return;
+    }
+    out.push_str(body);
+    *at_line_start = body.ends_with('\n');
 }
 
 fn emit_text(s: &str, out: &mut String, at_line_start: &mut bool, depth: usize) {
@@ -708,5 +744,59 @@ mod tests {
         // Single-line block with simple body should stay one line.
         let src = "<p>{{x}}</p>";
         assert_eq!(fmt(src), "<p>{{x}}</p>\n");
+    }
+
+    #[test]
+    fn script_body_preserved_verbatim() {
+        // Multi-line JS — internal whitespace, quotes, and indent must
+        // pass through unchanged. The formatter must not re-flow this.
+        let src = "<script>\n  var x = {\n    \"a\": 1,\n    \"b\": 2\n  };\n</script>";
+        let out = fmt(src);
+        assert!(
+            out.contains("\n  var x = {\n    \"a\": 1,\n    \"b\": 2\n  };\n"),
+            "script body must pass through verbatim, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn script_json_with_inline_mustache_preserves_quoting() {
+        // The bug this is the regression test for: a `<script
+        // type="application/json">` data island with `{{t "key"}}`
+        // mustaches inside JSON string values must render as
+        // single-line JSON pairs — not split with each mustache on
+        // its own indented line, which produced JSON strings with
+        // literal newlines and broke `JSON.parse` at runtime.
+        let src = "<script type=\"application/json\" id=\"i18n\">\n  {\n    \"a\": \"{{t \"a\"}}\",\n    \"b\": \"{{t \"b\"}}\"\n  }\n</script>";
+        let out = fmt(src);
+        assert!(
+            out.contains("\"a\": \"{{t \"a\"}}\""),
+            "mustache must stay inside the JSON string value, got:\n{out}"
+        );
+        assert!(
+            out.contains("\"b\": \"{{t \"b\"}}\""),
+            "mustache must stay inside the JSON string value, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn script_idempotent_with_json_body() {
+        let src = "<script type=\"application/json\" id=\"i18n\">\n  {\n    \"a\": \"{{t \"a\"}}\",\n    \"b\": \"{{t \"b\"}}\"\n  }\n</script>";
+        let once = fmt(src);
+        let twice = fmt(&once);
+        assert_eq!(once, twice, "format must be idempotent on script bodies");
+    }
+
+    #[test]
+    fn pre_body_preserved_verbatim() {
+        let src = "<pre>line1\n  indented\n\nblank above</pre>";
+        let out = fmt(src);
+        assert!(out.contains("line1\n  indented\n\nblank above"));
+    }
+
+    #[test]
+    fn empty_script_renders_open_close_pair() {
+        let src = "<script src=\"/x.js\"></script>";
+        let out = fmt(src);
+        assert!(out.contains("<script") && out.contains("</script>"));
     }
 }

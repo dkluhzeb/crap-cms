@@ -184,7 +184,13 @@ Re-exported from `static/components/util/index.js`:
 - `static/components/css.js` — `` css`…` `` tagged template that
   returns a `CSSStyleSheet` for `adoptedStyleSheets`.
 - `static/components/i18n.js` — `t(key)` reads the `crap-i18n` data
-  island injected by `layout/base.hbs`.
+  island injected by `layout/base.hbs`. The island body is emitted by
+  the server-side `{{{admin_i18n}}}` helper, which serialises a
+  curated set of keys for the active `_locale` as a single JSON
+  object. To expose extra keys to JS, edit the `ADMIN_JS_KEYS` list
+  in `src/admin/templates/helpers/admin_i18n.rs`. Missing keys still
+  resolve at the call site (`t()` falls back to the raw key) but
+  show up untranslated.
 
 ## Override pattern
 

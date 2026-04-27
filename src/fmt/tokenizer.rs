@@ -32,6 +32,12 @@ pub enum Token<'a> {
     HbsExpr(&'a str),
     HbsComment(&'a str),
     Text(&'a str),
+    /// Body of a raw-content element (`<script>`, `<style>`, `<pre>`,
+    /// `<textarea>`). Emitted verbatim by the printer — no indent
+    /// normalization, no mustache parsing, no whitespace collapse.
+    /// Required for elements whose content has its own grammar
+    /// (JSON-in-script, JS source) that we must not reformat.
+    RawText(&'a str),
 }
 
 /// Parsed attribute as the printer wants to consume it.
@@ -48,8 +54,18 @@ const VOID_TAGS: &[&str] = &[
     "wbr",
 ];
 
+/// HTML tags whose body content has its own grammar (JS/CSS/preformatted
+/// text) and must pass through the formatter verbatim. Reformatting
+/// these would mangle JSON data islands, JS source, CSS rules, or
+/// `<pre>` whitespace.
+const RAW_CONTENT_TAGS: &[&str] = &["script", "style", "pre", "textarea"];
+
 pub fn is_void(tag: &str) -> bool {
     VOID_TAGS.contains(&tag)
+}
+
+pub fn is_raw_content(tag: &str) -> bool {
+    RAW_CONTENT_TAGS.contains(&tag)
 }
 
 /// Walk `src` left-to-right and emit a flat token stream.
@@ -125,6 +141,38 @@ pub fn tokenize(src: &str) -> Result<Vec<Token<'_>>> {
         if bytes[i] == b'<' && i + 1 < bytes.len() && is_tag_start_char(bytes[i + 1]) {
             flush_text(src, text_start, i, &mut out);
             let (tok, next) = read_html_tag(src, i)?;
+
+            // Raw-content elements (`<script>`, `<style>`, `<pre>`,
+            // `<textarea>`) capture their body verbatim and emit the
+            // matching close tag in one shot. Without this, the
+            // printer would re-parse JS/CSS/JSON/preformatted text as
+            // if it were Handlebars/HTML and reflow it, breaking JSON
+            // string literals across newlines, collapsing JS spaces,
+            // etc.
+            let raw_tag = match &tok {
+                Token::HtmlStart {
+                    name, self_closed, ..
+                } if !*self_closed && is_raw_content(name) => Some(name.clone()),
+                _ => None,
+            };
+            if let Some(tag_name) = raw_tag {
+                out.push(tok);
+                let body_start = next;
+                let close_pos = find_raw_close(src, body_start, &tag_name)
+                    .ok_or_else(|| anyhow!("unterminated <{}> at byte {}", tag_name, i))?;
+                if close_pos > body_start {
+                    out.push(Token::RawText(&src[body_start..close_pos]));
+                }
+                let after_close = src[close_pos..]
+                    .find('>')
+                    .map(|p| close_pos + p + 1)
+                    .ok_or_else(|| anyhow!("unterminated </{}> tag", tag_name))?;
+                out.push(Token::HtmlEnd { name: tag_name });
+                i = after_close;
+                text_start = i;
+                continue;
+            }
+
             out.push(tok);
             i = next;
             text_start = i;
@@ -312,6 +360,34 @@ fn is_name_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b':'
 }
 
+/// Find the byte position of the next `</tag>` (case-insensitive) at or
+/// after `from`. Returns the index of the leading `<`, or `None` if no
+/// close tag is found. Used to bound the body of raw-content elements
+/// (`<script>`, `<style>`, `<pre>`, `<textarea>`) — the HTML5 parser
+/// terminates these on the first `</tag>` regardless of nesting, so a
+/// linear scan is correct. Per-byte ASCII-lowercase comparison since
+/// tag names are ASCII.
+fn find_raw_close(src: &str, from: usize, tag: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let needle_len = 2 + tag.len();
+    let mut i = from;
+    while i + needle_len <= bytes.len() {
+        if bytes[i] == b'<' && bytes[i + 1] == b'/' {
+            let candidate = &bytes[i + 2..i + 2 + tag.len()];
+            if candidate.eq_ignore_ascii_case(tag.as_bytes()) {
+                let after = i + 2 + tag.len();
+                if after < bytes.len()
+                    && (bytes[after] == b'>' || bytes[after].is_ascii_whitespace())
+                {
+                    return Some(i);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Re-parse an attribute slice into individual attributes. Supports:
 ///   - `name="value"`, `name='value'`, `name=value`, `name`
 ///   - `{{#if x}}required{{/if}}` and similar embedded blocks
@@ -487,6 +563,7 @@ mod tests {
                 Token::HbsExpr(_) => "Expr",
                 Token::HbsComment(_) => "HbsComment",
                 Token::Text(_) => "Text",
+                Token::RawText(_) => "RawText",
             })
             .collect()
     }
@@ -594,5 +671,44 @@ mod tests {
         let toks = tokenize("<!doctype html><html></html>").unwrap();
         // Doctype is folded into surrounding text; first real token is <html>.
         assert!(matches!(&toks[0], Token::Text(s) if s.eq_ignore_ascii_case("<!doctype html>")));
+    }
+
+    #[test]
+    fn script_body_captured_as_raw() {
+        let src = "<script>var x={\"a\":1};</script>";
+        let toks = tokenize(src).unwrap();
+        assert_eq!(names(&toks), ["Start", "RawText", "End"]);
+        assert!(matches!(&toks[1], Token::RawText("var x={\"a\":1};")));
+    }
+
+    #[test]
+    fn script_with_mustache_in_body_does_not_tokenize_mustache() {
+        let src = "<script>{{t \"hello\"}}</script>";
+        let toks = tokenize(src).unwrap();
+        // Body is raw — the {{...}} stays inside RawText, not split out.
+        assert_eq!(names(&toks), ["Start", "RawText", "End"]);
+        assert!(matches!(&toks[1], Token::RawText("{{t \"hello\"}}")));
+    }
+
+    #[test]
+    fn empty_script_emits_no_raw_text() {
+        let src = "<script src=\"/x.js\"></script>";
+        let toks = tokenize(src).unwrap();
+        assert_eq!(names(&toks), ["Start", "End"]);
+    }
+
+    #[test]
+    fn style_pre_textarea_are_raw_content() {
+        for tag in ["style", "pre", "textarea"] {
+            let src = format!("<{tag}>x  y\n  z</{tag}>");
+            let toks = tokenize(&src).unwrap();
+            assert_eq!(names(&toks), ["Start", "RawText", "End"], "tag={tag}");
+        }
+    }
+
+    #[test]
+    fn close_tag_match_is_case_insensitive() {
+        let toks = tokenize("<script>x</SCRIPT>").unwrap();
+        assert_eq!(names(&toks), ["Start", "RawText", "End"]);
     }
 }
