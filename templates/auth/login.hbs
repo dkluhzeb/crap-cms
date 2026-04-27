@@ -1,50 +1,88 @@
 {{#> layout/auth title=(t "login_page_title")}}
 
-{{#if success}}
-<div class="auth-card__success">{{t success}}</div>
-{{/if}}
+  {{#if success}}
+    <div class="auth-card__success">{{t success}}</div>
+  {{/if}}
 
-{{#if error}}
-<div class="auth-card__error">{{t error}}</div>
-{{/if}}
+  {{#if error}}
+    <div class="auth-card__error">{{t error}}</div>
+  {{/if}}
 
-{{#if disable_local}}
-<p class="auth-card__message">{{t "disable_local_message"}}</p>
-{{else}}
-<form class="auth-card__form" method="POST" action="/admin/login">
-  {{#if collections}}
-  {{#if show_collection_picker}}
-  <div class="form__field">
-    <label for="collection">{{t "account_type"}}</label>
-    <select name="collection" id="collection">
-      {{#each collections}}
-      <option value="{{this.slug}}" {{#if this.selected}}selected{{/if}}>{{this.display_name}}</option>
-      {{/each}}
-    </select>
-  </div>
+  {{#if disable_local}}
+    <p class="auth-card__message">{{t "disable_local_message"}}</p>
   {{else}}
-  <input type="hidden" name="collection" value="{{collections.[0].slug}}" />
+    <form
+      class="auth-card__form"
+      method="POST"
+      action="/admin/login"
+    >
+      {{#if collections}}
+        {{#if show_collection_picker}}
+          <div class="form__field">
+            <label for="collection">{{t "account_type"}}</label>
+            <select
+              name="collection"
+              id="collection"
+            >
+              {{#each collections}}
+                <option
+                  value="{{this.slug}}"
+                  {{#if this.selected}}selected{{/if}}
+                >
+                  {{this.display_name}}
+                </option>
+              {{/each}}
+            </select>
+          </div>
+        {{else}}
+          <input
+            type="hidden"
+            name="collection"
+            value="{{collections.[0].slug}}"
+          />
+        {{/if}}
+      {{/if}}
+
+      <div class="form__field">
+        <label for="email">{{t "email"}}</label>
+        <input
+          type="email"
+          name="email"
+          id="email"
+          placeholder="you@example.com"
+          required
+          value="{{email}}"
+          autocomplete="email"
+        />
+      </div>
+
+      <div class="form__field">
+        <label for="password">{{t "password"}}</label>
+        <crap-password-toggle>
+          <input
+            type="password"
+            name="password"
+            id="password"
+            placeholder='{{t "password"}}'
+            required
+            autocomplete="current-password"
+          />
+        </crap-password-toggle>
+      </div>
+
+      <button
+        type="submit"
+        class="button button--primary auth-card__submit"
+      >
+        {{t "login"}}
+      </button>
+
+      {{#if show_forgot_password}}
+        <p class="auth-card__link">
+          <a href="/admin/forgot-password">{{t "forgot_password"}}</a>
+        </p>
+      {{/if}}
+    </form>
   {{/if}}
-  {{/if}}
-
-  <div class="form__field">
-    <label for="email">{{t "email"}}</label>
-    <input type="email" name="email" id="email" placeholder="you@example.com" required value="{{email}}" autocomplete="email" />
-  </div>
-
-  <div class="form__field">
-    <label for="password">{{t "password"}}</label>
-    <crap-password-toggle>
-      <input type="password" name="password" id="password" placeholder="{{t "password"}}" required autocomplete="current-password" />
-    </crap-password-toggle>
-  </div>
-
-  <button type="submit" class="button button--primary auth-card__submit">{{t "login"}}</button>
-
-  {{#if show_forgot_password}}
-  <p class="auth-card__link"><a href="/admin/forgot-password">{{t "forgot_password"}}</a></p>
-  {{/if}}
-</form>
-{{/if}}
 
 {{/layout/auth}}

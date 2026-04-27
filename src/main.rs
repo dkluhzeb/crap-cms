@@ -266,6 +266,21 @@ enum Command {
         action: BenchAction,
     },
 
+    /// Format Handlebars templates (.hbs)
+    Fmt {
+        /// Paths to format. Files or directories. Defaults to `templates/`.
+        paths: Vec<PathBuf>,
+
+        /// Don't write — exit non-zero if any file would change. CI gate.
+        #[arg(long)]
+        check: bool,
+
+        /// Read source from stdin and write the formatted result to stdout.
+        /// Used by editor formatter integrations.
+        #[arg(long, conflicts_with = "check")]
+        stdio: bool,
+    },
+
     /// Manage installed versions of crap-cms
     Update {
         /// Skip confirmation prompts (no-op for read-only subcommands).
@@ -549,6 +564,11 @@ async fn run(cli: Cli) -> Result<()> {
             let config = commands::resolve_config_dir(config_flag)?;
             commands::bench::run(&config, action)
         }
+        Command::Fmt {
+            paths,
+            check,
+            stdio,
+        } => commands::fmt::run(paths, check, stdio),
         Command::Update { yes, force, action } => {
             // Run on a blocking thread — `reqwest::blocking` spawns its own
             // tokio runtime internally, and dropping that while inside

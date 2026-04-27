@@ -7,6 +7,7 @@ pub mod commands;
 pub mod config;
 pub mod core;
 pub mod db;
+pub mod fmt;
 pub mod hooks;
 pub mod mcp;
 pub mod scaffold;

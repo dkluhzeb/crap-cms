@@ -1,12 +1,12 @@
 {{#> partials/field}}
-<input
-  type="email"
-  id="field-{{name}}"
-  name="{{name}}"
-  value="{{value}}"
-  {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-/>
+  <input
+    type="email"
+    id="field-{{name}}"
+    name="{{name}}"
+    value="{{value}}"
+    {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
+    {{#if required}}required{{/if}}
+    {{#if readonly}}readonly{{/if}}
+    {{#if error}}class="form__input--error"{{/if}}
+  />
 {{/partials/field}}

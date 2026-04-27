@@ -1,19 +1,27 @@
 {{#> partials/field}}
-<crap-code data-language="{{language}}"
-  {{#if languages}}data-languages='{{json languages}}'{{/if}}>
-  <textarea
-    id="field-{{name}}"
-    name="{{name}}"
-    rows="16"
-    data-field-type="code"
-    hidden
-    {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
-    {{#if required}}required{{/if}}
-    {{#if readonly}}readonly{{/if}}
-    {{#if error}}class="form__input--error"{{/if}}
-  >{{value}}</textarea>
-</crap-code>
-{{#if languages}}
-<input type="hidden" name="{{name}}_lang" value="{{language}}" />
-{{/if}}
+  <crap-code
+    data-language="{{language}}"
+    {{#if languages}}data-languages='{{json languages}}'{{/if}}
+  >
+    <textarea
+      id="field-{{name}}"
+      name="{{name}}"
+      rows="16"
+      data-field-type="code"
+      hidden
+      {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
+      {{#if required}}required{{/if}}
+      {{#if readonly}}readonly{{/if}}
+      {{#if error}}class="form__input--error"{{/if}}
+    >
+      {{value}}
+    </textarea>
+  </crap-code>
+  {{#if languages}}
+    <input
+      type="hidden"
+      name="{{name}}_lang"
+      value="{{language}}"
+    />
+  {{/if}}
 {{/partials/field}}

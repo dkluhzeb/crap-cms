@@ -1,10 +1,19 @@
 {{#> layout/auth title=(t "error_admin_access_denied_title") header_icon_kind="material" header_icon="memory"}}
 
-<h2 class="auth-card__subtitle">{{t "error_admin_access_denied_title"}}</h2>
-<p class="auth-card__message">{{t "error_admin_access_denied"}}</p>
+  <h2 class="auth-card__subtitle">{{t "error_admin_access_denied_title"}}</h2>
+  <p class="auth-card__message">{{t "error_admin_access_denied"}}</p>
 
-<form method="POST" action="/admin/logout" class="auth-card__logout-form">
-  <button type="submit" class="button button--primary auth-card__submit">{{t "logout"}}</button>
-</form>
+  <form
+    method="POST"
+    action="/admin/logout"
+    class="auth-card__logout-form"
+  >
+    <button
+      type="submit"
+      class="button button--primary auth-card__submit"
+    >
+      {{t "logout"}}
+    </button>
+  </form>
 
 {{/layout/auth}}

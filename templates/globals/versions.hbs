@@ -1,12 +1,12 @@
 {{#> layout/base}}
-<crap-sticky-header>
-<div class="page-header">
-  <h1>{{t "version_history"}}</h1>
-</div>
-</crap-sticky-header>
+  <crap-sticky-header>
+    <div class="page-header">
+      <h1>{{t "version_history"}}</h1>
+    </div>
+  </crap-sticky-header>
 
-{{#if versions}}
-{{> partials/version-table}}
-{{> partials/pagination}}
-{{/if}}
+  {{#if versions}}
+    {{> partials/version-table}}
+    {{> partials/pagination}}
+  {{/if}}
 {{/layout/base}}

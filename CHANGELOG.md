@@ -6,6 +6,81 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.8] — Unreleased
 
+### Breaking Changes
+
+Read this section first when upgrading from `alpha.7`. Each item links
+to the detailed entry with full migration steps.
+
+**Deployment / config**
+
+- `server.trust_proxy = true` now fails startup unless
+  `server.trusted_proxies` is set. Add an allowlist (bare IPs, CIDR
+  ranges, or `"*"`) before upgrading. See *Security → `trust_proxy`
+  requires an allowlist*.
+- `mcp.api_key` must be at least 32 characters when `mcp.http = true`
+  — startup fails otherwise. Rotate short keys to
+  `openssl rand -hex 32` before upgrading. See *Security → MCP HTTP
+  key hardening*.
+- JWT validation is pinned to `HS256` and `exp` is now required.
+  Tokens issued under a different algorithm or without an `exp`
+  claim are rejected. See *Security → JWT validation hardening*.
+- `auth.session_absolute_max_age` defaults to 30 days. Existing
+  sessions older than 30 days from their original login (or last
+  refresh, for legacy tokens) are forced to re-authenticate. Set to
+  `0` to disable. See *Security → Absolute session cap*.
+
+**Template overlays**
+
+- `templates/components/` directory removed. Overlays at
+  `config/templates/components/{breadcrumb,pagination,version_sidebar,version_table}.hbs`
+  silently stop applying — move them to `templates/partials/`, and
+  rename the two `_`-named files to use `-`. See *Changed → BREAKING:
+  `templates/components/` directory removed*.
+- Inline `style="..."` attributes in overlay templates no longer
+  execute. CSP `style-src` no longer allows `'unsafe-inline'`. Use
+  classes, the `hidden` attribute, or `data-*` selectors instead;
+  programmatic `element.style.foo = ...` from JS is exempt. See
+  *Security → CSP hardening: `'unsafe-inline'` removed from
+  `style-src`*.
+- Inline `<script>` tags in overlay templates must carry
+  `nonce="{{crap.csp_nonce}}"` to execute. Inline event handlers
+  (`onclick=`, …) are blocked outright — port them to Web Components
+  or addEventListener-based wiring. See *Security → CSP hardening:
+  nonce-based `script-src`*.
+
+**Web Components / overlay JS**
+
+- Singleton discovery events renamed: `crap:toast` →
+  `crap:toast-request`, `crap:delete-dialog` →
+  `crap:delete-dialog-request`. The new events are discovery-only;
+  read `event.detail.instance` and call methods on it (or use the
+  `window.crap.*` sugar).
+- Globals moved: `window.CrapTheme` → `window.crap.theme`,
+  `window.CrapDeleteDialog` → `window.crap.deleteDialog`.
+- `<crap-toast>.show(message, type, duration)` (positional args)
+  removed. Use `show({ message, type, duration })`.
+- `<crap-confirm>` no longer renders its own dialog — it delegates to
+  the page-singleton `<crap-confirm-dialog>`. Custom layouts that
+  drop the singleton fall back to the native `window.confirm()`.
+- `<crap-password-toggle>` now self-renders its toggle button. The
+  required template shape collapsed to just
+  `<crap-password-toggle><input type="password" …/></crap-password-toggle>`
+  — drop the wrapper class and the inner `<button>`. The
+  `.form__password-wrapper` / `.form__password-toggle` CSS classes
+  were removed. See *Changed → `<crap-password-toggle>` shadow DOM*.
+- Web Component styles are now constructable stylesheets
+  (`new CSSStyleSheet()` + `adoptedStyleSheets`), not `<style>` blocks
+  inside `shadowRoot.innerHTML`. Overlays that previously injected a
+  `<style>` block via `shadowRoot.innerHTML` will not survive the
+  CSP. Override theming through the documented CSS custom properties
+  (which pierce the shadow boundary) or push onto
+  `shadowRoot.adoptedStyleSheets` directly.
+- `static/components/richtext.js` split into `richtext/` submodules
+  (`schema`, `plugins`, `toolbar`, `styles`, `link-modal`,
+  `node-modal`, `node-view`). Per-submodule overlays now work
+  granularly, but overlays that re-implemented the whole monolith
+  need to be re-pointed.
+
 ### Security
 
 - **Upload path traversal hardening** — `LocalStorage` now validates every
@@ -148,6 +223,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `HTMLButtonElement` in IDE hover.
 
 ### Added
+
+- **`crap-cms fmt` command — built-in Handlebars template formatter.**
+  Plays the same role for `templates/*.hbs` that `cargo fmt` plays for
+  Rust and `biome` plays for JS/CSS. Implements a project-specific rule
+  set (block helpers indent their bodies, attributes stack at 2+,
+  inline collapse for short single-attr/no-attr tags, comments
+  preserved verbatim, mustache spacing normalised to compact form,
+  void elements self-closed) that no off-the-shelf formatter
+  (djlint, prettier-plugin-glimmer) implements correctly. Idempotent
+  by property test. New flags:
+  - `crap-cms fmt` — format every `.hbs` under the given paths
+    in place. Default scope `templates/`.
+  - `crap-cms fmt --check` — exit non-zero if any file would change.
+    CI gate.
+  - `crap-cms fmt --stdio` — read from stdin, write formatted result
+    to stdout. Used by editor formatter integrations
+    (conform.nvim, etc.). Mutually exclusive with `--check`.
+
+  Wired into the pre-commit hook (`cargo run --quiet --bin crap-cms --
+  fmt --check`) and into `.github/workflows/ci.yml` as a separate step
+  alongside `cargo fmt --check` / `clippy` / `biome ci`. All 72
+  built-in templates were re-formatted with the new tool. Documentation
+  in `docs/src/admin-ui/template-formatter.md` and the CLI reference.
 
 - **Shell completions** — `crap-cms update completions <shell>` generates
   completions for bash, zsh, fish, elvish, and powershell. For bash,

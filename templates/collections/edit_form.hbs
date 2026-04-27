@@ -1,39 +1,72 @@
 {{#each upload_hidden_fields}}
-<input type="hidden" name="{{this.name}}" value="{{this.value}}" />
+  <input
+    type="hidden"
+    name="{{this.name}}"
+    value="{{this.value}}"
+  />
 {{/each}}
 {{#if collection.is_upload}}
-<div class="upload-section">
-  {{#if upload.preview}}
-  <crap-focal-point class="upload-section__preview"
-    data-focal-x="{{upload.focal_x}}"
-    data-focal-y="{{upload.focal_y}}">
-    <img src="{{upload.preview}}" alt="" />
-    <input type="hidden" name="focal_x" value="{{upload.focal_x}}" />
-    <input type="hidden" name="focal_y" value="{{upload.focal_y}}" />
-  </crap-focal-point>
-  {{/if}}
-  {{#if upload.info}}
-  <div class="upload-section__info">
-    <p>{{upload.info.filename}} &middot; {{upload.info.filesize_display}} {{upload.info.dimensions}}</p>
+  <div class="upload-section">
+    {{#if upload.preview}}
+      <crap-focal-point
+        class="upload-section__preview"
+        data-focal-x="{{upload.focal_x}}"
+        data-focal-y="{{upload.focal_y}}"
+      >
+        <img
+          src="{{upload.preview}}"
+          alt=""
+        />
+        <input
+          type="hidden"
+          name="focal_x"
+          value="{{upload.focal_x}}"
+        />
+        <input
+          type="hidden"
+          name="focal_y"
+          value="{{upload.focal_y}}"
+        />
+      </crap-focal-point>
+    {{/if}}
+    {{#if upload.info}}
+      <div class="upload-section__info">
+        <p>
+          {{upload.info.filename}}&middot;
+          {{upload.info.filesize_display}}
+          {{upload.info.dimensions}}
+        </p>
+      </div>
+    {{/if}}
+    <div class="upload-section__input">
+      <label for="upload-file">
+        {{#if editing}}
+          {{t "replace_file"}}
+        {{else}}
+          {{t "upload_file"}}
+        {{/if}}
+        {{#unless editing}}
+          <span class="form__required">*</span>
+        {{/unless}}
+      </label>
+      <input
+        type="file"
+        id="upload-file"
+        name="_file"
+        {{#if upload.accept}}accept="{{upload.accept}}"{{/if}}
+        {{#unless editing}}required{{/unless}}
+      />
+    </div>
   </div>
-  {{/if}}
-  <div class="upload-section__input">
-    <label for="upload-file">
-      {{#if editing}}{{t "replace_file"}}{{else}}{{t "upload_file"}}{{/if}}
-      {{#unless editing}}<span class="form__required">*</span>{{/unless}}
-    </label>
-    <input type="file" id="upload-file" name="_file"
-      {{#if upload.accept}}accept="{{upload.accept}}"{{/if}}
-      {{#unless editing}}required{{/unless}} />
-  </div>
-</div>
 {{/if}}
 
 {{#each fields}}
-<div class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
-  {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
-  {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
-  data-field-name="{{name}}">
-  {{{render_field this}}}
-</div>
+  <div
+    class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
+    {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
+    {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
+    data-field-name="{{name}}"
+  >
+    {{{render_field this}}}
+  </div>
 {{/each}}

@@ -8,8 +8,10 @@
        label_key  — translation key for the label (default "saving")
        variant    — "inline" (form-level) or "sidebar" (compact, used in
                     edit-sidebar save panel); default "inline" --}}
-<div id="{{#if id}}{{id}}{{else}}upload-loading{{/if}}"
-     class="{{#if (eq variant "sidebar")}}edit-sidebar__save-indicator{{else}}loading-indicator{{/if}}">
+<div
+  id="{{#if id}}{{id}}{{else}}upload-loading{{/if}}"
+  class='{{#if (eq variant "sidebar")}}edit-sidebar__save-indicator{{else}}loading-indicator{{/if}}'
+>
   <span class="loading-indicator__spinner"></span>
   <span class="loading-indicator__text">{{t (default label_key "saving")}}&hellip;</span>
 </div>

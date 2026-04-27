@@ -8,30 +8,97 @@
        has_errors (bool) — render the validation error badge
 
      Slot: row title content (rendered inside form__array-row-title) --}}
-<div class="form__array-row-header" data-action="toggle-array-row">
-  <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}" aria-hidden="true">
+<div
+  class="form__array-row-header"
+  data-action="toggle-array-row"
+>
+  <span
+    class="form__array-row-drag"
+    draggable="true"
+    data-drag
+    data-action="noop"
+    title='{{t "drag_to_reorder"}}'
+    aria-hidden="true"
+  >
     <span class="material-symbols-outlined icon--sm">drag_indicator</span>
   </span>
-  <button type="button" class="form__array-row-toggle" data-action="toggle-array-row"
-          aria-expanded="{{#if expanded}}true{{else}}false{{/if}}">
-    <span class="form__array-row-chevron material-symbols-outlined" aria-hidden="true">expand_more</span>
-    <span class="form__array-row-title">{{> @partial-block }}</span>
+  <button
+    type="button"
+    class="form__array-row-toggle"
+    data-action="toggle-array-row"
+    aria-expanded="{{#if expanded}}true{{else}}false{{/if}}"
+  >
+    <span
+      class="form__array-row-chevron material-symbols-outlined"
+      aria-hidden="true"
+    >
+      expand_more
+    </span>
+    <span class="form__array-row-title">{{> @partial-block}}</span>
   </button>
   {{#if has_errors}}
-  <span class="form__array-row-error-badge" title="{{t "validation_errors"}}">
-    <span class="material-symbols-outlined icon--sm" aria-hidden="true">error</span>
-  </span>
+    <span
+      class="form__array-row-error-badge"
+      title='{{t "validation_errors"}}'
+    >
+      <span
+        class="material-symbols-outlined icon--sm"
+        aria-hidden="true"
+      >
+        error
+      </span>
+    </span>
   {{/if}}
-  <button type="button" class="form__array-row-btn" data-action="move-row-up" aria-label="{{t "move_up"}}">
-    <span class="material-symbols-outlined icon--sm" aria-hidden="true">arrow_upward</span>
+  <button
+    type="button"
+    class="form__array-row-btn"
+    data-action="move-row-up"
+    aria-label='{{t "move_up"}}'
+  >
+    <span
+      class="material-symbols-outlined icon--sm"
+      aria-hidden="true"
+    >
+      arrow_upward
+    </span>
   </button>
-  <button type="button" class="form__array-row-btn" data-action="move-row-down" aria-label="{{t "move_down"}}">
-    <span class="material-symbols-outlined icon--sm" aria-hidden="true">arrow_downward</span>
+  <button
+    type="button"
+    class="form__array-row-btn"
+    data-action="move-row-down"
+    aria-label='{{t "move_down"}}'
+  >
+    <span
+      class="material-symbols-outlined icon--sm"
+      aria-hidden="true"
+    >
+      arrow_downward
+    </span>
   </button>
-  <button type="button" class="form__array-row-btn" data-action="duplicate-row" aria-label="{{t "duplicate"}}">
-    <span class="material-symbols-outlined icon--sm" aria-hidden="true">content_copy</span>
+  <button
+    type="button"
+    class="form__array-row-btn"
+    data-action="duplicate-row"
+    aria-label='{{t "duplicate"}}'
+  >
+    <span
+      class="material-symbols-outlined icon--sm"
+      aria-hidden="true"
+    >
+      content_copy
+    </span>
   </button>
-  <button type="button" class="form__array-row-btn" data-action="remove-array-row" aria-label="{{t "remove"}}">
-    <span class="material-symbols-outlined icon--sm" aria-hidden="true">close</span>
+  <button
+    type="button"
+    class="form__array-row-btn"
+    data-action="remove-array-row"
+    aria-label='{{t "remove"}}'
+  >
+    <span
+      class="material-symbols-outlined icon--sm"
+      aria-hidden="true"
+    >
+      close
+    </span>
   </button>
 </div>

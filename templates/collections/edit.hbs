@@ -1,17 +1,24 @@
 {{#> layout/base}}
-<crap-sticky-header>
-{{> partials/breadcrumb}}
-<div class="page-header">
-  <h1>{{#if editing}}{{t "edit"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}</h1>
-</div>
-</crap-sticky-header>
-<crap-validate-form validate-url="/admin/collections/{{collection.slug}}{{#if editing}}/{{document.id}}{{/if}}/validate">
-<crap-dirty-form>
-<crap-scroll-restore>
-<crap-conditions collection="{{collection.slug}}">
-<form
-  id="edit-form"
-  {{#if editing}}
+  <crap-sticky-header>
+    {{> partials/breadcrumb}}
+    <div class="page-header">
+      <h1>
+        {{#if editing}}
+          {{t "edit"}}
+        {{else}}
+          {{t "create"}}
+        {{/if}}
+        {{collection.singular_name}}
+      </h1>
+    </div>
+  </crap-sticky-header>
+  <crap-validate-form validate-url="/admin/collections/{{collection.slug}}{{#if editing}}/{{document.id}}{{/if}}/validate">
+    <crap-dirty-form>
+      <crap-scroll-restore>
+        <crap-conditions collection="{{collection.slug}}">
+          <form
+            id="edit-form"
+            {{#if editing}}
     hx-put="/admin/collections/{{collection.slug}}/{{document.id}}"
     action="/admin/collections/{{collection.slug}}/{{document.id}}"
     method="post"
@@ -21,31 +28,35 @@
     action="/admin/collections/{{collection.slug}}"
     method="post"
   {{/if}}
-  hx-target="body"
-  class="form"
-  novalidate
-  {{#if collection.is_upload}}enctype="multipart/form-data"{{/if}}
-  hx-indicator="#upload-loading"
-  data-collection-slug="{{collection.slug}}"
-  {{#if user}}data-current-user-id="{{user.id}}"{{/if}}
->
-  {{#if editing}}
-  <input type="hidden" name="_method" value="PUT" />
-  {{/if}}
-  {{#if has_editor_locales}}
-  <input type="hidden" name="_locale" value="{{editor_locale}}" />
-  {{/if}}
-  <div class="edit-layout">
-    <div class="edit-layout__content">
-      {{> collections/edit_form}}
-    </div>
-    <div class="edit-layout__sidebar">
-      {{> collections/edit_sidebar}}
-    </div>
-  </div>
-</form>
-</crap-conditions>
-</crap-scroll-restore>
-</crap-dirty-form>
-</crap-validate-form>
+            hx-target="body"
+            class="form"
+            novalidate
+            {{#if collection.is_upload}}enctype="multipart/form-data"{{/if}}
+            hx-indicator="#upload-loading"
+            data-collection-slug="{{collection.slug}}"
+            {{#if user}}data-current-user-id="{{user.id}}"{{/if}}
+          >
+            {{#if editing}}
+              <input
+                type="hidden"
+                name="_method"
+                value="PUT"
+              />
+            {{/if}}
+            {{#if has_editor_locales}}
+              <input
+                type="hidden"
+                name="_locale"
+                value="{{editor_locale}}"
+              />
+            {{/if}}
+            <div class="edit-layout">
+              <div class="edit-layout__content">{{> collections/edit_form}}</div>
+              <div class="edit-layout__sidebar">{{> collections/edit_sidebar}}</div>
+            </div>
+          </form>
+        </crap-conditions>
+      </crap-scroll-restore>
+    </crap-dirty-form>
+  </crap-validate-form>
 {{/layout/base}}

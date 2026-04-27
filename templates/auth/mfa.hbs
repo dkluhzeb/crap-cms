@@ -1,22 +1,42 @@
 {{#> layout/auth title=(t "mfa_page_title")}}
 
-{{#if error}}
-<div class="auth-card__error">{{t error}}</div>
-{{/if}}
+  {{#if error}}
+    <div class="auth-card__error">{{t error}}</div>
+  {{/if}}
 
-<p class="auth-card__message">{{t "mfa_enter_code"}}</p>
+  <p class="auth-card__message">{{t "mfa_enter_code"}}</p>
 
-<form class="auth-card__form" method="POST" action="/admin/mfa">
-  <div class="form__field">
-    <label for="code">{{t "mfa_code_label"}}</label>
-    <input type="text" name="code" id="code" placeholder="000000" required
-           autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}"
-           maxlength="6" autofocus />
-  </div>
+  <form
+    class="auth-card__form"
+    method="POST"
+    action="/admin/mfa"
+  >
+    <div class="form__field">
+      <label for="code">{{t "mfa_code_label"}}</label>
+      <input
+        type="text"
+        name="code"
+        id="code"
+        placeholder="000000"
+        required
+        autocomplete="one-time-code"
+        inputmode="numeric"
+        pattern="[0-9]{6}"
+        maxlength="6"
+        autofocus
+      />
+    </div>
 
-  <button type="submit" class="button button--primary auth-card__submit">{{t "mfa_verify"}}</button>
+    <button
+      type="submit"
+      class="button button--primary auth-card__submit"
+    >
+      {{t "mfa_verify"}}
+    </button>
 
-  <p class="auth-card__link"><a href="/admin/login">{{t "back_to_login"}}</a></p>
-</form>
+    <p class="auth-card__link">
+      <a href="/admin/login">{{t "back_to_login"}}</a>
+    </p>
+  </form>
 
 {{/layout/auth}}

@@ -1,15 +1,17 @@
 {{#if pagination}}
-<nav class="pagination">
-  {{#if pagination.has_prev}}
-  {{> partials/htmx-nav-link href=pagination.prev_url label_key="previous"}}
-  {{/if}}
+  <nav class="pagination">
+    {{#if pagination.has_prev}}
+      {{> partials/htmx-nav-link href=pagination.prev_url label_key="previous"}}
+    {{/if}}
 
-  {{#if pagination.page}}
-  <span class="pagination__info">{{t "page_of" page=pagination.page total=pagination.total_pages}}</span>
-  {{/if}}
+    {{#if pagination.page}}
+      <span class="pagination__info">
+        {{t "page_of" page=pagination.page total=pagination.total_pages}}
+      </span>
+    {{/if}}
 
-  {{#if pagination.has_next}}
-  {{> partials/htmx-nav-link href=pagination.next_url label_key="next"}}
-  {{/if}}
-</nav>
+    {{#if pagination.has_next}}
+      {{> partials/htmx-nav-link href=pagination.next_url label_key="next"}}
+    {{/if}}
+  </nav>
 {{/if}}

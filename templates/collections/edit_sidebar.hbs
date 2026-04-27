@@ -3,30 +3,63 @@
   {{#> partials/sidebar-panel}}
     <div class="edit-sidebar__actions">
       {{#if collection.has_drafts}}
-      {{#if editing}}
-      <button type="submit" name="_action" value="publish" class="button button--primary">
-        {{t "publish"}}
-      </button>
-      <button type="submit" name="_action" value="save_draft" class="button button--secondary">
-        {{t "save_draft"}}
-      </button>
-      {{#if (eq document.status "published")}}
-      <button type="submit" name="_action" value="unpublish" class="button button--ghost">
-        {{t "unpublish"}}
-      </button>
-      {{/if}}
+        {{#if editing}}
+          <button
+            type="submit"
+            name="_action"
+            value="publish"
+            class="button button--primary"
+          >
+            {{t "publish"}}
+          </button>
+          <button
+            type="submit"
+            name="_action"
+            value="save_draft"
+            class="button button--secondary"
+          >
+            {{t "save_draft"}}
+          </button>
+          {{#if (eq document.status "published")}}
+            <button
+              type="submit"
+              name="_action"
+              value="unpublish"
+              class="button button--ghost"
+            >
+              {{t "unpublish"}}
+            </button>
+          {{/if}}
+        {{else}}
+          <button
+            type="submit"
+            name="_action"
+            value="publish"
+            class="button button--primary"
+          >
+            {{t "publish"}}
+          </button>
+          <button
+            type="submit"
+            name="_action"
+            value="save_draft"
+            class="button button--secondary"
+          >
+            {{t "save_as_draft"}}
+          </button>
+        {{/if}}
       {{else}}
-      <button type="submit" name="_action" value="publish" class="button button--primary">
-        {{t "publish"}}
-      </button>
-      <button type="submit" name="_action" value="save_draft" class="button button--secondary">
-        {{t "save_as_draft"}}
-      </button>
-      {{/if}}
-      {{else}}
-      <button type="submit" class="button button--primary">
-        {{#if editing}}{{t "update"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}
-      </button>
+        <button
+          type="submit"
+          class="button button--primary"
+        >
+          {{#if editing}}
+            {{t "update"}}
+          {{else}}
+            {{t "create"}}
+          {{/if}}
+          {{collection.singular_name}}
+        </button>
       {{/if}}
 
       {{> partials/loading-indicator variant="sidebar"}}
@@ -35,76 +68,94 @@
   {{/partials/sidebar-panel}}
 
   {{#if sidebar_fields}}
-  {{!-- Sidebar fields panel --}}
-  {{#> partials/sidebar-panel icon="tune" label_key="fields"}}
-    {{#each sidebar_fields}}
-    <div class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
-      {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
-      {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
-      data-field-name="{{name}}">
-      {{{render_field this}}}
-    </div>
-    {{/each}}
-  {{/partials/sidebar-panel}}
+    {{!-- Sidebar fields panel --}}
+    {{#> partials/sidebar-panel icon="tune" label_key="fields"}}
+      {{#each sidebar_fields}}
+        <div
+          class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
+          {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
+          {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
+          data-field-name="{{name}}"
+        >
+          {{{render_field this}}}
+        </div>
+      {{/each}}
+    {{/partials/sidebar-panel}}
   {{/if}}
 
   {{#if editing}}
-  {{!-- Document meta panel --}}
-  {{#> partials/sidebar-panel icon="info" label_key="document"}}
-    <div class="edit-sidebar__meta">
-      {{#if collection.has_drafts}}
-      <div class="edit-sidebar__meta-row">
-        <span class="edit-sidebar__meta-label">{{t "status"}}</span>
-        <span class="edit-sidebar__meta-value">{{> partials/status-badge status=document.status}}</span>
+    {{!-- Document meta panel --}}
+    {{#> partials/sidebar-panel icon="info" label_key="document"}}
+      <div class="edit-sidebar__meta">
+        {{#if collection.has_drafts}}
+          <div class="edit-sidebar__meta-row">
+            <span class="edit-sidebar__meta-label">{{t "status"}}</span>
+            <span class="edit-sidebar__meta-value">
+              {{> partials/status-badge status=document.status}}
+            </span>
+          </div>
+        {{/if}}
+        <div class="edit-sidebar__meta-row">
+          <span class="edit-sidebar__meta-label">{{t "id"}}</span>
+          <span class="edit-sidebar__meta-value">{{document.id}}</span>
+        </div>
+        {{#if document.created_at}}
+          <div class="edit-sidebar__meta-row">
+            <span class="edit-sidebar__meta-label">{{t "created"}}</span>
+            <span class="edit-sidebar__meta-value">
+              <crap-time datetime="{{document.created_at}}">{{document.created_at}}</crap-time>
+            </span>
+          </div>
+        {{/if}}
+        {{#if document.updated_at}}
+          <div class="edit-sidebar__meta-row">
+            <span class="edit-sidebar__meta-label">{{t "updated"}}</span>
+            <span class="edit-sidebar__meta-value">
+              <crap-time datetime="{{document.updated_at}}">{{document.updated_at}}</crap-time>
+            </span>
+          </div>
+        {{/if}}
       </div>
-      {{/if}}
-      <div class="edit-sidebar__meta-row">
-        <span class="edit-sidebar__meta-label">{{t "id"}}</span>
-        <span class="edit-sidebar__meta-value">{{document.id}}</span>
-      </div>
-      {{#if document.created_at}}
-      <div class="edit-sidebar__meta-row">
-        <span class="edit-sidebar__meta-label">{{t "created"}}</span>
-        <span class="edit-sidebar__meta-value"><crap-time datetime="{{document.created_at}}">{{document.created_at}}</crap-time></span>
-      </div>
-      {{/if}}
-      {{#if document.updated_at}}
-      <div class="edit-sidebar__meta-row">
-        <span class="edit-sidebar__meta-label">{{t "updated"}}</span>
-        <span class="edit-sidebar__meta-value"><crap-time datetime="{{document.updated_at}}">{{document.updated_at}}</crap-time></span>
-      </div>
-      {{/if}}
-    </div>
-  {{/partials/sidebar-panel}}
+    {{/partials/sidebar-panel}}
 
-  {{#if collection.has_versions}}
-  {{> partials/version-sidebar}}
-  {{/if}}
-
-  {{!-- Actions panel --}}
-  {{#> partials/sidebar-panel icon="more_horiz" label_key="actions"}}
-    {{#if ref_count}}
-    <div class="edit-sidebar__ref-info">
-      <p class="text--muted text--sm edit-sidebar__ref-text">
-        <span class="material-symbols-outlined icon--inline">link</span>
-        {{t "referenced_by_count" count=ref_count}}
-      </p>
-      <crap-back-refs slug="{{collection.slug}}" doc-id="{{document.id}}">
-        <button type="button" class="button button--ghost button--small">
-          {{t "show_details"}}
-        </button>
-      </crap-back-refs>
-    </div>
+    {{#if collection.has_versions}}
+      {{> partials/version-sidebar}}
     {{/if}}
-    <button type="button" class="button button--danger button--full"
-      {{#if ref_count}}disabled title="{{t "cannot_delete_referenced"}}"{{/if}}
-      data-delete-id="{{document.id}}"
-      data-delete-title="{{document_title}}"
-      data-delete-slug="{{collection.slug}}"
-      data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
-      data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}">
-      {{t "delete"}} {{collection.singular_name}}
-    </button>
-  {{/partials/sidebar-panel}}
+
+    {{!-- Actions panel --}}
+    {{#> partials/sidebar-panel icon="more_horiz" label_key="actions"}}
+      {{#if ref_count}}
+        <div class="edit-sidebar__ref-info">
+          <p class="text--muted text--sm edit-sidebar__ref-text">
+            <span class="material-symbols-outlined icon--inline">link</span>
+            {{t "referenced_by_count" count=ref_count}}
+          </p>
+          <crap-back-refs
+            slug="{{collection.slug}}"
+            doc-id="{{document.id}}"
+          >
+            <button
+              type="button"
+              class="button button--ghost button--small"
+            >
+              {{t "show_details"}}
+            </button>
+          </crap-back-refs>
+        </div>
+      {{/if}}
+      <button
+        type="button"
+        class="button button--danger button--full"
+        {{#if ref_count}}disabled title="{{t "cannot_delete_referenced"}}"{{/if}}
+        data-delete-id="{{document.id}}"
+        data-delete-title="{{document_title}}"
+        data-delete-slug="{{collection.slug}}"
+        data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
+        data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}"
+      >
+        {{t "delete"}}
+        {{collection.singular_name}}
+      </button>
+    {{/partials/sidebar-panel}}
   {{/if}}
 </div>

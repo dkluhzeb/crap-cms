@@ -1,11 +1,13 @@
 {{#> partials/field}}
-<textarea
-  id="field-{{name}}"
-  name="{{name}}"
-  rows="12"
-  class="form__json{{#if error}} form__input--error{{/if}}"
-  {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
->{{value}}</textarea>
+  <textarea
+    id="field-{{name}}"
+    name="{{name}}"
+    rows="12"
+    class="form__json{{#if error}} form__input--error{{/if}}"
+    {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
+    {{#if required}}required{{/if}}
+    {{#if readonly}}readonly{{/if}}
+  >
+    {{value}}
+  </textarea>
 {{/partials/field}}

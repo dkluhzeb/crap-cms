@@ -1,42 +1,67 @@
 {{#if ref_count}}
-{{#> partials/warning-card title_key="delete_has_references"}}
-  <p>{{t "referenced_by_count" count=ref_count}}</p>
+  {{#> partials/warning-card title_key="delete_has_references"}}
+    <p>{{t "referenced_by_count" count=ref_count}}</p>
 
-  <crap-back-refs slug="{{collection.slug}}" doc-id="{{document_id}}">
-    <button type="button" class="button button--ghost button--small">
-      {{t "show_details"}}
-    </button>
-  </crap-back-refs>
+    <crap-back-refs
+      slug="{{collection.slug}}"
+      doc-id="{{document_id}}"
+    >
+      <button
+        type="button"
+        class="button button--ghost button--small"
+      >
+        {{t "show_details"}}
+      </button>
+    </crap-back-refs>
 
-  <p class="text--muted">{{t "delete_references_warning"}}</p>
-{{/partials/warning-card}}
+    <p class="text--muted">{{t "delete_references_warning"}}</p>
+  {{/partials/warning-card}}
 {{/if}}
 
 <div class="card">
   <div class="card__body">
     <p>{{t "confirm_delete" name=collection.singular_name}}</p>
     {{#if title_value}}
-    <p><strong>{{title_value}}</strong></p>
+      <p>
+        <strong>{{title_value}}</strong>
+      </p>
     {{else}}
-    <p><strong>{{document_id}}</strong></p>
+      <p>
+        <strong>{{document_id}}</strong>
+      </p>
     {{/if}}
 
     {{#> partials/form-actions cancel_href=(concat "/admin/collections/" collection.slug)}}
       {{#if ref_count}}
-      <button type="button" class="button button--danger" disabled
-        title="{{t "cannot_delete_referenced"}}">
-        {{t "delete"}}
-      </button>
+        <button
+          type="button"
+          class="button button--danger"
+          disabled
+          title='{{t "cannot_delete_referenced"}}'
+        >
+          {{t "delete"}}
+        </button>
       {{else}}
-      <crap-confirm message="{{t "confirm_delete_permanent" name=collection.singular_name}}">
-        <form hx-delete="/admin/collections/{{collection.slug}}/{{document_id}}"
-              action="/admin/collections/{{collection.slug}}/{{document_id}}"
-              method="post"
-              hx-target="body">
-          <input type="hidden" name="_method" value="DELETE" />
-          <button type="submit" class="button button--danger">{{t "delete"}}</button>
-        </form>
-      </crap-confirm>
+        <crap-confirm message='{{t "confirm_delete_permanent" name=collection.singular_name}}'>
+          <form
+            hx-delete="/admin/collections/{{collection.slug}}/{{document_id}}"
+            action="/admin/collections/{{collection.slug}}/{{document_id}}"
+            method="post"
+            hx-target="body"
+          >
+            <input
+              type="hidden"
+              name="_method"
+              value="DELETE"
+            />
+            <button
+              type="submit"
+              class="button button--danger"
+            >
+              {{t "delete"}}
+            </button>
+          </form>
+        </crap-confirm>
       {{/if}}
     {{/partials/form-actions}}
   </div>

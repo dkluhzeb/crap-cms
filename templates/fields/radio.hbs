@@ -1,14 +1,14 @@
 {{#> partials/field variant="fieldset"}}
-{{#each options}}
-<label class="form__radio-label">
-  <input
-    type="radio"
-    name="{{../name}}"
-    value="{{this.value}}"
-    {{#if this.selected}}checked{{/if}}
-    {{#if ../readonly}}disabled{{/if}}
-  />
-  <span>{{this.label}}</span>
-</label>
-{{/each}}
+  {{#each options}}
+    <label class="form__radio-label">
+      <input
+        type="radio"
+        name="{{../name}}"
+        value="{{this.value}}"
+        {{#if this.selected}}checked{{/if}}
+        {{#if ../readonly}}disabled{{/if}}
+      />
+      <span>{{this.label}}</span>
+    </label>
+  {{/each}}
 {{/partials/field}}

@@ -761,6 +761,53 @@ crap-cms templates extract --all --type templates
 crap-cms templates extract --all --force
 ```
 
+### `fmt` — Format Handlebars templates
+
+Format `.hbs` files in place using the project's built-in Handlebars formatter. Same role as `cargo fmt` for Rust or `biome check --write` for JS/CSS — keeps the templates' style consistent.
+
+```bash
+crap-cms fmt [PATHS...] [--check] [--stdio]
+```
+
+| Flag | Description |
+|------|-------------|
+| (none) | Format every `.hbs` under the given paths in place. Default scope is `templates/`. |
+| `--check` | Don't write — exit non-zero if any file would change. CI gate. |
+| `--stdio` | Read from stdin, write the formatted result to stdout. Used by editor formatter integrations. Mutually exclusive with `--check`. |
+
+```bash
+crap-cms fmt                              # format all templates/
+crap-cms fmt templates/auth/              # one subtree
+crap-cms fmt templates/fields/text.hbs    # one file
+crap-cms fmt --check                      # CI: exit 1 if any file would change
+cat my.hbs | crap-cms fmt --stdio         # editor pipe
+```
+
+The formatter is idempotent (`fmt(fmt(x)) == fmt(x)`) and applies the rule set documented in the [Admin UI: Template Formatter](../admin-ui/template-formatter.md) page (block-helper indentation, attribute stacking, comment preservation, etc.).
+
+**Editor integration (Neovim + conform.nvim):**
+
+```lua
+-- ~/.config/nvim/lua/plugins/conform.lua
+opts = {
+  formatters_by_ft = { handlebars = { 'crap_cms' } },
+  formatters = {
+    crap_cms = {
+      command = 'crap-cms',
+      args = { 'fmt', '--stdio' },
+      stdin = true,
+    },
+  },
+},
+```
+
+**Pre-commit hook entry:**
+
+```bash
+echo "Running crap-cms fmt..."
+cargo run --quiet --bin crap-cms -- fmt --check
+```
+
 ### `jobs` — Manage background jobs
 
 #### `jobs list`

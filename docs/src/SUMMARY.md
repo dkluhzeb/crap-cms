@@ -137,6 +137,7 @@
 - [Overview](admin-ui/overview.md)
 - [Template Overlay](admin-ui/template-overlay.md)
 - [Template Context](admin-ui/template-context.md)
+- [Template Formatter](admin-ui/template-formatter.md)
 - [Static Files](admin-ui/static-files.md)
 - [Display Conditions](admin-ui/display-conditions.md)
 - [Themes](admin-ui/themes.md)

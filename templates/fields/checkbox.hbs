@@ -1,19 +1,23 @@
 {{#> partials/field variant="checkbox"}}
-{{#if locale_locked}}
-<input type="hidden" name="{{name}}" value="{{#if checked}}1{{else}}0{{/if}}" />
-<input
-  type="checkbox"
-  id="field-{{name}}"
-  {{#if checked}}checked{{/if}}
-  disabled
-/>
-{{else}}
-<input
-  type="checkbox"
-  id="field-{{name}}"
-  name="{{name}}"
-  {{#if checked}}checked{{/if}}
-  {{#if required}}required{{/if}}
-/>
-{{/if}}
+  {{#if locale_locked}}
+    <input
+      type="hidden"
+      name="{{name}}"
+      value="{{#if checked}}1{{else}}0{{/if}}"
+    />
+    <input
+      type="checkbox"
+      id="field-{{name}}"
+      {{#if checked}}checked{{/if}}
+      disabled
+    />
+  {{else}}
+    <input
+      type="checkbox"
+      id="field-{{name}}"
+      name="{{name}}"
+      {{#if checked}}checked{{/if}}
+      {{#if required}}required{{/if}}
+    />
+  {{/if}}
 {{/partials/field}}

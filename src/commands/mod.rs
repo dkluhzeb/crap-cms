@@ -4,6 +4,7 @@ pub mod bench;
 pub mod config_resolve;
 pub mod db;
 pub mod export;
+pub mod fmt;
 pub mod images;
 pub mod init;
 pub mod jobs;

@@ -52,6 +52,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Handlebars template formatting (crap-cms fmt)
+        run: cargo run --quiet --bin crap-cms -- fmt --check
+
       - name: Run tests
         run: cargo test --workspace
 

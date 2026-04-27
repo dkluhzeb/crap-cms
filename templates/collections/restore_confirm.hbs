@@ -1,14 +1,17 @@
 {{#if missing_relations}}
-{{#> partials/warning-card title_key="restore_has_missing_relations"}}
-  <ul>
-    {{#each missing_relations}}
-    <li>
-      <strong>{{this.field_label}}</strong> — {{this.missing_count}} {{t "missing_of_total" total=this.total_ids}}
-    </li>
-    {{/each}}
-  </ul>
-  <p class="text--muted">{{t "restore_missing_warning"}}</p>
-{{/partials/warning-card}}
+  {{#> partials/warning-card title_key="restore_has_missing_relations"}}
+    <ul>
+      {{#each missing_relations}}
+        <li>
+          <strong>{{this.field_label}}</strong>
+          —
+          {{this.missing_count}}
+          {{t "missing_of_total" total=this.total_ids}}
+        </li>
+      {{/each}}
+    </ul>
+    <p class="text--muted">{{t "restore_missing_warning"}}</p>
+  {{/partials/warning-card}}
 {{/if}}
 
 <div class="card">
@@ -16,9 +19,18 @@
     <p>{{t "confirm_restore_version" version=version_number}}</p>
 
     {{#> partials/form-actions cancel_href=back_url}}
-      <form method="post" action="{{restore_url}}"
-        hx-post="{{restore_url}}" hx-target="body">
-        <button type="submit" class="button button--primary">{{t "restore"}}</button>
+      <form
+        method="post"
+        action="{{restore_url}}"
+        hx-post="{{restore_url}}"
+        hx-target="body"
+      >
+        <button
+          type="submit"
+          class="button button--primary"
+        >
+          {{t "restore"}}
+        </button>
       </form>
     {{/partials/form-actions}}
   </div>

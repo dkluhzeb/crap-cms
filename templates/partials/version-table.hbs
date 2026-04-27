@@ -11,19 +11,25 @@
   </thead>
   <tbody>
     {{#each versions}}
-    <tr>
-      <td><span class="edit-sidebar__version-number">v{{this.version}}</span></td>
-      <td>{{> partials/status-badge status=this.status}}</td>
-      <td><crap-time datetime="{{this.created_at}}">{{this.created_at}}</crap-time></td>
-      <td>
-        {{#unless this.latest}}
-        <a class="button button--ghost button--small"
-          href="{{../restore_url_prefix}}/versions/{{this.id}}/restore">
-          {{t "restore"}}
-        </a>
-        {{/unless}}
-      </td>
-    </tr>
+      <tr>
+        <td>
+          <span class="edit-sidebar__version-number">v{{this.version}}</span>
+        </td>
+        <td>{{> partials/status-badge status=this.status}}</td>
+        <td>
+          <crap-time datetime="{{this.created_at}}">{{this.created_at}}</crap-time>
+        </td>
+        <td>
+          {{#unless this.latest}}
+            <a
+              class="button button--ghost button--small"
+              href="{{../restore_url_prefix}}/versions/{{this.id}}/restore"
+            >
+              {{t "restore"}}
+            </a>
+          {{/unless}}
+        </td>
+      </tr>
     {{/each}}
   </tbody>
 </table>

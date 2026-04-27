@@ -1,39 +1,44 @@
 {{#> layout/base}}
-<crap-sticky-header>
-{{> partials/breadcrumb}}
-<div class="page-header">
-  <h1>{{global.display_name}}</h1>
-</div>
-</crap-sticky-header>
-<crap-validate-form validate-url="/admin/globals/{{global.slug}}/validate">
-<crap-dirty-form>
-<crap-scroll-restore>
-<crap-conditions collection="{{global.slug}}" type="global">
-<form id="edit-form"
-      hx-post="/admin/globals/{{global.slug}}"
-      action="/admin/globals/{{global.slug}}"
-      method="post"
-      hx-target="body"
-      hx-indicator="#upload-loading"
-      class="form"
-      novalidate
-      data-collection-slug="{{global.slug}}"
-      data-global-slug="{{global.slug}}"
-      {{#if user}}data-current-user-id="{{user.id}}"{{/if}}>
-  {{#if has_editor_locales}}
-  <input type="hidden" name="_locale" value="{{editor_locale}}" />
-  {{/if}}
-  <div class="edit-layout">
-    <div class="edit-layout__content">
-      {{> globals/edit_form}}
+  <crap-sticky-header>
+    {{> partials/breadcrumb}}
+    <div class="page-header">
+      <h1>{{global.display_name}}</h1>
     </div>
-    <div class="edit-layout__sidebar">
-      {{> globals/edit_sidebar}}
-    </div>
-  </div>
-</form>
-</crap-conditions>
-</crap-scroll-restore>
-</crap-dirty-form>
-</crap-validate-form>
+  </crap-sticky-header>
+  <crap-validate-form validate-url="/admin/globals/{{global.slug}}/validate">
+    <crap-dirty-form>
+      <crap-scroll-restore>
+        <crap-conditions
+          collection="{{global.slug}}"
+          type="global"
+        >
+          <form
+            id="edit-form"
+            hx-post="/admin/globals/{{global.slug}}"
+            action="/admin/globals/{{global.slug}}"
+            method="post"
+            hx-target="body"
+            hx-indicator="#upload-loading"
+            class="form"
+            novalidate
+            data-collection-slug="{{global.slug}}"
+            data-global-slug="{{global.slug}}"
+            {{#if user}}data-current-user-id="{{user.id}}"{{/if}}
+          >
+            {{#if has_editor_locales}}
+              <input
+                type="hidden"
+                name="_locale"
+                value="{{editor_locale}}"
+              />
+            {{/if}}
+            <div class="edit-layout">
+              <div class="edit-layout__content">{{> globals/edit_form}}</div>
+              <div class="edit-layout__sidebar">{{> globals/edit_sidebar}}</div>
+            </div>
+          </form>
+        </crap-conditions>
+      </crap-scroll-restore>
+    </crap-dirty-form>
+  </crap-validate-form>
 {{/layout/base}}

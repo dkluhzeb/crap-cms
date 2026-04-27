@@ -1,25 +1,26 @@
 <crap-sidebar>
-<aside class="sidebar">
-  <nav class="sidebar__navigation">
-    <ul>
-      <li>
-        <a class="link link--ghost" href="/admin"
-          hx-get="/admin" hx-target="body" hx-push-url="true">
-          <span class="material-symbols-outlined">dashboard</span>
-          {{t "dashboard"}}
-        </a>
-      </li>
-      {{#each nav.collections}}
-      <li>
-        {{> layout/sidebar_item}}
-      </li>
-      {{/each}}
-      {{#each nav.globals}}
-      <li>
-        {{> layout/sidebar_global_item}}
-      </li>
-      {{/each}}
-    </ul>
-  </nav>
-</aside>
+  <aside class="sidebar">
+    <nav class="sidebar__navigation">
+      <ul>
+        <li>
+          <a
+            class="link link--ghost"
+            href="/admin"
+            hx-get="/admin"
+            hx-target="body"
+            hx-push-url="true"
+          >
+            <span class="material-symbols-outlined">dashboard</span>
+            {{t "dashboard"}}
+          </a>
+        </li>
+        {{#each nav.collections}}
+          <li>{{> layout/sidebar_item}}</li>
+        {{/each}}
+        {{#each nav.globals}}
+          <li>{{> layout/sidebar_global_item}}</li>
+        {{/each}}
+      </ul>
+    </nav>
+  </aside>
 </crap-sidebar>

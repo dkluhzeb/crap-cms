@@ -1,11 +1,9 @@
 <div class="edit-sidebar__panel">
   {{#if label_key}}
-  <div class="edit-sidebar__panel-header">
-    <span class="material-symbols-outlined">{{icon}}</span>
-    {{t label_key}}
-  </div>
+    <div class="edit-sidebar__panel-header">
+      <span class="material-symbols-outlined">{{icon}}</span>
+      {{t label_key}}
+    </div>
   {{/if}}
-  <div class="edit-sidebar__panel-body">
-    {{> @partial-block }}
-  </div>
+  <div class="edit-sidebar__panel-body">{{> @partial-block}}</div>
 </div>

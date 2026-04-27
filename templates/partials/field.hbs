@@ -35,30 +35,46 @@
 
      Slot: the form input(s). --}}
 {{#if (eq variant "fieldset")}}
-<fieldset class="form__radio-group">
-  <legend>
-    {{t label}}
-    {{#if required}}<span class="required">*</span>{{/if}}
-    {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-  </legend>
-  {{> @partial-block }}
-</fieldset>
+  <fieldset class="form__radio-group">
+    <legend>
+      {{t label}}
+      {{#if required}}
+        <span class="required">*</span>
+      {{/if}}
+      {{#if locale_locked}}
+        <span class="form__locale-badge">{{t "shared_field"}}</span>
+      {{/if}}
+    </legend>
+    {{> @partial-block}}
+  </fieldset>
 {{else if (eq variant "checkbox")}}
-<div class="form__checkbox">
-  {{> @partial-block }}
+  <div class="form__checkbox">
+    {{> @partial-block}}
+    <label for="field-{{name}}">
+      {{t label}}
+      {{#if required}}
+        <span class="required">*</span>
+      {{/if}}
+      {{#if locale_locked}}
+        <span class="form__locale-badge">{{t "shared_field"}}</span>
+      {{/if}}
+    </label>
+  </div>
+{{else}}
   <label for="field-{{name}}">
     {{t label}}
-    {{#if required}}<span class="required">*</span>{{/if}}
-    {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
+    {{#if required}}
+      <span class="required">*</span>
+    {{/if}}
+    {{#if locale_locked}}
+      <span class="form__locale-badge">{{t "shared_field"}}</span>
+    {{/if}}
   </label>
-</div>
-{{else}}
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
-{{> @partial-block }}
+  {{> @partial-block}}
 {{/if}}
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{#if error}}
+  <p class="form__error">{{error}}</p>
+{{/if}}
+{{#if description}}
+  <p class="form__help">{{t description}}</p>
+{{/if}}
