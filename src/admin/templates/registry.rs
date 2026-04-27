@@ -179,6 +179,74 @@ mod tests {
         );
     }
 
+    /// Regression: textarea-style fields (textarea, json, code, richtext)
+    /// must not leave any whitespace between the rendered value and
+    /// `</textarea>`. HTML5 only strips a single leading LF after
+    /// `<textarea>`; everything else — indentation, trailing newlines —
+    /// becomes part of the field's submitted value. With surrounding
+    /// whitespace, every save round-trip wraps the value with another
+    /// layer of indentation. The fix is `>{{value}}</textarea>` flush
+    /// in the source plus formatter support for inline close tags on
+    /// raw-content elements.
+    ///
+    /// Round-trip simulation: render the field with a stable `value`,
+    /// then "submit" the resulting browser-visible value back through
+    /// the renderer. The output must converge — same body two passes
+    /// in a row. If the indent regression returns, the second pass
+    /// produces a longer body than the first.
+    #[test]
+    fn textarea_field_value_does_not_accrete_whitespace_on_round_trip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+
+        // What the browser would set the textarea's `value` property to,
+        // given its DOM children. Per HTML5: a single leading LF is
+        // stripped; everything else is preserved verbatim.
+        fn browser_textarea_value(rendered: &str) -> String {
+            let open = rendered
+                .find("<textarea")
+                .expect("rendered HTML must contain <textarea");
+            let body_start = rendered[open..]
+                .find('>')
+                .map(|p| open + p + 1)
+                .expect("opening tag close");
+            let body_end = body_start
+                + rendered[body_start..]
+                    .find("</textarea>")
+                    .expect("closing </textarea>");
+            let body = &rendered[body_start..body_end];
+            body.strip_prefix('\n').unwrap_or(body).to_string()
+        }
+
+        for field_type in ["textarea", "json", "code", "richtext"] {
+            let pass1 = hbs
+                .render(
+                    &format!("fields/{field_type}"),
+                    &json!({"name": "body", "value": "hello", "rows": 4}),
+                )
+                .unwrap_or_else(|e| panic!("render {field_type}: {e}"));
+            let v1 = browser_textarea_value(&pass1);
+
+            let pass2 = hbs
+                .render(
+                    &format!("fields/{field_type}"),
+                    &json!({"name": "body", "value": v1.clone(), "rows": 4}),
+                )
+                .unwrap_or_else(|e| panic!("re-render {field_type}: {e}"));
+            let v2 = browser_textarea_value(&pass2);
+
+            assert_eq!(
+                v1, v2,
+                "{field_type}: value accreted whitespace on round-trip\n  pass1: {v1:?}\n  pass2: {v2:?}"
+            );
+            assert_eq!(
+                v1, "hello",
+                "{field_type}: round-trip value should equal input, got {v1:?}"
+            );
+        }
+    }
+
     #[test]
     fn overlay_templates_override_compiled_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");

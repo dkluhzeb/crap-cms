@@ -563,6 +563,22 @@ to the detailed entry with full migration steps.
 
 ### Fixed
 
+- **Textarea-style fields accreted leading whitespace on every save.**
+  `templates/fields/{textarea,json,code,richtext}.hbs` rendered
+  `{{value}}` on its own indented line between `<textarea>` and
+  `</textarea>`. Per HTML5 only the *first* LF after `<textarea>` is
+  stripped — every other byte (including the source template's 4
+  spaces of indentation and the trailing `\n  ` before
+  `</textarea>`) becomes part of the field's submitted value. On
+  save, that whitespace round-tripped to the database and the next
+  render wrapped it again, so each save grew the value by another
+  indent level. Source now uses `>{{value}}</textarea>` flush; the
+  template formatter learned to hug `</tag>` against the body when
+  the body has no trailing newline (idempotent on the new form).
+  Regression test
+  `textarea_field_value_does_not_accrete_whitespace_on_round_trip`
+  exercises all four field types through two render passes.
+
 - **Globals edit form: missing loading indicator.** `globals/edit.hbs`
   had no `hx-indicator="#upload-loading"` attribute on the form, and
   `globals/edit_sidebar.hbs` was missing the indicator markup, so the

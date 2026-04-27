@@ -50,6 +50,12 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
     let mut out = String::new();
     let mut depth: usize = 0;
     let mut at_line_start = true;
+    // Set by the previous `Token::RawText` when its body had no
+    // trailing newline. The next `Token::HtmlEnd` (the matching
+    // raw-content close) hugs the body instead of going on its own
+    // line. Critical for `<textarea>{{value}}</textarea>` so saved
+    // values don't accrete indentation on every form round-trip.
+    let mut hug_next_close = false;
 
     let mut i = 0;
     while i < tokens.len() {
@@ -74,7 +80,7 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
             }
 
             Token::RawText(s) => {
-                emit_raw_text(s, &mut out, &mut at_line_start);
+                hug_next_close = emit_raw_text(s, &mut out, &mut at_line_start);
             }
 
             Token::HtmlComment(raw) => {
@@ -109,8 +115,13 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
 
             Token::HtmlEnd { name } => {
                 depth = depth.saturating_sub(1);
-                ensure_line_indent(&mut out, &mut at_line_start, depth);
-                write!(&mut out, "</{name}>").unwrap();
+                if hug_next_close {
+                    write!(&mut out, "</{name}>").unwrap();
+                    hug_next_close = false;
+                } else {
+                    ensure_line_indent(&mut out, &mut at_line_start, depth);
+                    write!(&mut out, "</{name}>").unwrap();
+                }
                 newline(&mut out, &mut at_line_start);
             }
 
@@ -470,9 +481,17 @@ fn collapse_inline_whitespace(s: &str) -> String {
 /// spaces. Whitespace-only bodies (empty `<script>` tags whose source
 /// happened to span multiple lines) are dropped entirely. Trailing
 /// state is set by whether the body ends on a newline.
-fn emit_raw_text(s: &str, out: &mut String, at_line_start: &mut bool) {
+///
+/// Returns `true` if the matching `</tag>` should be emitted inline
+/// (no preceding newline + indent). That's the case when the body
+/// has actual content but no trailing newline — critical for
+/// `<textarea>` where any whitespace between the body and `</textarea>`
+/// becomes part of the rendered field value and accretes on every
+/// save round-trip.
+#[must_use]
+fn emit_raw_text(s: &str, out: &mut String, at_line_start: &mut bool) -> bool {
     if s.trim().is_empty() {
-        return;
+        return false;
     }
     let body = s.strip_prefix('\n').unwrap_or(s);
     let body = match body.rfind('\n') {
@@ -480,10 +499,11 @@ fn emit_raw_text(s: &str, out: &mut String, at_line_start: &mut bool) {
         _ => body,
     };
     if body.is_empty() {
-        return;
+        return false;
     }
     out.push_str(body);
     *at_line_start = body.ends_with('\n');
+    !body.ends_with('\n')
 }
 
 fn emit_text(s: &str, out: &mut String, at_line_start: &mut bool, depth: usize) {
@@ -798,5 +818,46 @@ mod tests {
         let src = "<script src=\"/x.js\"></script>";
         let out = fmt(src);
         assert!(out.contains("<script") && out.contains("</script>"));
+    }
+
+    #[test]
+    fn textarea_inline_body_close_tag_hugs_body() {
+        // Regression for the indent-accretion bug: any whitespace
+        // between the body and `</textarea>` becomes part of the
+        // rendered field value and grows on every save round-trip.
+        // The formatter must preserve the source's "no trailing
+        // whitespace before </textarea>" choice.
+        let src = "<textarea name=\"x\">{{value}}</textarea>";
+        let out = fmt(src);
+        assert!(
+            out.contains("{{value}}</textarea>"),
+            "</textarea> must hug the body, got:\n{out}"
+        );
+        assert!(
+            !out.contains("{{value}}\n"),
+            "no whitespace allowed between body and close, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn textarea_inline_body_idempotent() {
+        let src = "<textarea\n  id=\"a\"\n  name=\"x\"\n>{{value}}</textarea>";
+        let once = fmt(src);
+        let twice = fmt(&once);
+        assert_eq!(once, twice, "idempotency on inline-body textarea");
+        // And the body must not have gained surrounding whitespace.
+        assert!(once.contains("{{value}}</textarea>"));
+    }
+
+    #[test]
+    fn script_multiline_body_close_on_own_line() {
+        // Inverse case: a multi-line body that ends with a newline
+        // gets `</script>` on its own indented line — unchanged.
+        let src = "<script>\n  alert(1);\n</script>";
+        let out = fmt(src);
+        assert!(
+            out.contains("alert(1);\n</script>"),
+            "multi-line body keeps close on own line, got:\n{out}"
+        );
     }
 }
