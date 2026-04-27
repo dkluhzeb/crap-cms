@@ -43,9 +43,9 @@ mlua = { version = "0.11", features = ["lua54", "vendored", "serialize", "send"]
 # Config & CLI
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-dialoguer = "0.11"
-console = "0.15"
-indicatif = "0.17"
+dialoguer = "0.12"
+console = "0.16"
+indicatif = "0.18"
 toml = "1.0"
 
 # Serialization
@@ -54,7 +54,7 @@ serde_json = "1"
 
 # Auth
 argon2 = "0.5"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "builder", "smtp-transport"] }
@@ -73,7 +73,7 @@ rand = "0.9"
 aes-gcm = "0.10"
 
 # Cron scheduling
-cron = "0.12"
+cron = "0.16"
 
 # HTTP/2 cleartext (h2c) support
 hyper = { version = "1", features = ["server", "http2"] }
@@ -108,7 +108,7 @@ infer = "0.19.0"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tonic-health = "0.14.5"
 chrono-tz = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 semver = "1"
 
 [features]
@@ -152,7 +152,7 @@ optional = true
 default-features = false
 
 [dependencies.redis]
-version = "0.29"
+version = "1"
 optional = true
 features = ["tokio-comp"]
 
@@ -165,7 +165,7 @@ features = ["tokio-rustls-tls"]
 [dev-dependencies]
 tempfile = "3"
 http-body-util = "0.1"
-scraper = "0.22"
+scraper = "0.26"
 
 [profile.dev.package.image]
 opt-level = 2

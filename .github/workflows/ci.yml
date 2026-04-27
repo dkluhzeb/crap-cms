@@ -55,6 +55,11 @@ jobs:
       - name: Handlebars template formatting (crap-cms fmt)
         run: cargo run --quiet --bin crap-cms -- fmt --check
 
+      - name: Security audit (cargo audit)
+        run: |
+          cargo install --locked cargo-audit --version "^0.22"
+          cargo audit
+
       - name: Run tests
         run: cargo test --workspace
 

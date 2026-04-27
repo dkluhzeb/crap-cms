@@ -1,0 +1,35 @@
+# `cargo audit` configuration. Used both locally and (when wired up) in CI.
+# An advisory listed here is **knowingly accepted** — every entry must
+# include a rationale and link, and should be re-evaluated on each
+# release.
+
+[advisories]
+ignore = [
+    # paste 1.0.15 — "no longer maintained" (RUSTSEC-2024-0436).
+    #
+    # paste is a *proc-macro* — a compile-time code generator. It runs
+    # in the rustc process during build and does NOT ship in the
+    # produced binary. Runtime exposure is zero.
+    #
+    # The advisory is a deprecation notice (the author retired the
+    # crate now that stable Rust features cover most of its use
+    # cases), not a CVE. There is no known vulnerability.
+    #
+    # Pulled in via the AVIF encoder chain:
+    #   paste 1.0.15 (proc-macro)
+    #   └── rav1e 0.8.1 (latest)
+    #       └── ravif 0.13.0 (latest)
+    #           └── image 0.25.10 (avif feature)
+    #               └── crap-cms
+    #
+    # We use AVIF for upload format conversion (see
+    # `src/core/upload/resize.rs::avif_to_bytes` and per-size variant
+    # generation in `core/upload/collection_upload.rs`). Dropping the
+    # `avif` feature on `image` would be a real feature regression,
+    # not a warning cleanup.
+    #
+    # The crate is authored by dtolnay (same author as serde, anyhow,
+    # thiserror) and pinned at 1.0.15 in Cargo.lock. We will revisit
+    # when rav1e drops the dependency upstream.
+    "RUSTSEC-2024-0436",
+]

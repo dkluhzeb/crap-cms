@@ -173,6 +173,17 @@ to the detailed entry with full migration steps.
     shipped binary. nanoid's public API (`nanoid::nanoid!()` /
     `nanoid!(10)`) is unchanged at every call site; default-RNG
     output is bit-identical for the alphabets we use.
+- **`cargo audit` is now a CI gate** — `.github/workflows/ci.yml`
+  installs `cargo-audit` and runs it on every PR. A committed
+  `.cargo/audit.toml` records the one advisory we knowingly accept
+  (RUSTSEC-2024-0436, `paste 1.0.15` "no longer maintained") with
+  the rationale: `paste` is a proc-macro that runs only in the
+  compiler and does not ship in the binary; the deprecation is not
+  a CVE; the crate is upstream-pinned in `rav1e 0.8.1` (currently
+  the latest), which we need transitively for the `image` crate's
+  `avif` feature, which we use for upload format conversion. Will
+  be revisited each release; any new advisory will fail CI by
+  default.
 - **CSP hardening: nonce-based `script-src`** — `'unsafe-inline'` has been
   removed from the default `script-src` directive. A fresh nonce is
   generated per request, inserted into the `Content-Security-Policy`
