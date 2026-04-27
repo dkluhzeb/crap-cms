@@ -630,6 +630,63 @@ to the detailed entry with full migration steps.
 
 ### Fixed
 
+- **`<crap-create-panel>` form submission rewritten as declarative
+  htmx.** Removes ~110 lines of imperative submit logic
+  (`_submitForm`, `_handleSubmitResponse`, `_sendForm`,
+  `encodeFormBody`, the multipart-vs-urlencoded branch, the strip-htmx
+  pass) and the `readCsrfCookie` import. The injected form keeps its
+  server-rendered `hx-post` (or `hx-put`); the panel sets
+  `hx-target="this"`, `hx-swap="outerHTML"`, `hx-select="#edit-form"`
+  (so the server's full-edit-page validation re-render gets sliced
+  down to just the form fragment), and `hx-headers='{"X-Inline-Create":"1"}'`.
+  htmx 2 picks the request encoding from the form's native `enctype`
+  attribute (which `templates/collections/edit.hbs` already emits as
+  `multipart/form-data` only when `collection.is_upload`) — the
+  multipart-vs-urlencoded encoding bug we hit earlier in this release
+  becomes structurally impossible, since the client never inspects the
+  FormData to decide. Two `htmx:beforeSwap` / `htmx:afterRequest`
+  listeners on the panel body (which survives across form re-renders)
+  intercept the `X-Created-Id` success header to fire the `onCreated`
+  callback + close the panel; on validation error the swapped form
+  fragment shows inline field errors as before. Regression tests
+  `relationship_inline_create_selects_item` and
+  `relationship_inline_create_validation_error_rerenders` exercise
+  both happy path (with file upload — multipart) and validation
+  re-render (urlencoded) end-to-end.
+
+  **Server side**: new `htmx_inline_created(id, label)` response
+  builder in `src/admin/handlers/shared/response.rs`. Returns 200 with
+  `X-Created-Id` / `X-Created-Label` headers and an empty body — *no*
+  `HX-Redirect`, since the panel keeps the parent page. The create
+  handler reads `X-Inline-Create: 1` off the request and branches to
+  this builder; page-level creates keep the old `htmx_redirect_with_created`
+  flow.
+
+- **`<crap-list-settings>` column save rewritten as declarative
+  htmx.** Removes the manual `fetch()` POST + CSRF-header construction
+  for `/admin/api/user-settings/{slug}` (~15 lines). The column-picker
+  form now carries `hx-post`, `hx-swap="none"`; the existing
+  `htmx:configRequest` listener in `templates/layout/base.hbs`
+  threads CSRF; an `htmx:afterRequest` listener on the form fires
+  `drawer.close()` + `window.location.reload()` on success. Drops
+  the `readCsrfCookie` import. The form lives inside
+  `<crap-drawer>`'s shadow DOM, so `htmx.process(form)` is invoked
+  after `appendChild` to register it (htmx auto-discovery doesn't
+  traverse shadow roots).
+
+- **Live-search input UX cleanup.** `templates/collections/items.hbs`:
+  the search input changed from `type="text"` to `type="search"`
+  (the existing `hx-trigger="…, search"` was unreachable on a
+  `text` input — the `search` event only fires from the browser's
+  native clear-X on `type="search"`). Adds `hx-indicator="#upload-loading"`
+  so the 300ms-debounced searches show a loading state.
+
+- **`getHttpVerb()` dual-shape comment.** `static/components/util/htmx.js`
+  documents *why* the helper checks both `evt.detail.requestConfig.verb`
+  (htmx 2) and `evt.detail.verb` (htmx 1.x legacy + some 2.x events
+  that retain the flat shape). The comment guards against a future
+  drive-by cleanup deleting one of the paths.
+
 - **Textarea-style fields accreted leading whitespace on every save.**
   `templates/fields/{textarea,json,code,richtext}.hbs` rendered
   `{{value}}` on its own indented line between `<textarea>` and

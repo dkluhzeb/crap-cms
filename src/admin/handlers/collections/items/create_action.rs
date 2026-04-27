@@ -19,8 +19,8 @@ use crate::{
             },
             forms::{extract_join_data_from_form, parse_form, transform_select_has_many},
             shared::{
-                forbidden, get_user_doc, htmx_redirect_with_created, paths, redirect_response,
-                toast_only_error,
+                forbidden, get_user_doc, htmx_inline_created, htmx_redirect_with_created, paths,
+                redirect_response, toast_only_error,
             },
         },
     },
@@ -146,6 +146,17 @@ pub async fn create_action(
         None => return redirect_response("/admin/collections"),
     };
 
+    // Inline-create requests come from `<crap-create-panel>`, which sets
+    // `X-Inline-Create: 1` on the form submit. The success response shape
+    // differs: no `HX-Redirect` (the panel keeps the parent page),
+    // just `X-Created-Id` / `X-Created-Label` headers for the panel's
+    // afterRequest listener to fire its `onCreated` callback. Read here
+    // because `parse_form` consumes the request below.
+    let inline_create = request
+        .headers()
+        .get("X-Inline-Create")
+        .is_some_and(|v| v == "1");
+
     // Collection-level access check is handled inside service::create_document_core.
 
     let (mut form_data, file) = match parse_form(request, &state, &def).await {
@@ -227,7 +238,11 @@ pub async fn create_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or(&doc.id);
 
-            htmx_redirect_with_created(&paths::collection(&slug), &doc.id, label)
+            if inline_create {
+                htmx_inline_created(&doc.id, label)
+            } else {
+                htmx_redirect_with_created(&paths::collection(&slug), &doc.id, label)
+            }
         }
         Ok(Err(e)) => match e {
             ServiceError::AccessDenied(_) => forbidden(

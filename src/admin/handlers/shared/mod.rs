@@ -40,8 +40,8 @@ pub use pagination::{Pagination, PaginationParams};
 
 // response
 pub(crate) use response::{
-    forbidden, html_with_toast, htmx_redirect, htmx_redirect_with_created, not_found,
-    redirect_response, render_or_error, server_error, toast_only_error,
+    forbidden, html_with_toast, htmx_inline_created, htmx_redirect, htmx_redirect_with_created,
+    not_found, redirect_response, render_or_error, server_error, toast_only_error,
 };
 
 // versions

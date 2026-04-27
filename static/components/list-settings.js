@@ -18,7 +18,6 @@
 
 import { clear, h } from './h.js';
 import { t } from './i18n.js';
-import { readCsrfCookie } from './util/cookies.js';
 import { discoverSingleton } from './util/discover.js';
 import { readDataIsland } from './util/json.js';
 
@@ -199,7 +198,14 @@ class CrapListSettings extends HTMLElement {
     if (!drawer) return;
     drawer.open({ title: t('columns') });
     clear(drawer.body);
-    drawer.body.appendChild(this._buildColumnPickerForm(options, slug, drawer));
+    const form = this._buildColumnPickerForm(options, slug, drawer);
+    drawer.body.appendChild(form);
+    // htmx auto-discovery doesn't traverse shadow roots; the drawer's
+    // body lives inside `<crap-drawer>`'s shadow DOM, so the new form's
+    // `hx-*` attributes are invisible to htmx until we tell it where
+    // to look. Without this call, submit goes through the browser's
+    // default form action (= the page URL) instead of `hx-post`.
+    if (typeof htmx !== 'undefined') htmx.process(form);
   }
 
   /**
@@ -208,21 +214,51 @@ class CrapListSettings extends HTMLElement {
    * @param {DrawerInstance} drawer
    */
   _buildColumnPickerForm(options, slug, drawer) {
-    const form = h(
-      'form',
-      { class: 'column-picker' },
-      h(
-        'div',
-        { class: 'column-picker__list' },
-        options.map((opt) =>
-          h(
-            'label',
-            { class: 'column-picker__item' },
-            h('input', { type: 'checkbox', name: 'column', value: opt.key, checked: opt.selected }),
-            h('span', { text: t(opt.label) }),
-          ),
+    // Submission goes through htmx: `hx-post` triggers on form submit,
+    // urlencoded body is auto-built from form fields, CSRF is added by
+    // the `htmx:configRequest` listener in `templates/layout/base.hbs`,
+    // and `hx-swap="none"` tells htmx not to splice the response into
+    // the DOM (we just need the success status — the page is reloaded
+    // below to pick up the new column selection from the server).
+    //
+    // We assemble checked column keys into a single hidden `columns`
+    // field (the server endpoint expects a comma-joined list, not
+    // duplicate `column=` params from `<select multiple>`).
+    const list = h(
+      'div',
+      { class: 'column-picker__list' },
+      options.map((opt) =>
+        h(
+          'label',
+          { class: 'column-picker__item' },
+          h('input', {
+            type: 'checkbox',
+            class: 'column-picker__checkbox',
+            value: opt.key,
+            checked: opt.selected,
+          }),
+          h('span', { text: t(opt.label) }),
         ),
       ),
+    );
+    const columnsInput = h('input', { type: 'hidden', name: 'columns', value: '' });
+    const updateColumns = () => {
+      const checked = /** @type {NodeListOf<HTMLInputElement>} */ (
+        list.querySelectorAll('input[type="checkbox"]:checked')
+      );
+      columnsInput.value = [...checked].map((cb) => cb.value).join(',');
+    };
+    list.addEventListener('change', updateColumns);
+    updateColumns();
+    const form = h(
+      'form',
+      {
+        class: 'column-picker',
+        'hx-post': `/admin/api/user-settings/${slug}`,
+        'hx-swap': 'none',
+      },
+      columnsInput,
+      list,
       h(
         'div',
         { class: 'column-picker__footer' },
@@ -233,38 +269,19 @@ class CrapListSettings extends HTMLElement {
         }),
       ),
     );
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      this._saveColumnSelection(form, slug, drawer);
-    });
-    return form;
-  }
-
-  /**
-   * @param {HTMLFormElement} form
-   * @param {string} slug
-   * @param {DrawerInstance} drawer
-   */
-  async _saveColumnSelection(form, slug, drawer) {
-    const checked = /** @type {NodeListOf<HTMLInputElement>} */ (
-      form.querySelectorAll('input[name="column"]:checked')
+    // Listen for the request outcome on the form itself. htmx's events
+    // bubble with `composed: true`, so the form node sees them even
+    // though it lives inside `<crap-drawer>`'s shadow root.
+    form.addEventListener(
+      'htmx:afterRequest',
+      /** @param {Event} evt */ (evt) => {
+        const detail = /** @type {any} */ (evt).detail;
+        if (!detail?.successful) return;
+        drawer.close();
+        window.location.reload();
+      },
     );
-    const columns = [...checked].map((cb) => cb.value).join(',');
-    try {
-      const resp = await fetch(`/admin/api/user-settings/${slug}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'X-CSRF-Token': readCsrfCookie(),
-        },
-        body: `columns=${encodeURIComponent(columns)}`,
-      });
-      if (!resp.ok) return;
-      drawer.close();
-      window.location.reload();
-    } catch {
-      // Silent — user can retry.
-    }
+    return form;
   }
 
   /* ── Filter builder ─────────────────────────────────────────── */

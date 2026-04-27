@@ -65,6 +65,31 @@ pub fn htmx_redirect_with_created(url: &str, id: &str, label: &str) -> Response 
         .unwrap_or_else(|_| Redirect::to(url).into_response())
 }
 
+/// Inline-create success response — used when the request carried
+/// `X-Inline-Create: 1`, indicating it came from `<crap-create-panel>`.
+/// The client wants to *stay on the parent page*, fire its `onCreated`
+/// callback with the new id/label, and close the panel — emphatically
+/// **not** follow `HX-Redirect`. We strip the redirect header and
+/// return only the create-identification headers; the htmx
+/// `htmx:beforeSwap` listener on the panel form sees `X-Created-Id`,
+/// suppresses the swap of the empty body, and the `htmx:afterRequest`
+/// listener fires the close + callback.
+pub fn htmx_inline_created(id: &str, label: &str) -> Response {
+    let encoded_label = percent_encode_header(label);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("X-Created-Id", id)
+        .header("X-Created-Label", &encoded_label)
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| {
+            // No fallback URL to redirect to — return an empty 200.
+            // Caller's create-panel listener will not fire close, but
+            // the document was created server-side.
+            (StatusCode::OK, axum::body::Body::empty()).into_response()
+        })
+}
+
 /// Percent-encode a string so it is safe for HTTP header values.
 /// Non-ASCII bytes and control characters are encoded as `%XX`.
 fn percent_encode_header(s: &str) -> String {

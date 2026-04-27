@@ -63,7 +63,7 @@
             search
           </span>
           <input
-            type="text"
+            type="search"
             name="search"
             value="{{ search }}"
             placeholder='{{ t "search_placeholder" }} {{ collection.display_name }}...'
@@ -74,6 +74,7 @@
             hx-push-url="true"
             hx-trigger="input changed delay:300ms, search"
             hx-include="closest form"
+            hx-indicator="#upload-loading"
           />
           {{#if sort}}
             <input

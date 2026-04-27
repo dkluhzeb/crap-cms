@@ -20,7 +20,6 @@
 import { css } from './css.js';
 import { clear, h } from './h.js';
 import { t } from './i18n.js';
-import { readCsrfCookie } from './util/cookies.js';
 import { toast } from './util/toast.js';
 
 /**
@@ -120,39 +119,6 @@ const sheet = css`
 /** Light-DOM components to unwrap from the embedded form. */
 const UNWRAP_TAGS = 'crap-dirty-form, crap-scroll-restore';
 
-/** HTMX attributes to strip so HTMX doesn't intercept submission inside the panel. */
-const HTMX_ATTRS = ['hx-post', 'hx-put', 'hx-get', 'hx-target', 'hx-indicator', 'hx-push-url'];
-
-/**
- * Choose the right body encoding for a fetch:
- *  - `multipart/form-data` (FormData) when any non-empty file is present;
- *  - `application/x-www-form-urlencoded` otherwise — required by the
- *    server's `parse_form` for non-upload collections (axum `Form` extractor
- *    refuses multipart).
- *
- * @param {FormData} formData
- * @returns {{ payload: BodyInit, headers: Record<string, string> }}
- */
-function encodeFormBody(formData) {
-  const hasFile = [...formData.values()].some((v) => v instanceof File && v.size > 0);
-  /** @type {Record<string, string>} */
-  const headers = { 'X-Inline-Create': '1' };
-
-  if (hasFile) {
-    // Browser sets `multipart/form-data` with boundary automatically.
-    return { payload: formData, headers };
-  }
-
-  const params = new URLSearchParams();
-  for (const [k, v] of formData.entries()) {
-    // FormData includes empty File entries for unfilled file inputs — skip them.
-    if (v instanceof File) continue;
-    params.append(k, v);
-  }
-  headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
-  return { payload: params, headers };
-}
-
 class CrapCreatePanel extends HTMLElement {
   constructor() {
     super();
@@ -163,6 +129,8 @@ class CrapCreatePanel extends HTMLElement {
     this._abortController = null;
     /** @type {boolean} */
     this._registered = false;
+    /** @type {boolean} */
+    this._listenersAttached = false;
     /** @type {((e: Event) => void)} */
     this._handleRequest = (e) => {
       const detail = /** @type {CustomEvent} */ (e).detail;
@@ -204,6 +172,7 @@ class CrapCreatePanel extends HTMLElement {
   connectedCallback() {
     CrapCreatePanel._injectStyles();
     if (!this._dialog.parentNode) this.appendChild(this._dialog);
+    this._attachPanelResponseListeners();
     if (this._registered) return;
     this._registered = true;
     document.addEventListener('crap:create-panel-request', this._handleRequest);
@@ -243,7 +212,7 @@ class CrapCreatePanel extends HTMLElement {
         return;
       }
       const html = await resp.text();
-      this._injectForm(html, opts.collection);
+      this._injectForm(html);
     } catch (e) {
       if (/** @type {Error} */ (e).name === 'AbortError') return;
       this._setBodyMessage('create-panel__error', t('error') || 'Error');
@@ -268,9 +237,8 @@ class CrapCreatePanel extends HTMLElement {
    * the panel.
    *
    * @param {string} html
-   * @param {string} collection
    */
-  _injectForm(html, collection) {
+  _injectForm(html) {
     // SAFETY: HTML source is the trusted server admin response (same-origin,
     // CSRF-protected, Handlebars-rendered with auto-escaping). NOT user-controlled.
     // Do not adapt this pattern for user content without re-review.
@@ -282,16 +250,16 @@ class CrapCreatePanel extends HTMLElement {
     }
 
     this._unwrapHostComponents(form);
-    this._stripHtmxAttrs(form);
+    this._wireFormForHtmxSubmit(form);
     this._reorderEditLayout(form);
 
     clear(this._bodyEl);
     this._bodyEl.appendChild(form);
 
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      this._submitForm(form, collection);
-    });
+    // htmx auto-discovery only runs at boot; the embedded form is
+    // dynamically inserted, so we tell htmx to scan it for `hx-*`
+    // attributes (the form has hx-post + our overrides applied above).
+    if (typeof htmx !== 'undefined') htmx.process(form);
   }
 
   /**
@@ -307,12 +275,129 @@ class CrapCreatePanel extends HTMLElement {
     }
   }
 
-  /** @param {HTMLFormElement} form */
-  _stripHtmxAttrs(form) {
-    for (const attr of HTMX_ATTRS) form.removeAttribute(attr);
-    for (const el of form.querySelectorAll(HTMX_ATTRS.map((a) => `[${a}]`).join(','))) {
-      for (const attr of HTMX_ATTRS) el.removeAttribute(attr);
-    }
+  /**
+   * Override the form's htmx targeting so submission stays in-panel.
+   *
+   * The server-rendered form already carries `hx-post="…"` (or `-put`)
+   * plus `hx-target="body"` (intended for the page-level edit flow,
+   * where success swaps the entire body). We override:
+   *
+   *  - `hx-target="this"` + `hx-swap="outerHTML"` — on a validation
+   *    error response htmx replaces the form with the re-rendered
+   *    version in-panel; nothing escapes to the parent page.
+   *  - `hx-select="#edit-form"` — the validation-error response is the
+   *    *full* edit page (the server reuses `collections/edit.hbs`
+   *    rather than emitting a fragment); `hx-select` tells htmx to
+   *    extract just `<form id="edit-form">` from the body. Without
+   *    this, the swap would try to replace the form with `<html>…`
+   *    and the panel would melt.
+   *  - `hx-headers='{"X-Inline-Create":"1"}'` — the create handler
+   *    sees this and returns a panel-friendly response (no
+   *    `HX-Redirect`, just `X-Created-Id` / `X-Created-Label`); see
+   *    `htmx_inline_created` in `src/admin/handlers/shared/response.rs`.
+   *
+   * Multipart vs. urlencoded encoding is handled by the form's native
+   * `enctype` attribute (which the server template emits as
+   * `multipart/form-data` for upload collections, omitted otherwise).
+   * htmx 2 reads that attribute to pick the request encoding — the
+   * client doesn't have to inspect file inputs at submit time, which
+   * is what kept producing the multipart-vs-urlencoded encoding bug
+   * in the previous fetch-based path.
+   *
+   * @param {HTMLFormElement} form
+   */
+  _wireFormForHtmxSubmit(form) {
+    form.setAttribute('hx-target', 'this');
+    form.setAttribute('hx-swap', 'outerHTML');
+    form.setAttribute('hx-select', '#edit-form');
+    form.setAttribute('hx-headers', '{"X-Inline-Create":"1"}');
+    form.setAttribute('data-create-panel-form', '1');
+    // Drop page-level chrome — irrelevant in-panel.
+    form.removeAttribute('hx-push-url');
+    form.removeAttribute('hx-indicator');
+  }
+
+  /**
+   * Listen for response events on the panel body. Listeners live on
+   * `_bodyEl` (which never gets replaced) rather than on the form
+   * (which gets replaced by `outerHTML` swaps on validation errors),
+   * so we attach once and the wiring survives across re-renders.
+   *
+   * Filtered to events whose target carries
+   * `data-create-panel-form` — set in `_wireFormForHtmxSubmit` — so
+   * stray htmx events bubbling through (e.g. a future widget's
+   * sub-request) don't trigger panel close.
+   */
+  _attachPanelResponseListeners() {
+    if (this._listenersAttached) return;
+    this._listenersAttached = true;
+
+    this._bodyEl.addEventListener('htmx:beforeSwap', (evt) => {
+      const detail = /** @type {any} */ (evt).detail;
+      const target = /** @type {Element|null} */ (evt.target);
+      if (!target?.matches?.('[data-create-panel-form]')) return;
+      const xhr = /** @type {XMLHttpRequest} */ (detail.xhr);
+
+      // Inline-create success: 2xx with X-Created-Id and empty body.
+      // Don't let htmx splice the empty body into the form — we'll
+      // close the panel from `htmx:afterRequest` instead.
+      if (xhr.getResponseHeader('X-Created-Id')) {
+        detail.shouldSwap = false;
+      }
+    });
+
+    this._bodyEl.addEventListener('htmx:afterRequest', (evt) => {
+      const detail = /** @type {any} */ (evt).detail;
+      const target = /** @type {Element|null} */ (evt.target);
+      if (!target?.matches?.('[data-create-panel-form]')) return;
+      const xhr = /** @type {XMLHttpRequest} */ (detail.xhr);
+
+      const createdId = xhr.getResponseHeader('X-Created-Id');
+      if (createdId) {
+        const rawLabel = xhr.getResponseHeader('X-Created-Label');
+        const label = rawLabel ? decodeURIComponent(rawLabel) : createdId;
+        if (this._onCreated) this._onCreated({ id: createdId, label });
+        toast({ message: label, type: 'success' });
+        this.close();
+        return;
+      }
+
+      // Validation error: 200 OK with re-rendered form body (the swap
+      // already happened, htmx extracted #edit-form via hx-select). The
+      // server sets `X-Crap-Toast` with the validation summary; surface
+      // it so the user sees both the inline field errors and the
+      // global "please fix the errors" toast.
+      const toastHeader = xhr.getResponseHeader('X-Crap-Toast');
+      if (toastHeader) {
+        try {
+          const parsed = JSON.parse(toastHeader);
+          toast({ message: parsed.message, type: parsed.type || 'error' });
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+
+      // Network error / non-2xx without a structured response.
+      if (!detail.successful) {
+        toast({ message: t('error') || 'Error', type: 'error' });
+      }
+    });
+
+    // After every form swap, re-apply our hx-* overrides to the new
+    // form node. htmx's own attribute processing (inherited
+    // hx-target / hx-swap) reads from the swapped-in HTML, which
+    // carries the *page-level* hx-target="body" — without re-wiring,
+    // the next submit would target the parent page body again.
+    this._bodyEl.addEventListener('htmx:afterSwap', () => {
+      const newForm = /** @type {HTMLFormElement|null} */ (
+        this._bodyEl.querySelector('form#edit-form')
+      );
+      if (newForm) {
+        this._wireFormForHtmxSubmit(newForm);
+        if (typeof htmx !== 'undefined') htmx.process(newForm);
+      }
+    });
   }
 
   /**
@@ -330,88 +415,6 @@ class CrapCreatePanel extends HTMLElement {
     const content = form.querySelector('.edit-layout__content');
     if (editLayout && sidebar && content) {
       editLayout.insertBefore(sidebar, content);
-    }
-  }
-
-  /**
-   * Submit the embedded form via fetch.
-   *
-   * On success (`X-Created-Id` header present) the caller's `onCreated`
-   * fires and the panel closes. On validation error (422) the response
-   * body is the re-rendered form, which replaces the current one in the
-   * panel.
-   *
-   * @param {HTMLFormElement} form
-   * @param {string} collection
-   */
-  async _submitForm(form, collection) {
-    const submitBtns = /** @type {HTMLButtonElement[]} */ ([
-      ...form.querySelectorAll('button[type="submit"], input[type="submit"]'),
-    ]);
-    const originalLabels = new Map(submitBtns.map((btn) => [btn, btn.textContent]));
-    for (const btn of submitBtns) {
-      btn.disabled = true;
-      btn.textContent = t('saving') || 'Saving...';
-    }
-
-    try {
-      const resp = await this._sendForm(form, collection);
-      await this._handleSubmitResponse(resp, collection);
-    } catch {
-      toast({ message: t('error') || 'Error', type: 'error' });
-    } finally {
-      for (const btn of submitBtns) {
-        btn.disabled = false;
-        btn.textContent = originalLabels.get(btn) || '';
-      }
-    }
-  }
-
-  /**
-   * @param {HTMLFormElement} form
-   * @param {string} collection
-   * @returns {Promise<Response>}
-   */
-  _sendForm(form, collection) {
-    const formData = new FormData(form);
-    const csrf = readCsrfCookie();
-    if (csrf && !formData.has('_csrf')) formData.set('_csrf', csrf);
-
-    const action = form.getAttribute('action') || `/admin/collections/${collection}`;
-    const method = (form.getAttribute('method') || 'POST').toUpperCase();
-    const { payload, headers } = encodeFormBody(formData);
-    if (csrf) headers['X-CSRF-Token'] = csrf;
-
-    return fetch(action, { method, body: payload, headers, redirect: 'manual' });
-  }
-
-  /**
-   * @param {Response} resp
-   * @param {string} collection
-   */
-  async _handleSubmitResponse(resp, collection) {
-    const createdId = resp.headers.get('X-Created-Id');
-    if (createdId) {
-      const rawLabel = resp.headers.get('X-Created-Label');
-      const label = rawLabel ? decodeURIComponent(rawLabel) : createdId;
-      if (this._onCreated) this._onCreated({ id: createdId, label });
-      toast({ message: label, type: 'success' });
-      this.close();
-      return;
-    }
-
-    if (!(resp.ok || resp.status === 422)) return;
-
-    const html = await resp.text();
-    this._injectForm(html, collection);
-
-    const toastHeader = resp.headers.get('X-Crap-Toast');
-    if (!toastHeader) return;
-    try {
-      const parsed = JSON.parse(toastHeader);
-      toast({ message: parsed.message, type: parsed.type || 'error' });
-    } catch {
-      /* ignore */
     }
   }
 
