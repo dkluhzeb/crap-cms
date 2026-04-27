@@ -53,6 +53,17 @@ to the detailed entry with full migration steps.
   "{{t \"key\"}}"` JSON). Without this, the admin JS `t(key)`
   helper falls back to raw keys and every translatable label
   shows up untranslated.
+- **htmx 1.9.12 → 2.0.9.** htmx is now vendored at `static/htmx.js`
+  and served from `'self'`; the CDN `<script src="https://unpkg.com/…">`
+  is gone, and `https://unpkg.com` is no longer in the default CSP
+  `script-src`. Overlays that referenced the old pinned URL/SRI
+  must drop both. Most htmx 2 breaking changes do not affect us
+  (we use no `hx-on=`, no `hx-ws`/`hx-sse`, no extensions), but
+  overlays may need adjustment for: `hx-on=` syntax (now
+  `hx-on:event-name`), `selfRequestsOnly` defaults to `true`
+  (cross-origin requires opt-in), and DELETE encodes form fields
+  in the URL by default. See *Changed → htmx 2.0.9 vendored
+  locally* for the full migration list.
 
 **Web Components / overlay JS**
 
@@ -336,6 +347,51 @@ to the detailed entry with full migration steps.
     policy, empty auth collection (0 users).
 
 ### Changed
+
+- **BREAKING: htmx 2.0.9 vendored locally.** The admin layout no
+  longer pulls htmx from `https://unpkg.com`; it serves
+  `static/htmx.js` from the same origin via a new
+  `scripts/bundle-htmx.sh` (mirrors the existing
+  `bundle-prosemirror.sh` / `bundle-codemirror.sh` pattern). The
+  script downloads the upstream artifact, verifies a pinned
+  SHA-384 against tampering, and writes a banner-prefixed
+  vendored copy. Re-run when upgrading htmx; bump `VERSION` and
+  `EXPECTED_SHA384` together after independently verifying the
+  new release.
+
+  **CSP impact** — `https://unpkg.com` removed from the default
+  `script-src`; `'self'` now covers every script the built-in
+  admin loads (`/static/htmx.js`, `/static/codemirror.js`,
+  `/static/prosemirror.js`, `/static/components/index.js`). One
+  fewer third-party origin in the trust boundary; one fewer DNS
+  lookup at page load.
+
+  **htmx 2 behavioral changes that may affect overlays** —
+  - `hx-on="..."` (single attribute) replaced by per-event
+    `hx-on:event-name="..."` (kebab-case). The built-in templates
+    use neither form, but overlay templates that did need the
+    rename.
+  - `selfRequestsOnly` config defaults to `true`. Overlays that
+    issue cross-origin htmx requests must set it to `false`
+    explicitly via the `<meta name="htmx-config">` JSON.
+  - `methodsThatUseUrlParams` now includes `delete`; htmx-driven
+    DELETE requests with form fields encode them in the URL
+    instead of the body. Built-in delete forms have no user-input
+    fields so this is a no-op for us; overlays with custom
+    DELETE forms should verify their server-side parsing.
+  - Default `scrollBehavior` changed from `smooth` to `instant`.
+    Restore the old default with
+    `<meta name="htmx-config" content='{"scrollBehavior":"smooth"}'>`
+    if the new feel is unwanted.
+  - `hx-ws` and `hx-sse` attributes are gone from core htmx —
+    install the corresponding extensions if you used them.
+    (We use neither; live events go through `<crap-live-events>`.)
+  - The `htmx.config.includeIndicatorStyles=false` workaround
+    we ship to keep `style-src` free of `'unsafe-inline'` still
+    works in 2.x; nothing to change there. As an alternative,
+    htmx 2 added `inlineStyleNonce` / `inlineScriptNonce`
+    config options that accept our per-request nonce and let
+    htmx inject its own styles/scripts with the correct nonce.
 
 - **BREAKING: `templates/components/` directory removed — the four
   partials it held (`breadcrumb`, `pagination`, `version_sidebar`,

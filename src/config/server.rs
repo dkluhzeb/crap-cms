@@ -248,8 +248,13 @@ impl Default for CspConfig {
             // `'unsafe-inline'` is intentionally absent — inline `<script>` tags
             // are allowed only via the per-request nonce (see `build_header_value`).
             // Built-in and overlay templates must mark inline scripts with
-            // `nonce="{{crap.csp_nonce}}"`.
-            script_src: vec!["'self'".into(), "https://unpkg.com".into()],
+            // `nonce="{{crap.csp_nonce}}"`. Only `'self'` is allowed because
+            // every script the built-in admin loads is served from the same
+            // origin: `/static/htmx.js` (vendored — see
+            // `scripts/bundle-htmx.sh`), `/static/codemirror.js`,
+            // `/static/prosemirror.js`, and the ES-module entry
+            // `/static/components/index.js`.
+            script_src: vec!["'self'".into()],
             // `'unsafe-inline'` is intentionally absent. The built-in admin
             // is fully nonce/CSP-friendly:
             //   - Web Components use constructable stylesheets
@@ -581,7 +586,11 @@ mod tests {
         assert!(h.contains("default-src 'self'"));
         // Defaults no longer permit `'unsafe-inline'` for scripts — the nonce
         // mechanism replaces it.
-        assert!(h.contains("script-src 'self' https://unpkg.com"));
+        assert!(h.contains("script-src 'self'"));
+        assert!(
+            !h.contains("https://unpkg.com"),
+            "no third-party CDN; htmx is now vendored at /static/htmx.js"
+        );
         assert!(!h.contains("script-src 'self' 'unsafe-inline'"));
         // `style-src` is also free of `'unsafe-inline'` — HTMX's runtime style
         // injection is disabled via `htmx.config.includeIndicatorStyles=false`
@@ -601,7 +610,7 @@ mod tests {
     fn csp_config_with_nonce_appends_nonce_to_script_src() {
         let csp = CspConfig::default();
         let header = csp.build_header_value(Some("abc123")).unwrap();
-        assert!(header.contains("script-src 'self' https://unpkg.com 'nonce-abc123'"));
+        assert!(header.contains("script-src 'self' 'nonce-abc123'"));
         // Nonce is scoped to scripts only — style-src does not get a nonce.
         assert!(!header.contains("style-src 'self' https://fonts.googleapis.com 'nonce-"));
     }

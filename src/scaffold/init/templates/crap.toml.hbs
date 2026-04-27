@@ -32,7 +32,7 @@ dev_mode = false
 # script_src ships without 'unsafe-inline' — a per-request nonce is emitted
 # instead and exposed to templates as {{crap.csp_nonce}}. Overlay templates
 # that use inline <script> MUST carry nonce="{{crap.csp_nonce}}".
-# script_src = ["'self'", "https://unpkg.com"]
+# script_src = ["'self'"]
 # style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
 # font_src = ["'self'", "https://fonts.gstatic.com"]
 # img_src = ["'self'", "data:"]

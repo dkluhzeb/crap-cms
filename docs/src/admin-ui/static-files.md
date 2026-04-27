@@ -47,6 +47,34 @@ Default static files are compiled into the binary using the `include_dir!` macro
 - **After modifying compiled-in static files, you must run `cargo build`** for changes to take effect
 - Config directory overrides don't require rebuilding
 
+## Vendored Vendor Libraries
+
+Three third-party JavaScript libraries are vendored into `static/` rather
+than loaded from a CDN:
+
+| File | Source | Bundler script |
+|---|---|---|
+| `static/htmx.js` | [htmx.org](https://htmx.org) | `scripts/bundle-htmx.sh` |
+| `static/prosemirror.js` | [prosemirror.net](https://prosemirror.net) | `scripts/bundle-prosemirror.sh` |
+| `static/codemirror.js` | [codemirror.net](https://codemirror.net) | `scripts/bundle-codemirror.sh` |
+
+Each script downloads its inputs, performs any bundling needed, verifies
+a pinned hash (htmx) or commits the build output (codemirror,
+prosemirror), and writes the artifact into `static/`. Re-run only when
+upgrading; the produced files are committed to git.
+
+**Why vendor instead of CDN?**
+- One trust boundary: every script the admin loads is `'self'`.
+  CSP `script-src` doesn't need to whitelist any third party.
+- One DNS resolution at page load instead of per-CDN.
+- Reproducible deploys: the bytes that ran in CI are the bytes that
+  ship in the binary (via `include_dir!`).
+- No external availability dependency at runtime.
+
+Overlay authors who need a different htmx/prosemirror/codemirror
+version can drop a replacement at the same path
+(`<config_dir>/static/htmx.js`) — the overlay always wins.
+
 ## MIME Types
 
 Content-Type headers are automatically detected from file extensions using the `mime_guess` crate.
