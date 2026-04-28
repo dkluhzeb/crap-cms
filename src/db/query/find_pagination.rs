@@ -294,6 +294,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: serde_json::Value::String("2024-01-01".to_string()),
             id: "doc-123".to_string(),
+            ..Default::default()
         };
         data.encode().unwrap()
     }

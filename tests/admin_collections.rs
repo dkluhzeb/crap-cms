@@ -358,17 +358,19 @@ async fn list_items_returns_200() {
 }
 
 /// Regression test for the user-reported "list shows all (published)
-/// items when filter is set to draft" symptom. The admin filter UI
-/// exposes `_status` for collections with drafts enabled
-/// (`has_drafts()`), producing URLs like
-/// `?where[_status][equals]=draft`. The architecture rejects user
-/// filters on system columns (`_*`), so the URL form must be
-/// translated by the admin list handler into a typed `status_filter`
-/// on `FindDocumentsInput`. Without that translation, the filter is
-/// silently dropped and the page renders unfiltered (typically only
-/// published, since the auto-injected `_status="published"` is the
-/// default when `include_drafts=false` — but the admin list sets
-/// `include_drafts=true`, so all items show).
+/// items when filter is set to draft" symptom. `_status` is a system
+/// column (`_*` prefix) so it cannot ride the generic user-filter
+/// pipeline (`validate_user_filters` rejects `_*`). The admin list
+/// handler extracts `?where[_status][equals]=X` from the raw query
+/// via `extract_status_filter` and forwards it as a typed
+/// `status_filter` on `FindDocumentsInput` so it bypasses
+/// validation and reaches SQL via the trusted post-validation
+/// injection path in `build_effective_query`.
+///
+/// This test asserts:
+/// - unfiltered shows both draft and published rows;
+/// - `?where[_status][equals]=draft` narrows to drafts only;
+/// - `?where[_status][equals]=published` narrows to published only.
 #[tokio::test]
 async fn list_items_url_status_filter_narrows_drafts_only() {
     use crap_cms::core::collection::VersionsConfig;
@@ -448,7 +450,8 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
         "unfiltered admin list should show both draft and published"
     );
 
-    // Filter to drafts only via URL-encoded `where[_status][equals]=draft`.
+    // Filter to drafts only via `?where[_status][equals]=draft`. URL-encoded
+    // brackets — what the browser sends from the filter drawer.
     let resp = app
         .router
         .clone()
@@ -465,12 +468,12 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     assert_eq!(
         count_table_rows(&body),
         1,
-        "_status=draft filter should narrow to 1 draft row"
+        "?where[_status][equals]=draft should narrow to 1 draft row"
     );
     assert!(body.contains("Pending Draft"));
     assert!(
         !body.contains("Live Article"),
-        "_status=draft filter must NOT include the published doc — silent drop regression"
+        "draft filter must NOT include the published doc — typed-param plumbing regression"
     );
 
     // Symmetric: filter to published only.
@@ -490,10 +493,33 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     assert_eq!(
         count_table_rows(&body),
         1,
-        "_status=published filter should narrow to 1 published row"
+        "?where[_status][equals]=published should narrow to 1 published row"
     );
     assert!(body.contains("Live Article"));
     assert!(!body.contains("Pending Draft"));
+
+    // Empty `where[_status][equals]=` value (the "All" option in the
+    // filter drawer) should fall through to showing both rows — the
+    // extractor returns None for empty values, the filter UI's
+    // `_collectFilters` skips empty-value rows, but both forms must
+    // resolve to the unfiltered list.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5B_status%5D%5Bequals%5D=")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "empty where[_status][equals]= (All) should show both draft and published"
+    );
 }
 
 /// Regression test for the user-reported "filter has no effect" symptom.

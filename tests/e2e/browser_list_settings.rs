@@ -7,6 +7,7 @@ use crate::helpers::*;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
+use crap_cms::db::{DbConnection, DbValue};
 
 fn make_list_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -40,6 +41,50 @@ fn create_list_post(app: &TestApp, title: &str) {
     let tx = conn.transaction().unwrap();
     let data = HashMap::from([("title".to_string(), title.to_string())]);
     query::create(&tx, "posts", &def, &data, None).unwrap();
+    tx.commit().unwrap();
+}
+
+/// Posts collection with drafts enabled (`versions.drafts = true`),
+/// so `_status` is exposed as a filterable field in the drawer.
+fn make_list_def_with_drafts() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.versions = Some(VersionsConfig::new(true, 10));
+    def.admin.use_as_title = Some("title".to_string());
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+    ];
+    def
+}
+
+/// Seed a row with the system `_status` column set to either `draft`
+/// or `published`. Mirrors the seeding pattern in
+/// `tests/admin_collections.rs::list_items_status_query_narrows_drafts_only`.
+fn create_post_with_system_status(app: &TestApp, title: &str, system_status: &str) {
+    let reg = app.registry.read().unwrap();
+    let def = reg.get_collection("posts").unwrap().clone();
+    drop(reg);
+
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data = HashMap::from([("title".to_string(), title.to_string())]);
+    let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+    if system_status != "published" {
+        tx.execute(
+            "UPDATE posts SET _status = ?1 WHERE id = ?2",
+            &[
+                DbValue::Text(system_status.to_string()),
+                DbValue::Text(doc.id.to_string()),
+            ],
+        )
+        .unwrap();
+    }
     tx.commit().unwrap();
 }
 
@@ -794,6 +839,228 @@ async fn filter_drawer_empty_when_no_url_filters() {
     assert!(
         !url.contains("where%5B") && !url.contains("where["),
         "empty drawer + apply must NOT inject any filter, got: {url}"
+    );
+
+    server_handle.abort();
+}
+
+// ── filter_drawer_status_field_narrows_and_clears ─────────────────────────
+//
+// Regression for `_status` filter routing through the drawer. With
+// drafts enabled the filter drawer exposes `_status` as a select field
+// with values `[All, Published, Draft]`. Picking `draft` and applying
+// pushes `?where[_status][equals]=draft` and narrows the list. Switching
+// the value to "All" (empty) and applying drops the filter on the URL
+// — `_collectFilters` skips empty-value rows — and the list shows every
+// row again.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_drawer_status_field_narrows_and_clears() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_list_def_with_drafts(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "blistt@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "blistt@test.com");
+
+    create_post_with_system_status(&app, "Pending Draft", "draft");
+    create_post_with_system_status(&app, "Live Article", "published");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "blistt@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let initial = page
+        .evaluate("() => document.querySelectorAll('tbody tr').length")
+        .await
+        .unwrap()
+        .into_value::<i64>()
+        .unwrap();
+    assert_eq!(
+        initial, 2,
+        "unfiltered list should show both draft and published"
+    );
+
+    // Open drawer, add row, set field to _status, value to draft, apply.
+    page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "const fieldSel = root.querySelector('.filter-builder__field'); \
+         fieldSel.value = '_status'; \
+         fieldSel.dispatchEvent(new Event('change', { bubbles: true })); \
+         return '';",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "const sel = root.querySelector('[name=\"filter-value\"]'); \
+         sel.value = 'draft'; \
+         sel.dispatchEvent(new Event('change', { bubbles: true })); \
+         return '';",
+    )
+    .await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let url = page
+        .evaluate("() => window.location.href")
+        .await
+        .unwrap()
+        .into_value::<String>()
+        .unwrap();
+    assert!(
+        url.contains("_status%5D%5Bequals%5D=draft") || url.contains("_status][equals]=draft"),
+        "URL must reflect _status=draft, got: {url}"
+    );
+    let drafts_only = page
+        .evaluate("() => document.querySelectorAll('tbody tr').length")
+        .await
+        .unwrap()
+        .into_value::<i64>()
+        .unwrap();
+    assert_eq!(drafts_only, 1, "_status=draft must narrow to 1 row");
+    let body_after = page
+        .evaluate("() => document.body.innerText")
+        .await
+        .unwrap()
+        .into_value::<String>()
+        .unwrap();
+    assert!(body_after.contains("Pending Draft"));
+    assert!(!body_after.contains("Live Article"));
+
+    // Re-open drawer; the row hydrates back to draft. Switch the value
+    // to "All" (empty) and apply — the filter must drop off the URL.
+    page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "const sel = root.querySelector('[name=\"filter-value\"]'); \
+         sel.value = ''; \
+         sel.dispatchEvent(new Event('change', { bubbles: true })); \
+         return '';",
+    )
+    .await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "root.querySelector('.filter-builder__footer .button--primary').click(); return '';",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let url2 = page
+        .evaluate("() => window.location.href")
+        .await
+        .unwrap()
+        .into_value::<String>()
+        .unwrap();
+    assert!(
+        !url2.contains("_status%5D%5Bequals%5D=draft")
+            && !url2.contains("_status][equals]=draft")
+            && !url2.contains("_status%5D%5Bequals%5D=published")
+            && !url2.contains("_status][equals]=published"),
+        "URL must drop the _status filter when value is 'All', got: {url2}"
+    );
+    let all_again = page
+        .evaluate("() => document.querySelectorAll('tbody tr').length")
+        .await
+        .unwrap()
+        .into_value::<i64>()
+        .unwrap();
+    assert_eq!(
+        all_again, 2,
+        "All (empty _status) must show both rows again, got {all_again}"
+    );
+
+    server_handle.abort();
+}
+
+// ── filter_drawer_status_field_hidden_without_drafts ──────────────────────
+//
+// Collections with `versions = None` (or `drafts = false`) have no
+// `_status` column to filter on; the field is excluded from the filter
+// drawer's field-select so users aren't offered a non-functional
+// filter.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_drawer_status_field_hidden_without_drafts() {
+    let (base_url, server_handle, app) =
+        browser::spawn_server(vec![make_list_def(), make_users_def()], vec![]).await;
+    let user_id = create_test_user(&app, "blistnd@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "blistnd@test.com");
+
+    create_list_post(&app, "Sample");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "blistnd@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    page.evaluate("() => document.querySelector('[data-action=\"open-filter-builder\"]')?.click()")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let _ = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "root.querySelector('.filter-builder > button.button--ghost')?.click(); return '';",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let has_status_option = browser::shadow_eval(
+        &page,
+        "crap-drawer",
+        "const fieldSel = root.querySelector('.filter-builder__field'); \
+         return fieldSel ? Array.from(fieldSel.options).some(o => o.value === '_status').toString() : 'false';",
+    )
+    .await;
+    assert_eq!(
+        has_status_option, "false",
+        "_status field must be absent from filter drawer when collection has no drafts"
     );
 
     server_handle.abort();

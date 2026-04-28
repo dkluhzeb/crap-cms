@@ -5,8 +5,11 @@ use std::collections::HashSet;
 use crate::core::Document;
 
 /// Filter SELECT columns based on a `select` list. If `select` is None or empty,
-/// returns all columns (backward compat). Always includes `id`, `created_at`, `updated_at`.
-/// For group fields: selecting `"seo"` includes all `seo__*` sub-columns.
+/// returns all columns (backward compat). Always includes `id`, `created_at`,
+/// `updated_at`, and `_status` (the latter so cursor pagination can encode the
+/// composite `(_status, sort_col, id)` order regardless of caller-provided
+/// `select`). For group fields: selecting `"seo"` includes all `seo__*`
+/// sub-columns.
 pub fn apply_select_filter(
     select_exprs: Vec<String>,
     result_names: Vec<String>,
@@ -22,8 +25,10 @@ pub fn apply_select_filter(
     let mut out_names = Vec::new();
 
     for (expr, name) in select_exprs.into_iter().zip(result_names) {
-        let dominated_by_select = matches!(name.as_str(), "id" | "created_at" | "updated_at")
-            || selected.contains(name.as_str())
+        let dominated_by_select = matches!(
+            name.as_str(),
+            "id" | "created_at" | "updated_at" | "_status"
+        ) || selected.contains(name.as_str())
             || name.split_once("__").is_some_and(|(prefix, _)| {
                 // Group prefix: "seo" selected → include "seo__title"
                 // Locale suffix: "title" selected → include "title__de"
@@ -107,6 +112,28 @@ mod tests {
             apply_select_filter(exprs.clone(), names.clone(), Some(&empty));
         assert_eq!(out_exprs, exprs);
         assert_eq!(out_names, names);
+    }
+
+    /// Regression: `_status` must survive `apply_select_filter` so cursor
+    /// pagination can encode the composite `(_status, sort_col, id)` order
+    /// even when the caller passes a narrow `select`. Without this,
+    /// `cursor_from_doc` would fall back to `"published"` for every row
+    /// (drafts included) and round-trip pagination silently skips drafts.
+    #[test]
+    fn apply_select_filter_keeps_status_for_cursor() {
+        let exprs = vec![
+            "id".to_string(),
+            "title".to_string(),
+            "_status".to_string(),
+            "created_at".to_string(),
+        ];
+        let names = exprs.clone();
+        let select = vec!["title".to_string()];
+        let (_, out_names) = apply_select_filter(exprs, names, Some(&select));
+        assert!(
+            out_names.contains(&"_status".to_string()),
+            "_status must be kept regardless of select; got {out_names:?}"
+        );
     }
 
     #[test]

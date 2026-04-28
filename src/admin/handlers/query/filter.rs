@@ -90,10 +90,6 @@ pub(crate) fn extract_status_filter(raw_query: &str) -> Option<String> {
     for part in raw_query.split('&') {
         let (key, value) = part.split_once('=')?;
         let decoded_key = url_decode(key);
-        // Accept both the bracket-with-equals form and any-op form for
-        // forward compatibility, but only `equals` makes sense for a
-        // 2-value field — keep it specific so a future op variant
-        // (`not_equals`) doesn't silently match.
         if decoded_key == "where[_status][equals]" {
             let v = url_decode(value);
             if !v.is_empty() {
@@ -196,8 +192,6 @@ mod tests {
         }
     }
 
-    // ── extract_status_filter ────────────────────────────────────────
-
     #[test]
     fn extract_status_filter_raw() {
         assert_eq!(
@@ -208,7 +202,6 @@ mod tests {
 
     #[test]
     fn extract_status_filter_url_encoded() {
-        // What the browser actually sends from the filter UI.
         assert_eq!(
             extract_status_filter("page=1&where%5B_status%5D%5Bequals%5D=draft"),
             Some("draft".to_string())
@@ -231,9 +224,6 @@ mod tests {
 
     #[test]
     fn extract_status_filter_only_equals_op() {
-        // `not_equals` doesn't make sense for a 2-value field; leave it
-        // unmatched so a typo / wrong-op URL is silently ignored rather
-        // than producing surprising behaviour.
         assert_eq!(
             extract_status_filter("where[_status][not_equals]=draft"),
             None
@@ -247,9 +237,6 @@ mod tests {
 
     #[test]
     fn extract_status_filter_ignores_user_status_field() {
-        // `status` (no underscore) is a user-defined field, handled by
-        // the generic `parse_where_params` path. `extract_status_filter`
-        // must only match the system column `_status`.
         assert_eq!(extract_status_filter("where[status][equals]=draft"), None);
     }
 }

@@ -10,6 +10,7 @@ use crate::{
         DbConnection, DbRow, DbValue, FindQuery, LocaleContext, LocaleMode,
         document::row_to_document,
         query::{
+            self,
             cursor::{CursorData, SortDirection},
             filter::{build_where_clause, resolve_filter_column, resolve_filters},
             fts, get_column_names, get_locale_select_columns_full, group_locale_fields,
@@ -167,6 +168,21 @@ fn resolve_sort(
 }
 
 /// Append ORDER BY clause with stable tiebreaker.
+///
+/// Surfaces drafts to the top of admin-style listings: when the
+/// collection has drafts and the user's sort isn't already `_status`,
+/// prepend `_status ASC` so `'draft'` rows come before `'published'`
+/// regardless of the configured `default_sort` (e.g. `-published_at`,
+/// where drafts have a NULL key and would otherwise sort last). The
+/// effective ORDER BY is `(_status ASC, sort_col DIR, id DIR)`. Both
+/// `_status` and the inner sort flip when `using_before` is set so
+/// `before_cursor` walks the same composite order in reverse. Cursor
+/// keysets must encode `_status` to remain symmetric — see
+/// `apply_cursor_keyset` and `cursor::CursorData::status_val`. When
+/// the WHERE clause already pins `_status` to a single value (filter
+/// to drafts/published only, or `include_drafts=false` injection) the
+/// prepended `_status ASC` is a no-op and the user's sort is
+/// preserved exactly.
 fn apply_order_by(
     sort_col: &str,
     sort_dir: SortDirection,
@@ -182,12 +198,24 @@ fn apply_order_by(
     };
     let resolved = resolve_filter_column(sort_col, def, locale_ctx)?;
 
+    let prepend_status = query::cursor::cursor_status_active(def.has_drafts(), sort_col);
+    let status_dir = if using_before {
+        SortDirection::Desc
+    } else {
+        SortDirection::Asc
+    };
+    let status_prefix = if prepend_status {
+        format!("_status {status_dir}, ")
+    } else {
+        String::new()
+    };
+
     if sort_col != "id" {
         sql.push_str(&format!(
-            " ORDER BY {resolved} {effective_dir}, id {effective_dir}"
+            " ORDER BY {status_prefix}{resolved} {effective_dir}, id {effective_dir}"
         ));
     } else {
-        sql.push_str(&format!(" ORDER BY id {effective_dir}"));
+        sql.push_str(&format!(" ORDER BY {status_prefix}id {effective_dir}"));
     }
 
     Ok(())
@@ -306,6 +334,14 @@ struct SortInfo<'a> {
 }
 
 /// Apply cursor-based keyset pagination to the SQL query.
+///
+/// When the cursor encodes `status_val` (composite ordering: `_status
+/// ASC, sort_col DIR, id DIR` — see `apply_order_by`), the keyset
+/// becomes a nested OR: rows in a different `_status` bucket
+/// (`_status [outer_op] cursor_status`) plus rows in the same bucket
+/// past the inner sort/id keyset. Pre-composite cursors (`status_val
+/// = None`, e.g. legacy bookmarks or non-drafts collections) fall
+/// back to the original single-column keyset.
 fn apply_cursor_keyset(
     conn: &dyn DbConnection,
     cursor: &CursorData,
@@ -323,47 +359,41 @@ fn apply_cursor_keyset(
         );
     }
 
-    let op = match (sort.dir, sort.using_before) {
+    let inner_op = match (sort.dir, sort.using_before) {
         (SortDirection::Desc, false) | (SortDirection::Asc, true) => "<",
         _ => ">",
     };
     let sort_val = cursor_sort_value(&cursor.sort_val);
 
-    let keyset = if matches!(sort_val, DbValue::Null) {
-        build_null_keyset(conn, resolved_col, op, &cursor.id, params)
+    let inner = inner_keyset_clause(conn, resolved_col, inner_op, sort_val, &cursor.id, params);
+    let clause = if let Some(status_val) = cursor.status_val.as_deref() {
+        // Composite (_status, sort_col, id) keyset. The outer `_status`
+        // direction tracks `apply_order_by` — `_status ASC` normally,
+        // flipped to `_status DESC` under `using_before` — so `outer_op`
+        // flips to match. `inner` is parenthesised so the implicit
+        // `AND` precedence over `OR` doesn't pull `inner`'s right-hand
+        // side outside the same-bucket clause.
+        let ph_status = conn.placeholder(params.len() + 1);
+        params.push(DbValue::Text(status_val.to_string()));
+        let outer_op = if sort.using_before { "<" } else { ">" };
+
+        format!("(_status {outer_op} {ph_status}) OR (_status = {ph_status} AND ({inner}))")
     } else {
-        build_standard_keyset(conn, resolved_col, op, sort_val, &cursor.id, params)
+        inner
     };
 
-    if *has_where {
-        sql.push_str(&keyset);
-    } else {
-        sql.push_str(&keyset.replacen(" AND ", " WHERE ", 1));
-    }
+    let prefix = if *has_where { " AND " } else { " WHERE " };
+    sql.push_str(&format!("{prefix}({clause})"));
+    *has_where = true;
 
     Ok(())
 }
 
-/// Build keyset condition for NULL sort values.
-fn build_null_keyset(
-    conn: &dyn DbConnection,
-    col: &str,
-    op: &str,
-    cursor_id: &str,
-    params: &mut Vec<DbValue>,
-) -> String {
-    let ph_id = conn.placeholder(params.len() + 1);
-    params.push(DbValue::Text(cursor_id.to_string()));
-
-    if op == ">" {
-        format!(" AND (({col} IS NULL AND id > {ph_id}) OR {col} IS NOT NULL)")
-    } else {
-        format!(" AND ({col} IS NULL AND id < {ph_id})")
-    }
-}
-
-/// Build standard keyset condition for non-NULL sort values.
-fn build_standard_keyset(
+/// Build the inner keyset condition (no leading `AND` / `WHERE`, no
+/// surrounding parens). Returns the same shape regardless of NULL
+/// handling so the caller can compose it with an outer `_status`
+/// clause uniformly, or wrap it on its own.
+fn inner_keyset_clause(
     conn: &dyn DbConnection,
     col: &str,
     op: &str,
@@ -371,12 +401,23 @@ fn build_standard_keyset(
     cursor_id: &str,
     params: &mut Vec<DbValue>,
 ) -> String {
-    let ph1 = conn.placeholder(params.len() + 1);
-    let ph2 = conn.placeholder(params.len() + 2);
-    params.push(sort_val);
-    params.push(DbValue::Text(cursor_id.to_string()));
+    if matches!(sort_val, DbValue::Null) {
+        let ph_id = conn.placeholder(params.len() + 1);
+        params.push(DbValue::Text(cursor_id.to_string()));
 
-    format!(" AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))")
+        if op == ">" {
+            format!("({col} IS NULL AND id > {ph_id}) OR {col} IS NOT NULL")
+        } else {
+            format!("{col} IS NULL AND id < {ph_id}")
+        }
+    } else {
+        let ph1 = conn.placeholder(params.len() + 1);
+        let ph2 = conn.placeholder(params.len() + 2);
+        params.push(sort_val);
+        params.push(DbValue::Text(cursor_id.to_string()));
+
+        format!("({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2})")
+    }
 }
 
 #[cfg(test)]
@@ -534,6 +575,7 @@ mod tests {
                 sort_dir: SortDirection::Asc,
                 sort_val: json!("abc"),
                 id: "abc".to_string(),
+                ..Default::default()
             }))
             .offset(Some(10))
             .build();
@@ -577,6 +619,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.to_string(),
+            ..Default::default()
         };
         let q2 = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -595,6 +638,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(last2.get_str("title").unwrap()),
             id: last2.id.to_string(),
+            ..Default::default()
         };
         let q3 = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -634,6 +678,7 @@ mod tests {
             sort_dir: SortDirection::Desc,
             sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.to_string(),
+            ..Default::default()
         };
         let q2 = FindQuery::builder()
             .order_by(Some("-title".to_string()))
@@ -659,6 +704,7 @@ mod tests {
                 sort_dir: SortDirection::Asc,
                 sort_val: json!("x"),
                 id: "abc".to_string(),
+                ..Default::default()
             }))
             .build();
         let result = find(&conn, "posts", &def, &query, None);
@@ -690,6 +736,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.to_string(),
+            ..Default::default()
         };
         let p2q = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -707,6 +754,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.to_string(),
+            ..Default::default()
         };
         let bq = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -749,6 +797,7 @@ mod tests {
             sort_dir: SortDirection::Desc,
             sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.to_string(),
+            ..Default::default()
         };
         let p2q = FindQuery::builder()
             .order_by(Some("-title".to_string()))
@@ -766,6 +815,7 @@ mod tests {
             sort_dir: SortDirection::Desc,
             sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.to_string(),
+            ..Default::default()
         };
         let bq = FindQuery::builder()
             .order_by(Some("-title".to_string()))
@@ -791,6 +841,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!("abc"),
             id: "abc".to_string(),
+            ..Default::default()
         };
         let query = FindQuery::builder()
             .after_cursor(Some(cursor.clone()))
@@ -878,6 +929,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(9),
             id: "id-nine".to_string(),
+            ..Default::default()
         };
         let q2 = FindQuery::builder()
             .order_by(Some("points".to_string()))
@@ -895,6 +947,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(20),
             id: "id-twenty".to_string(),
+            ..Default::default()
         };
         let q3 = FindQuery::builder()
             .order_by(Some("points".to_string()))
@@ -918,6 +971,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: Value::Null,
             id: "anyid".to_string(),
+            ..Default::default()
         };
         let q = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -979,6 +1033,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(1.5),
             id: "id-low".to_string(),
+            ..Default::default()
         };
         let q = FindQuery::builder()
             .order_by(Some("score".to_string()))
@@ -1003,6 +1058,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!(true), // Bool variant
             id: "anyid".to_string(),
+            ..Default::default()
         };
         let q = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -1035,6 +1091,7 @@ mod tests {
             sort_dir: SortDirection::Asc,
             sort_val: json!("Post 01"),
             id: "~".to_string(),
+            ..Default::default()
         };
         let q = FindQuery::builder()
             .order_by(Some("title".to_string()))
@@ -1251,6 +1308,7 @@ mod tests {
                 sort_dir: SortDirection::Asc,
                 sort_val: Value::String("test".to_string()),
                 id: "abc".to_string(),
+                ..Default::default()
             }))
             .build();
         let result = find(&conn, "posts", &def, &query, None);
@@ -1287,7 +1345,7 @@ mod tests {
         assert_eq!(page1[9].id.as_ref(), "d05");
 
         // Page 2: forward with after_cursor (overfetch limit=11)
-        let (_, end_cursor_p1) = build_cursors(&page1, "created_at", SortDirection::Desc);
+        let (_, end_cursor_p1) = build_cursors(&page1, "created_at", SortDirection::Desc, false);
         let end_cursor_data = CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
         let q2 = FindQuery::builder()
             .limit(Some(limit + 1))
@@ -1300,7 +1358,8 @@ mod tests {
 
         // Grab the start_cursor of page 2 for going back
         let page2_trimmed = &page2[..page2_count];
-        let (start_cursor_p2, _) = build_cursors(page2_trimmed, "created_at", SortDirection::Desc);
+        let (start_cursor_p2, _) =
+            build_cursors(page2_trimmed, "created_at", SortDirection::Desc, false);
         let start_cursor_data = CursorData::decode(start_cursor_p2.as_ref().unwrap()).unwrap();
 
         // Go back: before_cursor (overfetch limit=11)
@@ -1333,7 +1392,7 @@ mod tests {
 
         // Forward again: end_cursor of the back-result
         let (_, end_cursor_p1_again) =
-            build_cursors(&page1_trimmed, "created_at", SortDirection::Desc);
+            build_cursors(&page1_trimmed, "created_at", SortDirection::Desc, false);
         let end_cursor_data_again =
             CursorData::decode(end_cursor_p1_again.as_ref().unwrap()).unwrap();
         let q2_again = FindQuery::builder()
@@ -1475,6 +1534,347 @@ mod tests {
             is_valid_sort_column("seo__title", &def),
             "Group sub-field inside Tabs should be valid sort column"
         );
+    }
+
+    // ── Drafts surface to the top in admin-style listings ───────────────
+
+    fn setup_drafts_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE posts (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    published_at TEXT,
+                    _status TEXT NOT NULL DEFAULT 'published',
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
+    }
+
+    fn drafts_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.versions = Some(VersionsConfig::new(true, 0));
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("published_at", FieldType::Date).build(),
+        ];
+        def
+    }
+
+    /// Insert a row with an explicit `_status` (the column default is
+    /// `published`, so the draft case needs an UPDATE the way
+    /// `set_document_status` does).
+    fn insert_post(conn: &dyn DbConnection, id: &str, status: &str, published_at: Option<&str>) {
+        conn.execute(
+            "INSERT INTO posts (id, title, published_at, _status) VALUES (?1, ?2, ?3, ?4)",
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(id.to_string()),
+                published_at
+                    .map(|s| DbValue::Text(s.to_string()))
+                    .unwrap_or(DbValue::Null),
+                DbValue::Text(status.to_string()),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Regression for the "drafts hide on page 2" UX bug. With
+    /// `default_sort = "-published_at"` on a drafts-enabled collection,
+    /// drafts have NULL `published_at` and SQLite sorts NULLs LAST in
+    /// DESC. With page-1 limits in the typical 20-row range, drafts
+    /// vanish off the bottom of the list — making "All" look like
+    /// "published only" until the user explicitly paginates. Fix:
+    /// `apply_order_by` prepends `_status ASC` (which orders 'draft'
+    /// before 'published') when the collection has drafts and no
+    /// cursor is active. Drafts always surface above published in the
+    /// page-1 view regardless of the configured `default_sort`.
+    #[test]
+    fn drafts_sort_above_published_in_admin_list() {
+        let (_tmp, pool) = setup_drafts_db();
+        let conn = pool.get().unwrap();
+        let def = drafts_def();
+
+        // 3 published rows, 2 drafts (NULL published_at).
+        insert_post(&conn, "p3", "published", Some("2024-03-01T00:00:00Z"));
+        insert_post(&conn, "p2", "published", Some("2024-02-01T00:00:00Z"));
+        insert_post(&conn, "p1", "published", Some("2024-01-01T00:00:00Z"));
+        insert_post(&conn, "d1", "draft", None);
+        insert_post(&conn, "d2", "draft", None);
+
+        let query = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .build();
+        let docs = find(&conn, "posts", &def, &query, None).unwrap();
+        assert_eq!(docs.len(), 5);
+
+        let statuses: Vec<&str> = docs
+            .iter()
+            .map(|d| d.fields.get("_status").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(
+            &statuses[..2],
+            &["draft", "draft"],
+            "drafts must come first in admin list, got {statuses:?}"
+        );
+        assert_eq!(
+            &statuses[2..],
+            &["published", "published", "published"],
+            "published rows follow drafts, got {statuses:?}"
+        );
+    }
+
+    /// Regression: cursor pagination round-trip must preserve drafts on
+    /// page 1. Before composite cursors, `apply_order_by`'s `_status ASC`
+    /// prepend was gated on `!cursor_active`, so going forward via
+    /// `after_cursor` and then back via `before_cursor` ran the keyset
+    /// against `published_at` only. NULL-`published_at` drafts didn't
+    /// satisfy the keyset (`NULL < cursor_pub_at` is unknown → false),
+    /// so prev returned only published rows — the drafts that were on
+    /// page 1 vanished.
+    ///
+    /// Fix: `_status ASC` is always prepended when has_drafts; cursors
+    /// encode `_status` as `status_val`; `apply_cursor_keyset` builds
+    /// a composite `(_status outer_op cursor_status) OR (_status =
+    /// cursor_status AND inner_keyset)`. Drafts ride along on
+    /// before_cursor.
+    #[test]
+    fn cursor_round_trip_preserves_drafts_on_page_1() {
+        let (_tmp, pool) = setup_drafts_db();
+        let conn = pool.get().unwrap();
+        let def = drafts_def();
+
+        // 5 published with stable published_at, 2 drafts (NULL).
+        for i in 1..=5 {
+            insert_post(
+                &conn,
+                &format!("p{i}"),
+                "published",
+                Some(&format!("2024-0{i}-01T00:00:00Z")),
+            );
+        }
+        insert_post(&conn, "d1", "draft", None);
+        insert_post(&conn, "d2", "draft", None);
+
+        // Page 1: 4 rows, no cursor. Expect drafts first.
+        let limit = 4;
+        let q1 = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(limit))
+            .build();
+        let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
+        assert_eq!(page1.len(), limit as usize);
+        let p1_statuses: Vec<&str> = page1
+            .iter()
+            .map(|d| d.fields.get("_status").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(
+            &p1_statuses[..2],
+            &["draft", "draft"],
+            "page 1 should lead with drafts, got {p1_statuses:?}"
+        );
+
+        // Forward to page 2 via after_cursor on page 1's last row.
+        let (_, end_cursor_p1) = build_cursors(&page1, "published_at", SortDirection::Desc, true);
+        let end_cursor_data = CursorData::decode(&end_cursor_p1.unwrap()).unwrap();
+        assert_eq!(
+            end_cursor_data.status_val.as_deref(),
+            Some("published"),
+            "page 1's last cursor must encode the boundary _status"
+        );
+
+        let q2 = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(limit))
+            .after_cursor(Some(end_cursor_data))
+            .build();
+        let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
+        assert_eq!(page2.len(), 3, "page 2 has 3 remaining published");
+        for doc in &page2 {
+            let s = doc.fields.get("_status").and_then(|v| v.as_str()).unwrap();
+            assert_eq!(s, "published");
+        }
+
+        // Back to page 1 via before_cursor on page 2's first row.
+        let (start_cursor_p2, _) = build_cursors(&page2, "published_at", SortDirection::Desc, true);
+        let start_cursor_data = CursorData::decode(&start_cursor_p2.unwrap()).unwrap();
+
+        let q_back = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(limit))
+            .before_cursor(Some(start_cursor_data))
+            .build();
+        let page1_again = find(&conn, "posts", &def, &q_back, None).unwrap();
+
+        assert_eq!(
+            page1_again.len(),
+            limit as usize,
+            "back-to-page-1 should return {limit} rows, got {}",
+            page1_again.len()
+        );
+        let again_statuses: Vec<&str> = page1_again
+            .iter()
+            .map(|d| d.fields.get("_status").and_then(|v| v.as_str()).unwrap())
+            .collect();
+        assert_eq!(
+            &again_statuses[..2],
+            &["draft", "draft"],
+            "drafts must reappear on round-trip back to page 1, got {again_statuses:?}"
+        );
+        // The exact order should match the initial page 1.
+        let p1_ids: Vec<&str> = page1.iter().map(|d| d.id.as_ref()).collect();
+        let again_ids: Vec<&str> = page1_again.iter().map(|d| d.id.as_ref()).collect();
+        assert_eq!(p1_ids, again_ids, "round-trip page 1 must equal initial");
+    }
+
+    /// Backward compatibility: a pre-composite cursor URL (no
+    /// `status_val`) must still execute on a drafts-enabled collection
+    /// without erroring. Behaviour degrades to single-column keyset —
+    /// drafts paginated to follow won't surface — which matches what
+    /// the bookmarked URL would have returned before the upgrade.
+    #[test]
+    fn legacy_cursor_without_status_val_still_works_on_drafts_collection() {
+        let (_tmp, pool) = setup_drafts_db();
+        let conn = pool.get().unwrap();
+        let def = drafts_def();
+
+        for i in 1..=3 {
+            insert_post(
+                &conn,
+                &format!("p{i}"),
+                "published",
+                Some(&format!("2024-0{i}-01T00:00:00Z")),
+            );
+        }
+
+        // Hand-rolled legacy cursor: status_val absent (None).
+        let legacy = CursorData {
+            sort_col: "published_at".to_string(),
+            sort_dir: SortDirection::Desc,
+            sort_val: serde_json::Value::String("2024-03-01T00:00:00Z".to_string()),
+            id: "p3".to_string(),
+            status_val: None,
+        };
+
+        let q = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(10))
+            .after_cursor(Some(legacy))
+            .build();
+
+        // Must not panic / 500 — the legacy cursor falls back to the
+        // single-column keyset path. With sort_dir=Desc and op="<",
+        // we expect rows whose `published_at < 2024-03-01`.
+        let docs = find(&conn, "posts", &def, &q, None).unwrap();
+        let ids: Vec<&str> = docs.iter().map(|d| d.id.as_ref()).collect();
+        assert_eq!(
+            ids,
+            vec!["p2", "p1"],
+            "legacy cursor must navigate published rows; got {ids:?}"
+        );
+    }
+
+    /// `before_cursor` issued from a draft row (NULL `published_at`)
+    /// must walk back through the draft bucket using the composite
+    /// keyset. Without composite ordering, the `_status DESC` under
+    /// `using_before` plus the inner NULL keyset would drop sibling
+    /// drafts. Pins the symmetric round-trip across the draft bucket.
+    #[test]
+    fn before_cursor_on_draft_walks_draft_bucket() {
+        let (_tmp, pool) = setup_drafts_db();
+        let conn = pool.get().unwrap();
+        let def = drafts_def();
+
+        // 3 drafts, ids ordered so id-DESC tie-break is meaningful.
+        insert_post(&conn, "d1", "draft", None);
+        insert_post(&conn, "d2", "draft", None);
+        insert_post(&conn, "d3", "draft", None);
+        insert_post(&conn, "p1", "published", Some("2024-01-01T00:00:00Z"));
+
+        // Page 1: limit=2 — should return d3, d2 (drafts first; id DESC).
+        let q1 = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(2))
+            .build();
+        let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
+        let p1_ids: Vec<&str> = page1.iter().map(|d| d.id.as_ref()).collect();
+        assert_eq!(p1_ids, vec!["d3", "d2"]);
+
+        // Forward: after_cursor on d2. Should return d1 then p1.
+        let (_, end_p1) = build_cursors(&page1, "published_at", SortDirection::Desc, true);
+        let after = CursorData::decode(&end_p1.unwrap()).unwrap();
+        assert_eq!(after.status_val.as_deref(), Some("draft"));
+        let q2 = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(2))
+            .after_cursor(Some(after))
+            .build();
+        let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
+        let p2_ids: Vec<&str> = page2.iter().map(|d| d.id.as_ref()).collect();
+        assert_eq!(
+            p2_ids,
+            vec!["d1", "p1"],
+            "after_cursor on a draft must continue drafts then cross into published"
+        );
+
+        // Back: before_cursor on d1 (page 2's first row, also a draft).
+        let (start_p2, _) = build_cursors(&page2, "published_at", SortDirection::Desc, true);
+        let before = CursorData::decode(&start_p2.unwrap()).unwrap();
+        assert_eq!(before.status_val.as_deref(), Some("draft"));
+        let q_back = FindQuery::builder()
+            .order_by(Some("-published_at".to_string()))
+            .limit(Some(2))
+            .before_cursor(Some(before))
+            .build();
+        let page_back = find(&conn, "posts", &def, &q_back, None).unwrap();
+        let back_ids: Vec<&str> = page_back.iter().map(|d| d.id.as_ref()).collect();
+        assert_eq!(
+            back_ids, p1_ids,
+            "before_cursor on a draft must return the original draft-bucket page in order"
+        );
+    }
+
+    /// When `_status` is already pinned by a WHERE filter (the user
+    /// chose Drafts only or Published only in the filter drawer), the
+    /// prepended `_status ASC` is a no-op and the user's sort wins.
+    /// Verify by sorting drafts-only by id ASC: insertion order
+    /// `d2`, `d1` would otherwise be reordered if `_status` did
+    /// anything.
+    #[test]
+    fn drafts_first_does_not_disturb_status_filtered_query() {
+        let (_tmp, pool) = setup_drafts_db();
+        let conn = pool.get().unwrap();
+        let def = drafts_def();
+
+        insert_post(&conn, "d-zzz", "draft", None);
+        insert_post(&conn, "d-aaa", "draft", None);
+
+        let query = FindQuery::builder()
+            .filters(vec![FilterClause::Single(Filter {
+                field: "_status".to_string(),
+                op: FilterOp::Equals("draft".to_string()),
+            })])
+            .order_by(Some("id".to_string()))
+            .build();
+        let docs = find(&conn, "posts", &def, &query, None).unwrap();
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].id, "d-aaa");
+        assert_eq!(docs[1].id, "d-zzz");
     }
 
     /// Regression: negative limit/offset must be clamped to 0 instead of

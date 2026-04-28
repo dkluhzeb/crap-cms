@@ -47,58 +47,59 @@
           hx-target="body"
           hx-push-url="true"
           hx-trigger="submit"
-          hx-include="find input"
         >
-          <label
-            for="list-search-input"
-            class="sr-only"
-          >
-            {{t "search_placeholder"}}
-            {{collection.display_name}}
-          </label>
-          <span
-            class="material-symbols-outlined search-bar__icon"
-            aria-hidden="true"
-          >
-            search
-          </span>
-          <input
-            type="search"
-            name="search"
-            value="{{ search }}"
-            placeholder='{{ t "search_placeholder" }} {{ collection.display_name }}...'
-            class="search-bar__input"
-            id="list-search-input"
-            hx-get="/admin/collections/{{ collection.slug }}"
-            hx-target="body"
-            hx-push-url="true"
-            hx-trigger="input changed delay:300ms, search"
-            hx-include="closest form"
-            hx-indicator="#upload-loading"
-          />
+          <div class="list-toolbar__search-field">
+            <label
+              for="list-search-input"
+              class="sr-only"
+            >
+              {{t "search_placeholder"}}
+              {{collection.display_name}}
+            </label>
+            <span
+              class="material-symbols-outlined search-bar__icon"
+              aria-hidden="true"
+            >
+              search
+            </span>
+            <input
+              type="search"
+              name="search"
+              value="{{ search }}"
+              placeholder='{{ t "search_placeholder" }} {{ collection.display_name }}...'
+              class="search-bar__input"
+              id="list-search-input"
+              hx-get="/admin/collections/{{ collection.slug }}"
+              hx-target="body"
+              hx-push-url="true"
+              hx-trigger="input changed delay:300ms, search"
+              hx-include="closest form"
+              hx-indicator="#upload-loading"
+            />
+            {{#if search}}
+              <a
+                class="search-bar__clear"
+                href="/admin/collections/{{ collection.slug }}"
+                hx-get="/admin/collections/{{ collection.slug }}"
+                hx-target="body"
+                hx-push-url="true"
+                aria-label='{{ t "clear_search" }}'
+              >
+                <span
+                  class="material-symbols-outlined"
+                  aria-hidden="true"
+                >
+                  close
+                </span>
+              </a>
+            {{/if}}
+          </div>
           {{#if sort}}
             <input
               type="hidden"
               name="sort"
               value="{{ sort }}"
             />
-          {{/if}}
-          {{#if search}}
-            <a
-              class="search-bar__clear"
-              href="/admin/collections/{{ collection.slug }}"
-              hx-get="/admin/collections/{{ collection.slug }}"
-              hx-target="body"
-              hx-push-url="true"
-              aria-label='{{ t "clear_search" }}'
-            >
-              <span
-                class="material-symbols-outlined"
-                aria-hidden="true"
-              >
-                close
-              </span>
-            </a>
           {{/if}}
         </form>
         <div class="list-toolbar__actions">

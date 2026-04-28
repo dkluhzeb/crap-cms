@@ -252,7 +252,8 @@ pub async fn list_items(
     // clause, because system columns (`_*`) are off-limits to user
     // filters at the service layer (`validate_user_filters`). See
     // `extract_status_filter` for the parsing rule.
-    let status_filter = extract_status_filter(raw_query);
+    let status_filter = extract_status_filter(raw_query)
+        .filter(|s| def.has_drafts() && (s == "draft" || s == "published"));
 
     let order_by = if is_trash {
         Some("-_deleted_at".to_string())
