@@ -630,6 +630,169 @@ to the detailed entry with full migration steps.
 
 ### Fixed
 
+- **`_status` filter from the admin UI was silently dropped.** The
+  filter builder exposes `_status` as a filterable field for
+  collections with drafts (`build_filter_fields` adds it whenever
+  `def.has_drafts()`), producing URLs like
+  `?where[_status][equals]=draft`. But `_status` is a system column
+  (`_*` prefix), and the architecture rejects user filters on system
+  columns at two layers:
+  `admin::handlers::query::filter::parse_where_params` filters them
+  out (the field-validity check), and `validate_user_filters` would
+  reject them at the service-layer entry point in any case. Net
+  effect: the filter URL would update, but the page would render
+  unfiltered (showing both drafts and published, since the admin
+  list always passes `include_drafts = true`).
+
+  Fix: new typed param `status_filter: Option<String>` on
+  `FindDocumentsInput` (mirrors the existing `trash: bool` pattern
+  for `_deleted_at`). The admin list handler reads
+  `?where[_status][equals]=X` from the raw query via
+  `extract_status_filter()` and forwards it as a typed param, so
+  `_status` reaches the SQL via the trusted post-validation
+  injection path in `build_effective_query`. Generic-user-filter
+  rejection of system columns is unchanged. Other read surfaces
+  (gRPC, MCP, Lua) continue to control draft visibility through
+  the typed `include_drafts` flag.
+
+  Regression test
+  `list_items_url_status_filter_narrows_drafts_only` creates one
+  published and one draft document on a `has_drafts` collection,
+  hits `?where%5B_status%5D%5Bequals%5D=draft`, and asserts the
+  rendered `tbody` has exactly one row (the draft) with the
+  published row absent. Symmetric coverage for
+  `_status=published`. Plus 7 unit tests for
+  `extract_status_filter` (raw + URL-encoded + missing + wrong op
+  + non-system-column-not-matched).
+
+- **`Save as draft` blocked by required-field validation.** Three
+  layers needed adjustment to make this work end-to-end on a
+  collection with `has_drafts = true` and required fields:
+
+  1. **Browser native validation** — field templates emit the HTML
+     `required` attribute when `field.required = true`, so clicking
+     any submit button on a form with empty required fields would be
+     blocked by browser constraint validation before the request
+     even left. Fixed by adding `formnovalidate` to the "Save as
+     draft" submit buttons in `templates/collections/edit_sidebar.hbs`
+     and `templates/globals/edit_sidebar.hbs`. HTML5's
+     `formnovalidate` on a submit button bypasses the form's
+     constraint validation for that submit only.
+
+  2. **Pre-submit validate endpoint** — `<crap-validate-form>`
+     intercepts `htmx:beforeRequest`, posts the form data to a
+     `/validate` JSON endpoint, and only lets the real submission
+     proceed if validation passes. The component built its
+     payload via `new FormData(form).entries()` — which silently
+     drops the *submitter button's* `name=value` pair (that's only
+     included by the browser during *native* form submission, not
+     when constructed standalone). Net effect: `_action=save_draft`
+     was missing from the validate request, so the server saw
+     `payload.draft = false`, ran non-draft validation, returned
+     `{ title: "Field is required" }`, and the JS rendered inline
+     errors on a draft save the user explicitly asked for.
+
+     Fixed in `static/components/validate-form.js` by tracking the
+     last clicked submit button on the component instance
+     (`_lastSubmitter`, captured via a capture-phase click listener)
+     and passing it as the second argument to `new FormData(form,
+     submitter)`. Browsers without that constructor signature fall
+     back to manual `fd.append(submitter.name, submitter.value)`.
+
+  3. **Server validation** — already correctly skipped required
+     checks for drafts (`src/hooks/lifecycle/validation/checks/required.rs:8-23`
+     returns early when `is_draft = true`). No change needed; the
+     existing pipeline just couldn't fire because layers 1+2 were
+     blocking the request from reaching it.
+
+  Regression tests:
+  `html_versions::save_draft_button_carries_formnovalidate` (asserts
+  the rendered HTML carries the attribute on both create and edit
+  pages) and
+  `browser_validation::save_as_draft_skips_required_via_validate_endpoint`
+  (full browser flow: open create page, leave required field empty,
+  click Save as draft, assert no inline `form__error[data-validate-error]`
+  appears). Both fail without their respective fix.
+
+- **Filter drawer auto-applied `_status=published` on empty state.**
+  `<crap-list-settings>::_buildFilterUI` previously rendered ONE
+  default row when the URL had no filters (`presets.length > 0 ?
+  presets : [null]`). That row hydrated to the first field's first
+  op + first value — typically `_status = "published"` for
+  collections with drafts, since `build_filter_fields` lists
+  `_status` first. User opens drawer, doesn't realise the row is
+  pre-configured, clicks Apply → URL gets
+  `?where[_status][equals]=published` and the list silently
+  narrows. Fix: drawer opens with zero rows when URL has no
+  filters; the "+ Add condition" button is the explicit
+  affordance. `_collectFilters` also now skips rows whose `field` /
+  `op` are empty, or whose `value` is empty (except for `exists` /
+  `not_exists` which take no value). Regression test
+  `filter_drawer_empty_when_no_url_filters` exercises the
+  open-drawer-and-apply-without-changes flow.
+
+- **Cursor pagination + filter change produced empty/wrong
+  results.** When the user paginated with `after_cursor=…` /
+  `before_cursor=…` in the URL and then changed the filter via the
+  drawer, `_buildFilterUrl` deleted only `where[…]` params,
+  preserving the stale cursor. The cursor was issued against the
+  previous result set; with a different filter, the cursor's
+  keyset comparison narrowed the WHERE clause to empty (or
+  wrong-position rows). Fix: strip `after_cursor` and
+  `before_cursor` alongside `where[…]` on every filter apply, then
+  reset to `page=1`. Regression test
+  `filter_apply_strips_stale_cursor`.
+
+- **Filter-apply navigated to nowhere with htmx 2.** After the htmx
+  1.9 → 2.0.9 migration, applying a filter from the
+  `<crap-list-settings>` filter drawer silently failed to update the
+  URL or refresh the list. Two stacked option-API renames in
+  `htmx.ajax()` between versions:
+  1. `pushUrl` (1.x) → `push` (2.x). The 1.x key is silently dropped.
+  2. `push` takes a *string* (`"true"` or a path), not a boolean.
+     Passing `push: true` got coerced to the string `"true"` and
+     pushed the literal URL `/admin/collections/true` into history —
+     visible as the wrong URL in the address bar after applying a
+     filter.
+  Fixed in `static/components/list-settings.js::navigate()` —
+  passes `push: <path>` with the actual destination path. Four
+  regression tests now pin the behaviour:
+  `filter_builder_preset_value_change_applies` (preset value swap →
+  URL reflects new value),
+  `filter_builder_apply_actually_filters_the_list` (apply → list
+  actually narrows: 2 rows → 1 row, only the matching status visible
+  in `<tbody>`), `filter_builder_multi_row_reopen_edit_persists`
+  (multi-row apply → reopen → edit → all rows survive with edited
+  values), and `filter_builder_preserves_user_edit_across_op_change`.
+  Plus the integration test
+  `list_items_url_filter_narrows_results` covers the server-side
+  pipeline directly with both raw and URL-encoded `where[…]` query
+  strings. The user's reported "additional filter rows get lost"
+  symptom was a downstream effect of the same bug — without URL
+  pushing, the post-apply page state never reflected the new filter
+  set, so reopening the drawer from the unchanged URL appeared to
+  lose rows.
+
+- **Filter-builder dropped user edits on op-change.**
+  `static/components/list-settings.js`'s `_buildFilterRow` captured
+  the URL-derived `preset` by closure. When the user changed the op
+  (which can re-render the value input — `exists` / `not_exists`
+  drop the input entirely, switching back rebuilds it), the rebuild
+  used the stale `preset.value` and silently overwrote whatever the
+  user had just selected. Symptom: open the filter drawer with a
+  preset like `?where[status][equals]=published`, switch the value
+  dropdown to `draft`, change the op — the value snaps back to
+  `published`. Pre-existing bug from the alpha.8 webcomponents
+  refactor (`34410b8`); not introduced by the recent declarative
+  htmx work, but found while investigating filter behaviour. Fix:
+  `renderOp()` and `renderValue()` now read the current DOM state
+  (`opSelect.value`, `valueWrap.querySelector('[name="filter-value"]')?.value`)
+  before the rebuild and fall back to the preset only when the input
+  doesn't yet exist or has no value. Regression test
+  `filter_builder_preserves_user_edit_across_op_change` exercises
+  the URL-preset → value-edit → op-change → value-survives flow
+  end-to-end.
+
 - **`<crap-create-panel>` form submission rewritten as declarative
   htmx.** Removes ~110 lines of imperative submit logic
   (`_submitForm`, `_handleSubmitResponse`, `_sendForm`,

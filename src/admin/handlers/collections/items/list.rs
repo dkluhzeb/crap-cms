@@ -17,9 +17,9 @@ use crate::{
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PaginationParams, extract_editor_locale, extract_where_params,
-                forbidden, not_found, parse_where_params, paths, render_or_error, server_error,
-                validate_sort,
+                ListUrlContext, PaginationParams, extract_editor_locale, extract_status_filter,
+                extract_where_params, forbidden, not_found, parse_where_params, paths,
+                render_or_error, server_error, validate_sort,
             },
         },
     },
@@ -52,6 +52,7 @@ struct FetchListArgs<'a> {
     auth_user: &'a Option<Extension<AuthUser>>,
     cursor_enabled: bool,
     is_trash: bool,
+    status_filter: Option<String>,
 }
 
 fn fetch_list_documents(
@@ -77,6 +78,7 @@ fn fetch_list_documents(
         .cursor_enabled(args.cursor_enabled)
         .trash(args.is_trash)
         .include_drafts(true)
+        .status_filter(args.status_filter)
         .build();
 
     find_documents(&ctx, &input)
@@ -244,6 +246,13 @@ pub async fn list_items(
 
     let sort = params.sort.as_deref().and_then(|s| validate_sort(s, &def));
     let url_filters = parse_where_params(raw_query, &def);
+    // The filter UI exposes `_status` for collections with drafts (see
+    // `build_filter_fields`); the URL it produces (`where[_status][equals]=X`)
+    // is handled here as a typed param rather than a generic where
+    // clause, because system columns (`_*`) are off-limits to user
+    // filters at the service layer (`validate_user_filters`). See
+    // `extract_status_filter` for the parsing rule.
+    let status_filter = extract_status_filter(raw_query);
 
     let order_by = if is_trash {
         Some("-_deleted_at".to_string())
@@ -268,6 +277,7 @@ pub async fn list_items(
     let def_owned = def.clone();
     let auth_user_clone = auth_user.clone();
 
+    let status_filter_clone = status_filter.clone();
     let read_result = tokio::task::spawn_blocking(move || {
         fetch_list_documents(FetchListArgs {
             state: &state_clone,
@@ -278,6 +288,7 @@ pub async fn list_items(
             auth_user: &auth_user_clone,
             cursor_enabled,
             is_trash,
+            status_filter: status_filter_clone,
         })
     })
     .await;

@@ -120,6 +120,50 @@ async fn versioned_create_form_shows_draft_button() {
     );
 }
 
+// 1b. The Save-Draft button must carry `formnovalidate` so the browser
+// skips constraint validation (notably the HTML `required` attribute)
+// when this button submits the form. Without it the user can't save a
+// half-filled-in draft because the browser blocks submit before the
+// server-side draft-aware validation pipeline runs.
+#[tokio::test]
+async fn save_draft_button_carries_formnovalidate() {
+    use crap_cms::db::query;
+
+    let app = setup_app(vec![make_versioned_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "ver1b@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "ver1b@test.com");
+
+    // Create page (no document yet → uses the create-flow draft button).
+    let body = get_create_form(&app, "articles", &cookie).await;
+    let doc = html::parse(&body);
+    html::assert_exists(
+        &doc,
+        "button[value=\"save_draft\"][formnovalidate]",
+        "save_draft button on the create page must carry formnovalidate",
+    );
+
+    // Edit page (existing document → uses the editing-flow draft button).
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("articles").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let mut data = std::collections::HashMap::new();
+    data.insert("title".to_string(), "Edit Me".to_string());
+    let created = query::create(&tx, "articles", &def, &data, None).expect("seed doc");
+    tx.commit().unwrap();
+    drop(conn);
+
+    let body = get_edit_form(&app, "articles", created.id.as_ref(), &cookie).await;
+    let doc = html::parse(&body);
+    html::assert_exists(
+        &doc,
+        "button[value=\"save_draft\"][formnovalidate]",
+        "save_draft button on the edit page must carry formnovalidate",
+    );
+}
+
 // 2. Non-versioned form has no draft buttons
 #[tokio::test]
 async fn non_versioned_form_no_draft_button() {

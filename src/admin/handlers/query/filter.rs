@@ -73,6 +73,37 @@ pub(crate) fn extract_where_params(raw_query: &str) -> String {
         .join("&")
 }
 
+/// Extract a `where[_status][equals]=X` filter from a raw URL query
+/// string and return the value `X`. Returns `None` if no such param
+/// exists. The admin filter UI exposes `_status` as a filter option
+/// for collections with drafts (see `build_filter_fields`); the URL
+/// it produces is `where[_status][equals]=draft` (or
+/// `published`). Generic user filters cannot target `_*` system
+/// columns (rejected by `parse_where_params` here and by
+/// `validate_user_filters` at the service layer), so this helper
+/// pulls the status filter out separately for the admin list handler
+/// to forward as a typed `status_filter` on `FindDocumentsInput`.
+///
+/// Accepts both raw (`where[_status][equals]=draft`) and URL-encoded
+/// (`where%5B_status%5D%5Bequals%5D=draft`) forms.
+pub(crate) fn extract_status_filter(raw_query: &str) -> Option<String> {
+    for part in raw_query.split('&') {
+        let (key, value) = part.split_once('=')?;
+        let decoded_key = url_decode(key);
+        // Accept both the bracket-with-equals form and any-op form for
+        // forward compatibility, but only `equals` makes sense for a
+        // 2-value field — keep it specific so a future op variant
+        // (`not_equals`) doesn't silently match.
+        if decoded_key == "where[_status][equals]" {
+            let v = url_decode(value);
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +194,62 @@ mod tests {
             }
             _ => panic!("Expected Single"),
         }
+    }
+
+    // ── extract_status_filter ────────────────────────────────────────
+
+    #[test]
+    fn extract_status_filter_raw() {
+        assert_eq!(
+            extract_status_filter("page=1&where[_status][equals]=draft"),
+            Some("draft".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_status_filter_url_encoded() {
+        // What the browser actually sends from the filter UI.
+        assert_eq!(
+            extract_status_filter("page=1&where%5B_status%5D%5Bequals%5D=draft"),
+            Some("draft".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_status_filter_published() {
+        assert_eq!(
+            extract_status_filter("where[_status][equals]=published"),
+            Some("published".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_status_filter_absent() {
+        assert_eq!(extract_status_filter("page=1&sort=created_at"), None);
+        assert_eq!(extract_status_filter(""), None);
+    }
+
+    #[test]
+    fn extract_status_filter_only_equals_op() {
+        // `not_equals` doesn't make sense for a 2-value field; leave it
+        // unmatched so a typo / wrong-op URL is silently ignored rather
+        // than producing surprising behaviour.
+        assert_eq!(
+            extract_status_filter("where[_status][not_equals]=draft"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_status_filter_empty_value_is_none() {
+        assert_eq!(extract_status_filter("where[_status][equals]="), None);
+    }
+
+    #[test]
+    fn extract_status_filter_ignores_user_status_field() {
+        // `status` (no underscore) is a user-defined field, handled by
+        // the generic `parse_where_params` path. `extract_status_filter`
+        // must only match the system column `_status`.
+        assert_eq!(extract_status_filter("where[status][equals]=draft"), None);
     }
 }

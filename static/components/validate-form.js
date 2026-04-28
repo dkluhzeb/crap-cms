@@ -50,6 +50,20 @@ class CrapValidateForm extends HTMLElement {
     this._validateUrl = '';
     /** @type {((e: Event) => void)|null} */
     this._onBeforeRequest = null;
+    /**
+     * The submit button the user most recently clicked. Tracked because
+     * `new FormData(form)` does NOT include the submitter's `name=value`
+     * pair — that's only set by the browser during *native* form
+     * submission. Without this, our `_collectFormData` would miss
+     * `_action=save_draft` and the validate endpoint would run with
+     * `draft=false`, failing required-field checks on intentional
+     * draft saves.
+     *
+     * @type {HTMLElement|null}
+     */
+    this._lastSubmitter = null;
+    /** @type {((e: Event) => void)|null} */
+    this._onSubmitterClick = null;
   }
 
   connectedCallback() {
@@ -59,6 +73,17 @@ class CrapValidateForm extends HTMLElement {
 
     this._onBeforeRequest = (e) => this._interceptSubmit(e);
     document.body.addEventListener('htmx:beforeRequest', this._onBeforeRequest);
+
+    // Capture-phase click listener so we record the submitter even
+    // when intermediate handlers stop propagation.
+    this._onSubmitterClick = (e) => {
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      const btn = t?.closest?.('button[type="submit"], input[type="submit"]');
+      if (btn && this.contains(btn)) {
+        this._lastSubmitter = /** @type {HTMLElement} */ (btn);
+      }
+    };
+    this.addEventListener('click', this._onSubmitterClick, true);
   }
 
   disconnectedCallback() {
@@ -68,6 +93,11 @@ class CrapValidateForm extends HTMLElement {
       document.body.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
       this._onBeforeRequest = null;
     }
+    if (this._onSubmitterClick) {
+      this.removeEventListener('click', this._onSubmitterClick, true);
+      this._onSubmitterClick = null;
+    }
+    this._lastSubmitter = null;
   }
 
   /* ── Submit interception ────────────────────────────────────── */
@@ -177,6 +207,12 @@ class CrapValidateForm extends HTMLElement {
    * special fields (`_csrf`, `_method`, `_action`, `_locale`) and
    * skipping file inputs (validated separately on the real submit).
    *
+   * Includes the most recently clicked submit button's `name=value`
+   * pair (tracked in `this._lastSubmitter`) — `new FormData(form)`
+   * alone does not include the submitter, so without this the
+   * `_action=save_draft` button value would be missing and drafts
+   * would be validated as if the user clicked Publish.
+   *
    * @param {HTMLFormElement} form
    * @returns {CollectedFormData}
    */
@@ -187,7 +223,23 @@ class CrapValidateForm extends HTMLElement {
     /** @type {string|null} */
     let locale = null;
 
-    for (const [key, value] of new FormData(form).entries()) {
+    // Modern browsers honour `new FormData(form, submitter)` — this is
+    // the canonical way to include the submit button's name=value
+    // alongside the rest of the form. Older fallback is to manually
+    // append from `_lastSubmitter` after construction.
+    let fd;
+    try {
+      fd = new FormData(
+        form,
+        /** @type {HTMLElement|undefined} */ (this._lastSubmitter ?? undefined),
+      );
+    } catch {
+      fd = new FormData(form);
+      const sub = /** @type {HTMLButtonElement|HTMLInputElement|null} */ (this._lastSubmitter);
+      if (sub?.name) fd.append(sub.name, sub.value);
+    }
+
+    for (const [key, value] of fd.entries()) {
       if (value instanceof File) continue;
       if (key === '_csrf' || key === '_method') continue;
       if (key === '_action') {

@@ -108,7 +108,15 @@ const NO_VALUE_OPS = new Set(['exists', 'not_exists']);
  */
 function navigate(url) {
   if (typeof htmx !== 'undefined') {
-    htmx.ajax('GET', url.pathname + url.search, { target: 'body', pushUrl: true });
+    // htmx 2 renamed the URL-push option from `pushUrl: true` (1.x) to
+    // `push: <string>` — the value is either the literal `"true"` or
+    // the path to push. `pushUrl` is silently dropped; `push: true`
+    // (boolean) gets coerced to the string `"true"` and pushed as the
+    // URL `"/.../true"`, which is how the user observed
+    // `…/admin/collections/true` after applying. We pass the actual
+    // path so history matches what was loaded.
+    const path = url.pathname + url.search;
+    htmx.ajax('GET', path, { target: 'body', push: path });
     return;
   }
   window.location.href = url.toString();
@@ -306,11 +314,16 @@ class CrapListSettings extends HTMLElement {
    */
   _buildFilterUI(fieldMetas, slug, drawer) {
     const presets = this._parseCurrentFilters();
-    const initial = presets.length > 0 ? presets : [null];
+    // No URL filters → drawer opens with zero rows. The "+ Add condition"
+    // button below is the affordance for adding the first filter. A
+    // null-preset row would auto-hydrate to the first field's first op
+    // and first value (typically `_status = "published"` for collections
+    // with drafts), so clicking Apply without configuring would silently
+    // apply that filter — which is *not* what the user intended.
     const rowsEl = h(
       'div',
       { class: 'filter-builder__rows' },
-      initial.map((p) => this._buildFilterRow(fieldMetas, p)),
+      presets.map((p) => this._buildFilterRow(fieldMetas, p)),
     );
 
     return h(
@@ -374,13 +387,26 @@ class CrapListSettings extends HTMLElement {
     const opSelect = h('select', { class: 'filter-builder__op', name: 'filter-op' });
     const valueWrap = h('div', { class: 'filter-builder__value-wrap' });
 
+    // `preset` reflects the URL-derived state at row-construction time;
+    // it doesn't update with user input. When the user changes the
+    // field or op, we re-render the op list and value input — and we
+    // must preserve whatever the user has just typed/selected, not
+    // restore the stale preset. Read the current DOM state first;
+    // fall back to the preset only when the input doesn't yet exist
+    // (initial render) or has no value.
     const renderOp = () => {
       const fm = fieldMetas.find((f) => f.key === fieldSelect.value);
-      this._renderOpsInto(opSelect, fm?.field_type || 'text', preset?.op);
+      const currentOp = opSelect.value || preset?.op;
+      this._renderOpsInto(opSelect, fm?.field_type || 'text', currentOp);
     };
     const renderValue = () => {
       const fm = fieldMetas.find((f) => f.key === fieldSelect.value);
-      if (fm) this._renderValueInto(valueWrap, fm, opSelect.value, preset?.value || '');
+      if (!fm) return;
+      const currentInput = /** @type {HTMLInputElement|HTMLSelectElement|null} */ (
+        valueWrap.querySelector('[name="filter-value"]')
+      );
+      const currentValue = currentInput?.value || preset?.value || '';
+      this._renderValueInto(valueWrap, fm, opSelect.value, currentValue);
     };
 
     renderOp();
@@ -555,8 +581,15 @@ class CrapListSettings extends HTMLElement {
    */
   _buildFilterUrl(rowsEl) {
     const url = new URL(window.location.href);
+    // Strip both `where[…]` (rebuilt below from the current rows) AND the
+    // pagination cursors. The cursor was issued against the previous
+    // result set; with a different filter, the cursor's keyset
+    // comparison narrows to empty (or wrong-position rows). Resetting to
+    // page=1 gives a fresh query against the new filter.
     for (const key of [...url.searchParams.keys()]) {
-      if (key.startsWith('where[')) url.searchParams.delete(key);
+      if (key.startsWith('where[') || key === 'after_cursor' || key === 'before_cursor') {
+        url.searchParams.delete(key);
+      }
     }
     url.searchParams.set('page', '1');
     for (const f of this._collectFilters(rowsEl)) {
@@ -583,7 +616,18 @@ class CrapListSettings extends HTMLElement {
       const valueEl = /** @type {HTMLInputElement|null} */ (
         row.querySelector('[name="filter-value"]')
       );
-      filters.push({ field: fieldEl.value, op: opEl.value, value: valueEl?.value || '' });
+      const field = fieldEl.value;
+      const op = opEl.value;
+      const value = valueEl?.value || '';
+      // Skip rows with no field or op (defensive — shouldn't happen with
+      // the current builder, but a row that somehow lost its selects
+      // should not produce a `where[][]=` entry). Skip rows with an
+      // empty value too, except for `exists` / `not_exists` which take
+      // no value by definition.
+      if (!field || !op) continue;
+      const valueless = op === 'exists' || op === 'not_exists';
+      if (!valueless && value === '') continue;
+      filters.push({ field, op, value });
     }
     return filters;
   }

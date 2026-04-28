@@ -21,6 +21,18 @@ pub struct FindDocumentsInput<'a> {
     /// post-validation. Callers never push `_status` into `query.filters`
     /// themselves.
     pub include_drafts: bool,
+    /// Optional explicit `_status` filter for the admin list page's filter
+    /// builder. Mutually exclusive with `include_drafts` — when set, the
+    /// service treats it like an `include_drafts = true` request (no
+    /// auto-injected `_status = "published"`) and *additionally* pins the
+    /// query to documents whose `_status` equals this value. Use cases
+    /// from the UI: filter by `draft` to see drafts only; filter by
+    /// `published` (default behaviour, but explicit). Translated from
+    /// `?where[_status][equals]=X` URL filters by the admin list handler.
+    /// `parse_where_params` and `validate_user_filters` continue to
+    /// reject `_status` in the generic-user-filter path; this typed
+    /// param is the supported entry point.
+    pub status_filter: Option<String>,
     pub access_constraints: Option<Vec<FilterClause>>,
     /// Whether cursor-based pagination is enabled (from config).
     /// When true, PaginationResult uses cursor mode; when false, page mode.
@@ -53,6 +65,7 @@ pub struct FindDocumentsInputBuilder<'a> {
     registry: Option<&'a Registry>,
     cache: Option<&'a dyn CacheBackend>,
     include_drafts: bool,
+    status_filter: Option<String>,
     access_constraints: Option<Vec<FilterClause>>,
     cursor_enabled: bool,
     trash: bool,
@@ -70,6 +83,7 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             registry: None,
             cache: None,
             include_drafts: false,
+            status_filter: None,
             access_constraints: None,
             cursor_enabled: false,
             trash: false,
@@ -112,6 +126,11 @@ impl<'a> FindDocumentsInputBuilder<'a> {
         self
     }
 
+    pub fn status_filter(mut self, status_filter: Option<String>) -> Self {
+        self.status_filter = status_filter;
+        self
+    }
+
     pub fn access_constraints(mut self, access_constraints: Option<Vec<FilterClause>>) -> Self {
         self.access_constraints = access_constraints;
         self
@@ -144,6 +163,7 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             registry: self.registry,
             cache: self.cache,
             include_drafts: self.include_drafts,
+            status_filter: self.status_filter,
             access_constraints: self.access_constraints,
             cursor_enabled: self.cursor_enabled,
             trash: self.trash,

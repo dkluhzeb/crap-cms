@@ -357,6 +357,283 @@ async fn list_items_returns_200() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// Regression test for the user-reported "list shows all (published)
+/// items when filter is set to draft" symptom. The admin filter UI
+/// exposes `_status` for collections with drafts enabled
+/// (`has_drafts()`), producing URLs like
+/// `?where[_status][equals]=draft`. The architecture rejects user
+/// filters on system columns (`_*`), so the URL form must be
+/// translated by the admin list handler into a typed `status_filter`
+/// on `FindDocumentsInput`. Without that translation, the filter is
+/// silently dropped and the page renders unfiltered (typically only
+/// published, since the auto-injected `_status="published"` is the
+/// default when `include_drafts=false` — but the admin list sets
+/// `include_drafts=true`, so all items show).
+#[tokio::test]
+async fn list_items_url_status_filter_narrows_drafts_only() {
+    use crap_cms::core::collection::VersionsConfig;
+
+    fn posts_with_drafts_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.versions = Some(VersionsConfig::new(true, 10));
+        def.admin.use_as_title = Some("title".to_string());
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
+        def
+    }
+
+    let app = setup_app(vec![posts_with_drafts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "statusf@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "statusf@test.com");
+
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    // Both rows start `_status='published'` (column default per
+    // `migrate/collection/create.rs:131`). Demote one to `draft` via a
+    // direct UPDATE — this is what the service-layer
+    // `persist::create_document` does internally when `is_draft = true`,
+    // we just skip the service wrapper here to keep the test focused on
+    // the filter pipeline.
+    let mut data1 = std::collections::HashMap::new();
+    data1.insert("title".to_string(), "Live Article".to_string());
+    query::create(&tx, "posts", &def, &data1, None).expect("publish create ok");
+
+    let mut data2 = std::collections::HashMap::new();
+    data2.insert("title".to_string(), "Pending Draft".to_string());
+    let draft_doc = query::create(&tx, "posts", &def, &data2, None).expect("draft create ok");
+    use crap_cms::db::DbConnection;
+    use crap_cms::db::DbValue;
+    tx.execute(
+        "UPDATE posts SET _status = 'draft' WHERE id = ?1",
+        &[DbValue::Text(draft_doc.id.to_string())],
+    )
+    .expect("set _status=draft");
+    tx.commit().unwrap();
+    drop(conn);
+
+    fn count_table_rows(body: &str) -> usize {
+        let Some(start) = body.find("<tbody") else {
+            return 0;
+        };
+        let Some(end) = body[start..].find("</tbody>").map(|i| start + i) else {
+            return 0;
+        };
+        body[start..end].matches("<tr").count()
+    }
+
+    // Sanity: unfiltered shows both (admin defaults include_drafts=true).
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "unfiltered admin list should show both draft and published"
+    );
+
+    // Filter to drafts only via URL-encoded `where[_status][equals]=draft`.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5B_status%5D%5Bequals%5D=draft")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "_status=draft filter should narrow to 1 draft row"
+    );
+    assert!(body.contains("Pending Draft"));
+    assert!(
+        !body.contains("Live Article"),
+        "_status=draft filter must NOT include the published doc — silent drop regression"
+    );
+
+    // Symmetric: filter to published only.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5B_status%5D%5Bequals%5D=published")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "_status=published filter should narrow to 1 published row"
+    );
+    assert!(body.contains("Live Article"));
+    assert!(!body.contains("Pending Draft"));
+}
+
+/// Regression test for the user-reported "filter has no effect" symptom.
+/// Both `where[status][equals]=draft` (raw) and the URL-encoded form
+/// `where%5Bstatus%5D%5Bequals%5D=draft` (which is what the browser
+/// produces when you click Apply) must narrow the list to draft items
+/// only.
+#[tokio::test]
+async fn list_items_url_filter_narrows_results() {
+    fn posts_with_status_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.admin.use_as_title = Some("title".to_string());
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("status", FieldType::Select)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
+                    SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
+                ])
+                .build(),
+        ];
+        def
+    }
+
+    /// Count `<tr>` rows inside the items `<tbody>` of the rendered list page.
+    fn count_table_rows(body: &str) -> usize {
+        let Some(start) = body.find("<tbody") else {
+            return 0;
+        };
+        let Some(end) = body[start..].find("</tbody>").map(|i| start + i) else {
+            return 0;
+        };
+        body[start..end].matches("<tr").count()
+    }
+
+    let app = setup_app(vec![posts_with_status_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "filter@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "filter@test.com");
+
+    // Insert one draft + one published post.
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let mut data1 = std::collections::HashMap::new();
+    data1.insert("title".to_string(), "Draft Post".to_string());
+    data1.insert("status".to_string(), "draft".to_string());
+    query::create(&tx, "posts", &def, &data1, None).unwrap();
+    let mut data2 = std::collections::HashMap::new();
+    data2.insert("title".to_string(), "Published Post".to_string());
+    data2.insert("status".to_string(), "published".to_string());
+    query::create(&tx, "posts", &def, &data2, None).unwrap();
+    tx.commit().unwrap();
+    drop(conn);
+
+    // Sanity: no filter shows both.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "unfiltered list should show both posts"
+    );
+    assert!(
+        body.contains("Draft Post"),
+        "title 'Draft Post' must appear"
+    );
+    assert!(
+        body.contains("Published Post"),
+        "title 'Published Post' must appear"
+    );
+
+    // Filter via raw `where[status][equals]=draft`. List should only
+    // show the draft post.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where[status][equals]=draft")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "raw-filter list should narrow to 1 row (the draft post)"
+    );
+    assert!(body.contains("Draft Post"));
+    assert!(
+        !body.contains("Published Post"),
+        "raw-filter list must NOT contain the published post"
+    );
+
+    // Filter via URL-encoded `where%5Bstatus%5D%5Bequals%5D=draft` — what
+    // the browser actually sends when JS builds the URL.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5Bstatus%5D%5Bequals%5D=draft")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "encoded-filter list should narrow to 1 row"
+    );
+    assert!(body.contains("Draft Post"));
+    assert!(
+        !body.contains("Published Post"),
+        "encoded-filter list must NOT contain the published post"
+    );
+}
+
 #[tokio::test]
 async fn create_form_returns_200() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
