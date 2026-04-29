@@ -64,6 +64,8 @@
     >
 {{{admin_i18n}}}
     </script>
+
+    {{slot "head_extras"}}
   </head>
 
   <body>
@@ -93,5 +95,7 @@
     <crap-create-panel></crap-create-panel>
     <crap-drawer></crap-drawer>
     <crap-live-events></crap-live-events>
+
+    {{slot "body_end_scripts"}}
   </body>
 </html>

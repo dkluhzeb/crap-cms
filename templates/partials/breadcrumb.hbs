@@ -21,6 +21,7 @@
         </li>
       {{/each}}
     </ol>
+    {{slot "breadcrumb_extras"}}
   </nav>
 {{else}}
   {{!-- Backward compat: fall back to top-level breadcrumbs --}}
@@ -47,6 +48,7 @@
           </li>
         {{/each}}
       </ol>
+      {{slot "breadcrumb_extras"}}
     </nav>
   {{/if}}
 {{/if}}
