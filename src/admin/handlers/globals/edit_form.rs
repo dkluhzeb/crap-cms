@@ -13,7 +13,7 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{Breadcrumb, ContextBuilder, PageType, field::FieldContext},
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
@@ -67,7 +67,7 @@ fn prepare_edit_fields(
     doc_fields: &HashMap<String, Value>,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let values = flatten_document_values(doc_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
@@ -91,8 +91,8 @@ fn prepare_edit_fields(
 
     // Remove read-denied fields entirely from the form
     if !denied_read_fields.is_empty() {
-        fields.retain(|f| {
-            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        fields.retain(|fc| {
+            let name = fc.base().name.as_str();
             !denied_read_fields.iter().any(|d| d == name)
         });
     }

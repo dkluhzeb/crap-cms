@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            Breadcrumb, ContextBuilder, PageType,
+            field::{BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs},
+        },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
@@ -28,7 +31,7 @@ fn prepare_create_fields(
     state: &AdminState,
     def: &CollectionDefinition,
     editor_locale: Option<&str>,
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let non_default_locale = is_non_default_locale(state, editor_locale);
     let empty: HashMap<String, String> = HashMap::new();
 
@@ -60,13 +63,24 @@ fn prepare_create_fields(
     );
 
     if def.is_auth_collection() {
-        fields.push(json!({
-            "name": "password",
-            "field_type": "password",
-            "label": "password",
-            "required": true,
-            "value": "",
-            "description": "set_password_description",
+        fields.push(FieldContext::Password(TextField {
+            base: BaseFieldData {
+                name: "password".to_string(),
+                label: "password".to_string(),
+                required: true,
+                value: Value::String(String::new()),
+                placeholder: None,
+                description: Some("set_password_description".to_string()),
+                readonly: false,
+                localized: false,
+                locale_locked: false,
+                position: None,
+                error: None,
+                validation: ValidationAttrs::default(),
+                condition: ConditionData::default(),
+            },
+            has_many: None,
+            tags: None,
         }));
     }
 

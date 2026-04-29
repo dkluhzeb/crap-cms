@@ -1,19 +1,68 @@
 use std::collections::HashMap;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
-    admin::handlers::field_context::{
-        builder::build_field_contexts, count_errors_in_fields, safe_template_id,
-        split_sidebar_fields,
+    admin::{
+        context::field::FieldContext,
+        handlers::field_context::{
+            builder::build_field_contexts as build_typed, count_errors_in_field_contexts,
+            safe_template_id, split_sidebar_fields as split_sidebar_typed,
+        },
     },
     core::field::{
         BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString, SelectOption,
     },
 };
 
+/// Test-only helper: deserialize a list of JSON fixtures into typed
+/// [`FieldContext`] values. Each fixture must include a valid `field_type`
+/// tag (e.g. `"text"`, `"group"`, `"tabs"`, `"array"`).
+fn fields_from_json(values: Vec<Value>) -> Vec<FieldContext> {
+    values
+        .into_iter()
+        .map(|v| {
+            serde_json::from_value(v).expect("test fixture must deserialize as a FieldContext")
+        })
+        .collect()
+}
+
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, ft).build()
+}
+
+/// Test-only wrapper that converts the typed build output to `Vec<Value>` for
+/// the JSON-style assertions used throughout this file.
+fn build_field_contexts(
+    fields: &[FieldDefinition],
+    values: &HashMap<String, String>,
+    errors: &HashMap<String, String>,
+    filter_hidden: bool,
+    non_default_locale: bool,
+) -> Vec<Value> {
+    build_typed(fields, values, errors, filter_hidden, non_default_locale)
+        .into_iter()
+        .map(|fc| fc.to_value())
+        .collect()
+}
+
+/// Test-only wrapper that mirrors the old Value-based partition semantics so
+/// the existing split_sidebar tests can keep using minimal Value fixtures
+/// (without populating every BaseFieldData field).
+fn split_sidebar_fields(fields: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
+    fields
+        .into_iter()
+        .partition(|f| f.get("position").and_then(|v| v.as_str()) != Some("sidebar"))
+}
+
+/// Helper kept available for callers that genuinely have typed
+/// [`FieldContext`] values (currently unused by tests, but parallel to the
+/// real production helper).
+#[allow(dead_code)]
+fn split_sidebar_field_contexts(
+    fields: Vec<FieldContext>,
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
+    split_sidebar_typed(fields)
 }
 
 // --- build_field_contexts: array/block sub-field enrichment tests ---
@@ -872,93 +921,98 @@ fn build_field_contexts_date_short_value_day_and_time() {
     assert_eq!(result[0]["datetime_local_value"], "short");
 }
 
-// --- count_errors_in_fields tests ---
+// --- count_errors_in_field_contexts tests ---
 
 #[test]
 fn count_errors_empty_fields() {
-    assert_eq!(count_errors_in_fields(&[]), 0);
+    assert_eq!(count_errors_in_field_contexts(&[]), 0);
 }
 
 #[test]
 fn count_errors_no_errors() {
-    let fields = vec![
-        json!({"name": "title", "value": "hello"}),
-        json!({"name": "body", "value": "world"}),
-    ];
-    assert_eq!(count_errors_in_fields(&fields), 0);
+    let fields = fields_from_json(vec![
+        json!({"field_type": "text", "name": "title", "value": "hello"}),
+        json!({"field_type": "text", "name": "body", "value": "world"}),
+    ]);
+    assert_eq!(count_errors_in_field_contexts(&fields), 0);
 }
 
 #[test]
 fn count_errors_direct_errors() {
-    let fields = vec![
-        json!({"name": "title", "error": "Required"}),
-        json!({"name": "body", "value": "ok"}),
-        json!({"name": "email", "error": "Invalid email"}),
-    ];
-    assert_eq!(count_errors_in_fields(&fields), 2);
+    let fields = fields_from_json(vec![
+        json!({"field_type": "text", "name": "title", "error": "Required"}),
+        json!({"field_type": "text", "name": "body", "value": "ok"}),
+        json!({"field_type": "text", "name": "email", "error": "Invalid email"}),
+    ]);
+    assert_eq!(count_errors_in_field_contexts(&fields), 2);
 }
 
 #[test]
 fn count_errors_nested_in_sub_fields() {
-    let fields = vec![json!({
+    let fields = fields_from_json(vec![json!({
+        "field_type": "group",
         "name": "group1",
         "sub_fields": [
-            {"name": "nested1", "error": "Too short"},
-            {"name": "nested2", "value": "ok"},
+            {"field_type": "text", "name": "nested1", "error": "Too short"},
+            {"field_type": "text", "name": "nested2", "value": "ok"},
         ]
-    })];
-    assert_eq!(count_errors_in_fields(&fields), 1);
+    })]);
+    assert_eq!(count_errors_in_field_contexts(&fields), 1);
 }
 
 #[test]
 fn count_errors_nested_in_tabs() {
-    let fields = vec![json!({
+    let fields = fields_from_json(vec![json!({
+        "field_type": "tabs",
         "name": "settings",
         "tabs": [
             {
                 "label": "General",
                 "sub_fields": [
-                    {"name": "f1", "error": "Required"},
-                    {"name": "f2", "error": "Too long"},
+                    {"field_type": "text", "name": "f1", "error": "Required"},
+                    {"field_type": "text", "name": "f2", "error": "Too long"},
                 ]
             },
             {
                 "label": "Advanced",
                 "sub_fields": [
-                    {"name": "f3", "value": "ok"},
+                    {"field_type": "text", "name": "f3", "value": "ok"},
                 ]
             }
         ]
-    })];
-    assert_eq!(count_errors_in_fields(&fields), 2);
+    })]);
+    assert_eq!(count_errors_in_field_contexts(&fields), 2);
 }
 
 #[test]
 fn count_errors_nested_in_array_rows() {
-    let fields = vec![json!({
+    let fields = fields_from_json(vec![json!({
+        "field_type": "array",
         "name": "items",
         "rows": [
             {
                 "index": 0,
                 "sub_fields": [
-                    {"name": "items[0][title]", "error": "Required"},
+                    {"field_type": "text", "name": "items[0][title]", "error": "Required"},
                 ]
             },
             {
                 "index": 1,
                 "sub_fields": [
-                    {"name": "items[1][title]", "value": "ok"},
+                    {"field_type": "text", "name": "items[1][title]", "value": "ok"},
                 ]
             }
         ]
-    })];
-    assert_eq!(count_errors_in_fields(&fields), 1);
+    })]);
+    assert_eq!(count_errors_in_field_contexts(&fields), 1);
 }
 
 #[test]
 fn count_errors_null_error_not_counted() {
-    let fields = vec![json!({"name": "title", "error": null})];
-    assert_eq!(count_errors_in_fields(&fields), 0);
+    let fields = fields_from_json(vec![
+        json!({"field_type": "text", "name": "title", "error": null}),
+    ]);
+    assert_eq!(count_errors_in_field_contexts(&fields), 0);
 }
 
 #[test]

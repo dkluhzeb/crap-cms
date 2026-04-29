@@ -4,7 +4,7 @@
 //! the `relationship_collection` + `picker` shape; Join exposes its inverse
 //! reference.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::BaseFieldData;
 
@@ -12,7 +12,8 @@ use super::BaseFieldData;
 
 /// Relationship to documents in another collection. The `selected_items`
 /// field is `None` after the build phase and `Some` after enrichment.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct RelationshipField {
     #[serde(flatten)]
     pub base: BaseFieldData,
@@ -37,43 +38,46 @@ pub struct RelationshipField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picker: Option<String>,
 
-    /// Selected items resolved from the DB during enrichment. For
-    /// polymorphic relationships this is a `Vec<SelectedCollectionItem>`
-    /// (each item carries its collection); otherwise just `{id, label}`.
+    /// Selected items resolved from the DB during enrichment.
+    /// `collection` is `None` for non-polymorphic relationships and
+    /// `Some(target_collection)` for polymorphic ones.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_items: Option<RelationshipSelected>,
+    pub selected_items: Option<Vec<RelationshipSelectedItem>>,
 }
 
-/// Either a flat list of `{id, label}` or, for polymorphic relationships,
-/// items that also carry their target collection.
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum RelationshipSelected {
-    Flat(Vec<RelationshipSelectedItem>),
-    Polymorphic(Vec<SelectedCollectionItem>),
-}
-
-/// One row of a non-polymorphic `selected_items` list.
-#[derive(Serialize)]
+/// One row of a `selected_items` list. For polymorphic relationships the
+/// `collection` field is set so templates can render labels like
+/// `{collection} / {label}`. Upload `selected_items` reuse this same struct
+/// and populate `thumbnail_url`, `is_image`, and `filename`.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct RelationshipSelectedItem {
     pub id: String,
     pub label: String,
-}
 
-/// One row of a polymorphic `selected_items` list — same as
-/// [`RelationshipSelectedItem`] but with the target collection attached so
-/// templates can render labels like `{collection} / {label}`.
-#[derive(Serialize)]
-pub struct SelectedCollectionItem {
-    pub id: String,
-    pub label: String,
-    pub collection: String,
+    /// Set only for polymorphic relationships; absent for the common case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+
+    /// Upload-only — preview URL for the upload's thumbnail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail_url: Option<String>,
+
+    /// Upload-only — `Some(true)` when the underlying mime starts with `image/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_image: Option<bool>,
+
+    /// Upload-only — present when the item came from a has-one upload that
+    /// also sets the form's hidden filename input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
 }
 
 // ── Upload ────────────────────────────────────────────────────────
 
 /// Upload reference (specialised relationship to a media collection).
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct UploadField {
     #[serde(flatten)]
     pub base: BaseFieldData,
@@ -92,13 +96,23 @@ pub struct UploadField {
     /// Resolved selected items (after enrichment).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_items: Option<Vec<RelationshipSelectedItem>>,
+
+    /// Has-one only — the resolved filename, populated by enrichment for the
+    /// hidden filename input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_filename: Option<String>,
+
+    /// Has-one only — the resolved thumbnail URL for image previews.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_preview_url: Option<String>,
 }
 
 // ── Join ──────────────────────────────────────────────────────────
 
 /// Read-only inverse-reference field. The `readonly` flag on
 /// [`BaseFieldData`] is set to `true` for join fields.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct JoinField {
     #[serde(flatten)]
     pub base: BaseFieldData,
@@ -108,4 +122,22 @@ pub struct JoinField {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub join_on: Option<String>,
+
+    /// Reverse-lookup items resolved by enrichment for the join target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join_items: Option<Vec<JoinItem>>,
+
+    /// Convenience count of `join_items`. Templates branch on this with
+    /// `{{#if join_count}}…{{/if}}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join_count: Option<usize>,
+}
+
+/// One row of a [`JoinField::join_items`] list — the inverse-reference
+/// document's id and display label.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct JoinItem {
+    pub id: String,
+    pub label: String,
 }

@@ -2,18 +2,19 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     admin::{
         AdminState,
+        context::field::{FieldContext, RelationshipSelectedItem, TabsField},
         handlers::field_context::enrich::{
             EnrichCtx, EnrichOptions, enrich_types, nested::enrich_nested_fields,
         },
     },
     core::{
         Registry,
-        field::{FieldDefinition, FieldType, RelationshipConfig},
+        field::{FieldDefinition, RelationshipConfig},
     },
     db::{
         DbConnection,
@@ -54,14 +55,14 @@ fn extract_polymorphic_refs(
     }
 }
 
-/// Resolve a single polymorphic ref to a JSON item with id, label, and collection.
+/// Resolve a single polymorphic ref to a typed item with id, label, and collection.
 fn resolve_polymorphic_ref(
     col: &str,
     id: &str,
     reg: &Registry,
     conn: &dyn DbConnection,
     locale_ctx: Option<&LocaleContext>,
-) -> Option<Value> {
+) -> Option<RelationshipSelectedItem> {
     let related_def = reg.get_collection(col)?;
     let title_field = related_def.title_field().map(|s| s.to_string());
 
@@ -76,7 +77,12 @@ fn resolve_polymorphic_ref(
         .unwrap_or(&doc.id)
         .to_string();
 
-    Some(json!({ "id": format!("{}/{}", col, doc.id), "label": label, "collection": col }))
+    Some(RelationshipSelectedItem {
+        id: format!("{}/{}", col, doc.id),
+        label,
+        collection: Some(col.to_string()),
+        ..Default::default()
+    })
 }
 
 /// Build selected_items for a polymorphic relationship field.
@@ -90,7 +96,7 @@ pub fn enrich_polymorphic_selected(
     reg: &Registry,
     conn: &dyn DbConnection,
     locale_ctx: Option<&LocaleContext>,
-) -> Vec<Value> {
+) -> Vec<RelationshipSelectedItem> {
     let refs = extract_polymorphic_refs(doc_fields, field_name, rc.has_many);
 
     refs.iter()
@@ -98,9 +104,9 @@ pub fn enrich_polymorphic_selected(
         .collect()
 }
 
-/// Dispatch enrichment for a single field context based on its type.
+/// Dispatch enrichment for a single typed field context based on its variant.
 fn enrich_single_field(
-    ctx: &mut Value,
+    fc: &mut FieldContext,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
     state: &AdminState,
@@ -111,44 +117,54 @@ fn enrich_single_field(
     let reg = enrich_ctx.reg;
     let rel_locale_ctx = enrich_ctx.rel_locale_ctx;
 
-    match field_def.field_type {
-        FieldType::Relationship => {
-            enrich_types::enrich_relationship(
-                ctx,
-                field_def,
+    match fc {
+        FieldContext::Relationship(rf) => {
+            enrich_types::enrich_relationship(rf, field_def, doc_fields, conn, reg, rel_locale_ctx);
+        }
+        FieldContext::Upload(uf) => {
+            enrich_types::enrich_upload(uf, field_def, doc_fields, conn, reg, rel_locale_ctx);
+        }
+        FieldContext::Array(af) => {
+            enrich_types::enrich_array(af, field_def, doc_fields, enrich_ctx);
+        }
+        FieldContext::Blocks(bf) => {
+            enrich_types::enrich_blocks(bf, field_def, doc_fields, enrich_ctx);
+        }
+        FieldContext::Row(rf) => {
+            enrich_field_contexts(
+                &mut rf.sub_fields,
+                &field_def.fields,
                 doc_fields,
+                state,
+                opts,
+            );
+        }
+        FieldContext::Collapsible(cf) => {
+            enrich_field_contexts(
+                &mut cf.sub_fields,
+                &field_def.fields,
+                doc_fields,
+                state,
+                opts,
+            );
+        }
+        FieldContext::Group(gf) => {
+            enrich_nested_fields(
+                &mut gf.sub_fields,
+                &field_def.fields,
                 conn,
                 reg,
                 rel_locale_ctx,
             );
         }
-        FieldType::Upload => {
-            enrich_types::enrich_upload(ctx, field_def, doc_fields, conn, reg, rel_locale_ctx);
+        FieldContext::Tabs(tf) => {
+            enrich_tabs(tf, field_def, doc_fields, state, opts);
         }
-        FieldType::Array => {
-            enrich_types::enrich_array(ctx, field_def, doc_fields, enrich_ctx);
+        FieldContext::Join(jf) => {
+            enrich_types::enrich_join(jf, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
         }
-        FieldType::Blocks => {
-            enrich_types::enrich_blocks(ctx, field_def, doc_fields, enrich_ctx);
-        }
-        FieldType::Row | FieldType::Collapsible => {
-            if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                enrich_field_contexts(sub_arr, &field_def.fields, doc_fields, state, opts);
-            }
-        }
-        FieldType::Group => {
-            if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
-            }
-        }
-        FieldType::Tabs => {
-            enrich_tabs(ctx, field_def, doc_fields, state, opts);
-        }
-        FieldType::Join => {
-            enrich_types::enrich_join(ctx, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
-        }
-        FieldType::Richtext => {
-            enrich_types::enrich_richtext(ctx, reg);
+        FieldContext::Richtext(rf) => {
+            enrich_types::enrich_richtext(rf, reg);
         }
         _ => {}
     }
@@ -156,20 +172,20 @@ fn enrich_single_field(
 
 /// Recursively enrich sub-fields within each tab.
 fn enrich_tabs(
-    ctx: &mut Value,
+    tf: &mut TabsField,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
     state: &AdminState,
     opts: &EnrichOptions,
 ) {
-    let Some(tabs_arr) = ctx.get_mut("tabs").and_then(|v| v.as_array_mut()) else {
-        return;
-    };
-
-    for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
-        if let Some(sub_arr) = tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-            enrich_field_contexts(sub_arr, &tab_def.fields, doc_fields, state, opts);
-        }
+    for (tab_panel, tab_def) in tf.tabs.iter_mut().zip(field_def.tabs.iter()) {
+        enrich_field_contexts(
+            &mut tab_panel.sub_fields,
+            &tab_def.fields,
+            doc_fields,
+            state,
+            opts,
+        );
     }
 }
 
@@ -178,8 +194,10 @@ fn enrich_tabs(
 /// - Array fields: populate existing rows from hydrated document data
 /// - Upload fields: fetch upload collection options with thumbnails
 /// - Blocks fields: populate block rows from hydrated document data
+///
+/// Operates on typed [`FieldContext`] end-to-end — no Value roundtrip.
 pub fn enrich_field_contexts(
-    fields: &mut [Value],
+    fields: &mut [FieldContext],
     field_defs: &[FieldDefinition],
     doc_fields: &HashMap<String, Value>,
     state: &AdminState,
@@ -209,7 +227,7 @@ pub fn enrich_field_contexts(
         Box::new(field_defs.iter())
     };
 
-    for (ctx, field_def) in fields.iter_mut().zip(defs_iter) {
-        enrich_single_field(ctx, field_def, doc_fields, state, opts, &enrich_ctx);
+    for (fc, field_def) in fields.iter_mut().zip(defs_iter) {
+        enrich_single_field(fc, field_def, doc_fields, state, opts, &enrich_ctx);
     }
 }

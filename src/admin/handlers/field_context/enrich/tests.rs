@@ -4,15 +4,20 @@ use std::{
 };
 
 use r2d2_sqlite::SqliteConnectionManager;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::*;
+use super::{
+    EnrichOptions, SubFieldOpts, build_enriched_sub_field_context as build_enriched_typed,
+    enrich_nested_fields as enrich_nested_typed, enrich_types,
+    enrichment::enrich_field_contexts as enrich_typed,
+};
 
 use crate::{
     admin::{
         AdminState, Translations,
-        handlers::field_context::{MAX_FIELD_DEPTH, builder::build_field_contexts},
+        context::field::FieldContext,
+        handlers::field_context::{MAX_FIELD_DEPTH, builder::build_field_contexts as build_typed},
     },
     config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
@@ -28,6 +33,75 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
 };
+
+/// Test-only wrapper that converts the typed build output to `Vec<Value>` for
+/// the JSON-style assertions used throughout this file.
+fn build_field_contexts(
+    fields: &[FieldDefinition],
+    values: &HashMap<String, String>,
+    errors: &HashMap<String, String>,
+    filter_hidden: bool,
+    non_default_locale: bool,
+) -> Vec<Value> {
+    build_typed(fields, values, errors, filter_hidden, non_default_locale)
+        .into_iter()
+        .map(|fc| fc.to_value())
+        .collect()
+}
+
+/// Test-only wrapper for [`build_enriched_sub_field_context`] returning Value
+/// so existing assertions can keep using JSON indexing.
+fn build_enriched_sub_field_context(
+    sf: &FieldDefinition,
+    raw_value: Option<&Value>,
+    parent_name: &str,
+    idx: usize,
+    opts: &SubFieldOpts,
+) -> Value {
+    build_enriched_typed(sf, raw_value, parent_name, idx, opts).to_value()
+}
+
+/// Test-only wrapper for the typed enrichment entry point. Tests construct
+/// `Vec<Value>`; we deserialize at entry and reserialize at exit.
+fn enrich_field_contexts(
+    fields: &mut Vec<Value>,
+    field_defs: &[FieldDefinition],
+    doc_fields: &HashMap<String, Value>,
+    state: &AdminState,
+    opts: &EnrichOptions,
+) {
+    let mut typed: Vec<FieldContext> = fields
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).expect("test field-context must deserialize"))
+        .collect();
+    enrich_typed(&mut typed, field_defs, doc_fields, state, opts);
+    *fields = typed.into_iter().map(|fc| fc.to_value()).collect();
+}
+
+/// Test-only wrapper for `enrich_nested_fields` accepting `Vec<Value>`.
+#[allow(dead_code)]
+fn enrich_nested_fields(
+    sub_fields: &mut Vec<Value>,
+    field_defs: &[FieldDefinition],
+    conn: &dyn crate::db::DbConnection,
+    reg: &Registry,
+    rel_locale_ctx: Option<&crate::db::query::LocaleContext>,
+) {
+    let mut typed: Vec<FieldContext> = sub_fields
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).expect("test sub-field must deserialize"))
+        .collect();
+    enrich_nested_typed(&mut typed, field_defs, conn, reg, rel_locale_ctx);
+    *sub_fields = typed.into_iter().map(|fc| fc.to_value()).collect();
+}
+
+/// Test-only wrapper for `enrich_types::enrich_richtext` accepting `&mut Value`.
+fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
+    let mut typed: crate::admin::context::field::RichtextField =
+        serde_json::from_value(ctx.clone()).expect("test richtext ctx must deserialize");
+    enrich_types::enrich_richtext(&mut typed, reg);
+    *ctx = serde_json::to_value(typed).expect("RichtextField serializes infallibly");
+}
 
 fn make_test_state() -> AdminState {
     let tmp = tempfile::tempdir().unwrap();
@@ -296,9 +370,17 @@ fn enriched_sub_field_max_depth_returns_early() {
             .depth(MAX_FIELD_DEPTH)
             .build(),
     );
-    // At max depth, array-specific fields should not be added
+    // At max depth, array-specific recursive content should not be expanded.
+    // (`sub_fields` may serialize as an empty array under the typed model;
+    // the contract is that no rows/template content is present.)
     assert!(ctx.get("rows").is_none());
-    assert!(ctx.get("sub_fields").is_none());
+    assert_eq!(
+        ctx.get("sub_fields")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
+        0
+    );
 }
 
 // --- enriched_sub_field: date field ---
@@ -1386,7 +1468,7 @@ fn enrich_richtext_basic_node_defs() {
         "_node_names": ["cta"],
     });
 
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     // _node_names should be removed
     assert!(ctx.get("_node_names").is_none());
@@ -1449,7 +1531,7 @@ fn enrich_richtext_admin_display_hints() {
     );
 
     let mut ctx = json!({ "_node_names": ["widget"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
     assert_eq!(attrs[0]["hidden"], true);
@@ -1484,7 +1566,7 @@ fn enrich_richtext_validation_bounds() {
     );
 
     let mut ctx = json!({ "_node_names": ["form"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
 
@@ -1504,7 +1586,7 @@ fn enrich_richtext_missing_node_skipped() {
     let reg = Registry::new(); // empty — no nodes registered
     let mut ctx = json!({ "_node_names": ["nonexistent"] });
 
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     // _node_names removed, but no custom_nodes set (all were missing)
     assert!(ctx.get("_node_names").is_none());
@@ -1516,7 +1598,7 @@ fn enrich_richtext_no_node_names_key() {
     let reg = Registry::new();
     let mut ctx = json!({ "value": "hello" });
 
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     // nothing changed, no crash
     assert_eq!(ctx["value"], "hello");
@@ -1541,7 +1623,7 @@ fn enrich_richtext_default_value_forwarded() {
     );
 
     let mut ctx = json!({ "_node_names": ["note"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
     assert_eq!(attrs[0]["default"], "low");
@@ -1559,7 +1641,7 @@ fn enrich_richtext_hints_absent_when_not_set() {
     );
 
     let mut ctx = json!({ "_node_names": ["plain"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attr = &ctx["custom_nodes"][0]["attrs"][0];
     // These should NOT be present when not explicitly set

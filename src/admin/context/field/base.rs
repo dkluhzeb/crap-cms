@@ -2,7 +2,7 @@
 //! variant. Carries the keys templates expect on every field, regardless of
 //! type: `name`, `field_type`, `label`, `required`, `value`, etc.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Common keys present on every field context. Variants flatten this into
@@ -13,10 +13,19 @@ use serde_json::Value;
 /// `null` from `undefined` keep working. (Most templates branch with
 /// `{{#if placeholder}}` which treats both identically; the explicit-null
 /// form is preserved for parity.)
-#[derive(Serialize)]
+///
+/// **No `field_type` field.** The discriminator is provided by the
+/// internally-tagged [`FieldContext`](super::FieldContext) enum.
+///
+/// `Default` + `#[serde(default)]` are derived so the existing Value-based
+/// enrichment code (which constructs ad-hoc sub-field contexts without
+/// every base field) can roundtrip through `Deserialize` without panicking
+/// on missing keys. The trade-off: typed handlers must explicitly populate
+/// fields they care about; missing fields get sensible defaults silently.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct BaseFieldData {
     pub name: String,
-    pub field_type: String,
     pub label: String,
     pub required: bool,
     pub value: Value,
@@ -50,13 +59,13 @@ pub struct BaseFieldData {
 
 /// Validation attributes shared by all field types — present only when the
 /// field definition declares them.
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct ValidationAttrs {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_length: Option<u32>,
+    pub min_length: Option<usize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_length: Option<u32>,
+    pub max_length: Option<usize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
@@ -76,7 +85,7 @@ pub struct ValidationAttrs {
 
 /// Display-condition state injected by
 /// [`apply_display_conditions`](crate::admin::handlers::field_context::apply_display_conditions).
-#[derive(Serialize, Default)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct ConditionData {
     /// Initial visibility resolved by the Lua condition function.
     #[serde(skip_serializing_if = "Option::is_none")]

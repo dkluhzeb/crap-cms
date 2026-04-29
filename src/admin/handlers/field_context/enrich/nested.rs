@@ -3,16 +3,25 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::enrich_types::build_upload_item;
 use crate::{
-    admin::handlers::{
-        field_context::{
-            MAX_FIELD_DEPTH, collect_node_attr_errors,
-            enrich::{SubFieldOpts, field_types},
+    admin::{
+        context::field::{
+            ArrayField, BaseFieldData, BlocksField, CheckboxField, ChoiceField, CodeField,
+            ConditionData, DateField, FieldContext, GroupField, JoinField, NumberField,
+            RelationshipField, RelationshipSelectedItem, RichtextField, RowField, TabsField,
+            TextField, TextareaField, UploadField, ValidationAttrs,
         },
-        shared::auto_label_from_name,
+        handlers::{
+            field_context::{
+                MAX_FIELD_DEPTH, collect_node_attr_errors,
+                enrich::{SubFieldOpts, field_types},
+                safe_template_id,
+            },
+            shared::auto_label_from_name,
+        },
     },
     core::{
         Registry,
@@ -62,13 +71,14 @@ fn stringify_sub_field_value(raw_value: Option<&Value>, sf: &FieldDefinition) ->
         .unwrap_or_default()
 }
 
-/// Build the base JSON context for a sub-field (before type-specific dispatch).
+/// Build the typed shared base data for a sub-field (before variant
+/// construction).
 fn build_sub_field_base(
     sf: &FieldDefinition,
     indexed_name: &str,
     val: &str,
     opts: &SubFieldOpts,
-) -> Value {
+) -> BaseFieldData {
     let sf_label = sf
         .admin
         .label
@@ -76,155 +86,320 @@ fn build_sub_field_base(
         .map(|ls| ls.resolve_default().to_string())
         .unwrap_or_else(|| auto_label_from_name(&sf.name));
 
-    let mut ctx = json!({
-        "name": indexed_name,
-        "field_type": sf.field_type.as_str(),
-        "label": sf_label,
-        "value": val,
-        "required": sf.required,
-        "readonly": sf.admin.readonly || opts.locale_locked,
-        "locale_locked": opts.locale_locked,
-        "placeholder": sf.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
-        "description": sf.admin.description.as_ref().map(|ls| ls.resolve_default()),
-    });
-
-    if let Some(err) = opts.errors.get(indexed_name) {
-        ctx["error"] = json!(err);
+    BaseFieldData {
+        name: indexed_name.to_string(),
+        label: sf_label,
+        required: sf.required,
+        value: Value::String(val.to_string()),
+        placeholder: sf
+            .admin
+            .placeholder
+            .as_ref()
+            .map(|ls| ls.resolve_default().to_string()),
+        description: sf
+            .admin
+            .description
+            .as_ref()
+            .map(|ls| ls.resolve_default().to_string()),
+        readonly: sf.admin.readonly || opts.locale_locked,
+        localized: sf.localized,
+        locale_locked: opts.locale_locked,
+        position: sf.admin.position.clone(),
+        error: opts.errors.get(indexed_name).cloned(),
+        validation: ValidationAttrs::default(),
+        condition: ConditionData::default(),
     }
+}
 
-    ctx
+/// Construct the [`FieldContext`] variant matching `sf.field_type`, with the
+/// base data populated and per-variant defaults filled in. Type-specific
+/// dispatch in [`dispatch_sub_field_type`] subsequently mutates the variant
+/// to set its real data.
+pub(super) fn construct_sub_variant(
+    sf: &FieldDefinition,
+    base: BaseFieldData,
+    indexed_name: &str,
+) -> FieldContext {
+    match &sf.field_type {
+        FieldType::Text => FieldContext::Text(TextField {
+            base,
+            has_many: None,
+            tags: None,
+        }),
+        FieldType::Email => FieldContext::Email(TextField {
+            base,
+            has_many: None,
+            tags: None,
+        }),
+        FieldType::Json => FieldContext::Json(TextField {
+            base,
+            has_many: None,
+            tags: None,
+        }),
+        FieldType::Textarea => FieldContext::Textarea(TextareaField {
+            base,
+            rows: 8,
+            resizable: false,
+        }),
+        FieldType::Number => FieldContext::Number(NumberField {
+            base,
+            step: String::new(),
+            has_many: None,
+            tags: None,
+        }),
+        FieldType::Code => FieldContext::Code(CodeField {
+            base,
+            language: String::new(),
+            languages: None,
+        }),
+        FieldType::Richtext => FieldContext::Richtext(RichtextField {
+            base,
+            resizable: false,
+            richtext_format: "html".to_string(),
+            features: None,
+            node_names: None,
+            custom_nodes: None,
+        }),
+        FieldType::Date => FieldContext::Date(DateField {
+            base,
+            picker_appearance: "dayOnly".to_string(),
+            date_only_value: None,
+            datetime_local_value: None,
+            min_date: None,
+            max_date: None,
+            timezone_enabled: None,
+            default_timezone: None,
+            timezone_options: None,
+            timezone_value: None,
+        }),
+        FieldType::Checkbox => FieldContext::Checkbox(CheckboxField {
+            base,
+            checked: false,
+        }),
+        FieldType::Select => FieldContext::Select(ChoiceField {
+            base,
+            options: Vec::new(),
+            has_many: None,
+        }),
+        FieldType::Radio => FieldContext::Radio(ChoiceField {
+            base,
+            options: Vec::new(),
+            has_many: None,
+        }),
+        FieldType::Relationship => FieldContext::Relationship(RelationshipField {
+            base,
+            relationship_collection: None,
+            has_many: None,
+            polymorphic: None,
+            collections: None,
+            picker: None,
+            selected_items: None,
+        }),
+        FieldType::Upload => FieldContext::Upload(UploadField {
+            base,
+            relationship_collection: None,
+            has_many: None,
+            picker: None,
+            selected_items: None,
+            selected_filename: None,
+            selected_preview_url: None,
+        }),
+        FieldType::Join => FieldContext::Join(JoinField {
+            base,
+            join_collection: None,
+            join_on: None,
+            join_items: None,
+            join_count: None,
+        }),
+        FieldType::Group => FieldContext::Group(GroupField {
+            base,
+            sub_fields: Vec::new(),
+            collapsed: false,
+        }),
+        FieldType::Row => FieldContext::Row(RowField {
+            base,
+            sub_fields: Vec::new(),
+        }),
+        FieldType::Collapsible => FieldContext::Collapsible(GroupField {
+            base,
+            sub_fields: Vec::new(),
+            collapsed: false,
+        }),
+        FieldType::Tabs => FieldContext::Tabs(TabsField {
+            base,
+            tabs: Vec::new(),
+        }),
+        FieldType::Array => FieldContext::Array(ArrayField {
+            base,
+            sub_fields: Vec::new(),
+            rows: None,
+            row_count: 0,
+            template_id: safe_template_id(indexed_name),
+            min_rows: None,
+            max_rows: None,
+            init_collapsed: false,
+            add_label: None,
+            label_field: None,
+        }),
+        FieldType::Blocks => FieldContext::Blocks(BlocksField {
+            base,
+            block_definitions: Vec::new(),
+            rows: None,
+            row_count: 0,
+            template_id: safe_template_id(indexed_name),
+            min_rows: None,
+            max_rows: None,
+            init_collapsed: false,
+            add_label: None,
+            picker: None,
+            label_field: None,
+        }),
+    }
 }
 
 /// Enrich a Richtext sub-field context with format, features, nodes, and attr errors.
-fn enrich_sub_richtext(
-    sub_ctx: &mut Value,
+pub(super) fn enrich_sub_richtext(
+    rf: &mut RichtextField,
     sf: &FieldDefinition,
     indexed_name: &str,
     errors: &HashMap<String, String>,
 ) {
-    sub_ctx["resizable"] = json!(sf.admin.resizable);
+    rf.resizable = sf.admin.resizable;
 
     if !sf.admin.features.is_empty() {
-        sub_ctx["features"] = json!(sf.admin.features);
+        rf.features = Some(sf.admin.features.clone());
     }
 
-    sub_ctx["richtext_format"] = json!(sf.admin.richtext_format.as_deref().unwrap_or("html"));
+    rf.richtext_format = sf
+        .admin
+        .richtext_format
+        .as_deref()
+        .unwrap_or("html")
+        .to_string();
 
     if !sf.admin.nodes.is_empty() {
-        sub_ctx["_node_names"] = json!(sf.admin.nodes);
+        rf.node_names = Some(sf.admin.nodes.clone());
     }
 
-    if sub_ctx.get("error").is_none_or(|v| v.is_null())
+    if rf.base.error.is_none()
         && let Some(node_err) = collect_node_attr_errors(errors, indexed_name)
     {
-        sub_ctx["error"] = json!(node_err);
+        rf.base.error = Some(node_err);
     }
 }
 
-/// Dispatch type-specific enrichment for a sub-field context.
+/// Dispatch type-specific enrichment for a typed sub-field context.
 fn dispatch_sub_field_type(
-    sub_ctx: &mut Value,
+    fc: &mut FieldContext,
     sf: &FieldDefinition,
     val: &str,
     raw_value: Option<&Value>,
     indexed_name: &str,
     opts: &SubFieldOpts,
 ) {
-    match &sf.field_type {
-        FieldType::Checkbox => field_types::sub_checkbox(sub_ctx, val),
-        FieldType::Select | FieldType::Radio => field_types::sub_select_radio(sub_ctx, sf, val),
-        FieldType::Date => field_types::sub_date(sub_ctx, sf, val, ""),
-        FieldType::Relationship => field_types::sub_relationship(sub_ctx, sf),
-        FieldType::Upload => field_types::sub_upload(sub_ctx, sf),
-        FieldType::Array => field_types::sub_array(sub_ctx, sf, raw_value, indexed_name, opts),
-        FieldType::Blocks => field_types::sub_blocks(sub_ctx, sf, raw_value, indexed_name, opts),
-        FieldType::Group => field_types::sub_group(sub_ctx, sf, raw_value, indexed_name, opts),
-        FieldType::Row | FieldType::Collapsible => {
-            field_types::sub_row_collapsible(sub_ctx, sf, raw_value, indexed_name, opts)
+    match fc {
+        FieldContext::Checkbox(cf) => field_types::sub_checkbox(cf, val),
+        FieldContext::Select(cf) | FieldContext::Radio(cf) => {
+            field_types::sub_select_radio(cf, sf, val)
         }
-        FieldType::Tabs => field_types::sub_tabs(sub_ctx, sf, raw_value, indexed_name, opts),
-        FieldType::Textarea => {
-            sub_ctx["rows"] = json!(sf.admin.rows.unwrap_or(8));
-            sub_ctx["resizable"] = json!(sf.admin.resizable);
+        FieldContext::Date(df) => field_types::sub_date(df, sf, val, ""),
+        FieldContext::Relationship(rf) => field_types::sub_relationship(rf, sf),
+        FieldContext::Upload(uf) => field_types::sub_upload(uf, sf),
+        FieldContext::Array(af) => field_types::sub_array(af, sf, raw_value, indexed_name, opts),
+        FieldContext::Blocks(bf) => field_types::sub_blocks(bf, sf, raw_value, indexed_name, opts),
+        FieldContext::Group(gf) => field_types::sub_group(gf, sf, raw_value, indexed_name, opts),
+        FieldContext::Row(rf) => {
+            field_types::sub_row_collapsible_row(rf, sf, raw_value, indexed_name, opts)
         }
-        FieldType::Richtext => enrich_sub_richtext(sub_ctx, sf, indexed_name, opts.errors),
-        FieldType::Text | FieldType::Number if sf.has_many => {
-            field_types::sub_has_many_tags(sub_ctx, val)
+        FieldContext::Collapsible(gf) => {
+            field_types::sub_row_collapsible_group(gf, sf, raw_value, indexed_name, opts)
         }
+        FieldContext::Tabs(tf) => field_types::sub_tabs(tf, sf, raw_value, indexed_name, opts),
+        FieldContext::Textarea(tf) => {
+            tf.rows = sf.admin.rows.unwrap_or(8);
+            tf.resizable = sf.admin.resizable;
+        }
+        FieldContext::Richtext(rf) => enrich_sub_richtext(rf, sf, indexed_name, opts.errors),
+        FieldContext::Text(tf) if sf.has_many => field_types::sub_text_has_many_tags(tf, val),
+        FieldContext::Number(nf) if sf.has_many => field_types::sub_number_has_many_tags(nf, val),
         _ => {}
     }
 }
 
 /// Build an enriched sub-field context for a single field within an array/blocks row.
-///
-/// - `sf`: the sub-field definition
-/// - `raw_value`: the raw JSON value for this sub-field from the hydrated document
-/// - `parent_name`: the parent field's name (e.g. "content")
-/// - `idx`: the row index within the parent
-/// - `opts`: locale/depth/error options
+/// Constructs the typed [`FieldContext`] variant directly and applies
+/// type-specific enrichment via [`dispatch_sub_field_type`].
 pub fn build_enriched_sub_field_context(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     parent_name: &str,
     idx: usize,
     opts: &SubFieldOpts,
-) -> Value {
+) -> FieldContext {
     let indexed_name = sub_field_indexed_name(sf, parent_name, idx);
     let val = stringify_sub_field_value(raw_value, sf);
-    let mut sub_ctx = build_sub_field_base(sf, &indexed_name, &val, opts);
+    let base = build_sub_field_base(sf, &indexed_name, &val, opts);
+    let mut fc = construct_sub_variant(sf, base, &indexed_name);
 
     if opts.depth < MAX_FIELD_DEPTH {
-        dispatch_sub_field_type(&mut sub_ctx, sf, &val, raw_value, &indexed_name, opts);
+        dispatch_sub_field_type(&mut fc, sf, &val, raw_value, &indexed_name, opts);
     }
 
-    sub_ctx
+    fc
 }
 
 /// Recursively enrich Upload and Relationship sub-field contexts with options from the database.
 /// Called for sub-fields inside layout containers (Row, Collapsible, Tabs, Group) and
 /// composite fields (Array, Blocks) that can't be enriched during initial context building.
 pub fn enrich_nested_fields(
-    sub_fields: &mut [Value],
+    sub_fields: &mut [FieldContext],
     field_defs: &[FieldDefinition],
     conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
-    for (ctx, field_def) in sub_fields.iter_mut().zip(field_defs.iter()) {
-        match field_def.field_type {
-            FieldType::Relationship => {
-                enrich_nested_relationship(ctx, field_def, conn, reg, rel_locale_ctx);
+    for (fc, field_def) in sub_fields.iter_mut().zip(field_defs.iter()) {
+        match fc {
+            FieldContext::Relationship(rf) => {
+                enrich_nested_relationship(rf, field_def, conn, reg, rel_locale_ctx);
             }
-            FieldType::Upload => {
-                enrich_nested_upload(ctx, field_def, conn, reg, rel_locale_ctx);
+            FieldContext::Upload(uf) => {
+                enrich_nested_upload(uf, field_def, conn, reg, rel_locale_ctx);
             }
-            FieldType::Row | FieldType::Collapsible | FieldType::Group => {
-                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                    enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
+            FieldContext::Row(rfld) => {
+                enrich_nested_fields(
+                    &mut rfld.sub_fields,
+                    &field_def.fields,
+                    conn,
+                    reg,
+                    rel_locale_ctx,
+                );
+            }
+            FieldContext::Collapsible(gf) | FieldContext::Group(gf) => {
+                enrich_nested_fields(
+                    &mut gf.sub_fields,
+                    &field_def.fields,
+                    conn,
+                    reg,
+                    rel_locale_ctx,
+                );
+            }
+            FieldContext::Tabs(tf) => {
+                for (tab_panel, tab_def) in tf.tabs.iter_mut().zip(field_def.tabs.iter()) {
+                    enrich_nested_fields(
+                        &mut tab_panel.sub_fields,
+                        &tab_def.fields,
+                        conn,
+                        reg,
+                        rel_locale_ctx,
+                    );
                 }
             }
-            FieldType::Tabs => {
-                if let Some(tabs_arr) = ctx.get_mut("tabs").and_then(|v| v.as_array_mut()) {
-                    for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
-                        if let Some(sub_arr) =
-                            tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
-                        {
-                            enrich_nested_fields(
-                                sub_arr,
-                                &tab_def.fields,
-                                conn,
-                                reg,
-                                rel_locale_ctx,
-                            );
-                        }
-                    }
-                }
+            FieldContext::Array(af) => {
+                enrich_nested_array(af, field_def, conn, reg, rel_locale_ctx);
             }
-            FieldType::Array => {
-                enrich_nested_array(ctx, field_def, conn, reg, rel_locale_ctx);
-            }
-            FieldType::Blocks => {
-                enrich_nested_blocks(ctx, field_def, conn, reg, rel_locale_ctx);
+            FieldContext::Blocks(bf) => {
+                enrich_nested_blocks(bf, field_def, conn, reg, rel_locale_ctx);
             }
             _ => {}
         }
@@ -232,7 +407,7 @@ pub fn enrich_nested_fields(
 }
 
 fn enrich_nested_relationship(
-    ctx: &mut Value,
+    rf: &mut RelationshipField,
     field_def: &FieldDefinition,
     conn: &dyn DbConnection,
     reg: &Registry,
@@ -251,10 +426,10 @@ fn enrich_nested_relationship(
         return;
     };
     let title_field = related_def.title_field().map(|s| s.to_string());
-    let current_value = ctx.get("value").and_then(|v| v.as_str()).unwrap_or("");
+    let current_value = rf.base.value.as_str().unwrap_or("");
 
     if current_value.is_empty() {
-        ctx["selected_items"] = json!([]);
+        rf.selected_items = Some(Vec::new());
         return;
     }
 
@@ -274,17 +449,21 @@ fn enrich_nested_relationship(
             .and_then(|f| doc.get_str(f))
             .unwrap_or(&doc.id)
             .to_string();
-        json!({ "id": doc.id, "label": label })
+        RelationshipSelectedItem {
+            id: doc.id.to_string(),
+            label,
+            ..Default::default()
+        }
     });
 
-    ctx["selected_items"] = match item {
-        Some(it) => json!([it]),
-        None => json!([]),
-    };
+    rf.selected_items = Some(match item {
+        Some(it) => vec![it],
+        None => Vec::new(),
+    });
 }
 
 fn enrich_nested_upload(
-    ctx: &mut Value,
+    uf: &mut UploadField,
     field_def: &FieldDefinition,
     conn: &dyn DbConnection,
     reg: &Registry,
@@ -309,10 +488,10 @@ fn enrich_nested_upload(
         .as_ref()
         .and_then(|u| u.admin_thumbnail.as_ref().cloned());
 
-    let current_value = ctx.get("value").and_then(|v| v.as_str()).unwrap_or("");
+    let current_value = uf.base.value.as_str().unwrap_or("");
 
     if current_value.is_empty() {
-        ctx["selected_items"] = json!([]);
+        uf.selected_items = Some(Vec::new());
         return;
     }
 
@@ -326,7 +505,7 @@ fn enrich_nested_upload(
     )
     .ok()
     .flatten() else {
-        ctx["selected_items"] = json!([]);
+        uf.selected_items = Some(Vec::new());
         return;
     };
 
@@ -337,77 +516,81 @@ fn enrich_nested_upload(
     }
 
     let item = build_upload_item(&doc, &title_field, &admin_thumbnail, true);
-    let label = item["label"].as_str().unwrap_or("").to_string();
-    let thumb_url = item
-        .get("thumbnail_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let label = item.label.clone();
+    let thumb_url = item.thumbnail_url.clone();
 
-    ctx["selected_items"] = json!([item]);
-    ctx["selected_filename"] = json!(label);
+    uf.selected_items = Some(vec![item]);
+    uf.selected_filename = Some(label);
 
     if let Some(url) = thumb_url {
-        ctx["selected_preview_url"] = json!(url);
+        uf.selected_preview_url = Some(url);
     }
 }
 
 fn enrich_nested_array(
-    ctx: &mut Value,
+    af: &mut ArrayField,
     field_def: &FieldDefinition,
     conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
     // Recurse into array rows' sub-fields
-    if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
-        for row_ctx in rows_arr.iter_mut() {
-            if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
-            }
+    if let Some(rows) = af.rows.as_mut() {
+        for row in rows.iter_mut() {
+            enrich_nested_fields(
+                &mut row.sub_fields,
+                &field_def.fields,
+                conn,
+                reg,
+                rel_locale_ctx,
+            );
         }
     }
 
     // Enrich the <template> sub-fields so new rows added via JS have upload/relationship options
-    if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-        enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
-    }
+    enrich_nested_fields(
+        &mut af.sub_fields,
+        &field_def.fields,
+        conn,
+        reg,
+        rel_locale_ctx,
+    );
 }
 
 fn enrich_nested_blocks(
-    ctx: &mut Value,
+    bf: &mut BlocksField,
     field_def: &FieldDefinition,
     conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
     // Recurse into block rows' sub-fields, matching each row's block type
-    if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
-        for row_ctx in rows_arr.iter_mut() {
-            let block_type = row_ctx
-                .get("_block_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
+    if let Some(rows) = bf.rows.as_mut() {
+        for row in rows.iter_mut() {
             if let Some(block_def) = field_def
                 .blocks
                 .iter()
-                .find(|bd| bd.block_type == block_type)
-                && let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
+                .find(|bd| bd.block_type == row.block_type)
             {
-                enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
+                enrich_nested_fields(
+                    &mut row.sub_fields,
+                    &block_def.fields,
+                    conn,
+                    reg,
+                    rel_locale_ctx,
+                );
             }
         }
     }
 
     // Enrich block definition templates so new block rows have upload/relationship options
-    if let Some(defs_arr) = ctx
-        .get_mut("block_definitions")
-        .and_then(|v| v.as_array_mut())
-    {
-        for (def_ctx, block_def) in defs_arr.iter_mut().zip(field_def.blocks.iter()) {
-            if let Some(sub_arr) = def_ctx.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
-            }
-        }
+    for (def_ctx, block_def) in bf.block_definitions.iter_mut().zip(field_def.blocks.iter()) {
+        enrich_nested_fields(
+            &mut def_ctx.fields,
+            &block_def.fields,
+            conn,
+            reg,
+            rel_locale_ctx,
+        );
     }
 }

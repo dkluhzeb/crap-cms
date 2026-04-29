@@ -10,12 +10,13 @@ use serde_json::{Value, json};
 
 use super::*;
 
-/// Convenience: build a base with sensible defaults and the given name +
-/// field_type. All other fields use parity-preserving defaults.
-fn base(name: &str, field_type: &str) -> BaseFieldData {
+/// Convenience: build a base with sensible defaults. The field_type
+/// discriminator is set by the variant the base ends up in (via the
+/// internally-tagged enum), so this helper takes only the name and field
+/// label parameters.
+fn base(name: &str, _field_type_hint: &str) -> BaseFieldData {
     BaseFieldData {
         name: name.to_string(),
-        field_type: field_type.to_string(),
         label: name.to_string(),
         required: false,
         value: Value::String(String::new()),
@@ -191,6 +192,7 @@ fn richtext_renames_node_names_with_underscore_prefix() {
         richtext_format: "html".to_string(),
         features: Some(vec!["bold".to_string()]),
         node_names: Some(vec!["paragraph".to_string()]),
+        custom_nodes: None,
     };
     let v = serde_json::to_value(FieldContext::Richtext(f)).unwrap();
     // Per the existing on-the-wire shape consumed by <crap-richtext>.
@@ -313,10 +315,14 @@ fn relationship_with_selected_items_flat() {
         polymorphic: None,
         collections: None,
         picker: None,
-        selected_items: Some(RelationshipSelected::Flat(vec![RelationshipSelectedItem {
+        selected_items: Some(vec![RelationshipSelectedItem {
             id: "u1".to_string(),
             label: "Alice".to_string(),
-        }])),
+            collection: None,
+            thumbnail_url: None,
+            is_image: None,
+            filename: None,
+        }]),
     };
     let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();
     let items = v["selected_items"].as_array().unwrap();
@@ -334,13 +340,14 @@ fn relationship_polymorphic_selected_items_carry_collection() {
         polymorphic: Some(true),
         collections: Some(vec!["users".to_string()]),
         picker: None,
-        selected_items: Some(RelationshipSelected::Polymorphic(vec![
-            SelectedCollectionItem {
-                id: "u1".to_string(),
-                label: "Alice".to_string(),
-                collection: "users".to_string(),
-            },
-        ])),
+        selected_items: Some(vec![RelationshipSelectedItem {
+            id: "u1".to_string(),
+            label: "Alice".to_string(),
+            collection: Some("users".to_string()),
+            thumbnail_url: None,
+            is_image: None,
+            filename: None,
+        }]),
     };
     let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();
     let items = v["selected_items"].as_array().unwrap();
@@ -356,6 +363,8 @@ fn upload_with_picker_default() {
         relationship_collection: Some("media".to_string()),
         has_many: None,
         picker: Some("drawer".to_string()),
+        selected_filename: None,
+        selected_preview_url: None,
         selected_items: None,
     };
     let v = serde_json::to_value(FieldContext::Upload(f)).unwrap();
@@ -373,6 +382,8 @@ fn join_emits_collection_and_on() {
         base: b,
         join_collection: Some("posts".to_string()),
         join_on: Some("author_id".to_string()),
+        join_items: None,
+        join_count: None,
     };
     let v = serde_json::to_value(FieldContext::Join(f)).unwrap();
     assert_eq!(v["readonly"], true);
@@ -444,7 +455,7 @@ fn tabs_include_panels_with_optional_error_count() {
             TabPanel {
                 label: "Advanced".to_string(),
                 sub_fields: vec![],
-                error_count: Some(2),
+                error_count: Some(2usize),
                 description: Some("danger zone".to_string()),
             },
         ],
@@ -535,6 +546,7 @@ fn blocks_emit_block_definitions() {
         init_collapsed: false,
         add_label: None,
         picker: Some("inline".to_string()),
+        label_field: None,
     };
     let v = serde_json::to_value(FieldContext::Blocks(b)).unwrap();
     let defs = v["block_definitions"].as_array().unwrap();
@@ -550,12 +562,16 @@ fn block_row_carries_block_type() {
     let row = BlockRow {
         index: 0,
         block_type: "hero".to_string(),
+        block_label: "Hero".to_string(),
         sub_fields: vec![],
         has_errors: Some(true),
         custom_label: None,
     };
     let v = serde_json::to_value(&row).unwrap();
-    assert_eq!(v["block_type"], "hero");
+    // JSON key is `_block_type` (underscore-prefixed) per the legacy
+    // on-the-wire contract; the Rust field is `block_type`.
+    assert_eq!(v["_block_type"], "hero");
+    assert_eq!(v["block_label"], "Hero");
     assert_eq!(v["has_errors"], true);
 }
 

@@ -10,7 +10,7 @@ use crate::{
         AdminState,
         context::{
             Breadcrumb, CollectionContext, CrapMeta, DocumentRef, EditorLocaleContext,
-            GlobalContext, NavData, PageType, PaginationContext, UserContext,
+            GlobalContext, NavData, PageType, PaginationContext, UserContext, field::FieldContext,
         },
         handlers::shared::has_read_access,
     },
@@ -214,9 +214,12 @@ impl ContextBuilder {
         self
     }
 
-    /// Set the processed fields array (for edit/create forms).
-    pub fn fields(mut self, fields: Vec<Value>) -> Self {
-        self.data.insert("fields".into(), Value::Array(fields));
+    /// Set the processed fields array (for edit/create forms). Accepts the
+    /// typed [`FieldContext`] vec produced by `build_field_contexts` and
+    /// serializes to JSON at the boundary.
+    pub fn fields(mut self, fields: Vec<FieldContext>) -> Self {
+        let serialized: Vec<Value> = fields.iter().map(|fc| fc.to_value()).collect();
+        self.data.insert("fields".into(), Value::Array(serialized));
 
         self
     }
@@ -408,9 +411,31 @@ mod tests {
 
     #[test]
     fn context_builder_fields_sets_array() {
+        use crate::admin::context::field::{
+            BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs,
+        };
+
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let builder = builder.fields(vec![json!({"name": "title"})]);
+        let builder = builder.fields(vec![FieldContext::Text(TextField {
+            base: BaseFieldData {
+                name: "title".to_string(),
+                label: "Title".to_string(),
+                required: false,
+                value: Value::String(String::new()),
+                placeholder: None,
+                description: None,
+                readonly: false,
+                localized: false,
+                locale_locked: false,
+                position: None,
+                error: None,
+                validation: ValidationAttrs::default(),
+                condition: ConditionData::default(),
+            },
+            has_many: None,
+            tags: None,
+        })]);
         let result = builder.build();
         let fields = result["fields"].as_array().unwrap();
         assert_eq!(fields.len(), 1);

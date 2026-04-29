@@ -4,18 +4,25 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
-    admin::handlers::{
-        field_context::{
-            enrich::{
-                EnrichCtx, SubFieldOpts, build_enriched_sub_field_context, enrich_nested_fields,
-                enrich_polymorphic_selected,
-            },
-            inject_lang_values_from_row, inject_timezone_values_from_row,
+    admin::{
+        context::field::{
+            ArrayField, ArrayRow, BlockRow, BlocksField, FieldContext, JoinField, JoinItem,
+            RelationshipField, RelationshipSelectedItem, RichtextField, RichtextNodeAttrCtx,
+            RichtextNodeAttrOption, RichtextNodeDefCtx, UploadField,
         },
-        shared::compute_row_label,
+        handlers::{
+            field_context::{
+                enrich::{
+                    EnrichCtx, SubFieldOpts, build_enriched_sub_field_context,
+                    enrich_nested_fields, enrich_polymorphic_selected,
+                },
+                inject_lang_values_from_row, inject_timezone_values_from_row,
+            },
+            shared::compute_row_label,
+        },
     },
     core::{
         Document,
@@ -40,15 +47,19 @@ fn extract_selected_ids(doc_fields: &HashMap<String, Value>, field_name: &str) -
     }
 }
 
-/// Build a `{ id, label }` JSON item from a document.
-fn doc_to_label_item(doc: &Document, title_field: &Option<String>) -> Value {
+/// Build a typed `{ id, label }` item from a document.
+fn doc_to_label_item(doc: &Document, title_field: &Option<String>) -> RelationshipSelectedItem {
     let label = title_field
         .as_ref()
         .and_then(|f| doc.get_str(f))
         .unwrap_or(&doc.id)
         .to_string();
 
-    json!({ "id": doc.id, "label": label })
+    RelationshipSelectedItem {
+        id: doc.id.to_string(),
+        label,
+        ..Default::default()
+    }
 }
 
 /// Resolve has-many selected items by looking up each ID in the DB.
@@ -61,7 +72,7 @@ fn resolve_has_many_items(
     title_field: &Option<String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
-) -> Vec<Value> {
+) -> Vec<RelationshipSelectedItem> {
     ids.iter()
         .filter_map(|id| {
             query::find_by_id(conn, collection, related_def, id, rel_locale_ctx)
@@ -76,15 +87,13 @@ fn resolve_has_many_items(
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
 fn resolve_has_one_item(
-    ctx: &Value,
+    current_value: &str,
     collection: &str,
     related_def: &crate::core::collection::CollectionDefinition,
     title_field: &Option<String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
-) -> Vec<Value> {
-    let current_value = ctx.get("value").and_then(|v| v.as_str()).unwrap_or("");
-
+) -> Vec<RelationshipSelectedItem> {
     if current_value.is_empty() {
         return Vec::new();
     }
@@ -98,7 +107,7 @@ fn resolve_has_one_item(
 
 /// Enrich a top-level Relationship field context with selected items from DB.
 pub(super) fn enrich_relationship(
-    ctx: &mut Value,
+    rf: &mut RelationshipField,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
     conn: &dyn DbConnection,
@@ -110,9 +119,14 @@ pub(super) fn enrich_relationship(
     };
 
     if rc.is_polymorphic() {
-        let items =
-            enrich_polymorphic_selected(rc, &field_def.name, doc_fields, reg, conn, rel_locale_ctx);
-        ctx["selected_items"] = json!(items);
+        rf.selected_items = Some(enrich_polymorphic_selected(
+            rc,
+            &field_def.name,
+            doc_fields,
+            reg,
+            conn,
+            rel_locale_ctx,
+        ));
         return;
     }
 
@@ -133,8 +147,9 @@ pub(super) fn enrich_relationship(
             rel_locale_ctx,
         )
     } else {
+        let current_value = rf.base.value.as_str().unwrap_or("");
         resolve_has_one_item(
-            ctx,
+            current_value,
             &rc.collection,
             related_def,
             &title_field,
@@ -143,7 +158,7 @@ pub(super) fn enrich_relationship(
         )
     };
 
-    ctx["selected_items"] = json!(items);
+    rf.selected_items = Some(items);
 }
 
 /// Extract the raw value for a sub-field from a row, handling layout wrappers transparently.
@@ -162,17 +177,17 @@ fn extract_sub_field_value<'a>(
     }
 }
 
-/// Build sub-field contexts for a single array row.
+/// Build typed sub-field contexts for a single array row.
 fn build_array_row_sub_fields(
     field_def: &FieldDefinition,
     row: &Value,
     idx: usize,
     locale_locked: bool,
     enrich: &EnrichCtx,
-) -> Vec<Value> {
+) -> Vec<FieldContext> {
     let row_obj = row.as_object();
 
-    let mut sub_values: Vec<_> = field_def
+    let mut sub_fields: Vec<FieldContext> = field_def
         .fields
         .iter()
         .map(|sf| {
@@ -188,76 +203,47 @@ fn build_array_row_sub_fields(
         })
         .collect();
 
-    inject_timezone_values_from_row(&mut sub_values, &field_def.fields, row_obj);
-    inject_lang_values_from_row(&mut sub_values, &field_def.fields, row_obj);
-    sub_values
+    inject_timezone_values_from_row(&mut sub_fields, &field_def.fields, row_obj);
+    inject_lang_values_from_row(&mut sub_fields, &field_def.fields, row_obj);
+    sub_fields
 }
 
-/// Build a single array row JSON object with index, sub_fields, errors, and custom label.
+/// Build a single typed [`ArrayRow`] with index, sub_fields, errors, and custom label.
 fn build_array_row(
     field_def: &FieldDefinition,
     row: &Value,
     idx: usize,
     locale_locked: bool,
     enrich: &EnrichCtx,
-) -> Value {
-    let sub_values = build_array_row_sub_fields(field_def, row, idx, locale_locked, enrich);
-    let row_has_errors = sub_values
-        .iter()
-        .any(|sf_ctx| sf_ctx.get("error").is_some());
+) -> ArrayRow {
+    let sub_fields = build_array_row_sub_fields(field_def, row, idx, locale_locked, enrich);
+    let row_has_errors = sub_fields.iter().any(|fc| fc.base().error.is_some());
 
-    let mut row_json = json!({
-        "index": idx,
-        "sub_fields": sub_values,
-    });
-
-    if row_has_errors {
-        row_json["has_errors"] = json!(true);
-    }
-
-    if let Some(label) = compute_row_label(
+    let custom_label = compute_row_label(
         &field_def.admin,
         None,
         row.as_object(),
         &enrich.state.hook_runner,
-    ) {
-        row_json["custom_label"] = json!(label);
-    }
+    );
 
-    row_json
-}
-
-/// Enrich nested Upload/Relationship sub-fields in existing row and template contexts.
-fn enrich_row_and_template_nested_fields(
-    ctx: &mut Value,
-    fields: &[FieldDefinition],
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
-) {
-    if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
-        for row_ctx in rows_arr.iter_mut() {
-            if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                enrich_nested_fields(sub_arr, fields, conn, reg, rel_locale_ctx);
-            }
-        }
-    }
-
-    if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-        enrich_nested_fields(sub_arr, fields, conn, reg, rel_locale_ctx);
+    ArrayRow {
+        index: idx,
+        sub_fields,
+        has_errors: if row_has_errors { Some(true) } else { None },
+        custom_label,
     }
 }
 
 /// Enrich a top-level Array field context with rows from hydrated document data.
 pub(super) fn enrich_array(
-    ctx: &mut Value,
+    af: &mut ArrayField,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
     enrich: &EnrichCtx,
 ) {
     let locale_locked = enrich.non_default_locale && !field_def.localized;
 
-    let rows: Vec<Value> = match doc_fields.get(&field_def.name) {
+    let rows: Vec<ArrayRow> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
             .iter()
             .enumerate()
@@ -266,11 +252,23 @@ pub(super) fn enrich_array(
         _ => Vec::new(),
     };
 
-    ctx["row_count"] = json!(rows.len());
-    ctx["rows"] = json!(rows);
+    af.row_count = rows.len();
+    af.rows = Some(rows);
 
-    enrich_row_and_template_nested_fields(
-        ctx,
+    // Recurse into row sub_fields and template sub_fields for nested enrichment.
+    if let Some(rows) = af.rows.as_mut() {
+        for row in rows.iter_mut() {
+            enrich_nested_fields(
+                &mut row.sub_fields,
+                &field_def.fields,
+                enrich.conn,
+                enrich.reg,
+                enrich.rel_locale_ctx,
+            );
+        }
+    }
+    enrich_nested_fields(
+        &mut af.sub_fields,
         &field_def.fields,
         enrich.conn,
         enrich.reg,
@@ -278,14 +276,14 @@ pub(super) fn enrich_array(
     );
 }
 
-/// Assemble sizes and build an upload item for a document.
+/// Assemble sizes and build a typed upload item for a document.
 fn prepare_upload_doc(
     mut doc: Document,
     related_def: &crate::core::collection::CollectionDefinition,
     title_field: &Option<String>,
     admin_thumbnail: &Option<String>,
     include_filename: bool,
-) -> Value {
+) -> RelationshipSelectedItem {
     if let Some(ref uc) = related_def.upload
         && uc.enabled
     {
@@ -306,7 +304,7 @@ fn resolve_upload_has_many(
     admin_thumbnail: &Option<String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
-) -> Vec<Value> {
+) -> Vec<RelationshipSelectedItem> {
     ids.iter()
         .filter_map(|id| {
             query::find_by_id(conn, collection, related_def, id, rel_locale_ctx)
@@ -319,11 +317,11 @@ fn resolve_upload_has_many(
         .collect()
 }
 
-/// Resolve a has-one upload item, setting preview URL and filename on the context.
+/// Resolve a has-one upload item, setting preview URL and filename on the field.
 ///
 /// Internal UI enrichment — direct query for display labels, not a user-facing read.
 fn resolve_upload_has_one(
-    ctx: &mut Value,
+    uf: &mut UploadField,
     collection: &str,
     related_def: &crate::core::collection::CollectionDefinition,
     title_field: &Option<String>,
@@ -331,10 +329,10 @@ fn resolve_upload_has_one(
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
-    let current_value = ctx.get("value").and_then(|v| v.as_str()).unwrap_or("");
+    let current_value = uf.base.value.as_str().unwrap_or("");
 
     if current_value.is_empty() {
-        ctx["selected_items"] = json!([]);
+        uf.selected_items = Some(Vec::new());
         return;
     }
 
@@ -342,28 +340,25 @@ fn resolve_upload_has_one(
         .ok()
         .flatten()
     else {
-        ctx["selected_items"] = json!([]);
+        uf.selected_items = Some(Vec::new());
         return;
     };
 
     let item = prepare_upload_doc(doc, related_def, title_field, admin_thumbnail, true);
-    let label = item["label"].as_str().unwrap_or("").to_string();
-    let thumb_url = item
-        .get("thumbnail_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let label = item.label.clone();
+    let thumb_url = item.thumbnail_url.clone();
 
-    ctx["selected_items"] = json!([item]);
-    ctx["selected_filename"] = json!(label);
+    uf.selected_items = Some(vec![item]);
+    uf.selected_filename = Some(label);
 
     if let Some(url) = thumb_url {
-        ctx["selected_preview_url"] = json!(url);
+        uf.selected_preview_url = Some(url);
     }
 }
 
 /// Enrich a top-level Upload field context with selected items from DB.
 pub(super) fn enrich_upload(
-    ctx: &mut Value,
+    uf: &mut UploadField,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
     conn: &dyn DbConnection,
@@ -394,10 +389,10 @@ pub(super) fn enrich_upload(
             conn,
             rel_locale_ctx,
         );
-        ctx["selected_items"] = json!(items);
+        uf.selected_items = Some(items);
     } else {
         resolve_upload_has_one(
-            ctx,
+            uf,
             &rc.collection,
             related_def,
             &title_field,
@@ -408,13 +403,13 @@ pub(super) fn enrich_upload(
     }
 }
 
-/// Build a JSON item for an upload document (shared by has-one and has-many).
+/// Build a typed item for an upload document (shared by has-one and has-many).
 pub(super) fn build_upload_item(
     doc: &Document,
     title_field: &Option<String>,
     admin_thumbnail: &Option<String>,
     include_filename: bool,
-) -> Value {
+) -> RelationshipSelectedItem {
     let label = doc
         .get_str("filename")
         .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
@@ -438,24 +433,17 @@ pub(super) fn build_upload_item(
         None
     };
 
-    let mut item = json!({ "id": doc.id, "label": label });
-
-    if let Some(ref url) = thumb_url {
-        item["thumbnail_url"] = json!(url);
+    RelationshipSelectedItem {
+        id: doc.id.to_string(),
+        label: label.clone(),
+        thumbnail_url: thumb_url,
+        is_image: if is_image { Some(true) } else { None },
+        filename: if include_filename { Some(label) } else { None },
+        ..Default::default()
     }
-
-    if is_image {
-        item["is_image"] = json!(true);
-    }
-
-    if include_filename {
-        item["filename"] = json!(label);
-    }
-
-    item
 }
 
-/// Build sub-field contexts for a single blocks row.
+/// Build typed sub-field contexts for a single blocks row.
 fn build_blocks_row_sub_fields(
     block_def: &crate::core::field::BlockDefinition,
     row: &Value,
@@ -463,10 +451,10 @@ fn build_blocks_row_sub_fields(
     idx: usize,
     locale_locked: bool,
     enrich: &EnrichCtx,
-) -> Vec<Value> {
+) -> Vec<FieldContext> {
     let row_obj = row.as_object();
 
-    let mut sub_values: Vec<_> = block_def
+    let mut sub_fields: Vec<FieldContext> = block_def
         .fields
         .iter()
         .map(|sf| {
@@ -482,19 +470,19 @@ fn build_blocks_row_sub_fields(
         })
         .collect();
 
-    inject_timezone_values_from_row(&mut sub_values, &block_def.fields, row_obj);
-    inject_lang_values_from_row(&mut sub_values, &block_def.fields, row_obj);
-    sub_values
+    inject_timezone_values_from_row(&mut sub_fields, &block_def.fields, row_obj);
+    inject_lang_values_from_row(&mut sub_fields, &block_def.fields, row_obj);
+    sub_fields
 }
 
-/// Build a single blocks row JSON object.
+/// Build a single typed [`BlockRow`].
 fn build_blocks_row(
     field_def: &FieldDefinition,
     row: &Value,
     idx: usize,
     locale_locked: bool,
     enrich: &EnrichCtx,
-) -> Value {
+) -> BlockRow {
     let row_obj = row.as_object();
     let block_type = row_obj
         .and_then(|m| m.get("_block_type"))
@@ -507,90 +495,43 @@ fn build_blocks_row(
         .find(|bd| bd.block_type == block_type);
 
     let block_label = block_def
-        .and_then(|bd| bd.label.as_ref().map(|ls| ls.resolve_default()))
-        .unwrap_or(block_type);
+        .and_then(|bd| bd.label.as_ref().map(|ls| ls.resolve_default().to_string()))
+        .unwrap_or_else(|| block_type.to_string());
 
-    let sub_values = block_def
+    let sub_fields = block_def
         .map(|bd| build_blocks_row_sub_fields(bd, row, &field_def.name, idx, locale_locked, enrich))
         .unwrap_or_default();
 
-    let row_has_errors = sub_values
-        .iter()
-        .any(|sf_ctx| sf_ctx.get("error").is_some());
-
-    let mut row_json = json!({
-        "index": idx,
-        "_block_type": block_type,
-        "block_label": block_label,
-        "sub_fields": sub_values,
-    });
-
-    if row_has_errors {
-        row_json["has_errors"] = json!(true);
-    }
+    let row_has_errors = sub_fields.iter().any(|fc| fc.base().error.is_some());
 
     let block_label_field = block_def.and_then(|bd| bd.label_field.as_deref());
-
-    if let Some(label) = compute_row_label(
+    let custom_label = compute_row_label(
         &field_def.admin,
         block_label_field,
         row_obj,
         &enrich.state.hook_runner,
-    ) {
-        row_json["custom_label"] = json!(label);
-    }
+    );
 
-    row_json
-}
-
-/// Enrich nested sub-fields within existing block rows and block definition templates.
-fn enrich_blocks_nested_fields(
-    ctx: &mut Value,
-    field_def: &FieldDefinition,
-    conn: &dyn DbConnection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
-) {
-    if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
-        for row_ctx in rows_arr.iter_mut() {
-            let block_type = row_ctx
-                .get("_block_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if let Some(block_def) = field_def
-                .blocks
-                .iter()
-                .find(|bd| bd.block_type == block_type)
-                && let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
-            {
-                enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
-            }
-        }
-    }
-
-    if let Some(defs_arr) = ctx
-        .get_mut("block_definitions")
-        .and_then(|v| v.as_array_mut())
-    {
-        for (def_ctx, block_def) in defs_arr.iter_mut().zip(field_def.blocks.iter()) {
-            if let Some(sub_arr) = def_ctx.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
-            }
-        }
+    BlockRow {
+        index: idx,
+        block_type: block_type.to_string(),
+        block_label,
+        sub_fields,
+        has_errors: if row_has_errors { Some(true) } else { None },
+        custom_label,
     }
 }
 
 /// Enrich a top-level Blocks field context with rows from hydrated document data.
 pub(super) fn enrich_blocks(
-    ctx: &mut Value,
+    bf: &mut BlocksField,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
     enrich: &EnrichCtx,
 ) {
     let locale_locked = enrich.non_default_locale && !field_def.localized;
 
-    let rows: Vec<Value> = match doc_fields.get(&field_def.name) {
+    let rows: Vec<BlockRow> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
             .iter()
             .enumerate()
@@ -599,21 +540,43 @@ pub(super) fn enrich_blocks(
         _ => Vec::new(),
     };
 
-    ctx["row_count"] = json!(rows.len());
-    ctx["rows"] = json!(rows);
+    bf.row_count = rows.len();
+    bf.rows = Some(rows);
 
-    enrich_blocks_nested_fields(
-        ctx,
-        field_def,
-        enrich.conn,
-        enrich.reg,
-        enrich.rel_locale_ctx,
-    );
+    // Recurse into block rows' sub-fields, matching each row's block type.
+    if let Some(rows) = bf.rows.as_mut() {
+        for row in rows.iter_mut() {
+            if let Some(block_def) = field_def
+                .blocks
+                .iter()
+                .find(|bd| bd.block_type == row.block_type)
+            {
+                enrich_nested_fields(
+                    &mut row.sub_fields,
+                    &block_def.fields,
+                    enrich.conn,
+                    enrich.reg,
+                    enrich.rel_locale_ctx,
+                );
+            }
+        }
+    }
+
+    // Enrich block definition templates so new block rows have upload/relationship options.
+    for (def_ctx, block_def) in bf.block_definitions.iter_mut().zip(field_def.blocks.iter()) {
+        enrich_nested_fields(
+            &mut def_ctx.fields,
+            &block_def.fields,
+            enrich.conn,
+            enrich.reg,
+            enrich.rel_locale_ctx,
+        );
+    }
 }
 
 /// Enrich a top-level Join field context with reverse-lookup items from DB.
 pub(super) fn enrich_join(
-    ctx: &mut Value,
+    jf: &mut JoinField,
     field_def: &FieldDefinition,
     conn: &dyn DbConnection,
     reg: &Registry,
@@ -635,7 +598,7 @@ pub(super) fn enrich_join(
             .build();
 
         if let Ok(docs) = query::find(conn, &jc.collection, target_def, &fq, rel_locale_ctx) {
-            let items: Vec<_> = docs
+            let items: Vec<JoinItem> = docs
                 .iter()
                 .map(|doc| {
                     let label = title_field
@@ -643,18 +606,21 @@ pub(super) fn enrich_join(
                         .and_then(|f| doc.get_str(f))
                         .unwrap_or(&doc.id)
                         .to_string();
-                    json!({ "id": doc.id, "label": label })
+                    JoinItem {
+                        id: doc.id.to_string(),
+                        label,
+                    }
                 })
                 .collect();
 
-            ctx["join_items"] = json!(items);
-            ctx["join_count"] = json!(items.len());
+            jf.join_count = Some(items.len());
+            jf.join_items = Some(items);
         }
     }
 }
 
-/// Build a JSON attribute object for a richtext node field definition.
-fn build_node_attr(f: &FieldDefinition) -> Value {
+/// Build a typed attribute object for a richtext node field definition.
+fn build_node_attr(f: &FieldDefinition) -> RichtextNodeAttrCtx {
     let label = f
         .admin
         .label
@@ -662,114 +628,74 @@ fn build_node_attr(f: &FieldDefinition) -> Value {
         .map(|ls| ls.resolve_default().to_string())
         .unwrap_or_else(|| to_title_case(&f.name));
 
-    let mut attr = json!({
-        "name": f.name,
-        "type": f.field_type.as_str(),
-        "label": label,
-        "required": f.required,
-    });
-
-    if let Some(ref dv) = f.default_value {
-        attr["default"] = dv.clone();
-    }
-
-    if !f.options.is_empty() {
-        attr["options"] = json!(
+    let options = if f.options.is_empty() {
+        None
+    } else {
+        Some(
             f.options
                 .iter()
-                .map(|o| json!({
-                    "label": o.label.resolve_default(),
-                    "value": o.value,
-                }))
-                .collect::<Vec<_>>()
-        );
-    }
+                .map(|o| RichtextNodeAttrOption {
+                    label: o.label.resolve_default().to_string(),
+                    value: o.value.clone(),
+                })
+                .collect(),
+        )
+    };
 
-    apply_node_attr_admin_hints(f, &mut attr);
-    apply_node_attr_validation(f, &mut attr);
-    attr
-}
-
-/// Apply admin display hints to a richtext node attribute.
-fn apply_node_attr_admin_hints(f: &FieldDefinition, attr: &mut Value) {
-    if let Some(ref ph) = f.admin.placeholder {
-        attr["placeholder"] = json!(ph.resolve_default());
-    }
-    if let Some(ref desc) = f.admin.description {
-        attr["description"] = json!(desc.resolve_default());
-    }
-    if f.admin.hidden {
-        attr["hidden"] = json!(true);
-    }
-    if f.admin.readonly {
-        attr["readonly"] = json!(true);
-    }
-    if let Some(ref w) = f.admin.width {
-        attr["width"] = json!(w);
-    }
-    if let Some(ref s) = f.admin.step {
-        attr["step"] = json!(s);
-    }
-    if let Some(rows) = f.admin.rows {
-        attr["rows"] = json!(rows);
-    }
-    if let Some(ref lang) = f.admin.language {
-        attr["language"] = json!(lang);
-    }
-}
-
-/// Apply validation bounds to a richtext node attribute.
-fn apply_node_attr_validation(f: &FieldDefinition, attr: &mut Value) {
-    if let Some(v) = f.min {
-        attr["min"] = json!(v);
-    }
-    if let Some(v) = f.max {
-        attr["max"] = json!(v);
-    }
-    if let Some(v) = f.min_length {
-        attr["min_length"] = json!(v);
-    }
-    if let Some(v) = f.max_length {
-        attr["max_length"] = json!(v);
-    }
-    if let Some(ref d) = f.min_date {
-        attr["min_date"] = json!(d);
-    }
-    if let Some(ref d) = f.max_date {
-        attr["max_date"] = json!(d);
-    }
-    if let Some(ref pa) = f.picker_appearance {
-        attr["picker_appearance"] = json!(pa);
+    RichtextNodeAttrCtx {
+        name: f.name.clone(),
+        kind: f.field_type.as_str().to_string(),
+        label,
+        required: f.required,
+        default: f.default_value.clone(),
+        options,
+        placeholder: f
+            .admin
+            .placeholder
+            .as_ref()
+            .map(|ls| ls.resolve_default().to_string()),
+        description: f
+            .admin
+            .description
+            .as_ref()
+            .map(|ls| ls.resolve_default().to_string()),
+        hidden: if f.admin.hidden { Some(true) } else { None },
+        readonly: if f.admin.readonly { Some(true) } else { None },
+        width: f.admin.width.clone(),
+        step: f.admin.step.clone(),
+        rows: f.admin.rows,
+        language: f.admin.language.clone(),
+        min: f.min,
+        max: f.max,
+        min_length: f.min_length,
+        max_length: f.max_length,
+        min_date: f.min_date.clone(),
+        max_date: f.max_date.clone(),
+        picker_appearance: f.picker_appearance.clone(),
     }
 }
 
 /// Enrich a top-level Richtext field context with custom node definitions from registry.
-pub(super) fn enrich_richtext(ctx: &mut Value, reg: &Registry) {
-    let Some(node_names) = ctx.get("_node_names").cloned() else {
+pub(super) fn enrich_richtext(rf: &mut RichtextField, reg: &Registry) {
+    let Some(names) = rf.node_names.as_ref() else {
         return;
     };
 
-    if let Some(names) = node_names.as_array() {
-        let node_defs: Vec<_> = names
-            .iter()
-            .filter_map(|n| n.as_str())
-            .filter_map(|name| reg.get_richtext_node(name))
-            .map(|def| {
-                json!({
-                    "name": def.name,
-                    "label": def.label,
-                    "inline": def.inline,
-                    "attrs": def.attrs.iter().map(build_node_attr).collect::<Vec<_>>(),
-                })
-            })
-            .collect();
+    let node_defs: Vec<RichtextNodeDefCtx> = names
+        .iter()
+        .filter_map(|name| reg.get_richtext_node(name))
+        .map(|def| RichtextNodeDefCtx {
+            name: def.name.clone(),
+            label: def.label.clone(),
+            inline: def.inline,
+            attrs: def.attrs.iter().map(build_node_attr).collect(),
+        })
+        .collect();
 
-        if !node_defs.is_empty() {
-            ctx["custom_nodes"] = json!(node_defs);
-        }
+    if !node_defs.is_empty() {
+        rf.custom_nodes = Some(node_defs);
     }
 
-    if let Some(obj) = ctx.as_object_mut() {
-        obj.remove("_node_names");
-    }
+    // Drop the now-resolved node-name list from the JSON output.
+    rf.node_names = None;
 }

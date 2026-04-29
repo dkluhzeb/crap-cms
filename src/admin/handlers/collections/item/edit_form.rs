@@ -7,6 +7,10 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
+
+use crate::admin::context::field::{
+    BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
+};
 use tokio::task;
 use tracing::error;
 
@@ -67,15 +71,31 @@ fn read_document(params: ReadParams) -> Result<Option<Document>, ServiceError> {
     find_document_by_id(&ctx, &input)
 }
 
+/// Build a synthetic [`BaseFieldData`] for an auth-only injected field.
+fn auth_field_base(name: &str, label: &str, description: Option<&str>) -> BaseFieldData {
+    BaseFieldData {
+        name: name.to_string(),
+        label: label.to_string(),
+        required: false,
+        value: Value::String(String::new()),
+        placeholder: None,
+        description: description.map(str::to_string),
+        readonly: false,
+        localized: false,
+        locale_locked: false,
+        position: None,
+        error: None,
+        validation: ValidationAttrs::default(),
+        condition: ConditionData::default(),
+    }
+}
+
 /// Append auth-specific fields (password, locked checkbox) to the field list.
-fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &str) {
-    fields.push(json!({
-        "name": "password",
-        "field_type": "password",
-        "label": "password",
-        "required": false,
-        "value": "",
-        "description": "leave_blank_keep_password",
+fn append_auth_fields(fields: &mut Vec<FieldContext>, pool: &DbPool, slug: &str, id: &str) {
+    fields.push(FieldContext::Password(TextField {
+        base: auth_field_base("password", "password", Some("leave_blank_keep_password")),
+        has_many: None,
+        tags: None,
     }));
 
     let is_locked = pool
@@ -87,12 +107,9 @@ fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &s
         })
         .unwrap_or(false);
 
-    fields.push(json!({
-        "name": "_locked",
-        "field_type": "checkbox",
-        "label": "account_locked",
-        "checked": is_locked,
-        "description": "prevent_login",
+    fields.push(FieldContext::Checkbox(CheckboxField {
+        base: auth_field_base("_locked", "account_locked", Some("prevent_login")),
+        checked: is_locked,
     }));
 }
 
@@ -104,7 +121,7 @@ fn prepare_edit_fields(
     id: &str,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let values = flatten_document_values(&document.fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
@@ -130,8 +147,8 @@ fn prepare_edit_fields(
 
     // Remove read-denied fields entirely — they shouldn't render in the form
     if !denied_read_fields.is_empty() {
-        fields.retain(|f| {
-            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        fields.retain(|fc| {
+            let name = fc.base().name.as_str();
             !denied_read_fields.iter().any(|d| d == name)
         });
     }
