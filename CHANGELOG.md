@@ -252,6 +252,63 @@ to the detailed entry with full migration steps.
 
 ### Added
 
+- **AND + OR filter composition in the admin list drawer.** Each
+  row in the filter drawer now has a per-row connector dropdown
+  (`AND` / `OR`, default `AND`; the very first row's connector is
+  hidden via CSS — there's no previous row to connect to). Adjacent
+  `OR` rows form a single OR-clause; an `AND` row breaks the streak
+  and starts the next clause. Walking
+  `[A][AND B][OR C][AND D][OR E]` produces
+  `A AND (B OR C) AND (D OR E)` — two independent OR-clauses AND'd
+  at the top level. Mirrors the existing
+  `FilterClause::Or(Vec<Vec<Filter>>)` shape that the gRPC/Lua side
+  has accepted via JSON `or` keys all along; the admin URL grammar
+  is the new piece.
+
+  **URL grammar** — `where[field][op]=value` (unchanged) is the
+  top-level AND form. `where[or][G][N][field][op]=value` adds the
+  OR form: bucket `N` of OR-clause `G`. Multiple entries with the
+  same `(G, N)` AND together inside the bucket; different `N`
+  values inside the same `G` are OR'd; different `G` values are
+  independent OR-clauses AND'd at the top level.
+  `parse_where_params` recognises both grammars and reassembles
+  `Vec<FilterClause>` accordingly. URL-encoded brackets
+  (`where%5Bor%5D…`) work too. Existing bookmarks against the
+  flat AND form keep working.
+
+  **Same-field-same-op auto-merge** — within each AND-context
+  (top-level + each OR-bucket independently), repeated
+  `(field, Equals)` filters collapse into a single
+  `FilterOp::In(values)`; repeated `(field, NotEquals)` collapse
+  into `NotIn`. `?where[title][equals]=A&where[title][equals]=B`
+  becomes `WHERE title IN ('A','B')`, not the silently-empty
+  `WHERE title='A' AND title='B'` it produced before. Other ops
+  (`contains`, `gt`, …) stay AND'd because they're additive, not
+  redundant.
+
+  **`_status` alignment** — `extract_status_filter` returns
+  `Option<Vec<String>>`, collecting every `_status` value across
+  both URL grammars and de-duplicating. Service-layer injects
+  `_status = X` for one value, `_status IN (X, Y, …)` for many. So
+  picking both `draft` and `published` in the drawer widens to "show
+  both" instead of silently dropping one.
+
+  **Test coverage** — 31 unit tests in `parse_where_params` /
+  `extract_status_filter` (top-level AND, OR buckets, multi-clause
+  OR, in-bucket merge, system-column rejection inside buckets,
+  URL-encoded forms, mixed top + OR). Two new integration tests in
+  `tests/admin_collections.rs`: `list_items_or_clause_widens_results`
+  pins same-field IN merge + cross-field OR, and the existing
+  `list_items_url_status_filter_narrows_drafts_only` got an
+  `_status IN (draft, published)` case.
+
+  **Out of scope (v1)** — AND-inside-OR-bucket round-trip in the
+  drawer is lossy: the URL grammar parses multi-filter buckets
+  correctly, but the drawer renders them as separate OR rows; on
+  re-apply they re-bucket as singletons. Document; revisit if it
+  bites. A "match all / any" top-level toggle is achievable today
+  by setting every row to OR, so it's left out of v1 too.
+
 - **`crap-cms fmt` command — built-in Handlebars template formatter.**
   Plays the same role for `templates/*.hbs` that `cargo fmt` plays for
   Rust and `biome` plays for JS/CSS. Implements a project-specific rule
@@ -644,26 +701,74 @@ to the detailed entry with full migration steps.
   unfiltered (showing both drafts and published, since the admin
   list always passes `include_drafts = true`).
 
-  Fix: new typed param `status_filter: Option<String>` on
+  Fix: new typed param `status_filter: Option<Vec<String>>` on
   `FindDocumentsInput` (mirrors the existing `trash: bool` pattern
-  for `_deleted_at`). The admin list handler reads
-  `?where[_status][equals]=X` from the raw query via
-  `extract_status_filter()` and forwards it as a typed param, so
-  `_status` reaches the SQL via the trusted post-validation
-  injection path in `build_effective_query`. Generic-user-filter
-  rejection of system columns is unchanged. Other read surfaces
-  (gRPC, MCP, Lua) continue to control draft visibility through
-  the typed `include_drafts` flag.
+  for `_deleted_at`). The admin list handler reads every
+  `where[_status][equals]=X` value from the raw query — both
+  top-level and OR-bucket forms — via `extract_status_filter()` and
+  forwards them as a typed param, so `_status` reaches the SQL via
+  the trusted post-validation injection path in
+  `build_effective_query` (`Equals` for one value, `IN (…)` for two
+  or more). Generic-user-filter rejection of system columns is
+  unchanged. Other read surfaces (gRPC, MCP, Lua) continue to
+  control draft visibility through the typed `include_drafts` flag.
 
   Regression test
   `list_items_url_status_filter_narrows_drafts_only` creates one
   published and one draft document on a `has_drafts` collection,
   hits `?where%5B_status%5D%5Bequals%5D=draft`, and asserts the
   rendered `tbody` has exactly one row (the draft) with the
-  published row absent. Symmetric coverage for
-  `_status=published`. Plus 7 unit tests for
-  `extract_status_filter` (raw + URL-encoded + missing + wrong op
-  + non-system-column-not-matched).
+  published row absent. Symmetric coverage for `_status=published`,
+  for the empty-value "All" case, and for the multi-`_status` OR
+  case (both rows shown when `_status IN (draft, published)`).
+  Plus 11 unit tests for `extract_status_filter` (raw +
+  URL-encoded + missing + wrong op + non-system-column + collects
+  from OR-buckets + dedupes + mixed top-and-OR).
+
+- **Drafts hidden on page 1 of admin lists with cursor pagination.**
+  Collections with drafts and a `default_sort` whose key is NULL on
+  draft rows (e.g. the example `posts` config sets
+  `default_sort = "-published_at"`, and the
+  `set_published_at` hook only fills it on publish) sorted drafts to
+  the bottom — SQLite places NULLs last in DESC. With the default
+  `per_page = 20`, the first page of 28 mixed posts showed 20
+  published rows; the 2 drafts paginated out of sight.
+
+  Fix at the SQL builder: when `def.has_drafts()` and the user's
+  sort isn't already `_status`, `apply_order_by`
+  (`src/db/query/read/find.rs`) prepends `_status DIR` to the ORDER
+  BY (ASC normally, flipped to DESC under `using_before` so
+  `before_cursor` walks the same composite order in reverse). Effective
+  order becomes `(_status, sort_col, id)` and `'draft' < 'published'`
+  alphabetically surfaces drafts above published. When the WHERE
+  clause already pins `_status` to a single value (drafts/published
+  filter, or `include_drafts=false` injection on public reads) the
+  prepend is a no-op SQL-wise.
+
+  Cursor pagination kept symmetric across the draft↔published
+  boundary by extending the cursor encoding: `CursorData` gained a
+  `status_val: Option<String>` (`#[serde(default)]` so legacy
+  bookmark URLs decode and fall back to single-column keyset),
+  populated by `cursor_from_doc` when the row is on a drafts-enabled
+  collection. `apply_cursor_keyset` builds a composite `(_status
+  outer_op cursor_status) OR (_status = cursor_status AND <inner
+  keyset>)` so prev returns the drafts that next skipped.
+  `apply_select_filter` was extended to keep `_status` regardless of
+  caller-provided `select` so cursor encoding never falls back to a
+  bogus default. The shared gate predicate
+  `cursor::cursor_status_active(has_drafts, sort_col)` is used by
+  both `apply_order_by` and `PaginationResult::cursor` to keep the
+  SQL writer and the cursor encoder locked together.
+
+  Regression tests:
+  `drafts_sort_above_published_in_admin_list`,
+  `cursor_round_trip_preserves_drafts_on_page_1` (5 published + 2
+  drafts, page → next → prev returns the original page 1 in order),
+  `before_cursor_on_draft_walks_draft_bucket` (using_before symmetry
+  on a draft sort_val), `legacy_cursor_without_status_val_still_works_on_drafts_collection`
+  (backward compat for old cursor URLs), `apply_select_filter_keeps_status_for_cursor`,
+  `drafts_first_does_not_disturb_status_filtered_query` (no-op when
+  WHERE pins `_status`).
 
 - **`Save as draft` blocked by required-field validation.** Three
   layers needed adjustment to make this work end-to-end on a

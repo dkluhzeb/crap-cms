@@ -63,6 +63,8 @@ const ADMIN_JS_KEYS: &[&str] = &[
     "op_on_or_before",
     "op_exists",
     "op_not_exists",
+    "op_and",
+    "op_or",
     "status",
     "created",
     "updated",

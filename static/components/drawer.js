@@ -234,6 +234,15 @@ const sheet = css`
     width: auto;
     flex: 0 0 auto;
   }
+  .body .filter-builder__connector {
+    min-width: 4rem;
+    /* Hide the dropdown on the very first row — the connector only makes
+       sense relative to a previous row. The element stays in DOM so row
+       layout stays stable when adding/removing rows. */
+  }
+  .body .filter-builder__rows .filter-builder__row:first-child .filter-builder__connector {
+    visibility: hidden;
+  }
   .body .filter-builder__field {
     min-width: 7.5rem;
   }

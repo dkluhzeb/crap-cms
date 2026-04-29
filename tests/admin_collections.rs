@@ -520,6 +520,111 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
         2,
         "empty where[_status][equals]= (All) should show both draft and published"
     );
+
+    // Multiple `_status` values across an OR-clause (`(_status=draft OR
+    // _status=published)`) widen back to "show both" — the extractor
+    // collects every value, the service injects `_status IN (...)`.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?where[or][0][0][_status][equals]=draft\
+                 &where[or][0][1][_status][equals]=published",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "_status IN (draft, published) should show both rows"
+    );
+    assert!(body.contains("Live Article"));
+    assert!(body.contains("Pending Draft"));
+}
+
+/// Regression for the same-field IN-merge: `?where[title][equals]=A&where[title][equals]=B`
+/// collapses to `WHERE title IN ('A', 'B')` and returns rows matching either.
+/// Cross-field OR via the `where[or][G][N][…]` URL form widens to a true OR.
+#[tokio::test]
+async fn list_items_or_clause_widens_results() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "or-filter@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "or-filter@test.com");
+
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    for title in ["Alpha", "Bravo", "Charlie"] {
+        let mut data = std::collections::HashMap::new();
+        data.insert("title".to_string(), title.to_string());
+        query::create(&tx, "posts", &def, &data, None).unwrap();
+    }
+    tx.commit().unwrap();
+    drop(conn);
+
+    fn count_table_rows(body: &str) -> usize {
+        let Some(start) = body.find("<tbody") else {
+            return 0;
+        };
+        let Some(end) = body[start..].find("</tbody>").map(|i| start + i) else {
+            return 0;
+        };
+        body[start..end].matches("<tr").count()
+    }
+
+    // Same-field IN merge: two `equals` rows on `title` → `title IN ('Alpha', 'Bravo')`.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?where[title][equals]=Alpha&where[title][equals]=Bravo",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(count_table_rows(&body), 2, "IN merge returns 2 rows");
+    assert!(body.contains("Alpha"));
+    assert!(body.contains("Bravo"));
+    assert!(!body.contains("Charlie"));
+
+    // Cross-field OR via `where[or][G][N][…]`: title=Alpha OR title=Charlie.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?\
+                 where[or][0][0][title][equals]=Alpha\
+                 &where[or][0][1][title][equals]=Charlie",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(count_table_rows(&body), 2, "OR clause returns 2 rows");
+    assert!(body.contains("Alpha"));
+    assert!(body.contains("Charlie"));
+    assert!(!body.contains("Bravo"));
 }
 
 /// Regression test for the user-reported "filter has no effect" symptom.

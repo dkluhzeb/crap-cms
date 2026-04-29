@@ -92,7 +92,7 @@ const NO_VALUE_OPS = new Set(['exists', 'not_exists']);
  *   options?: SelectOption[],
  * }} FieldMeta
  *
- * @typedef {{ field: string, op: string, value: string }} Filter
+ * @typedef {{ field: string, op: string, value: string, connector?: 'AND'|'OR' }} Filter
  *
  * @typedef {{
  *   open: (opts: { title: string }) => void,
@@ -376,13 +376,16 @@ class CrapListSettings extends HTMLElement {
   }
 
   /**
-   * Build one filter row: field select + op select + value input + remove.
-   * The op + value inputs re-render reactively on field/op change.
+   * Build one filter row: connector + field select + op select + value input
+   * + remove. The connector dropdown sits at the front and is hidden on the
+   * very first row (no previous row to connect to). The op + value inputs
+   * re-render reactively on field/op change.
    *
    * @param {FieldMeta[]} fieldMetas
    * @param {Filter|null} preset
    */
   _buildFilterRow(fieldMetas, preset) {
+    const connectorSelect = this._buildConnectorSelect(preset);
     const fieldSelect = this._buildFieldSelect(fieldMetas, preset);
     const opSelect = h('select', { class: 'filter-builder__op', name: 'filter-op' });
     const valueWrap = h('div', { class: 'filter-builder__value-wrap' });
@@ -427,8 +430,25 @@ class CrapListSettings extends HTMLElement {
       },
       h('span', { class: 'material-symbols-outlined', text: 'close' }),
     );
-    row.append(fieldSelect, opSelect, valueWrap, removeBtn);
+    row.append(connectorSelect, fieldSelect, opSelect, valueWrap, removeBtn);
     return row;
+  }
+
+  /**
+   * Connector dropdown rendered on every row. The first row's connector is
+   * visually hidden (CSS `aria-hidden`) but remains in the DOM so subsequent
+   * row insertions don't need to reflow positions. Default `AND`.
+   *
+   * @param {Filter|null} preset
+   */
+  _buildConnectorSelect(preset) {
+    const value = preset?.connector === 'OR' ? 'OR' : 'AND';
+    return h(
+      'select',
+      { class: 'filter-builder__connector', name: 'filter-connector' },
+      h('option', { value: 'AND', selected: value === 'AND', text: t('op_and') }),
+      h('option', { value: 'OR', selected: value === 'OR', text: t('op_or') }),
+    );
   }
 
   /**
@@ -548,15 +568,36 @@ class CrapListSettings extends HTMLElement {
   }
 
   /**
-   * Read the current `where[field][op]=value` filters off the URL.
+   * Read the current `where[…]` URL params and render them as a flat list of
+   * rows ready to feed `_buildFilterRow`. Recognises both the top-level form
+   * (`where[field][op]=value` → row with connector `AND`) and the OR form
+   * (`where[or][G][N][field][op]=value`). For the OR form the *first* bucket
+   * (`N=0`) of each OR-clause renders as connector `AND` — it's the row that
+   * "broke" from the preceding AND-flow into a new OR-streak — and subsequent
+   * buckets (`N>0`) render as connector `OR` to extend the streak. Rows from
+   * different OR-clauses (different `G`) are AND'd between OR-streaks.
+   *
    * @returns {Filter[]}
    */
   _parseCurrentFilters() {
     /** @type {Filter[]} */
     const filters = [];
     for (const [key, value] of new URLSearchParams(window.location.search)) {
+      // OR form: `where[or][G][N][field][op]`.
+      const orMatch = key.match(/^where\[or\]\[(\d+)\]\[(\d+)\]\[([^\]]+)\]\[([^\]]+)\]$/);
+      if (orMatch) {
+        const bucket = Number(orMatch[2]);
+        filters.push({
+          field: orMatch[3],
+          op: orMatch[4],
+          value,
+          connector: bucket === 0 ? 'AND' : 'OR',
+        });
+        continue;
+      }
+      // Top-level AND form: `where[field][op]`.
       const m = key.match(/^where\[([^\]]+)\]\[([^\]]+)\]$/);
-      if (m) filters.push({ field: m[1], op: m[2], value });
+      if (m) filters.push({ field: m[1], op: m[2], value, connector: 'AND' });
     }
     return filters;
   }
@@ -574,8 +615,12 @@ class CrapListSettings extends HTMLElement {
   }
 
   /**
-   * Build the filtered list URL: drop existing `where[…]` params, reset
-   * to page 1, then append one entry per filter row.
+   * Build the filtered list URL: drop existing `where[…]` params, reset to
+   * page 1, then walk the current rows, group adjacent OR-rows into
+   * OR-clauses (an AND row breaks the streak), and emit each clause in the
+   * URL grammar the server parser understands (`where[field][op]=value` for
+   * AND singles, `where[or][G][N][field][op]=value` for OR-clause `G` bucket
+   * `N`).
    *
    * @param {HTMLElement} rowsEl
    */
@@ -592,14 +637,55 @@ class CrapListSettings extends HTMLElement {
       }
     }
     url.searchParams.set('page', '1');
-    for (const f of this._collectFilters(rowsEl)) {
-      url.searchParams.append(`where[${f.field}][${f.op}]`, f.value);
+
+    // Walk rows top-to-bottom, accumulating filters into a buffer that
+    // flushes whenever an AND row breaks the streak. Buffer of size 1 →
+    // top-level Single; buffer of size 2+ → an OR-clause with one bucket
+    // per filter.
+    const filters = this._collectFilters(rowsEl);
+    /** @type {Array<{ kind: 'and', f: Filter } | { kind: 'or', filters: Filter[] }>} */
+    const clauses = [];
+    /** @type {Filter[]} */
+    let buffer = [];
+    const flush = () => {
+      if (buffer.length === 1) {
+        clauses.push({ kind: 'and', f: buffer[0] });
+      } else if (buffer.length > 1) {
+        clauses.push({ kind: 'or', filters: buffer.slice() });
+      }
+      buffer = [];
+    };
+    for (let i = 0; i < filters.length; i++) {
+      const f = filters[i];
+      // First row's connector is irrelevant (no prev row to connect to);
+      // treat it as AND so it starts the buffer cleanly.
+      const isOr = i > 0 && f.connector === 'OR';
+      if (!isOr) flush();
+      buffer.push(f);
+    }
+    flush();
+
+    let orGroupIdx = 0;
+    for (const clause of clauses) {
+      if (clause.kind === 'and') {
+        url.searchParams.append(`where[${clause.f.field}][${clause.f.op}]`, clause.f.value);
+      } else {
+        clause.filters.forEach((f, bucketIdx) => {
+          url.searchParams.append(
+            `where[or][${orGroupIdx}][${bucketIdx}][${f.field}][${f.op}]`,
+            f.value,
+          );
+        });
+        orGroupIdx++;
+      }
     }
     return url;
   }
 
   /**
-   * Read the current value of every filter row in `rowsEl`.
+   * Read the current value of every filter row in `rowsEl`. Captures the
+   * connector ('AND'/'OR') alongside field/op/value so `_buildFilterUrl` can
+   * group adjacent OR rows into OR-clauses.
    *
    * @param {HTMLElement} rowsEl
    * @returns {Filter[]}
@@ -616,9 +702,13 @@ class CrapListSettings extends HTMLElement {
       const valueEl = /** @type {HTMLInputElement|null} */ (
         row.querySelector('[name="filter-value"]')
       );
+      const connectorEl = /** @type {HTMLSelectElement|null} */ (
+        row.querySelector('.filter-builder__connector')
+      );
       const field = fieldEl.value;
       const op = opEl.value;
       const value = valueEl?.value || '';
+      const connector = connectorEl?.value === 'OR' ? 'OR' : 'AND';
       // Skip rows with no field or op (defensive — shouldn't happen with
       // the current builder, but a row that somehow lost its selects
       // should not produce a `where[][]=` entry). Skip rows with an
@@ -627,7 +717,7 @@ class CrapListSettings extends HTMLElement {
       if (!field || !op) continue;
       const valueless = op === 'exists' || op === 'not_exists';
       if (!valueless && value === '') continue;
-      filters.push({ field, op, value });
+      filters.push({ field, op, value, connector });
     }
     return filters;
   }

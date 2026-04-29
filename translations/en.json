@@ -190,6 +190,8 @@
   "op_on_or_before": "on or before",
   "op_exists": "exists",
   "op_not_exists": "not exists",
+  "op_and": "AND",
+  "op_or": "OR",
 
   "clear_search": "Clear search",
   "sort": "Sort",

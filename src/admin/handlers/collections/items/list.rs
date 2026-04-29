@@ -52,7 +52,7 @@ struct FetchListArgs<'a> {
     auth_user: &'a Option<Extension<AuthUser>>,
     cursor_enabled: bool,
     is_trash: bool,
-    status_filter: Option<String>,
+    status_filter: Option<Vec<String>>,
 }
 
 fn fetch_list_documents(
@@ -247,13 +247,27 @@ pub async fn list_items(
     let sort = params.sort.as_deref().and_then(|s| validate_sort(s, &def));
     let url_filters = parse_where_params(raw_query, &def);
     // The filter UI exposes `_status` for collections with drafts (see
-    // `build_filter_fields`); the URL it produces (`where[_status][equals]=X`)
-    // is handled here as a typed param rather than a generic where
-    // clause, because system columns (`_*`) are off-limits to user
-    // filters at the service layer (`validate_user_filters`). See
-    // `extract_status_filter` for the parsing rule.
-    let status_filter = extract_status_filter(raw_query)
-        .filter(|s| def.has_drafts() && (s == "draft" || s == "published"));
+    // `build_filter_fields`); the URL it produces (`where[_status][equals]=X`,
+    // including OR-bucket forms) is handled here as a typed param rather
+    // than a generic where clause, because system columns (`_*`) are
+    // off-limits to user filters at the service layer
+    // (`validate_user_filters`). See `extract_status_filter` for the
+    // parsing rule. Multiple values widen to `_status IN (...)` at
+    // injection time.
+    let status_filter = extract_status_filter(raw_query).and_then(|values| {
+        if !def.has_drafts() {
+            return None;
+        }
+        let filtered: Vec<String> = values
+            .into_iter()
+            .filter(|s| s == "draft" || s == "published")
+            .collect();
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(filtered)
+        }
+    });
 
     let order_by = if is_trash {
         Some("-_deleted_at".to_string())

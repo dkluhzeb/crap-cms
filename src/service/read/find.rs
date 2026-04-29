@@ -137,7 +137,9 @@ pub fn find_documents(
 /// system-column rule that user filters are subject to.
 ///
 /// Status precedence: an explicit `status_filter` (translated by the admin
-/// list handler from `?where[_status][equals]=X`) wins. Otherwise the
+/// list handler from `?where[_status][equals]=X` URL params, including
+/// OR-bucket forms) wins. One value injects `_status = X`; multiple
+/// values widen to `_status IN (X, Y, …)`. Otherwise the
 /// default-when-drafts rule fires: `include_drafts = false` &&
 /// `def.has_drafts()` injects `_status = "published"`.
 fn build_effective_query(
@@ -145,22 +147,29 @@ fn build_effective_query(
     def: &CollectionDefinition,
     trash: bool,
     include_drafts: bool,
-    status_filter: Option<&str>,
+    status_filter: Option<&[String]>,
 ) -> FindQuery {
     let mut fq = user_query.clone();
 
-    if let Some(status) = status_filter {
-        if def.has_drafts() {
+    match status_filter {
+        Some(values) if def.has_drafts() && !values.is_empty() => {
+            let op = if values.len() == 1 {
+                FilterOp::Equals(values[0].clone())
+            } else {
+                FilterOp::In(values.to_vec())
+            };
             fq.filters.push(FilterClause::Single(Filter {
                 field: "_status".to_string(),
-                op: FilterOp::Equals(status.to_string()),
+                op,
             }));
         }
-    } else if !include_drafts && def.has_drafts() {
-        fq.filters.push(FilterClause::Single(Filter {
-            field: "_status".to_string(),
-            op: FilterOp::Equals("published".to_string()),
-        }));
+        _ if !include_drafts && def.has_drafts() => {
+            fq.filters.push(FilterClause::Single(Filter {
+                field: "_status".to_string(),
+                op: FilterOp::Equals("published".to_string()),
+            }));
+        }
+        _ => {}
     }
 
     if trash && def.soft_delete {
