@@ -447,6 +447,7 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 
 - **`collections`** (Vec<[NavCollection](#navcollection)>)
 - **`globals`** (Vec<[NavGlobal](#navglobal)>)
+- **`custom_pages`** (Vec<[CustomPage](#custompage)>) — Filesystem-routed custom admin pages registered via `crap.pages.register`. Only entries with a `label` set appear here.
 
 ### NavCollection
 

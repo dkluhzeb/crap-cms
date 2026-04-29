@@ -17,6 +17,7 @@
 
 pub mod auth;
 pub mod collections;
+pub mod custom;
 pub mod dashboard;
 pub mod errors;
 pub mod globals;

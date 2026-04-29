@@ -114,6 +114,41 @@ impl HookRunner {
         }
     }
 
+    /// Read every entry registered via `crap.pages.register(slug, opts)`
+    /// and convert to the typed [`CustomPage`] list. Called once at
+    /// admin-server startup to populate `AdminState.custom_pages`.
+    ///
+    /// Returns an empty Vec if Lua isn't available or no pages are
+    /// registered.
+    pub fn extract_custom_pages(&self) -> Vec<crate::admin::custom_pages::CustomPage> {
+        use crate::admin::custom_pages::CustomPage;
+
+        let Ok(lua) = self.pool.acquire() else {
+            return Vec::new();
+        };
+
+        let Ok(pages_table): mlua::Result<Table> =
+            lua.named_registry_value(crate::hooks::api::pages::PAGES_KEY)
+        else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        for pair in pages_table.pairs::<String, Table>() {
+            let Ok((slug, opts)) = pair else { continue };
+
+            out.push(CustomPage {
+                slug,
+                section: opts.get::<String>("section").ok(),
+                label: opts.get::<String>("label").ok(),
+                icon: opts.get::<String>("icon").ok(),
+                access: opts.get::<String>("access").ok(),
+            });
+        }
+
+        out
+    }
+
     /// Run `before_render` hooks on the template context.
     /// Global registered `before_render` hooks receive the full template context as a
     /// Lua table and return the (potentially modified) context. No CRUD access.

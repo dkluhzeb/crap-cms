@@ -14,6 +14,7 @@ mod hooks;
 mod http;
 mod jobs;
 mod log;
+pub(crate) mod pages;
 pub mod parse;
 mod register;
 pub(crate) mod richtext;

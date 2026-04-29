@@ -150,6 +150,7 @@ fn make_test_state() -> AdminState {
         ),
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     }
 }
 
@@ -1084,6 +1085,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         ),
         populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1196,6 +1198,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         ),
         populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     enrich_field_contexts(

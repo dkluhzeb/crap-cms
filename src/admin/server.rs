@@ -130,6 +130,9 @@ pub async fn start(
         translations.clone(),
         Some(Arc::new(hook_runner.clone())),
     )?;
+    let custom_pages = crate::admin::custom_pages::CustomPageRegistry::from_pages(
+        hook_runner.extract_custom_pages(),
+    );
     let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
     let email_provider = create_email_provider(&config.email)?;
 
@@ -170,6 +173,7 @@ pub async fn start(
         invalidation_transport,
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
         cache,
+        custom_pages,
     };
 
     let h2c_enabled = state.config.server.h2c;
@@ -278,6 +282,10 @@ fn protected_routes(
     Router::new()
         .route("/", get(dashboard::index))
         .route("/admin", get(dashboard::index))
+        .route(
+            "/admin/p/{slug}",
+            get(crate::admin::handlers::custom_page::render_custom_page),
+        )
         .route("/admin/collections", get(collections::list_collections))
         .route("/admin/collections/{slug}", slug_methods)
         .route(

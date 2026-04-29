@@ -7,13 +7,17 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::admin::AdminState;
+use crate::admin::{AdminState, custom_pages::CustomPage};
 
 /// Top-level nav data exposed at `{{nav.*}}`.
 #[derive(Serialize, JsonSchema)]
 pub struct NavData {
     pub collections: Vec<NavCollection>,
     pub globals: Vec<NavGlobal>,
+    /// Filesystem-routed custom admin pages registered via
+    /// `crap.pages.register`. Only entries with a `label` set appear here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub custom_pages: Vec<CustomPage>,
 }
 
 /// One sidebar entry for a collection.
@@ -59,9 +63,17 @@ impl NavData {
             .collect();
         globals.sort_by(|a, b| a.slug.cmp(&b.slug));
 
+        let custom_pages: Vec<CustomPage> = state
+            .custom_pages
+            .nav_entries()
+            .into_iter()
+            .cloned()
+            .collect();
+
         Self {
             collections,
             globals,
+            custom_pages,
         }
     }
 }

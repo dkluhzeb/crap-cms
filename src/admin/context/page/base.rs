@@ -170,9 +170,9 @@ impl AuthBasePageContext {
     }
 }
 
-/// Filter sidebar nav entries to only show collections/globals the current
-/// user can read. The nav data is built unfiltered from the registry, then
-/// trimmed against each collection's / global's `access.read` rule.
+/// Filter sidebar nav entries to only show collections/globals/custom-pages
+/// the current user can read. Nav data is built unfiltered from the
+/// registries, then trimmed against each entry's access rule.
 fn filter_nav_in_place(
     nav: &mut NavData,
     state: &AdminState,
@@ -195,6 +195,9 @@ fn filter_nav_in_place(
             .and_then(|d| d.access.read.as_deref());
         has_read_access(state, access_ref, user_doc)
     });
+
+    nav.custom_pages
+        .retain(|p| has_read_access(state, p.access.as_deref(), user_doc));
 }
 
 // Tests for the typed bases live alongside per-page-context tests once the

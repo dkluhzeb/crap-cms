@@ -85,4 +85,36 @@ crap.hooks.register("after_change", function(context)
 	return context
 end)
 
+-- ── Custom admin page: System info ───────────────────────────
+--
+-- Template lives at `templates/pages/system_info.hbs`. The route
+-- `/admin/p/system_info` is created automatically. This call adds the
+-- sidebar entry and locks the page to admins via the `admin_only`
+-- access function in `access/admin_only.lua`.
+--
+-- TODO (post-refactor): a `crap-cms make page <slug>` scaffold command
+-- will generate the .hbs, the optional `crap.template_data.register`
+-- snippet, and this `crap.pages.register` block in one shot. Tracked in
+-- the project memory under "scaffold widgets" (post-Phase 3/4).
+crap.pages.register("system_info", {
+	section = "Tools",
+	label = "System info",
+	icon = "monitoring",
+	access = "access.admin_only",
+})
+
+-- Live counters for the System info page. Invoked lazily from the
+-- template via `{{#with (data "system_info_counts")}}…{{/with}}`, so
+-- pages that don't reference it pay no cost.
+---@param ctx crap.template_ctx
+---@return table
+crap.template_data.register("system_info_counts", function(ctx)
+	local nav = ctx.nav or {}
+	return {
+		collections = nav.collections and #nav.collections or 0,
+		globals = nav.globals and #nav.globals or 0,
+		custom_pages = nav.custom_pages and #nav.custom_pages or 0,
+	}
+end)
+
 crap.log.info("Crap Studio ready")

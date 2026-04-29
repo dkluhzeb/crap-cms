@@ -48,6 +48,8 @@ pub enum PageType {
     AuthRequired,
     /// Authenticated but not authorized for admin.
     AdminDenied,
+    /// User-defined custom page rendered from `<config_dir>/templates/pages/<slug>.hbs`.
+    CustomPage,
 }
 
 impl PageType {
@@ -72,6 +74,7 @@ impl PageType {
             PageType::Error500 => "error_500",
             PageType::AuthRequired => "auth_required",
             PageType::AdminDenied => "admin_denied",
+            PageType::CustomPage => "custom_page",
         }
     }
 }
@@ -141,6 +144,9 @@ mod tests {
         assert_eq!(PageType::Error403.as_str(), "error_403");
         assert_eq!(PageType::Error404.as_str(), "error_404");
         assert_eq!(PageType::Error500.as_str(), "error_500");
+        assert_eq!(PageType::AuthRequired.as_str(), "auth_required");
+        assert_eq!(PageType::AdminDenied.as_str(), "admin_denied");
+        assert_eq!(PageType::CustomPage.as_str(), "custom_page");
     }
 
     // --- Breadcrumb ---

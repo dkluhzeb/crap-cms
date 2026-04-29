@@ -3,6 +3,7 @@
 mod auth_middleware;
 pub mod context;
 pub mod csp_nonce;
+pub mod custom_pages;
 pub mod handlers;
 mod mcp_handler;
 pub mod server;
@@ -99,6 +100,11 @@ pub struct AdminState {
     /// Shared cross-request cache for populated relationship documents.
     /// Passed to service-layer write operations for cache invalidation.
     pub cache: Option<SharedCache>,
+    /// Discovered filesystem-routed custom pages
+    /// (`<config_dir>/templates/pages/<slug>.hbs`). Populated once at
+    /// startup; the route handler validates incoming slugs against this,
+    /// and the sidebar nav reads its `nav_entries`.
+    pub custom_pages: custom_pages::CustomPageRegistry,
 }
 
 impl AdminState {
