@@ -1,11 +1,12 @@
 //! Authenticated-user context — what templates see at `{{user.*}}`.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::core::auth::Claims;
 
 /// Identifying data about the currently authenticated user.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct UserContext {
     pub email: String,
     pub id: String,

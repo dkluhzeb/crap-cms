@@ -2,6 +2,7 @@
 //! variant. Carries the keys templates expect on every field, regardless of
 //! type: `name`, `field_type`, `label`, `required`, `value`, etc.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -22,7 +23,7 @@ use serde_json::Value;
 /// every base field) can roundtrip through `Deserialize` without panicking
 /// on missing keys. The trade-off: typed handlers must explicitly populate
 /// fields they care about; missing fields get sensible defaults silently.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct BaseFieldData {
     pub name: String,
@@ -59,7 +60,7 @@ pub struct BaseFieldData {
 
 /// Validation attributes shared by all field types — present only when the
 /// field definition declares them.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 pub struct ValidationAttrs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_length: Option<usize>,
@@ -85,7 +86,7 @@ pub struct ValidationAttrs {
 
 /// Display-condition state injected by
 /// [`apply_display_conditions`](crate::admin::handlers::field_context::apply_display_conditions).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 pub struct ConditionData {
     /// Initial visibility resolved by the Lua condition function.
     #[serde(skip_serializing_if = "Option::is_none")]

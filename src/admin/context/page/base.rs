@@ -11,6 +11,7 @@
 //! their page-specific fields on top.
 
 use axum::Extension;
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{Breadcrumb, PageMeta};
@@ -24,7 +25,7 @@ use crate::{
 };
 
 /// Common fields present on every authenticated admin page.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct BasePageContext {
     pub crap: CrapMeta,
     pub nav: NavData,
@@ -66,7 +67,7 @@ pub struct BasePageContext {
 
 /// Minimal base for unauthenticated pages (login / forgot / reset / MFA).
 /// Omits `nav` and `user`.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct AuthBasePageContext {
     pub crap: CrapMeta,
 

@@ -1,881 +1,580 @@
-# Template Context API
+<!--
+  AUTO-GENERATED — do not edit by hand.
+  Source of truth: typed page-context structs in `src/admin/context/page/`.
+  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+-->
 
-Every admin page receives a structured context object built by the `ContextBuilder`. When [overriding templates](template-overlay.md), you can access any of these variables in your Handlebars templates.
+# Admin template context reference
 
-## Top-Level Keys
+Every admin page renders a typed Rust struct serialized to JSON, runs it through the optional `before_render` Lua hook, and hands it to Handlebars. This file lists every page, its `page.type` discriminant, the template it renders, and the fields the template can rely on.
 
-| Key | Type | Pages | Description |
-|-----|------|-------|-------------|
-| `crap` | object | all | App metadata (version, dev mode, auth status) |
-| `page` | object | all | Current page info (title, type, breadcrumbs) |
-| `nav` | object | all (except auth) | Navigation data for sidebar |
-| `user` | object | authenticated | Current user (email, id, collection) |
-| `collection` | object | collection pages | Full collection definition with metadata |
-| `global` | object | global pages | Full global definition with metadata |
-| `document` | object | edit pages | Current document with raw data |
-| `fields` | array | edit/create/global edit | Processed field contexts for main content area |
-| `sidebar_fields` | array | edit/create/global edit | Field contexts for sidebar panel (fields with `admin.position = "sidebar"`) |
-| `docs` | array | collection items | Document list with enriched data |
-| `editing` | boolean | edit/create | `true` when editing, `false` when creating |
-| `pagination` | object | items, versions | Pagination state |
-| `versions` | array | edit (versioned) | Recent version entries |
-| `has_more_versions` | boolean | edit (versioned) | Whether more versions exist beyond the shown 3 |
-| `upload` | object | upload collections | Upload file metadata and preview |
-| `collection_cards` | array | dashboard | Collection summary cards with counts |
-| `global_cards` | array | dashboard | Global summary cards |
-| `search` | string | items | Current search query |
-| `custom` | object | all | Custom data injected by `before_render` hooks |
+Field types use Rust-style notation: `string`, `integer`, `boolean`, `Vec<T>`, `Option<T>`. Composite leaves like `CrapMeta`, `NavData`, `FieldContext` link into the [shared definitions](#shared-definitions) section at the bottom.
 
----
+## Login page
 
-## Base Context (Every Page)
+- **`page.type`**: `auth_login`
+- **Template**: `templates/auth/login.hbs`
 
-### `crap` — App Metadata
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`_locale`** (string)
+- **`available_locales`** (Vec<string>)
+- **`title`** (string)
+- **`page`** ([PageMeta](#pagemeta))
+- **`error`** (Option<string>) _(optional)_ — Error key (e.g., `"error_invalid_credentials"`) — present after a failed login post.
+- **`email`** (Option<string>) _(optional)_ — Pre-fills the email field after a failed login.
+- **`collections`** (Vec<[AuthCollection](#authcollection)>)
+- **`show_collection_picker`** (boolean)
+- **`disable_local`** (boolean)
+- **`show_forgot_password`** (boolean)
+- **`success`** (Option<string>) _(optional)_ — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as `null` when absent) to preserve the original `Option`-as-null contract.
 
-```handlebars
-{{crap.version}}      {{!-- "0.1.0" --}}
-{{crap.build_hash}}   {{!-- Git commit hash at build time --}}
-{{crap.dev_mode}}     {{!-- true/false --}}
-{{crap.auth_enabled}} {{!-- true if any auth collection exists --}}
-```
+## MFA challenge page
 
-### `page` — Page Info
+- **`page.type`**: `auth_mfa`
+- **Template**: `templates/auth/mfa.hbs`
 
-```handlebars
-{{page.title}}  {{!-- "Edit Post", "Dashboard", etc. --}}
-{{page.type}}   {{!-- "collection_edit", "dashboard", etc. --}}
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`_locale`** (string)
+- **`available_locales`** (Vec<string>)
+- **`title`** (string)
+- **`page`** ([PageMeta](#pagemeta))
+- **`error`** (Option<string>) _(optional)_
 
-{{#each page.breadcrumbs}}
-  {{#if this.url}}
-    <a href="{{this.url}}">{{this.label}}</a>
-  {{else}}
-    <span>{{this.label}}</span>
-  {{/if}}
-{{/each}}
-```
+## Forgot password page
 
-#### Page Types
+- **`page.type`**: `auth_forgot`
+- **Template**: `templates/auth/forgot_password.hbs`
 
-| Type | Route |
-|------|-------|
-| `dashboard` | `/admin` |
-| `collection_list` | `/admin/collections` |
-| `collection_items` | `/admin/collections/{slug}` |
-| `collection_edit` | `/admin/collections/{slug}/{id}` |
-| `collection_create` | `/admin/collections/{slug}/create` |
-| `collection_delete` | `/admin/collections/{slug}/{id}/delete` |
-| `collection_versions` | `/admin/collections/{slug}/{id}/versions` |
-| `global_edit` | `/admin/globals/{slug}` |
-| `global_versions` | `/admin/globals/{slug}/versions` |
-| `auth_login` | `/admin/login` |
-| `auth_forgot` | `/admin/forgot-password` |
-| `auth_reset` | `/admin/reset-password` |
-| `error_403` | (forbidden) |
-| `error_404` | (not found) |
-| `error_500` | (server error) |
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`_locale`** (string)
+- **`available_locales`** (Vec<string>)
+- **`title`** (string)
+- **`page`** ([PageMeta](#pagemeta))
+- **`success`** (boolean)
+- **`collections`** (Vec<[AuthCollection](#authcollection)>)
+- **`show_collection_picker`** (boolean)
 
-### `nav` — Navigation
+## Reset password page
 
-Available on all authenticated pages. Auth pages use `ContextBuilder::auth()` which does **not** include nav.
+- **`page.type`**: `auth_reset`
+- **Template**: `templates/auth/reset_password.hbs`
 
-```handlebars
-{{#each nav.collections}}
-  <a href="/admin/collections/{{this.slug}}">{{this.display_name}}</a>
-  {{!-- Also available: this.is_auth, this.is_upload --}}
-{{/each}}
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`_locale`** (string)
+- **`available_locales`** (Vec<string>)
+- **`title`** (string)
+- **`page`** ([PageMeta](#pagemeta))
+- **`token`** (Option<string>) _(optional)_ — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case `error` is set instead).
+- **`error`** (Option<string>) _(optional)_
 
-{{#each nav.globals}}
-  <a href="/admin/globals/{{this.slug}}">{{this.display_name}}</a>
-{{/each}}
-```
+## Error pages (403 / 404 / 500)
 
-Each nav collection entry:
+- **`page.type`**: `error_403 | error_404 | error_500`
+- **Template**: `templates/errors/{403,404,500}.hbs`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `slug` | string | Collection slug |
-| `display_name` | string | Human-readable name |
-| `is_auth` | boolean | Whether this is an auth collection |
-| `is_upload` | boolean | Whether this is an upload collection |
-
-Each nav global entry:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `slug` | string | Global slug |
-| `display_name` | string | Human-readable name |
-
-### `user` — Current User
-
-Present when the user is authenticated (JWT session valid). Absent on auth pages and error pages.
-
-```handlebars
-{{#if user}}
-  Logged in as {{user.email}} ({{user.collection}})
-{{/if}}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `email` | string | User's email address |
-| `id` | string | User document ID |
-| `collection` | string | Auth collection slug (e.g., `"users"`) |
-
----
-
-## Collection Pages
-
-### `collection` — Collection Definition
-
-Available on all collection page types (`collection_items`, `collection_edit`, `collection_create`, `collection_delete`, `collection_versions`).
-
-```handlebars
-{{collection.slug}}
-{{collection.display_name}}
-{{collection.singular_name}}
-{{collection.title_field}}
-{{collection.timestamps}}       {{!-- boolean --}}
-{{collection.is_auth}}          {{!-- boolean --}}
-{{collection.is_upload}}        {{!-- boolean --}}
-{{collection.has_drafts}}       {{!-- boolean --}}
-{{collection.has_versions}}     {{!-- boolean --}}
-```
-
-#### `collection.admin`
-
-```handlebars
-{{collection.admin.use_as_title}}          {{!-- field name or null --}}
-{{collection.admin.default_sort}}          {{!-- e.g., "-created_at" or null --}}
-{{collection.admin.hidden}}                {{!-- boolean --}}
-{{collection.admin.list_searchable_fields}} {{!-- array of field names --}}
-```
-
-#### `collection.upload`
-
-`null` unless the collection has upload enabled.
-
-```handlebars
-{{#if collection.upload}}
-  Accepts: {{collection.upload.mime_types}}
-  Max size: {{collection.upload.max_file_size}}
-  Thumbnail: {{collection.upload.admin_thumbnail}}
-{{/if}}
-```
-
-#### `collection.versions`
-
-`null` unless the collection has versioning enabled.
-
-```handlebars
-{{#if collection.versions}}
-  Drafts: {{collection.versions.drafts}}
-  Max versions: {{collection.versions.max_versions}}
-{{/if}}
-```
-
-#### `collection.auth`
-
-`null` unless the collection is an auth collection.
-
-```handlebars
-{{#if collection.auth}}
-  Local login: {{#if (not collection.auth.disable_local)}}enabled{{/if}}
-  Email verification: {{collection.auth.verify_email}}
-{{/if}}
-```
-
-#### `collection.fields_meta`
-
-Array of raw field definitions. Useful for JavaScript conditional logic or embedding metadata.
-
-```handlebars
-{{#each collection.fields_meta}}
-  {{this.name}} — {{this.field_type}}
-  Required: {{this.required}}, Localized: {{this.localized}}
-  Label: {{this.admin.label}}
-{{/each}}
-
-{{!-- Serialize to JSON for JavaScript --}}
-<script>
-  const fields = {{{json collection.fields_meta}}};
-</script>
-```
-
-Each entry in `fields_meta`:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Field name |
-| `field_type` | string | `text`, `number`, `select`, `relationship`, etc. |
-| `required` | boolean | Whether the field is required |
-| `unique` | boolean | Whether the field has a unique constraint |
-| `localized` | boolean | Whether the field is localized |
-| `admin.label` | string/null | Display label |
-| `admin.hidden` | boolean | Whether the field is hidden in admin and API responses |
-| `admin.readonly` | boolean | Whether the field is readonly |
-| `admin.width` | number/null | Column width hint |
-| `admin.description` | string/null | Help text |
-| `admin.placeholder` | string/null | Placeholder text |
-
----
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`message`** (string) — User-facing error message body.
 
 ## Dashboard
 
-**Page type:** `dashboard`
+- **`page.type`**: `dashboard`
+- **Template**: `templates/dashboard/index.hbs`
 
-Additional keys:
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection_cards`** (Vec<[CollectionCard](#collectioncard)>)
+- **`global_cards`** (Vec<[GlobalCard](#globalcard)>)
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `collection_cards` | array | One entry per collection with document count |
-| `global_cards` | array | One entry per global |
+## Collection list
 
-```handlebars
-{{#each collection_cards}}
-  <a href="/admin/collections/{{this.slug}}">
-    {{this.display_name}} ({{this.count}} items)
-  </a>
-{{/each}}
+- **`page.type`**: `collection_list`
+- **Template**: `templates/collections/list.hbs`
 
-{{#each global_cards}}
-  <a href="/admin/globals/{{this.slug}}">{{this.display_name}}</a>
-{{/each}}
-```
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collections`** (Vec<[CollectionEntry](#collectionentry)>)
 
-Collection card fields: `slug`, `display_name`, `singular_name`, `count`, `last_updated`, `is_auth`, `is_upload`, `has_versions`.
+## Collection items list
 
-Global card fields: `slug`, `display_name`, `last_updated`, `has_versions`.
+- **`page.type`**: `collection_items`
+- **Template**: `templates/collections/items.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`docs`** (Vec<any>)
+- **`pagination`** ([PaginationContext](#paginationcontext))
+- **`has_drafts`** (boolean)
+- **`has_soft_delete`** (boolean)
+- **`is_trash`** (boolean)
+- **`search`** (Option<string>) _(optional)_
+- **`sort`** (Option<string>) _(optional)_
+- **`table_columns`** (Vec<any>)
+- **`column_options`** (Vec<any>)
+- **`filter_fields`** (Vec<any>)
+- **`active_filters`** (Vec<any>)
+- **`active_filter_count`** (integer)
+- **`title_sort_url`** (Option<string>) _(optional)_
+- **`title_sorted_asc`** (boolean)
+- **`title_sorted_desc`** (boolean)
+
+## Collection edit form
+
+- **`page.type`**: `collection_edit`
+- **Template**: `templates/collections/edit.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`document`** ([DocumentRef](#documentref))
+- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`editing`** (boolean)
+- **`has_drafts`** (boolean)
+- **`has_versions`** (boolean)
+- **`versions`** (Vec<any>)
+- **`has_more_versions`** (boolean)
+- **`restore_url_prefix`** (string)
+- **`versions_url`** (string)
+- **`document_title`** (string)
+- **`ref_count`** (integer)
+- **`has_locales`** (boolean) _(optional)_
+- **`current_locale`** (string) _(optional)_
+- **`locales`** (Vec<[LocaleTemplateOption](#localetemplateoption)>) _(optional)_
+- **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_ — Upload preview block — present only on upload collections.
+
+## Collection create form
+
+- **`page.type`**: `collection_create`
+- **Template**: `templates/collections/edit.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`editing`** (boolean)
+- **`has_drafts`** (boolean)
+- **`has_locales`** (boolean) _(optional)_
+- **`current_locale`** (string) _(optional)_
+- **`locales`** (Vec<[LocaleTemplateOption](#localetemplateoption)>) _(optional)_
+- **`upload`** ([UploadFormContext](#uploadformcontext) \| null) _(optional)_
+
+## Collection form-error re-render
+
+- **`page.type`**: `collection_edit | collection_create`
+- **Template**: `templates/collections/edit.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`document`** ([DocumentRef](#documentref) \| null) _(optional)_ — Document stub (with `id` only) on edit error; absent on create error.
+- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`editing`** (boolean)
+- **`has_drafts`** (boolean)
+- **`upload_hidden_fields`** (Option<Vec<any>>) _(optional)_ — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).
+
+## Collection delete confirmation
+
+- **`page.type`**: `collection_delete`
+- **Template**: `templates/collections/delete.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`document_id`** (string)
+- **`title_value`** (Option<string>) _(optional)_ — Document title for display. `None` (serialized as `null`) when the collection has no title field or the read fell through.
+- **`ref_count`** (integer)
+
+## Collection versions list
+
+- **`page.type`**: `collection_versions`
+- **Template**: `templates/collections/versions.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`document`** ([DocumentRef](#documentref))
+- **`pagination`** ([PaginationContext](#paginationcontext))
+- **`doc_title`** (string)
+- **`versions`** (Vec<any>)
+- **`restore_url_prefix`** (string)
+
+## Collection restore confirmation
+
+- **`page.type`**: `collection_versions`
+- **Template**: `templates/collections/restore.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`collection`** ([CollectionContext](#collectioncontext))
+- **`document`** ([DocumentRef](#documentref))
+- **`version_number`** (any) — Version number being restored (from the version row's `version` column).
+- **`missing_relations`** (Vec<any>) — IDs of relationship references whose targets no longer exist.
+- **`restore_url`** (string)
+- **`back_url`** (string)
+
+## Global edit form
+
+- **`page.type`**: `global_edit`
+- **Template**: `templates/globals/edit.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`global`** ([GlobalContext](#globalcontext))
+- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`has_drafts`** (boolean)
+- **`has_versions`** (boolean)
+- **`versions`** (Vec<any>)
+- **`has_more_versions`** (boolean)
+- **`restore_url_prefix`** (string)
+- **`versions_url`** (string)
+- **`doc_status`** (string)
+- **`has_locales`** (boolean) _(optional)_
+- **`current_locale`** (string) _(optional)_
+- **`locales`** (Vec<[LocaleTemplateOption](#localetemplateoption)>) _(optional)_
+
+## Global form-error re-render
+
+- **`page.type`**: `global_edit`
+- **Template**: `templates/globals/edit.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`global`** ([GlobalContext](#globalcontext))
+- **`fields`** (Vec<[FieldContext](#fieldcontext)>)
+- **`sidebar_fields`** (Vec<[FieldContext](#fieldcontext)>)
+
+## Global versions list
+
+- **`page.type`**: `global_versions`
+- **Template**: `templates/globals/versions.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`global`** ([GlobalContext](#globalcontext))
+- **`pagination`** ([PaginationContext](#paginationcontext))
+- **`versions`** (Vec<any>)
+- **`restore_url_prefix`** (string)
+
+## Global restore confirmation
+
+- **`page.type`**: `global_versions`
+- **Template**: `templates/globals/restore.hbs`
+
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+- **`global`** ([GlobalContext](#globalcontext))
+- **`version_number`** (any)
+- **`missing_relations`** (Vec<any>)
+- **`restore_url`** (string)
+- **`back_url`** (string)
+
 
 ---
 
-## Collection Items (List)
-
-**Page type:** `collection_items`
-
-Additional keys beyond `collection`:
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `docs` | array | Document list |
-| `search` | string/null | Current search query |
-| `pagination` | object | Pagination state |
-| `has_drafts` | boolean | Shorthand for `collection.has_drafts` |
-
-### `docs`
-
-```handlebars
-{{#each docs}}
-  <tr>
-    <td>{{this.title_value}}</td>
-    <td>{{this.status}}</td>
-    <td>{{this.created_at}}</td>
-    <td>{{this.updated_at}}</td>
-    {{#if this.thumbnail_url}}
-      <td><img src="{{this.thumbnail_url}}" /></td>
-    {{/if}}
-  </tr>
-{{/each}}
-```
-
-Each doc:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Document ID |
-| `title_value` | string | Value of the title field (falls back to filename for uploads, then ID) |
-| `created_at` | string/null | Creation timestamp |
-| `updated_at` | string/null | Last update timestamp |
-| `thumbnail_url` | string/null | Thumbnail URL (upload collections with images only) |
-
-### `pagination`
-
-```handlebars
-{{#if pagination.has_prev}}
-  <a href="{{pagination.prev_url}}">Previous</a>
-{{/if}}
-<span>Page {{pagination.page}} of {{pagination.total_pages}}</span>
-{{#if pagination.has_next}}
-  <a href="{{pagination.next_url}}">Next</a>
-{{/if}}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `page` | integer | Current page number (1-based) |
-| `per_page` | integer | Items per page |
-| `total` | integer | Total document count |
-| `total_pages` | integer | Total number of pages |
-| `has_prev` | boolean | Whether a previous page exists |
-| `has_next` | boolean | Whether a next page exists |
-| `prev_url` | string | URL for the previous page |
-| `next_url` | string | URL for the next page |
-
----
-
-## Collection Edit
-
-**Page type:** `collection_edit`
-
-Additional keys beyond `collection`:
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `document` | object | Current document data |
-| `fields` | array | Processed field contexts for form rendering |
-| `editing` | boolean | Always `true` |
-| `has_drafts` | boolean | Shorthand for `collection.has_drafts` |
-| `has_versions` | boolean | Shorthand for `collection.has_versions` |
-| `versions` | array | Up to 3 most recent version entries |
-| `has_more_versions` | boolean | `true` if more than 3 versions exist |
-| `upload` | object | Upload context (upload collections only) |
-
-### `document`
-
-```handlebars
-{{document.id}}
-{{document.created_at}}
-{{document.updated_at}}
-{{document.status}}        {{!-- "published" or "draft" --}}
-
-{{!-- Raw field values --}}
-{{document.data.title}}
-{{document.data.category}}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Document ID |
-| `created_at` | string/null | Creation timestamp |
-| `updated_at` | string/null | Last update timestamp |
-| `status` | string | `"published"` or `"draft"` (when drafts enabled) |
-| `data` | object | Raw field values as key-value pairs |
+## Shared definitions
 
-> **Draft loading:** When a collection has drafts enabled and the latest version is a draft, the edit page loads the document from the draft version snapshot. This means `document.data` contains the draft values, including block and array data — not the published main-table values.
+Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageContext](#authbasepagecontext) for auth-flow pages) into its top-level fields. The base structs and their leaves are defined here once.
 
-### `fields`
+### BasePageContext
 
-Processed field context objects used by the `{{render_field}}` helper or custom form rendering. See [Field Context](#field-context) below.
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`nav`** ([NavData](#navdata))
+- **`user`** ([UserContext](#usercontext) \| null) _(optional)_
+- **`_locale`** (string) — Active UI translation locale.
+- **`available_locales`** (Vec<string>) — Available UI translation locales (for the locale picker).
+- **`title`** (string) — Page title — duplicated at top level for backward compat with the base layout that reads `{{title}}` directly. Templates that have migrated read `{{page.title}}` instead.
+- **`page`** ([PageMeta](#pagemeta))
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Top-level breadcrumb mirror of `page.breadcrumbs`. The breadcrumb partial prefers `page.breadcrumbs` and falls back to this. Kept for backward compat with overridden templates.
+- **`has_editor_locales`** (Option<boolean>) _(optional)_
+- **`editor_locale`** (Option<string>) _(optional)_
+- **`editor_locales`** (Option<Vec<[EditorLocaleOption](#editorlocaleoption)>>) _(optional)_
+
+### AuthBasePageContext
 
-### `versions`
+- **`crap`** ([CrapMeta](#crapmeta))
+- **`_locale`** (string)
+- **`available_locales`** (Vec<string>)
+- **`title`** (string)
+- **`page`** ([PageMeta](#pagemeta))
+
+### PageMeta
+
+- **`type`** (string) — Page-type discriminant. Serialized as a snake_case string literal so templates can branch with `{{#if (eq page.type "collection_edit")}}`.
+- **`title`** (string) — Page title or translation key.
+- **`title_name`** (Option<string>) _(optional)_ — Optional interpolation param for `{{t page.title name=page.title_name}}`.
+- **`breadcrumbs`** (Vec<[Breadcrumb](#breadcrumb)>) — Breadcrumb trail rendered by `partials/breadcrumb.hbs`.
 
-```handlebars
-{{#each versions}}
-  v{{this.version}} — {{this.status}}
-  {{#if this.latest}} (latest) {{/if}}
-  Created: {{this.created_at}}
-{{/each}}
-{{#if has_more_versions}}
-  <a href="/admin/collections/{{collection.slug}}/{{document.id}}/versions">View all</a>
-{{/if}}
-```
+### CrapMeta
 
-Each version entry: `id`, `version` (number), `status` (`"published"` or `"draft"`), `latest` (boolean), `created_at`.
+- **`version`** (string) — Crate version (Cargo.toml `version`).
+- **`build_hash`** (string) — Build hash (set by build script from git).
+- **`dev_mode`** (boolean) — Whether admin dev-mode is enabled (per-request template reload, etc.).
+- **`auth_enabled`** (boolean) — Whether the system has any auth-enabled collections.
+- **`csp_nonce`** (string) — Per-request CSP nonce (empty string outside request scope).
 
-### `upload`
+### NavData
 
-Present only on upload collection edit/create pages.
+- **`collections`** (Vec<[NavCollection](#navcollection)>)
+- **`globals`** (Vec<[NavGlobal](#navglobal)>)
 
-```handlebars
-{{#if collection.is_upload}}
-  {{#if upload.preview}}
-    <img src="{{upload.preview}}" />
-  {{/if}}
-  {{#if upload.info}}
-    {{upload.info.filename}}
-    {{upload.info.filesize_display}}  {{!-- e.g., "2.4 MB" --}}
-    {{upload.info.dimensions}}        {{!-- e.g., "1920x1080" --}}
-  {{/if}}
-  {{#if upload.accept}}
-    <input type="file" accept="{{upload.accept}}" />
-  {{/if}}
-{{/if}}
-```
+### NavCollection
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `accept` | string/null | MIME type filter for file input (e.g., `"image/*"`) |
-| `preview` | string/null | Preview image URL (images only, uses admin_thumbnail) |
-| `info` | object/null | File info for existing uploads |
-| `info.filename` | string | Original filename |
-| `info.filesize_display` | string | Human-readable file size |
-| `info.dimensions` | string/null | Image dimensions (e.g., `"1920x1080"`) |
+- **`slug`** (string)
+- **`display_name`** (string)
+- **`is_auth`** (boolean)
+- **`is_upload`** (boolean)
 
----
+### NavGlobal
 
-## Collection Create
+- **`slug`** (string)
+- **`display_name`** (string)
 
-**Page type:** `collection_create`
+### UserContext
 
-Same structure as collection edit, with these differences:
-- `editing` is `false`
-- `document` is absent
-- `versions`, `has_more_versions` are absent
-- Password field is added for auth collections (required)
+- **`email`** (string)
+- **`id`** (string)
+- **`collection`** (string)
 
----
+### EditorLocaleOption
 
-## Collection Delete
+- **`value`** (string)
+- **`label`** (string)
+- **`selected`** (boolean)
 
-**Page type:** `collection_delete`
+### LocaleTemplateOption
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `collection` | object | Collection definition |
-| `document_id` | string | ID of the document to delete |
-| `title_value` | string/null | Display title of the document |
+- **`value`** (string)
+- **`label`** (string)
+- **`selected`** (boolean)
 
----
+### Breadcrumb
 
-## Collection Versions
+- **`label`** (string) — The text label to display for the breadcrumb.
+- **`url`** (Option<string>) _(optional)_ — The optional URL to link to. If None, the breadcrumb is the current page.
+- **`label_name`** (Option<string>) _(optional)_ — Optional interpolation param for `{{t label name=label_name}}`.
 
-**Page type:** `collection_versions`
+### CollectionContext
 
-Full version history page with pagination.
+- **`slug`** (string)
+- **`display_name`** (string)
+- **`singular_name`** (string)
+- **`title_field`** (Option<string>) _(optional)_
+- **`timestamps`** (boolean)
+- **`is_auth`** (boolean)
+- **`is_upload`** (boolean)
+- **`has_drafts`** (boolean)
+- **`has_versions`** (boolean)
+- **`soft_delete`** (boolean)
+- **`can_permanently_delete`** (boolean)
+- **`admin`** ([AdminMeta](#adminmeta))
+- **`upload`** ([UploadMeta](#uploadmeta) \| null) _(optional)_
+- **`versions`** ([VersionsMeta](#versionsmeta) \| null) _(optional)_
+- **`auth`** ([AuthMeta](#authmeta) \| null) _(optional)_
+- **`fields_meta`** (Vec<[FieldMeta](#fieldmeta)>)
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `collection` | object | Collection definition |
-| `document` | object | Stub with `id` only |
-| `doc_title` | string | Document title for breadcrumbs |
-| `versions` | array | Paginated version entries |
-| `pagination` | object | Pagination state |
+### GlobalContext
 
----
+- **`slug`** (string)
+- **`display_name`** (string)
+- **`has_drafts`** (boolean)
+- **`has_versions`** (boolean)
+- **`versions`** ([VersionsMeta](#versionsmeta) \| null) _(optional)_
+- **`fields_meta`** (Vec<[FieldMeta](#fieldmeta)>)
 
-## Collection List
+### DocumentRef
 
-**Page type:** `collection_list`
+- **`id`** (string)
+- **`created_at`** (Option<string>) _(optional)_
+- **`updated_at`** (Option<string>) _(optional)_
+- **`status`** (Option<string>) _(optional)_
+- **`data`** (Option<Object>) _(optional)_
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `collections` | array | All registered collections |
+### PaginationContext
 
-Each entry: `slug`, `display_name`, `field_count`.
+- **`per_page`** (integer)
+- **`total`** (integer)
+- **`has_prev`** (boolean)
+- **`has_next`** (boolean)
+- **`prev_url`** (string)
+- **`next_url`** (string)
+- **`page`** (Option<integer>) _(optional)_ — Page-mode only — current page number (1-indexed).
+- **`total_pages`** (Option<integer>) _(optional)_ — Page-mode only — total page count.
 
----
+### FieldContext
 
-## Global Edit
+_(No fields.)_
 
-**Page type:** `global_edit`
+### AuthCollection
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `global` | object | Global definition |
-| `fields` | array | Processed field contexts (main area) |
-| `sidebar_fields` | array | Processed field contexts (sidebar) |
-| `has_drafts` | boolean | Whether the global has drafts enabled |
-| `has_versions` | boolean | Whether the global has versions enabled |
-| `versions` | array | Recent version entries (up to 3) |
-| `has_more_versions` | boolean | `true` if more than 3 versions exist |
-| `restore_url_prefix` | string | URL prefix for version restore actions |
-| `versions_url` | string | URL to the full versions list page |
-| `doc_status` | string | Document status (`"published"` or `"draft"`) |
+- **`slug`** (string)
+- **`display_name`** (string)
 
-### `global`
+### CollectionEntry
 
-```handlebars
-{{global.slug}}
-{{global.display_name}}
-{{#each global.fields_meta}}
-  {{this.name}} — {{this.field_type}}
-{{/each}}
-```
+- **`slug`** (string)
+- **`display_name`** (string)
+- **`field_count`** (integer)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `slug` | string | Global slug |
-| `display_name` | string | Human-readable name |
-| `fields_meta` | array | Same structure as `collection.fields_meta` |
+### CollectionCard
 
----
+- **`slug`** (string)
+- **`display_name`** (string)
+- **`singular_name`** (string)
+- **`count`** (integer)
+- **`last_updated`** (Option<string>) _(optional)_
+- **`is_auth`** (boolean)
+- **`is_upload`** (boolean)
+- **`has_versions`** (boolean)
 
-## Auth Pages
+### GlobalCard
 
-Auth pages use a minimal context builder (`ContextBuilder::auth()`) — no `nav` or `user`.
+- **`slug`** (string)
+- **`display_name`** (string)
+- **`last_updated`** (Option<string>) _(optional)_
+- **`has_versions`** (boolean)
 
-### Login (`auth_login`)
+### UploadFormContext
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `collections` | array | Auth collections (slug + display_name) |
-| `show_collection_picker` | boolean | `true` if more than one auth collection |
-| `disable_local` | boolean | `true` if all auth collections disable local login |
-| `show_forgot_password` | boolean | `true` if email is configured and any collection enables forgot password |
-| `error` | string/null | Error message (e.g., "Invalid email or password") |
-| `success` | string/null | Success message (e.g., after password reset) |
-| `email` | string/null | Pre-filled email (on error re-render) |
+- **`accept`** (Option<string>) _(optional)_ — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.
+- **`focal_x`** (Option<number>) _(optional)_
+- **`focal_y`** (Option<number>) _(optional)_
+- **`preview`** (Option<string>) _(optional)_ — Image preview URL when the file is an image.
+- **`info`** ([UploadInfo](#uploadinfo) \| null) _(optional)_ — Filename + dimensions/filesize info pill.
 
-### Forgot Password (`auth_forgot`)
+### UploadInfo
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `collections` | array | Auth collections |
-| `show_collection_picker` | boolean | `true` if more than one auth collection |
-| `success` | boolean/null | `true` after form submission (always, to avoid leaking user existence) |
+- **`filename`** (string)
+- **`filesize_display`** (Option<string>) _(optional)_
+- **`dimensions`** (Option<string>) _(optional)_
 
-### Reset Password (`auth_reset`)
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `token` | string/null | Reset token (if valid) |
-| `error` | string/null | Error message (invalid/expired token, validation errors) |
-
----
-
-## Error Pages
-
-Error pages receive the base context (`crap`, `nav`, `page`) plus:
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `message` | string | Error description |
-
-**Page types:** `error_403`, `error_404`, `error_500`.
-
-```handlebars
-<h1>{{page.title}}</h1>
-<p>{{message}}</p>
-```
-
----
-
-## Locale Context
-
-When localization is enabled in `crap.toml`, edit/create pages receive additional keys merged into the top level:
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `has_locales` | boolean | Always `true` when locale is enabled |
-| `current_locale` | string | Currently selected locale (e.g., `"en"`) |
-| `locales` | array | All configured locales with selection state |
-
-```handlebars
-{{#if has_locales}}
-  {{#each locales}}
-    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>
-      {{this.label}}
-    </option>
-  {{/each}}
-{{/if}}
-```
-
-Each locale entry: `value` (e.g., `"en"`), `label` (e.g., `"EN"`), `selected` (boolean).
-
-When editing a non-default locale, non-localized fields are rendered as readonly (locale-locked).
-
-### Editor Locale (Content Locale)
-
-In addition to the UI translation locale (`has_locales`/`current_locale`/`locales`), edit/create pages also receive content editor locale variables when locale is enabled:
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `has_editor_locales` | boolean | Always `true` when locale is enabled |
-| `editor_locale` | string | Currently selected content locale (e.g., `"en"`) |
-| `editor_locales` | array | All configured locales with selection state |
-
-These control which content locale is being edited, separate from the admin UI translation locale.
-
----
-
-## Field Context
-
-The `fields` array contains processed field context objects, one per field. These are used by `{{{render_field field}}}` or can be iterated manually.
-
-### Common Fields
-
-Every field context object has:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Field name (HTML form input name) |
-| `field_type` | string | Type identifier (e.g., `"text"`, `"select"`, `"blocks"`) |
-| `label` | string | Display label (from `admin.label` or auto-generated) |
-| `required` | boolean | Whether the field is required |
-| `value` | string | Current value (stringified) |
-| `placeholder` | string/null | Placeholder text |
-| `description` | string/null | Help text |
-| `readonly` | boolean | Whether the field is readonly |
-| `localized` | boolean | Whether the field is localized |
-| `locale_locked` | boolean | `true` when editing a non-default locale and the field is not localized |
-| `error` | string/null | Validation error message (on re-render after failed save) |
-| `position` | string/null | Field position: `"main"` (default) or `"sidebar"`. Fields with `"sidebar"` appear in `sidebar_fields` instead of `fields` |
-| `condition_visible` | boolean/null | Initial visibility from display condition evaluation. `false` = hidden on page load |
-| `condition_json` | object/null | Client-side condition table (JSON). Present for condition functions that return a table |
-| `condition_ref` | string/null | Server-side condition function reference. Present for condition functions that return a boolean |
-
-### Select Fields
-
-Additional keys:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `options` | array | Available options |
-
-Each option: `label`, `value`, `selected` (boolean).
-
-### Checkbox Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `checked` | boolean | Whether the checkbox is checked |
-
-### Date Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `picker_appearance` | string | `"dayOnly"`, `"dayAndTime"`, `"timeOnly"`, or `"monthOnly"` |
-| `date_only_value` | string | Date portion only, e.g., `"2026-01-15"` (dayOnly) |
-| `datetime_local_value` | string | Date+time, e.g., `"2026-01-15T09:00"` (dayAndTime) |
-
-### Relationship Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `relationship_collection` | string | Related collection slug |
-| `has_many` | boolean | Whether this is a has-many relationship |
-| `relationship_options` | array | Available documents from the related collection |
-
-Each option: `value` (document ID), `label` (title field value), `selected` (boolean).
-
-### Upload Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `relationship_collection` | string | Upload collection slug |
-| `relationship_options` | array | Available uploads with thumbnail info |
-| `selected_preview_url` | string/null | Preview URL of the currently selected upload |
-| `selected_filename` | string/null | Filename of the currently selected upload |
-
-Each option: `value`, `label`, `selected`, `thumbnail_url` (if image), `is_image` (boolean), `filename`.
-
-### Group Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `sub_fields` | array | Sub-field contexts (same structure as top-level fields) |
-| `collapsed` | boolean | Whether the group starts collapsed |
-
-Sub-field `name` is formatted as `group__subfield` (double underscore).
-
-### Array Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `sub_fields` | array | Sub-field definitions (template for new rows) |
-| `rows` | array | Existing row data |
-| `row_count` | integer | Number of existing rows |
-| `template_id` | string | Unique ID for DOM targeting (count badge, row container, templates) |
-| `label_field` | string/null | Sub-field name used for dynamic row labels (from `admin.label_field`) |
-| `max_rows` | integer/null | Maximum number of rows allowed (from `max_rows` on field definition) |
-| `min_rows` | integer/null | Minimum number of rows required (from `min_rows` on field definition) |
-| `init_collapsed` | boolean | Whether existing rows render collapsed by default (from `admin.collapsed`, default: true) |
-| `add_label` | string/null | Custom singular label for the add button (from `admin.labels.singular`, e.g., "Slide" → "Add Slide") |
-
-Each row: `index` (integer), `sub_fields` (array of field contexts with indexed names like `items[0][title]`), `custom_label` (string/null — computed label from `row_label` or `label_field`).
-
-The `<fieldset>` element includes a `data-label-field` attribute when `label_field` is set, enabling JavaScript to update row titles live as the user types.
-
-### Blocks Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `block_definitions` | array | Available block types with their fields |
-| `rows` | array | Existing block instances |
-| `row_count` | integer | Number of existing blocks |
-| `template_id` | string | Unique ID for DOM targeting (count badge, row container, templates) |
-| `label_field` | string/null | Field-level `admin.label_field` (shared fallback for all block types) |
-| `max_rows` | integer/null | Maximum number of blocks allowed (from `max_rows` on field definition) |
-| `min_rows` | integer/null | Minimum number of blocks required (from `min_rows` on field definition) |
-| `init_collapsed` | boolean | Whether existing block rows render collapsed by default (from `admin.collapsed`, default: true) |
-| `add_label` | string/null | Custom singular label for the add button (from `admin.labels.singular`, e.g., "Section" → "Add Section") |
-
-Each block definition: `block_type`, `label`, `label_field` (string/null — per-block-type label field), `fields` (array of sub-field contexts).
-
-Each row: `index`, `_block_type`, `block_label`, `custom_label` (string/null — computed label from `row_label`, block `label_field`, or field `label_field`), `sub_fields` (array of field contexts with indexed names like `content[0][heading]`).
-
----
-
-## Handlebars Helpers
-
-In addition to the standard Handlebars helpers, these custom helpers are available:
-
-### Logic Helpers
-
-| Helper | Usage | Description |
-|--------|-------|-------------|
-| `eq` | `{{#if (eq a b)}}` | Equality check (any types) |
-| `not` | `{{#if (not val)}}` | Boolean negation |
-| `and` | `{{#if (and a b)}}` | Logical AND |
-| `or` | `{{#if (or a b)}}` | Logical OR |
-
-### Comparison Helpers
-
-| Helper | Usage | Description |
-|--------|-------|-------------|
-| `gt` | `{{#if (gt a b)}}` | Greater than (numeric) |
-| `lt` | `{{#if (lt a b)}}` | Less than (numeric) |
-| `gte` | `{{#if (gte a b)}}` | Greater than or equal (numeric) |
-| `lte` | `{{#if (lte a b)}}` | Less than or equal (numeric) |
-| `contains` | `{{#if (contains haystack needle)}}` | Array/string contains |
-
-### Utility Helpers
-
-| Helper | Usage | Description |
-|--------|-------|-------------|
-| `json` | `{{{json value}}}` | Serialize to JSON string (use triple braces) |
-| `default` | `{{default val "fallback"}}` | Fallback for falsy values |
-| `concat` | `{{concat a b c}}` | String concatenation (variadic) |
-| `t` | `{{t "key"}}` | Translation lookup |
-| `render_field` | `{{{render_field field}}}` | Render a field partial (use triple braces) |
-
-### Translation Helper
-
-Supports interpolation:
-
-```handlebars
-{{t "welcome"}}                     {{!-- simple lookup --}}
-{{t "greeting" name="World"}}       {{!-- replaces {{name}} in translation string --}}
-```
-
-### Truthiness
-
-Helpers like `not`, `and`, `or`, and `default` use Handlebars truthiness:
-- **Falsy:** `null`, `false`, `0`, `""` (empty string), `[]` (empty array)
-- **Truthy:** everything else (including empty objects `{}`)
-
-### Composition
-
-Helpers can be composed as sub-expressions:
-
-```handlebars
-{{#if (and (not collection.is_auth) (gt pagination.total 0))}}
-  Showing {{pagination.total}} items
-{{/if}}
-
-{{#if (or collection.has_drafts collection.has_versions)}}
-  This collection supports versioning
-{{/if}}
-
-<a href="{{concat "/admin/collections/" collection.slug "/create"}}">New</a>
-```
-
----
-
-## `before_render` Hook
-
-You can inject custom data into every admin page context using the `before_render` hook:
-
-```lua
--- init.lua
-crap.hooks.register("before_render", function(context)
-  context.custom = {
-    announcement = "Maintenance tonight at 10pm",
-    feature_flags = { new_editor = true },
-  }
-  return context
-end)
-```
-
-Then in your templates:
-
-```handlebars
-{{#if custom.announcement}}
-  <div class="announcement">{{custom.announcement}}</div>
-{{/if}}
-
-{{#if custom.feature_flags.new_editor}}
-  {{!-- show new editor --}}
-{{/if}}
-```
-
-The `before_render` hook:
-- Fires on every admin page render (GET and POST error re-renders)
-- Receives the full template context as a Lua table
-- Must return the (possibly modified) context
-- Has **no CRUD access** (no database operations) — keeps it fast
-- Use the `custom` key by convention for injected data
-- Can read and modify any context key (not just `custom`), but modifying built-in keys may break default templates
-- On error: logs a warning and returns the original context unmodified
-
-### Example: Conditional Navigation
-
-```lua
-crap.hooks.register("before_render", function(context)
-  -- Add environment indicator
-  local env = crap.env.get("APP_ENV") or "development"
-  context.custom = context.custom or {}
-  context.custom.environment = env
-  context.custom.is_production = (env == "production")
-  return context
-end)
-```
-
-```handlebars
-{{#if custom.is_production}}
-  <div class="env-badge env-badge--production">PRODUCTION</div>
-{{else}}
-  <div class="env-badge">{{custom.environment}}</div>
-{{/if}}
-```
-
----
-
-## Full Example: Custom List Template
-
-A complete example overriding the items list to add a custom column:
-
-```handlebars
-{{!-- <config_dir>/templates/collections/items.hbs --}}
-{{#> layout/base}}
-
-<h1>{{page.title}}</h1>
-
-{{#if custom.announcement}}
-  <div class="alert">{{custom.announcement}}</div>
-{{/if}}
-
-<table>
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Status</th>
-      {{#if collection.is_upload}}<th>Preview</th>{{/if}}
-      <th>Updated</th>
-    </tr>
-  </thead>
-  <tbody>
-    {{#each docs}}
-      <tr>
-        <td>
-          <a href="/admin/collections/{{../collection.slug}}/{{this.id}}">
-            {{this.title_value}}
-          </a>
-        </td>
-        <td>{{this.status}}</td>
-        {{#if ../collection.is_upload}}
-          <td>
-            {{#if this.thumbnail_url}}
-              <img src="{{this.thumbnail_url}}" width="40" />
-            {{/if}}
-          </td>
-        {{/if}}
-        <td>{{this.updated_at}}</td>
-      </tr>
-    {{/each}}
-  </tbody>
-</table>
-
-{{#if pagination.has_prev}}
-  <a href="{{pagination.prev_url}}">Previous</a>
-{{/if}}
-{{#if pagination.has_next}}
-  <a href="{{pagination.next_url}}">Next</a>
-{{/if}}
-
-{{!-- Embed field metadata for client-side use --}}
-<script>
-  const collectionDef = {{{json collection}}};
-</script>
-
-{{/layout/base}}
-```

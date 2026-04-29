@@ -1,5 +1,6 @@
 //! Global definition context — `{{global.*}}` for global-scoped pages.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::{
@@ -8,7 +9,7 @@ use crate::{
 };
 
 /// Top-level global metadata exposed to templates.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct GlobalContext {
     pub slug: String,
     pub display_name: String,

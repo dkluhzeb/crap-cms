@@ -1,6 +1,7 @@
 //! [`PageMeta`] — the `page` object templates branch on for layout decisions
 //! (active sidebar item, breadcrumb rendering, body class).
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{Breadcrumb, PageType};
@@ -8,7 +9,7 @@ use super::{Breadcrumb, PageType};
 /// The `page` object every admin template receives. Carries the page-type
 /// discriminant, the page title (already-translated label or translation key),
 /// optional title interpolation parameter, and breadcrumb trail.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct PageMeta {
     /// Page-type discriminant. Serialized as a snake_case string literal so
     /// templates can branch with `{{#if (eq page.type "collection_edit")}}`.

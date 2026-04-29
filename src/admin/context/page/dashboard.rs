@@ -1,12 +1,13 @@
 //! Typed page context for the dashboard.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::BasePageContext;
 
 /// One collection summary card on the dashboard. The shape mirrors the
 /// keys the dashboard template reads.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionCard {
     pub slug: String,
     pub display_name: String,
@@ -22,7 +23,7 @@ pub struct CollectionCard {
 }
 
 /// One global summary card on the dashboard.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct GlobalCard {
     pub slug: String,
     pub display_name: String,
@@ -34,7 +35,7 @@ pub struct GlobalCard {
 }
 
 /// Dashboard page context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct DashboardPage {
     #[serde(flatten)]
     pub base: BasePageContext,

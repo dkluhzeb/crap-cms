@@ -1,6 +1,7 @@
 //! Typed page contexts for global-singleton pages (edit, versions list,
 //! restore-confirm).
 
+use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -8,7 +9,7 @@ use super::BasePageContext;
 use crate::admin::context::{FieldContext, GlobalContext, LocaleTemplateData, PaginationContext};
 
 /// `/admin/globals/{slug}` edit form context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct GlobalEditPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -33,7 +34,7 @@ pub struct GlobalEditPage {
 /// Slim re-render context for the `globals/edit` template after a validation
 /// error. Mirrors [`super::collections::CollectionFormErrorPage`] for
 /// globals.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct GlobalFormErrorPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -44,7 +45,7 @@ pub struct GlobalFormErrorPage {
 }
 
 /// `/admin/globals/{slug}/versions` versions-listing page context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct GlobalVersionsListPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -57,7 +58,7 @@ pub struct GlobalVersionsListPage {
 }
 
 /// `/admin/globals/{slug}/versions/{ver}/restore` restore-confirmation page.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct GlobalRestoreConfirmPage {
     #[serde(flatten)]
     pub base: BasePageContext,

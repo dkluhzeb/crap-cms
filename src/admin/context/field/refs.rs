@@ -4,6 +4,7 @@
 //! the `relationship_collection` + `picker` shape; Join exposes its inverse
 //! reference.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::BaseFieldData;
@@ -12,7 +13,7 @@ use super::BaseFieldData;
 
 /// Relationship to documents in another collection. The `selected_items`
 /// field is `None` after the build phase and `Some` after enrichment.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RelationshipField {
     #[serde(flatten)]
@@ -49,7 +50,7 @@ pub struct RelationshipField {
 /// `collection` field is set so templates can render labels like
 /// `{collection} / {label}`. Upload `selected_items` reuse this same struct
 /// and populate `thumbnail_url`, `is_image`, and `filename`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RelationshipSelectedItem {
     pub id: String,
@@ -76,7 +77,7 @@ pub struct RelationshipSelectedItem {
 // ── Upload ────────────────────────────────────────────────────────
 
 /// Upload reference (specialised relationship to a media collection).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct UploadField {
     #[serde(flatten)]
@@ -111,7 +112,7 @@ pub struct UploadField {
 
 /// Read-only inverse-reference field. The `readonly` flag on
 /// [`BaseFieldData`] is set to `true` for join fields.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct JoinField {
     #[serde(flatten)]
@@ -135,7 +136,7 @@ pub struct JoinField {
 
 /// One row of a [`JoinField::join_items`] list — the inverse-reference
 /// document's id and display label.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct JoinItem {
     pub id: String,

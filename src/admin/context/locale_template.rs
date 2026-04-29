@@ -6,12 +6,13 @@
 //! coexist for historical reasons (different parts of the admin UI grew
 //! against different key names) and both are populated on edit-form pages.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::config::LocaleConfig;
 
 /// Per-locale option in the template-data picker.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct LocaleTemplateOption {
     pub value: String,
     pub label: String,
@@ -20,7 +21,7 @@ pub struct LocaleTemplateOption {
 
 /// Template-data flavor of the editor locale picker. Flattened into pages
 /// that need it (collection edit/create, globals edit).
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct LocaleTemplateData {
     pub has_locales: bool,
     pub current_locale: String,

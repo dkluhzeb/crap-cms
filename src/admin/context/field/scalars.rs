@@ -2,6 +2,7 @@
 //! Text, Email, Password, Json, Textarea, Number, Code, Richtext, Date,
 //! Checkbox, Select/Radio (Choice).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::BaseFieldData;
@@ -12,7 +13,7 @@ use super::BaseFieldData;
 ///
 /// Only `Text` (and `Number`) supports `has_many` — the others always
 /// have `has_many: None` and `tags: None`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct TextField {
     #[serde(flatten)]
@@ -30,7 +31,7 @@ pub struct TextField {
 // ── Textarea ──────────────────────────────────────────────────────
 
 /// Multi-line textarea. Always emits `rows` and `resizable`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct TextareaField {
     #[serde(flatten)]
@@ -46,7 +47,7 @@ pub struct TextareaField {
 // ── Number ────────────────────────────────────────────────────────
 
 /// Numeric input. `step` is always emitted (default `"any"`).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct NumberField {
     #[serde(flatten)]
@@ -67,7 +68,7 @@ pub struct NumberField {
 /// Source-code editor field (CodeMirror). Always emits `language`. Emits
 /// `languages` only when the operator configured an allow-list (which makes
 /// the editor render an in-form picker).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct CodeField {
     #[serde(flatten)]
@@ -87,7 +88,7 @@ pub struct CodeField {
 /// Rich-text editor field (ProseMirror). The `_node_names` key is prefixed
 /// with `_` per the existing on-the-wire shape consumed by the
 /// `<crap-richtext>` element.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RichtextField {
     #[serde(flatten)]
@@ -117,7 +118,7 @@ pub struct RichtextField {
 }
 
 /// One custom ProseMirror node definition exposed to the richtext editor.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RichtextNodeDefCtx {
     pub name: String,
@@ -129,7 +130,7 @@ pub struct RichtextNodeDefCtx {
 /// One attribute on a custom richtext node — describes a form field rendered
 /// in the node-edit modal. Many fields are optional and only emitted when
 /// configured.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RichtextNodeAttrCtx {
     pub name: String,
@@ -193,7 +194,7 @@ pub struct RichtextNodeAttrCtx {
 }
 
 /// One row in a richtext node attribute's `options` list (Select/Radio attrs).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RichtextNodeAttrOption {
     pub label: String,
@@ -207,7 +208,7 @@ pub struct RichtextNodeAttrOption {
 /// Either `date_only_value` (when `picker_appearance == "dayOnly"`) or
 /// `datetime_local_value` (when `picker_appearance == "dayAndTime"`) is set
 /// — never both. Other appearances emit neither.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct DateField {
     #[serde(flatten)]
@@ -246,7 +247,7 @@ pub struct DateField {
 }
 
 /// One row in a Date field's timezone picker.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct TimezoneOption {
     pub value: String,
@@ -256,7 +257,7 @@ pub struct TimezoneOption {
 // ── Checkbox ──────────────────────────────────────────────────────
 
 /// Boolean checkbox. `checked` is always present.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct CheckboxField {
     #[serde(flatten)]
@@ -269,7 +270,7 @@ pub struct CheckboxField {
 
 /// Select dropdown or radio button group. The `field_type` discriminator
 /// on `base` distinguishes the two; the data shape is identical.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct ChoiceField {
     #[serde(flatten)]
@@ -283,7 +284,7 @@ pub struct ChoiceField {
 }
 
 /// One row in a Select/Radio's `options` array.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct SelectOption {
     pub label: String,

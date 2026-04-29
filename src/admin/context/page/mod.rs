@@ -25,6 +25,9 @@ mod base;
 mod meta;
 mod types;
 
+#[cfg(test)]
+mod schema_doc;
+
 pub use base::{AuthBasePageContext, BasePageContext};
 pub use meta::PageMeta;
 pub use types::{Breadcrumb, PageType};

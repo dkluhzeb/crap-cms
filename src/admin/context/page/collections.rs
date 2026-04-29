@@ -1,6 +1,7 @@
 //! Typed page contexts for collection-related pages (list, items, edit,
 //! create, delete-confirm, versions, restore-confirm).
 
+use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -10,7 +11,7 @@ use crate::admin::context::{
 };
 
 /// One row on the `/admin/collections` listing page.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionEntry {
     pub slug: String,
     pub display_name: String,
@@ -18,7 +19,7 @@ pub struct CollectionEntry {
 }
 
 /// `/admin/collections` page context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionListPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -34,7 +35,7 @@ pub struct CollectionListPage {
 /// `build_filter_pills`) haven't been migrated to typed structs yet — that's
 /// independent surgery. The page-level shape is fixed; tightening the
 /// inner types is a future cleanup.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionItemsListPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -68,7 +69,7 @@ pub struct CollectionItemsListPage {
 
 /// Upload-collection preview block flattened onto the edit form when
 /// `def.upload` is set.
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, JsonSchema)]
 pub struct UploadFormContext {
     /// Comma-joined accept list for the file input — emitted only when the
     /// collection declares allowed mime types.
@@ -90,7 +91,7 @@ pub struct UploadFormContext {
     pub info: Option<UploadInfo>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct UploadInfo {
     pub filename: String,
 
@@ -102,7 +103,7 @@ pub struct UploadInfo {
 }
 
 /// `/admin/collections/{slug}/{id}` edit form context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionEditPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -134,7 +135,7 @@ pub struct CollectionEditPage {
 }
 
 /// `/admin/collections/{slug}/create` create form context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionCreatePage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -157,7 +158,7 @@ pub struct CollectionCreatePage {
 /// validation / upload error. Carries only what the template needs in the
 /// error path (no version sidebar, no breadcrumbs, no editor-locale data) —
 /// the user is bounced back to the form they just submitted.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionFormErrorPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -181,7 +182,7 @@ pub struct CollectionFormErrorPage {
 }
 
 /// `/admin/collections/{slug}/{id}/delete` delete-confirmation page.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionDeleteConfirmPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -196,7 +197,7 @@ pub struct CollectionDeleteConfirmPage {
 
 /// `/admin/collections/{slug}/{id}/versions/{ver}/restore` restore-
 /// confirmation page.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionRestoreConfirmPage {
     #[serde(flatten)]
     pub base: BasePageContext,
@@ -216,7 +217,7 @@ pub struct CollectionRestoreConfirmPage {
 }
 
 /// `/admin/collections/{slug}/{id}/versions` versions-listing page context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionVersionsListPage {
     #[serde(flatten)]
     pub base: BasePageContext,

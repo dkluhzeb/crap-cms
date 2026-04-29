@@ -4,12 +4,13 @@
 //! `editor_locales` (Vec<EditorLocaleOption>). Templates use the array to
 //! render a locale picker and the string to mark the active one.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::config::LocaleConfig;
 
 /// Top-level context contributed by the editor-locale builder.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct EditorLocaleContext {
     pub has_editor_locales: bool,
     pub editor_locale: String,
@@ -17,7 +18,7 @@ pub struct EditorLocaleContext {
 }
 
 /// One row in the editor-locale picker dropdown.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct EditorLocaleOption {
     pub value: String,
     pub label: String,

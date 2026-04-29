@@ -36,6 +36,7 @@
 //! `Blocks`) hold `Vec<FieldContext>` for their children. The Vec heap
 //! indirection makes the enum sized, so no `Box` is needed.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -63,8 +64,9 @@ pub use scalars::{
 /// serialized JSON has `{"field_type": "text", ...flat fields...}`. This is
 /// the single source of truth for the discriminator — [`BaseFieldData`]
 /// does NOT carry a `field_type` field.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "field_type", rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
 pub enum FieldContext {
     /// Plain text input (or tag input when `has_many`).
     Text(TextField),

@@ -5,6 +5,7 @@
 //! containing enum recursive. The `Vec` heap indirection keeps the enum
 //! sized without `Box`.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{BaseFieldData, FieldContext};
@@ -13,7 +14,7 @@ use super::{BaseFieldData, FieldContext};
 
 /// Inline group of sub-fields with `__`-prefixed column names. Also used
 /// for the `Collapsible` variant — they share the exact JSON shape.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct GroupField {
     #[serde(flatten)]
@@ -29,7 +30,7 @@ pub struct GroupField {
 /// Layout row wrapper — transparent (no name added to children, no
 /// `collapsed` toggle). Distinct from [`GroupField`] only by the absence
 /// of `collapsed`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct RowField {
     #[serde(flatten)]
@@ -41,7 +42,7 @@ pub struct RowField {
 // ── Tabs ──────────────────────────────────────────────────────────
 
 /// Tabbed layout wrapper — each tab carries its own sub-fields.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct TabsField {
     #[serde(flatten)]
@@ -51,7 +52,7 @@ pub struct TabsField {
 }
 
 /// One tab panel inside a [`TabsField`].
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct TabPanel {
     pub label: String,
@@ -74,7 +75,7 @@ pub struct TabPanel {
 /// At builder time, `sub_fields` carries the *template* sub-fields used to
 /// render new rows, `rows` is `None`, and `row_count` is `0`. Enrichment
 /// fills `rows` from the document data and updates `row_count`.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct ArrayField {
     #[serde(flatten)]
@@ -108,7 +109,7 @@ pub struct ArrayField {
 }
 
 /// One concrete row in an [`ArrayField::rows`] list.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct ArrayRow {
     pub index: usize,
@@ -132,7 +133,7 @@ pub struct ArrayRow {
 /// `block_definitions` carries the available block types and their template
 /// sub-fields. Enrichment fills `rows` with the concrete block rows from
 /// the document.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct BlocksField {
     #[serde(flatten)]
@@ -169,7 +170,7 @@ pub struct BlocksField {
 /// One block-type definition inside a [`BlocksField::block_definitions`]
 /// array. Carries the template sub-fields used to render a new block of
 /// this type.
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct BlockDefinition {
     pub block_type: String,
@@ -192,7 +193,7 @@ pub struct BlockDefinition {
 /// One concrete row in a [`BlocksField::rows`] list. Mirrors [`ArrayRow`]
 /// but also carries the block discriminator (the `_block_type` JSON key,
 /// underscore-prefixed for legacy on-the-wire compatibility).
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct BlockRow {
     pub index: usize,

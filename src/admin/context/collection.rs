@@ -1,5 +1,6 @@
 //! Collection definition context — `{{collection.*}}` for collection-scoped pages.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::{
@@ -12,7 +13,7 @@ use crate::{
 };
 
 /// Top-level collection metadata exposed to templates.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CollectionContext {
     pub slug: String,
     pub display_name: String,
@@ -33,7 +34,7 @@ pub struct CollectionContext {
 }
 
 /// Admin-presentation metadata pulled from `def.admin`.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct AdminMeta {
     pub use_as_title: Option<String>,
     pub default_sort: Option<String>,
@@ -42,7 +43,7 @@ pub struct AdminMeta {
 }
 
 /// Upload-collection metadata. Only present when `def.upload` is set.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct UploadMeta {
     pub enabled: bool,
     pub mime_types: Vec<String>,
@@ -51,14 +52,14 @@ pub struct UploadMeta {
 }
 
 /// Versioning metadata. Only present when `def.versions` is set.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct VersionsMeta {
     pub drafts: bool,
     pub max_versions: u32,
 }
 
 /// Auth-collection metadata. Only present when `def.auth` is set.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct AuthMeta {
     pub enabled: bool,
     pub disable_local: bool,

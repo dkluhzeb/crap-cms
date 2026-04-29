@@ -1,20 +1,21 @@
 //! Typed page contexts for the unauthenticated auth flow (login, MFA,
 //! password reset, forgot password).
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::AuthBasePageContext;
 
 /// One auth-enabled collection shown in the picker on the login / forgot
 /// password forms (when more than one auth collection exists).
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, JsonSchema)]
 pub struct AuthCollection {
     pub slug: String,
     pub display_name: String,
 }
 
 /// Login page context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct LoginPage {
     #[serde(flatten)]
     pub base: AuthBasePageContext,
@@ -40,7 +41,7 @@ pub struct LoginPage {
 }
 
 /// MFA code entry page context.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct MfaPage {
     #[serde(flatten)]
     pub base: AuthBasePageContext,
@@ -50,7 +51,7 @@ pub struct MfaPage {
 }
 
 /// Password-reset page (the form a user sees via the email link).
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct ResetPasswordPage {
     #[serde(flatten)]
     pub base: AuthBasePageContext,
@@ -66,7 +67,7 @@ pub struct ResetPasswordPage {
 
 /// Forgot-password page (the form where a user requests a reset email).
 /// Renders the success state once the email has been queued.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct ForgotPasswordPage {
     #[serde(flatten)]
     pub base: AuthBasePageContext,

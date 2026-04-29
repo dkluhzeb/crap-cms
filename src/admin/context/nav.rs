@@ -4,19 +4,20 @@
 //! Sorted alphabetically by slug; filtered down to entries the current user
 //! can read by `BasePageContext::for_handler`.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::admin::AdminState;
 
 /// Top-level nav data exposed at `{{nav.*}}`.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct NavData {
     pub collections: Vec<NavCollection>,
     pub globals: Vec<NavGlobal>,
 }
 
 /// One sidebar entry for a collection.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct NavCollection {
     pub slug: String,
     pub display_name: String,
@@ -25,7 +26,7 @@ pub struct NavCollection {
 }
 
 /// One sidebar entry for a global.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct NavGlobal {
     pub slug: String,
     pub display_name: String,

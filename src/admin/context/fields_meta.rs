@@ -2,12 +2,13 @@
 //! `{{global.fields_meta}}` — a flat array of definitions templates use for
 //! conditional logic (e.g., showing labels, descriptions, placeholders).
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::core::FieldDefinition;
 
 /// Metadata about a single field as it appears to templates.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct FieldMeta {
     pub name: String,
     pub field_type: String,
@@ -18,7 +19,7 @@ pub struct FieldMeta {
 }
 
 /// Admin-presentation metadata for a field (label, description, layout hints).
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct FieldAdminMeta {
     pub label: Option<String>,
     pub hidden: bool,

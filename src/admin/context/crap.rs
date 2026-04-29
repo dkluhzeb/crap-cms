@@ -4,12 +4,13 @@
 //! task-local set by the security_headers middleware so inline `<script>` tags
 //! in built-in and overlay templates pass CSP.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::admin::{AdminState, csp_nonce::current_nonce_or_empty};
 
 /// Metadata about the running crap-cms process and current request.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct CrapMeta {
     /// Crate version (Cargo.toml `version`).
     pub version: &'static str,

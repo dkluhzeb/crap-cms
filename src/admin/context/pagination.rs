@@ -4,12 +4,13 @@
 //! (no page numbers, just prev/next URLs). Cursor mode omits `page` and
 //! `total_pages` so templates can detect mode via key presence.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::db::query::PaginationResult;
 
 /// Pagination metadata for list views.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct PaginationContext {
     pub per_page: i64,
     pub total: i64,

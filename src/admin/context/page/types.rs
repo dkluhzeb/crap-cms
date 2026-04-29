@@ -5,9 +5,12 @@
 //! used by handlers; it serializes to the JSON shape the breadcrumb partial
 //! consumes.
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
 /// Page type identifiers for template conditional logic.
+#[derive(JsonSchema)]
+#[schemars(rename_all = "snake_case")]
 pub enum PageType {
     /// The main administration dashboard.
     Dashboard,
@@ -74,7 +77,7 @@ impl PageType {
 }
 
 /// A breadcrumb entry with a label and optional URL.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, JsonSchema)]
 pub struct Breadcrumb {
     /// The text label to display for the breadcrumb.
     pub label: String,
