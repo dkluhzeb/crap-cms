@@ -8,8 +8,10 @@ use serde_json::{Map, Value, json};
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, PageType, build_collection_context, build_global_context},
-        csp_nonce::current_nonce_or_empty,
+        context::{
+            Breadcrumb, CollectionContext, CrapMeta, DocumentRef, EditorLocaleContext,
+            GlobalContext, NavData, PageType, PaginationContext, UserContext,
+        },
         handlers::shared::has_read_access,
     },
     config::LocaleConfig,
@@ -26,50 +28,26 @@ pub struct ContextBuilder {
     pub(crate) data: Map<String, Value>,
 }
 
+/// Serialize an admin-context struct to a [`Value`]. The error path is
+/// unreachable because admin context structs only contain primitive Rust
+/// types (String, bool, integers, Option, Vec, HashMap<String, Value>) which
+/// `serde_json::to_value` always handles successfully.
+fn to_value<T: serde::Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).expect("admin context structs serialize infallibly")
+}
+
 impl ContextBuilder {
     /// Create a new builder with `crap`, `nav`, `user`, and locale pre-populated.
     pub fn new(state: &AdminState, claims: Option<&Claims>) -> Self {
         let mut data = Map::new();
 
-        // crap metadata — including the per-request CSP nonce so inline
-        // `<script nonce="{{crap.csp_nonce}}">` tags (in built-in templates
-        // AND overlay templates) are accepted by the browser. Reads from a
-        // task-local set by the `security_headers` middleware; falls back to
-        // empty string outside request scope (tests, error paths) in which
-        // case inline scripts are CSP-blocked by design.
-        data.insert(
-            "crap".into(),
-            json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "build_hash": env!("BUILD_HASH"),
-                "dev_mode": state.config.admin.dev_mode,
-                "auth_enabled": has_auth_collections(state),
-                "csp_nonce": current_nonce_or_empty(),
-            }),
-        );
+        data.insert("crap".into(), to_value(&CrapMeta::from_state(state)));
+        data.insert("nav".into(), to_value(&NavData::from_state(state)));
 
-        // nav
-        data.insert(
-            "nav".into(),
-            json!({
-                "collections": build_nav_collections(state),
-                "globals": build_nav_globals(state),
-            }),
-        );
-
-        // user
         if let Some(c) = claims {
-            data.insert(
-                "user".into(),
-                json!({
-                    "email": c.email,
-                    "id": c.sub,
-                    "collection": c.collection,
-                }),
-            );
+            data.insert("user".into(), to_value(&UserContext::from_claims(c)));
         }
 
-        // locale defaults
         data.insert(
             "_locale".into(),
             Value::String(state.config.locale.default_locale.clone()),
@@ -87,18 +65,8 @@ impl ContextBuilder {
     pub fn auth(state: &AdminState) -> Self {
         let mut data = Map::new();
 
-        data.insert(
-            "crap".into(),
-            json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "build_hash": env!("BUILD_HASH"),
-                "dev_mode": state.config.admin.dev_mode,
-                "auth_enabled": true,
-                "csp_nonce": current_nonce_or_empty(),
-            }),
-        );
+        data.insert("crap".into(), to_value(&CrapMeta::for_auth_page(state)));
 
-        // locale defaults for auth pages
         data.insert(
             "_locale".into(),
             Value::String(state.config.locale.default_locale.clone()),
@@ -188,73 +156,53 @@ impl ContextBuilder {
 
     /// Set breadcrumbs on the page object.
     pub fn breadcrumbs(mut self, crumbs: Vec<Breadcrumb>) -> Self {
-        let crumbs_json: Vec<Value> = crumbs
-            .into_iter()
-            .map(|c| {
-                let mut m = Map::new();
-
-                m.insert("label".into(), Value::String(c.label));
-
-                if let Some(url) = c.url {
-                    m.insert("url".into(), Value::String(url));
-                }
-
-                if let Some(name) = c.label_name {
-                    m.insert("label_name".into(), Value::String(name));
-                }
-
-                Value::Object(m)
-            })
-            .collect();
+        let crumbs_json = to_value(&crumbs);
 
         // Set on page.breadcrumbs
         let page = self.data.entry("page").or_insert_with(|| json!({}));
 
         if let Some(obj) = page.as_object_mut() {
-            obj.insert("breadcrumbs".into(), Value::Array(crumbs_json.clone()));
+            obj.insert("breadcrumbs".into(), crumbs_json.clone());
         }
 
         // Also top-level for backward compat with breadcrumb partial
-        self.data
-            .insert("breadcrumbs".into(), Value::Array(crumbs_json));
+        self.data.insert("breadcrumbs".into(), crumbs_json);
 
         self
     }
 
     /// Set the collection definition context.
     pub fn collection_def(mut self, def: &CollectionDefinition) -> Self {
-        self.data
-            .insert("collection".into(), build_collection_context(def));
+        self.data.insert(
+            "collection".into(),
+            to_value(&CollectionContext::from_def(def)),
+        );
 
         self
     }
 
     /// Set the global definition context.
     pub fn global_def(mut self, def: &GlobalDefinition) -> Self {
-        self.data.insert("global".into(), build_global_context(def));
+        self.data
+            .insert("global".into(), to_value(&GlobalContext::from_def(def)));
 
         self
     }
 
     /// Set a minimal document context (e.g., for error re-renders with just ID).
     pub fn document_stub(mut self, id: &str) -> Self {
-        self.data.insert("document".into(), json!({ "id": id }));
+        self.data
+            .insert("document".into(), to_value(&DocumentRef::stub(id)));
 
         self
     }
 
     /// Set the document with explicit status (for edit pages before the document is fully loaded).
     pub fn document_with_status(mut self, doc: &Document, status: &str) -> Self {
-        let mut doc_json = json!({
-            "id": doc.id,
-            "created_at": doc.created_at,
-            "updated_at": doc.updated_at,
-            "status": status,
-        });
-
-        doc_json["data"] = json!(doc.fields);
-
-        self.data.insert("document".into(), doc_json);
+        self.data.insert(
+            "document".into(),
+            to_value(&DocumentRef::with_status(doc, status)),
+        );
 
         self
     }
@@ -284,21 +232,10 @@ impl ContextBuilder {
         prev_url: String,
         next_url: String,
     ) -> Self {
-        let mut pg = json!({
-            "per_page": pr.limit,
-            "total": pr.total_docs,
-            "has_prev": pr.has_prev_page,
-            "has_next": pr.has_next_page,
-            "prev_url": prev_url,
-            "next_url": next_url,
-        });
-
-        if let Some(page) = pr.page {
-            pg["page"] = json!(page);
-            pg["total_pages"] = json!(pr.total_pages.unwrap_or(0));
-        }
-
-        self.data.insert("pagination".into(), pg);
+        self.data.insert(
+            "pagination".into(),
+            to_value(&PaginationContext::from_result(pr, prev_url, next_url)),
+        );
 
         self
     }
@@ -323,30 +260,18 @@ impl ContextBuilder {
 
     /// Set editor locale context (content locales from config, not UI translation locales).
     pub fn editor_locale(mut self, editor_locale: Option<&str>, config: &LocaleConfig) -> Self {
-        if !config.is_enabled() {
+        let Some(ctx) = EditorLocaleContext::for_locale(editor_locale, config) else {
             return self;
-        }
+        };
 
-        let current = editor_locale.unwrap_or(&config.default_locale);
-
-        let locales: Vec<Value> = config
-            .locales
-            .iter()
-            .map(|l| {
-                json!({
-                    "value": l,
-                    "label": l.to_uppercase(),
-                    "selected": l == current,
-                })
-            })
-            .collect();
-
-        self.data.insert("has_editor_locales".into(), json!(true));
-
+        self.data.insert(
+            "has_editor_locales".into(),
+            Value::Bool(ctx.has_editor_locales),
+        );
         self.data
-            .insert("editor_locale".into(), Value::String(current.to_string()));
-
-        self.data.insert("editor_locales".into(), json!(locales));
+            .insert("editor_locale".into(), Value::String(ctx.editor_locale));
+        self.data
+            .insert("editor_locales".into(), to_value(&ctx.editor_locales));
 
         self
     }
@@ -366,54 +291,6 @@ impl ContextBuilder {
     pub fn build(self) -> Value {
         Value::Object(self.data)
     }
-}
-
-// ── Internal helpers ──────────────────────────────────────────────────────
-
-fn build_nav_collections(state: &AdminState) -> Value {
-    let mut collections: Vec<Value> = state
-        .registry
-        .collections
-        .values()
-        .map(|def| {
-            json!({
-                "slug": def.slug,
-                "display_name": def.display_name(),
-                "is_auth": def.is_auth_collection(),
-                "is_upload": def.is_upload_collection(),
-            })
-        })
-        .collect();
-
-    collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
-
-    Value::Array(collections)
-}
-
-fn build_nav_globals(state: &AdminState) -> Value {
-    let mut globals: Vec<Value> = state
-        .registry
-        .globals
-        .values()
-        .map(|def| {
-            json!({
-                "slug": def.slug,
-                "display_name": def.display_name(),
-            })
-        })
-        .collect();
-
-    globals.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
-
-    Value::Array(globals)
-}
-
-fn has_auth_collections(state: &AdminState) -> bool {
-    state
-        .registry
-        .collections
-        .values()
-        .any(|def| def.is_auth_collection())
 }
 
 #[cfg(test)]
