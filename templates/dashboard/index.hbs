@@ -1,6 +1,8 @@
 {{#> layout/base}}
   <h1>{{t "dashboard"}}</h1>
 
+  {{slot "dashboard_widgets"}}
+
   <div class="cards">
     {{#each collection_cards}}
       <a

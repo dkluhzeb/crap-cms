@@ -3,12 +3,14 @@ mod and;
 mod compare;
 mod concat;
 mod contains;
+mod data;
 mod default_val;
 mod eq;
 mod json;
 mod not;
 mod or;
 mod render_field;
+mod slot;
 mod translation;
 
 use std::{cmp::Ordering, sync::Arc};
@@ -16,23 +18,33 @@ use std::{cmp::Ordering, sync::Arc};
 use handlebars::Handlebars;
 use serde_json::Value;
 
-use crate::admin::Translations;
+use crate::{admin::Translations, hooks::HookRunner};
 
 use self::admin_i18n::AdminI18nHelper;
 use self::and::AndHelper;
 use self::compare::CompareHelper;
 use self::concat::ConcatHelper;
 use self::contains::ContainsHelper;
+use self::data::DataHelper;
 use self::default_val::DefaultHelper;
 use self::eq::EqHelper;
 use self::json::JsonHelper;
 use self::not::NotHelper;
 use self::or::OrHelper;
 use self::render_field::RenderFieldHelper;
+use self::slot::SlotHelper;
 use self::translation::TranslationHelper;
 
 /// Register all Handlebars helpers.
-pub(super) fn register_helpers(hbs: &mut Handlebars, translations: Arc<Translations>) {
+///
+/// The optional `hook_runner` enables the Lua-backed `{{data "name"}}`
+/// helper. Pass `None` to skip registering it (e.g. for unit tests that
+/// don't spin up a Lua VM pool).
+pub(super) fn register_helpers(
+    hbs: &mut Handlebars,
+    translations: Arc<Translations>,
+    hook_runner: Option<Arc<HookRunner>>,
+) {
     hbs.register_helper("render_field", Box::new(RenderFieldHelper));
     hbs.register_helper("eq", Box::new(EqHelper));
     hbs.register_helper(
@@ -59,6 +71,11 @@ pub(super) fn register_helpers(hbs: &mut Handlebars, translations: Arc<Translati
     hbs.register_helper("json", Box::new(JsonHelper));
     hbs.register_helper("default", Box::new(DefaultHelper));
     hbs.register_helper("concat", Box::new(ConcatHelper));
+    hbs.register_helper("slot", Box::new(SlotHelper));
+
+    if let Some(runner) = hook_runner {
+        hbs.register_helper("data", Box::new(DataHelper { runner }));
+    }
 }
 
 /// Check if a JSON value is "truthy" (not null, not false, not empty string, not 0).
@@ -95,7 +112,8 @@ mod test_helpers {
 
     pub fn test_hbs_with_translations(config_dir: &Path) -> handlebars::Handlebars<'static> {
         let translations = Arc::new(Translations::load(config_dir));
-        let hbs = create_handlebars(config_dir, false, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(config_dir, false, translations, None).expect("create_handlebars");
         (*hbs).clone()
     }
 }
@@ -161,7 +179,7 @@ mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(crate::admin::translations::Translations::load(tmp.path()));
-        let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
+        let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations, None)
             .expect("create_handlebars");
         (*hbs).clone()
     }

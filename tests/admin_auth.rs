@@ -111,7 +111,7 @@ fn setup_app_with_config(
     let translations = Arc::new(crap_cms::admin::translations::Translations::load(
         tmp.path(),
     ));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -1295,7 +1295,7 @@ end"#,
     let translations = Arc::new(crap_cms::admin::translations::Translations::load(
         tmp.path(),
     ));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 

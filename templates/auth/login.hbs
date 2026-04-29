@@ -8,6 +8,8 @@
     <div class="auth-card__error">{{t error}}</div>
   {{/if}}
 
+  {{slot "login_extras"}}
+
   {{#if disable_local}}
     <p class="auth-card__message">{{t "disable_local_message"}}</p>
   {{else}}

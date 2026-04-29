@@ -19,6 +19,7 @@ mod register;
 pub(crate) mod richtext;
 mod schema;
 mod serializers;
+pub(crate) mod template_data;
 mod utils;
 
 pub use register::register_api;

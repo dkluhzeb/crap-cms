@@ -7,17 +7,21 @@ use handlebars::Handlebars;
 use include_dir::{Dir, include_dir};
 use tracing::debug;
 
-use crate::admin::Translations;
+use crate::{admin::Translations, hooks::HookRunner};
 
 use super::helpers;
 
 static TEMPLATES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 
 /// Create a Handlebars instance with embedded defaults, config overlays, and helpers.
+///
+/// `hook_runner` enables the Lua-backed `{{data "name"}}` helper. Tests
+/// pass `None` to skip Lua wiring.
 pub fn create_handlebars(
     config_dir: &Path,
     dev_mode: bool,
     translations: Arc<Translations>,
+    hook_runner: Option<Arc<HookRunner>>,
 ) -> Result<Arc<Handlebars<'static>>> {
     let mut hbs = Handlebars::new();
     hbs.set_dev_mode(dev_mode);
@@ -30,7 +34,7 @@ pub fn create_handlebars(
         register_dir_templates(&mut hbs, &templates_dir)?;
     }
 
-    helpers::register_helpers(&mut hbs, translations);
+    helpers::register_helpers(&mut hbs, translations, hook_runner);
 
     Ok(Arc::new(hbs))
 }
@@ -107,7 +111,8 @@ mod tests {
     fn create_handlebars_loads_templates() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(tmp.path(), false, translations, None).expect("create_handlebars");
         let result = hbs.render(
             "auth/login",
             &json!({
@@ -135,7 +140,8 @@ mod tests {
     fn base_layout_i18n_island_renders_valid_json() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         // Wrap the layout — base.hbs uses partial-block syntax for the
         // page body slot.
         hbs.register_template_string("page", "{{#> layout/base}}body{{/layout/base}}")
@@ -198,7 +204,7 @@ mod tests {
     fn textarea_field_value_does_not_accrete_whitespace_on_round_trip() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let hbs = create_handlebars(tmp.path(), false, translations, None).expect("hbs");
 
         // What the browser would set the textarea's `value` property to,
         // given its DOM children. Per HTML5: a single leading LF is
@@ -255,7 +261,8 @@ mod tests {
         fs::write(templates_dir.join("login.hbs"), "CUSTOM_LOGIN_PAGE").unwrap();
 
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(tmp.path(), false, translations, None).expect("create_handlebars");
         let result = hbs.render("auth/login", &json!({})).unwrap();
         assert_eq!(result, "CUSTOM_LOGIN_PAGE");
     }
@@ -268,7 +275,8 @@ mod tests {
         fs::write(nested_dir.join("page.hbs"), "DEEP_NESTED").unwrap();
 
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(tmp.path(), false, translations, None).expect("create_handlebars");
         let result = hbs.render("custom/deep/page", &json!({})).unwrap();
         assert_eq!(result, "DEEP_NESTED");
     }
@@ -282,7 +290,8 @@ mod tests {
         fs::write(templates_dir.join("custom.hbs"), "IS_TEMPLATE").unwrap();
 
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(tmp.path(), false, translations, None).expect("create_handlebars");
         assert!(hbs.render("custom", &json!({})).is_ok());
         assert!(hbs.render("notes", &json!({})).is_err());
     }
@@ -291,7 +300,8 @@ mod tests {
     fn dev_mode_enables_dev_mode() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), true, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(tmp.path(), true, translations, None).expect("create_handlebars");
         assert!(hbs.dev_mode());
     }
 
@@ -299,7 +309,8 @@ mod tests {
     fn non_dev_mode_disables_dev_mode() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let hbs =
+            create_handlebars(tmp.path(), false, translations, None).expect("create_handlebars");
         assert!(!hbs.dev_mode());
     }
 
@@ -307,7 +318,7 @@ mod tests {
     fn embedded_templates_include_dashboard() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let hbs = create_handlebars(tmp.path(), false, translations, None).expect("hbs");
         let result = hbs.render(
             "dashboard/index",
             &json!({
@@ -327,7 +338,7 @@ mod tests {
     fn embedded_templates_include_field_partials() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let hbs = create_handlebars(tmp.path(), false, translations, None).expect("hbs");
         let result = hbs.render(
             "fields/text",
             &json!({
@@ -347,7 +358,8 @@ mod tests {
     fn htmx_nav_link_partial_renders_button_with_hx_attrs() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             r#"{{> partials/htmx-nav-link href="/admin/foo" label_key="cancel" variant="primary" icon="arrow_back"}}"#,
@@ -371,7 +383,8 @@ mod tests {
     fn htmx_nav_link_partial_small_size_uses_small_icon_class() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             r#"{{> partials/htmx-nav-link href="/admin" label="View" size="small" icon="open_in_new"}}"#,
@@ -391,7 +404,8 @@ mod tests {
     fn htmx_nav_link_partial_defaults_to_ghost_variant() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             r#"{{> partials/htmx-nav-link href="/admin" label="Back"}}"#,
@@ -412,7 +426,8 @@ mod tests {
     fn status_badge_partial_renders_badge_with_status_modifier() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string("t", r#"{{> partials/status-badge status="published"}}"#)
             .expect("register caller");
 
@@ -427,7 +442,8 @@ mod tests {
     fn warning_card_partial_renders_title_and_slot_body() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             r#"{{#> partials/warning-card title_key="delete_has_references"}}<p>3 incoming refs</p>{{/partials/warning-card}}"#,
@@ -448,7 +464,8 @@ mod tests {
     fn loading_indicator_partial_inline_variant_is_default() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string("t", r#"{{> partials/loading-indicator}}"#)
             .expect("register caller");
 
@@ -465,7 +482,8 @@ mod tests {
     fn loading_indicator_partial_sidebar_variant_uses_sidebar_class() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string("t", r#"{{> partials/loading-indicator variant="sidebar"}}"#)
             .expect("register caller");
 
@@ -478,7 +496,8 @@ mod tests {
     fn array_row_header_partial_renders_drag_toggle_buttons() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             "{{#> partials/array-row-header expanded=true has_errors=true}}Title 0{{/partials/array-row-header}}",
@@ -505,7 +524,8 @@ mod tests {
     fn array_row_header_partial_collapsed_no_errors() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             "{{#> partials/array-row-header expanded=false has_errors=false}}foo{{/partials/array-row-header}}",
@@ -522,7 +542,7 @@ mod tests {
     fn field_partial_fieldset_variant_wraps_radio_in_legend() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let hbs = create_handlebars(tmp.path(), false, translations, None).expect("hbs");
 
         let html = hbs
             .render(
@@ -566,7 +586,7 @@ mod tests {
     fn field_partial_checkbox_variant_renders_input_then_label() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let hbs = create_handlebars(tmp.path(), false, translations, None).expect("hbs");
 
         let html = hbs
             .render(
@@ -610,7 +630,8 @@ mod tests {
         // name in the parent context.
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let mut hbs = (*create_handlebars(tmp.path(), false, translations).expect("hbs")).clone();
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
         hbs.register_template_string(
             "t",
             r#"{{#> partials/field name="custom" label="Override Label" error="explicit error"}}<input type="text" />{{/partials/field}}"#,
@@ -650,7 +671,7 @@ mod tests {
     fn field_partial_wraps_label_required_locale_badge_error_help() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let hbs = create_handlebars(tmp.path(), false, translations, None).expect("hbs");
 
         let html = hbs
             .render(

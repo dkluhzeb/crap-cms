@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use mlua::{Lua, Table, Value};
+use mlua::{Function, Lua, Table, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
@@ -64,6 +64,54 @@ impl HookRunner {
         }
 
         results
+    }
+
+    /// Invoke a template-data function registered via
+    /// `crap.template_data.register(name, fn)` from Lua. Returns the
+    /// function's return value as JSON. None when no function is
+    /// registered under `name`, or when the function errors.
+    ///
+    /// Called on demand by the `{{data "name"}}` Handlebars helper, so
+    /// the function only runs on pages whose templates actually reference
+    /// it.
+    ///
+    /// The function is invoked with the full page context as its single
+    /// argument: `function(ctx) ... end`. Customers reach into
+    /// `ctx.user`, `ctx.document`, `ctx.page`, `ctx.collection`, etc. to
+    /// scope their data. Functions registered with no arguments still
+    /// work — Lua silently drops the extra arg.
+    pub fn call_template_data(&self, name: &str, page_ctx: &JsonValue) -> Option<JsonValue> {
+        let lua = self.pool.acquire().ok()?;
+
+        let table: Table = lua
+            .named_registry_value(crate::hooks::api::template_data::TEMPLATE_DATA_KEY)
+            .ok()?;
+        let func: Function = match table.get(name) {
+            Ok(f) => f,
+            Err(_) => return None,
+        };
+
+        let ctx_lua = match api::json_to_lua(&lua, page_ctx) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("crap.template_data['{name}']: failed to convert context to Lua: {e}");
+                return None;
+            }
+        };
+
+        match func.call::<Value>(ctx_lua) {
+            Ok(v) => match api::lua_to_json(&lua, &v) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    warn!("crap.template_data['{name}']: result is not JSON-encodable: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                warn!("crap.template_data['{name}'] errored: {e}");
+                None
+            }
+        }
     }
 
     /// Run `before_render` hooks on the template context.

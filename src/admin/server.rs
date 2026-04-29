@@ -124,8 +124,12 @@ pub async fn start(
         cache,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
-    let handlebars =
-        templates::create_handlebars(&config_dir, config.admin.dev_mode, translations.clone())?;
+    let handlebars = templates::create_handlebars(
+        &config_dir,
+        config.admin.dev_mode,
+        translations.clone(),
+        Some(Arc::new(hook_runner.clone())),
+    )?;
     let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
     let email_provider = create_email_provider(&config.email)?;
 

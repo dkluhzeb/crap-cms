@@ -69,6 +69,8 @@
     Crap CMS
   </div>
   <div class="header__actions">
+    {{slot "page_header_actions"}}
+
     {{#if has_editor_locales}}
       <crap-locale-picker class="locale-picker">
         <button

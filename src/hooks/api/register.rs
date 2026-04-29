@@ -21,6 +21,7 @@ use super::{
     log::register_log,
     richtext::register_richtext,
     schema::register_schema,
+    template_data::register_template_data,
     utils::{load_lua_helpers, register_util},
 };
 
@@ -51,6 +52,7 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) ->
     register_email(lua, &crap, config)?;
     register_richtext(lua, &crap, registry.clone())?;
     register_fields(lua, &crap)?;
+    register_template_data(lua, &crap)?;
 
     lua.globals().set("crap", crap)?;
 
