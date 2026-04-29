@@ -331,6 +331,12 @@ pub enum DbAction {
 }
 
 /// Actions for the `templates` subcommand.
+///
+/// Manages the user's customization layer — the files in
+/// `<config_dir>/{templates,static}/` that override the compiled-in
+/// defaults. `list` and `extract` are bootstrap helpers; `status` and
+/// `diff` answer "what have I overridden, and is it drifting from
+/// upstream?".
 #[derive(Subcommand)]
 pub enum TemplatesAction {
     /// List all available default templates and static files
@@ -343,7 +349,9 @@ pub enum TemplatesAction {
         #[arg(short, long)]
         verbose: bool,
     },
-    /// Extract default files into the config directory for customization
+    /// Extract default files into the config directory for customization.
+    /// A `crap-cms:source <version>` header is prepended (when the file
+    /// type allows comments) so `templates status` can detect drift later.
     Extract {
         /// File paths to extract (e.g., "layout/base.hbs" "styles.css")
         paths: Vec<String>,
@@ -356,6 +364,14 @@ pub enum TemplatesAction {
         /// Overwrite existing files
         #[arg(short, long)]
         force: bool,
+    },
+    /// Report drift status for every customized file in the config dir
+    Status,
+    /// Show a unified diff between a customized file and the embedded default
+    Diff {
+        /// Path relative to the config dir
+        /// (e.g. `templates/layout/base.hbs`, `static/styles.css`)
+        path: String,
     },
 }
 

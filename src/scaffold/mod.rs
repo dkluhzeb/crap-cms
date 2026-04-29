@@ -10,6 +10,7 @@ pub mod init;
 pub mod job;
 pub mod migration;
 pub(crate) mod render;
+pub mod source_header;
 pub mod templates;
 pub mod wizard;
 

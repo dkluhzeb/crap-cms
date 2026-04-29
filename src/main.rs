@@ -219,7 +219,7 @@ enum Command {
         collection: Option<String>,
     },
 
-    /// List and extract default admin templates and static files
+    /// Manage admin template / static customizations: list, extract, status, diff
     Templates {
         #[command(subcommand)]
         action: TemplatesAction,
@@ -534,6 +534,14 @@ async fn run(cli: Cli) -> Result<()> {
             } => {
                 let config = commands::resolve_config_dir(config_flag)?;
                 commands::templates::extract(&config, &paths, all, r#type, force)
+            }
+            TemplatesAction::Status => {
+                let config = commands::resolve_config_dir(config_flag)?;
+                commands::templates::status(&config)
+            }
+            TemplatesAction::Diff { path } => {
+                let config = commands::resolve_config_dir(config_flag)?;
+                commands::templates::diff(&config, &path)
             }
         },
         Command::Jobs { action } => {

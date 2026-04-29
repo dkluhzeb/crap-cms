@@ -5,12 +5,17 @@ use std::{collections::BTreeMap, fs, io::Write, path::Path};
 use anyhow::{Context as _, Result, bail};
 use include_dir::{Dir, include_dir};
 
-use crate::cli;
+use crate::{cli, scaffold::source_header::prepend_source_header};
+
+/// Current crate version, baked in at compile time. Written into the
+/// source-version header of every extracted file so `overlay status` can
+/// detect drift later.
+const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Embedded default templates — compiled into the binary.
-static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+pub(crate) static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 /// Embedded default static files — compiled into the binary.
-static EMBEDDED_STATIC: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static");
+pub(crate) static EMBEDDED_STATIC: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 /// The embedded proto file content — compiled into the binary.
 const PROTO_CONTENT: &str = include_str!("../../proto/content.proto");
@@ -285,6 +290,8 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
 }
 
 /// Write all files from an embedded dir into `config_dir/subdir/`, returning count written.
+/// Each file is prepended with a `crap-cms:source <version>` header (for file
+/// types where it's safely commentable) so `overlay status` can detect drift.
 fn extract_dir(dir: &Dir, subdir: &str, config_dir: &Path, force: bool) -> Result<usize> {
     let files = collect_embedded_files_flat(dir);
     let mut count = 0;
@@ -301,7 +308,8 @@ fn extract_dir(dir: &Dir, subdir: &str, config_dir: &Path, force: bool) -> Resul
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&dest, content)?;
+        let body = prepend_source_header(&dest, CRATE_VERSION, content);
+        fs::write(&dest, &body)?;
         count += 1;
     }
 
@@ -420,7 +428,8 @@ fn extract_specific(
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&dest, file.contents())?;
+        let body = prepend_source_header(&dest, CRATE_VERSION, file.contents());
+        fs::write(&dest, &body)?;
         cli::success(&format!("{kind}/{path}"));
         extracted += 1;
     }

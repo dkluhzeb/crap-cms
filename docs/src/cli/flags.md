@@ -717,9 +717,11 @@ crap-cms restore ./backups/backup-2026-03-07T10-00-00 -y
 crap-cms restore /tmp/backups/backup-2026-03-07T10-00-00 -i -y
 ```
 
-### `templates` — List and extract default admin templates
+### `templates` — Manage admin template / static customizations
 
-Extract the compiled-in admin templates and static files into your config directory for customization.
+Extract the compiled-in admin templates and static files into your config directory for customization, then track drift between your customizations and upstream.
+
+Each extracted file gets a `crap-cms:source <version>` header (in the file's native comment syntax) so `templates status` can report which version your customizations were extracted from.
 
 #### `templates list`
 
@@ -759,6 +761,34 @@ crap-cms templates extract --all --type templates
 
 # Extract everything, overwriting existing
 crap-cms templates extract --all --force
+```
+
+#### `templates status`
+
+```bash
+crap-cms templates status
+```
+
+Reports the relationship between every customized file in `<config_dir>/{templates,static}/` and the upstream embedded default. Each file is classified as one of:
+
+- `✓ current` — extracted from the running version
+- `⚠ behind: extracted from <ver>` — older version, may be missing upstream fixes
+- `↑ ahead: extracted from <ver>` — newer than running (downgrade scenario)
+- `= pristine (matches upstream)` — extracted but never customized
+- `? no source header` — hand-written, or header was stripped
+- `? unparseable source header` — header found but version isn't valid semver
+- `✗ orphaned` — file no longer exists in the embedded upstream
+
+#### `templates diff`
+
+```bash
+crap-cms templates diff <PATH>
+```
+
+Shows a unified diff between a customized file and its embedded default. The path is relative to the config dir (e.g. `templates/layout/base.hbs`, `static/styles.css`).
+
+```bash
+crap-cms templates diff templates/layout/base.hbs
 ```
 
 ### `fmt` — Format Handlebars templates
