@@ -11,6 +11,7 @@ mod collection;
 mod crap;
 mod document;
 mod editor_locale;
+pub mod field;
 mod fields_meta;
 mod global;
 mod nav;
@@ -22,6 +23,7 @@ pub use collection::{AdminMeta, AuthMeta, CollectionContext, UploadMeta, Version
 pub use crap::CrapMeta;
 pub use document::DocumentRef;
 pub use editor_locale::{EditorLocaleContext, EditorLocaleOption};
+pub use field::FieldContext;
 pub use fields_meta::{FieldAdminMeta, FieldMeta};
 pub use global::GlobalContext;
 pub use nav::{NavCollection, NavData, NavGlobal};

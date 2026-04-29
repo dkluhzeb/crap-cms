@@ -1,0 +1,95 @@
+//! Shared base data flattened into every [`FieldContext`](super::FieldContext)
+//! variant. Carries the keys templates expect on every field, regardless of
+//! type: `name`, `field_type`, `label`, `required`, `value`, etc.
+
+use serde::Serialize;
+use serde_json::Value;
+
+/// Common keys present on every field context. Variants flatten this into
+/// themselves via `#[serde(flatten)]` so the rendered JSON has no nesting.
+///
+/// `placeholder` and `description` are NOT skipped when None — the existing
+/// builder always emits them as `null` so templates that distinguish
+/// `null` from `undefined` keep working. (Most templates branch with
+/// `{{#if placeholder}}` which treats both identically; the explicit-null
+/// form is preserved for parity.)
+#[derive(Serialize)]
+pub struct BaseFieldData {
+    pub name: String,
+    pub field_type: String,
+    pub label: String,
+    pub required: bool,
+    pub value: Value,
+    pub placeholder: Option<String>,
+    pub description: Option<String>,
+    pub readonly: bool,
+    pub localized: bool,
+    pub locale_locked: bool,
+
+    /// Where to render this field — `None` for main, `Some("sidebar")` for
+    /// the right-hand sidebar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+
+    /// Validation error message for this field, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+
+    /// Validation attribute group, flattened so `min_length`, `max_length`,
+    /// `min`, `max`, `has_min`, `has_max` appear at the field-context root
+    /// (not nested under `validation`).
+    #[serde(flatten)]
+    pub validation: ValidationAttrs,
+
+    /// Display-condition data, flattened so `condition_visible`,
+    /// `condition_ref`, and `condition_json` appear at the field-context
+    /// root.
+    #[serde(flatten)]
+    pub condition: ConditionData,
+}
+
+/// Validation attributes shared by all field types — present only when the
+/// field definition declares them.
+#[derive(Serialize, Default)]
+pub struct ValidationAttrs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+
+    /// Companion flag for `min` — emitted alongside the bound for templates
+    /// that branch on presence. Set to `Some(true)` exactly when `min` is
+    /// `Some`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_min: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_max: Option<bool>,
+}
+
+/// Display-condition state injected by
+/// [`apply_display_conditions`](crate::admin::handlers::field_context::apply_display_conditions).
+#[derive(Serialize, Default)]
+pub struct ConditionData {
+    /// Initial visibility resolved by the Lua condition function.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_visible: Option<bool>,
+
+    /// Server-side function reference (set when the condition function
+    /// returns a bool). The client re-asks the server when the form changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_ref: Option<String>,
+
+    /// Client-evaluable condition table (set when the condition function
+    /// returns a Lua table). The client evaluates this directly without a
+    /// round-trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_json: Option<Value>,
+}
