@@ -4,16 +4,18 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::json;
 use tracing::warn;
 
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, CollectionContext, PageMeta, PageType,
+            page::collections::CollectionDeleteConfirmPage,
+        },
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden, lookup_ref_count, not_found,
-            paths, render_or_error,
+            paths, render_page,
         },
     },
     core::{
@@ -101,24 +103,30 @@ pub async fn delete_confirm(
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionDelete, "delete_name")
-        .page_title_name(def.singular_name())
-        .collection_def(&def)
-        .set("document_id", json!(id))
-        .set("title_value", json!(title_value))
-        .set("ref_count", json!(ref_count))
-        .breadcrumbs(vec![
-            Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
-            Breadcrumb::current("delete_name").with_name(def.singular_name()),
-        ])
-        .build();
 
-    let data = state.hook_runner.run_before_render(data);
+    let breadcrumbs = vec![
+        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::current("delete_name").with_name(def.singular_name()),
+    ];
 
-    render_or_error(&state, "collections/delete", &data)
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionDelete, "delete_name")
+            .with_title_name(def.singular_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
+
+    let ctx = CollectionDeleteConfirmPage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        document_id: id,
+        title_value,
+        ref_count,
+    };
+
+    render_page(&state, "collections/delete", &ctx)
 }

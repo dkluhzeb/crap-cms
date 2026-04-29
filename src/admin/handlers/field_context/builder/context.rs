@@ -62,10 +62,9 @@ pub(in crate::admin::handlers::field_context) fn build_select_options(
 ///
 /// Returns `Vec<FieldContext>` — typed end-to-end. Downstream consumers
 /// (`enrich_field_contexts`, `apply_display_conditions`,
-/// `split_sidebar_fields`, `ContextBuilder::fields`) all consume typed
-/// values; serialization to `serde_json::Value` happens once, inside
-/// [`ContextBuilder::fields`](crate::admin::ContextBuilder::fields), at the
-/// boundary into the page-context Map.
+/// `split_sidebar_fields`, the `fields` field on each typed page context)
+/// all consume typed values; serialization to `serde_json::Value` happens
+/// once when the page context is serialized for the `before_render` hook.
 pub fn build_field_contexts(
     fields: &[FieldDefinition],
     values: &HashMap<String, String>,

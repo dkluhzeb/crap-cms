@@ -2,7 +2,7 @@
 //! the left sidebar.
 //!
 //! Sorted alphabetically by slug; filtered down to entries the current user
-//! can read by [`crate::admin::ContextBuilder::filter_nav_by_access`].
+//! can read by `BasePageContext::for_handler`.
 
 use serde::Serialize;
 

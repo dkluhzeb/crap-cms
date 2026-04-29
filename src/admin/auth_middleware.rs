@@ -13,7 +13,11 @@ use serde_json::Value;
 use tracing::{debug, error, warn};
 
 use crate::{
-    admin::{AdminState, context::ContextBuilder, server::extract_cookie},
+    admin::{
+        AdminState,
+        context::{AuthBasePageContext, PageMeta, PageType},
+        server::extract_cookie,
+    },
     config::LocaleConfig,
     core::{
         AuthUser, Registry, Slug,
@@ -289,9 +293,20 @@ pub(crate) async fn check_admin_gate_for_doc(
     }
 }
 
+/// Serialize a typed [`AuthBasePageContext`] for rendering. Avoids the
+/// `before_render` hook (these are last-resort error pages where the hook
+/// would just add noise).
+fn serialize_auth_base(state: &AdminState, page: PageMeta) -> Value {
+    serde_json::to_value(AuthBasePageContext::for_state(state, page))
+        .expect("AuthBasePageContext serializes infallibly")
+}
+
 /// Render the "setup required" page (no auth collection exists, require_auth is on).
 fn auth_required_response(state: &AdminState) -> Response {
-    let data = ContextBuilder::auth(state).build();
+    let data = serialize_auth_base(
+        state,
+        PageMeta::new(PageType::AuthRequired, "error_auth_required_title"),
+    );
 
     match state.render("errors/auth_required", &data) {
         Ok(html) => (StatusCode::SERVICE_UNAVAILABLE, Html(html)).into_response(),
@@ -305,7 +320,10 @@ fn auth_required_response(state: &AdminState) -> Response {
 
 /// Render the "access denied" page (user authenticated but not authorized for admin).
 fn admin_denied_response(state: &AdminState) -> Response {
-    let data = ContextBuilder::auth(state).build();
+    let data = serialize_auth_base(
+        state,
+        PageMeta::new(PageType::AdminDenied, "error_admin_access_denied_title"),
+    );
 
     match state.render("errors/admin_denied", &data) {
         Ok(html) => (StatusCode::FORBIDDEN, Html(html)).into_response(),

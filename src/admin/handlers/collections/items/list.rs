@@ -10,7 +10,10 @@ use tracing::{error, warn};
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
+        context::{
+            BasePageContext, CollectionContext, PageMeta, PageType, PaginationContext,
+            page::collections::CollectionItemsListPage,
+        },
         handlers::{
             collections::shared::{
                 build_column_options, build_filter_fields, build_filter_pills, compute_cells,
@@ -18,8 +21,8 @@ use crate::{
             },
             shared::{
                 ListUrlContext, PaginationParams, extract_editor_locale, extract_status_filter,
-                extract_where_params, forbidden, not_found, parse_where_params, paths,
-                render_or_error, server_error, validate_sort,
+                extract_where_params, forbidden, not_found, parse_where_params, paths, render_page,
+                server_error, validate_sort,
             },
         },
     },
@@ -373,37 +376,39 @@ pub async fn list_items(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let ctx = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionItems, def.display_name())
-        .collection_def(&def)
-        .docs(items);
-
     let lp = build_list_pagination(&pagination_result, &pagination, cursor_enabled, &url_ctx);
 
-    let ctx = ctx.with_pagination(&lp.result, lp.prev_url, lp.next_url);
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionItems, def.display_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state);
 
-    let data = ctx
-        .set("has_drafts", json!(def.has_drafts()))
-        .set("has_soft_delete", json!(def.soft_delete))
-        .set("is_trash", json!(is_trash))
-        .set("search", json!(search))
-        .set("sort", json!(sort))
-        .set("table_columns", json!(table_columns))
-        .set("column_options", json!(column_options))
-        .set("filter_fields", json!(filter_fields))
-        .set("active_filters", json!(filter_pills))
-        .set("active_filter_count", json!(filter_pills.len()))
-        .set("title_sort_url", json!(title_sort_url))
-        .set("title_sorted_asc", json!(title_sorted_asc))
-        .set("title_sorted_desc", json!(title_sorted_desc))
-        .build();
+    let active_filter_count = filter_pills.len();
 
-    let data = state.hook_runner.run_before_render(data);
+    let ctx = CollectionItemsListPage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        docs: items,
+        pagination: PaginationContext::from_result(&lp.result, lp.prev_url, lp.next_url),
+        has_drafts: def.has_drafts(),
+        has_soft_delete: def.soft_delete,
+        is_trash,
+        search,
+        sort,
+        table_columns,
+        column_options,
+        filter_fields,
+        active_filters: filter_pills,
+        active_filter_count,
+        title_sort_url,
+        title_sorted_asc,
+        title_sorted_desc,
+    };
 
-    render_or_error(&state, "collections/items", &data)
+    render_page(&state, "collections/items", &ctx)
 }
 
 /// Build a single item row for the collection list table.

@@ -3,17 +3,19 @@ use std::net::SocketAddr;
 use axum::{
     extract::{ConnectInfo, Form, State},
     http::HeaderMap,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
 };
-use serde_json::json;
 use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
-        handlers::auth::{ResetPasswordForm, client_ip},
+        context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
+        handlers::{
+            auth::{ResetPasswordForm, client_ip},
+            shared::render_page,
+        },
     },
     core::{Registry, auth::ResetTokenError},
     db::DbPool,
@@ -24,25 +26,16 @@ use crate::{
 
 /// Render a reset password error page with the given error key and optional token.
 fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> Response {
-    let mut builder = ContextBuilder::auth(state)
-        .page(PageType::AuthReset, "Reset Password")
-        .set("error", json!(error));
+    let ctx = ResetPasswordPage {
+        base: AuthBasePageContext::for_state(
+            state,
+            PageMeta::new(PageType::AuthReset, "Reset Password"),
+        ),
+        token: token.map(str::to_string),
+        error: Some(error.to_string()),
+    };
 
-    if let Some(t) = token {
-        builder = builder.set("token", json!(t));
-    }
-
-    let data = builder.build();
-
-    match state.render("auth/reset_password", &data) {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            error!("Template render error: {}", e);
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                .into_response()
-        }
-    }
+    render_page(state, "auth/reset_password", &ctx)
 }
 
 /// Find the reset token across all auth collections, validate it, and update the password.

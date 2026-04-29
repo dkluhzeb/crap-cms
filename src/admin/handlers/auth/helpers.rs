@@ -7,18 +7,22 @@ use std::{
 
 use axum::{
     http::HeaderMap,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
 use ipnet::IpNet;
-use serde_json::{Value, json};
-use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
-        handlers::auth::{append_cookies, session_cookies, session_same_site},
+        context::{
+            AuthBasePageContext, PageMeta, PageType,
+            page::auth::{AuthCollection, ForgotPasswordPage, LoginPage},
+        },
+        handlers::{
+            auth::{append_cookies, session_cookies, session_same_site},
+            shared::render_page,
+        },
     },
     config::ServerConfig,
     core::{Document, Registry, Slug, auth::ClaimsBuilder, email},
@@ -99,28 +103,20 @@ pub(in crate::admin::handlers) fn login_error(
     email: &str,
 ) -> Response {
     let auth_collections = get_auth_collections(state);
-    let all_disable_local = all_disable_local(state);
-    let show_forgot_password = show_forgot_password(state);
+    let show_collection_picker = auth_collections.len() > 1;
 
-    let data = ContextBuilder::auth(state)
-        .page(PageType::AuthLogin, "Login")
-        .set("error", json!(error))
-        .set("email", json!(email))
-        .set("collections", json!(auth_collections))
-        .set("show_collection_picker", json!(auth_collections.len() > 1))
-        .set("disable_local", json!(all_disable_local))
-        .set("show_forgot_password", json!(show_forgot_password))
-        .build();
+    let ctx = LoginPage {
+        base: AuthBasePageContext::for_state(state, PageMeta::new(PageType::AuthLogin, "Login")),
+        error: Some(error.to_string()),
+        email: Some(email.to_string()),
+        collections: auth_collections,
+        show_collection_picker,
+        disable_local: all_disable_local(state),
+        show_forgot_password: show_forgot_password(state),
+        success: None,
+    };
 
-    match state.render("auth/login", &data) {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            error!("Template render error: {}", e);
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-        }
-        .into_response(),
-    }
+    render_page(state, "auth/login", &ctx)
 }
 
 /// Check if all auth collections have disable_local = true.
@@ -155,44 +151,44 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
         .any(|def| def.auth.as_ref().is_some_and(|a| a.forgot_password))
 }
 
-pub(in crate::admin::handlers) fn get_auth_collections(state: &AdminState) -> Vec<Value> {
-    let mut collections: Vec<_> = state
+pub(in crate::admin::handlers) fn get_auth_collections(
+    state: &AdminState,
+) -> Vec<crate::admin::context::page::auth::AuthCollection> {
+    use crate::admin::context::page::auth::AuthCollection;
+
+    let mut collections: Vec<AuthCollection> = state
         .registry
         .collections
         .values()
         .filter(|def| def.is_auth_collection())
-        .map(|def| {
-            json!({
-                "slug": def.slug,
-                "display_name": def.display_name(),
-            })
+        .map(|def| AuthCollection {
+            slug: def.slug.to_string(),
+            display_name: def.display_name().to_string(),
         })
         .collect();
 
-    collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
+    collections.sort_by(|a, b| a.slug.cmp(&b.slug));
 
     collections
 }
 
 pub(in crate::admin::handlers) fn render_forgot_success(
     state: &AdminState,
-    auth_collections: &[Value],
-) -> Html<String> {
-    let data = ContextBuilder::auth(state)
-        .page(PageType::AuthForgot, "Forgot Password")
-        .set("success", json!(true))
-        .set("collections", json!(auth_collections))
-        .set("show_collection_picker", json!(auth_collections.len() > 1))
-        .build();
+    auth_collections: &[AuthCollection],
+) -> Response {
+    let show_collection_picker = auth_collections.len() > 1;
 
-    match state.render("auth/forgot_password", &data) {
-        Ok(html) => Html(html),
-        Err(e) => {
-            error!("Template render error: {}", e);
+    let ctx = ForgotPasswordPage {
+        base: AuthBasePageContext::for_state(
+            state,
+            PageMeta::new(PageType::AuthForgot, "Forgot Password"),
+        ),
+        success: true,
+        collections: auth_collections.to_vec(),
+        show_collection_picker,
+    };
 
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-        }
-    }
+    render_page(state, "auth/forgot_password", &ctx)
 }
 
 /// Convert axum `HeaderMap` to a simple `HashMap<String, String>`.

@@ -8,10 +8,13 @@ use serde_json::{Map, Value, json};
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
+        context::{
+            BasePageContext, CollectionContext, DocumentRef, PageMeta, PageType,
+            page::collections::CollectionFormErrorPage,
+        },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts, enrich_field_contexts,
-            html_with_toast, split_sidebar_fields, translate_validation_errors,
+            page_with_toast, split_sidebar_fields, translate_validation_errors,
         },
     },
     core::{
@@ -99,30 +102,33 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
         (PageType::CollectionCreate, "create_name")
     };
 
-    let mut builder = ContextBuilder::new(p.state, None)
-        .locale_from_auth(p.auth_user)
-        .page(page_type, page_key)
-        .page_title_name(p.def.singular_name())
-        .collection_def(p.def)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .set("editing", json!(editing))
-        .set("has_drafts", json!(p.def.has_drafts()));
+    let base = BasePageContext::for_handler(
+        p.state,
+        None,
+        p.auth_user,
+        PageMeta::new(page_type, page_key).with_title_name(p.def.singular_name()),
+    );
 
-    if let Some(id) = p.doc_id {
-        builder = builder.document_stub(id);
-    }
+    let upload_hidden_fields = (editing && p.def.is_upload_collection()).then(|| {
+        let value = collect_upload_hidden_fields(&p.def.fields, p.form_data);
+        match value {
+            Value::Array(arr) => arr,
+            _ => Vec::new(),
+        }
+    });
 
-    if editing && p.def.is_upload_collection() {
-        builder = builder.set(
-            "upload_hidden_fields",
-            collect_upload_hidden_fields(&p.def.fields, p.form_data),
-        );
-    }
+    let ctx = CollectionFormErrorPage {
+        base,
+        collection: CollectionContext::from_def(p.def),
+        document: p.doc_id.map(DocumentRef::stub),
+        fields: main_fields,
+        sidebar_fields,
+        editing,
+        has_drafts: p.def.has_drafts(),
+        upload_hidden_fields,
+    };
 
-    let data = builder.build();
-
-    html_with_toast(p.state, "collections/edit", &data, p.toast_msg)
+    page_with_toast(p.state, "collections/edit", &ctx, p.toast_msg)
 }
 
 /// Render the upload error page (create mode).

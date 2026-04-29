@@ -2,7 +2,6 @@
 
 mod auth_middleware;
 pub mod context;
-pub mod context_builder;
 pub mod csp_nonce;
 pub mod handlers;
 mod mcp_handler;
@@ -11,7 +10,6 @@ pub mod server_builder;
 pub mod templates;
 pub mod translations;
 
-pub use context_builder::ContextBuilder;
 pub use csp_nonce::{CSP_NONCE, CspNonce, current_nonce_or_empty};
 pub use translations::Translations;
 

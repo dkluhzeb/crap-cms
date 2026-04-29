@@ -1,14 +1,15 @@
 //! Dashboard handler showing collection/global cards with document counts.
 
-use axum::{Extension, extract::State, http::HeaderMap, response::Html};
-use serde_json::{Value, json};
-use tracing::error;
+use axum::{Extension, extract::State, http::HeaderMap, response::Response};
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
-        handlers::shared::{extract_editor_locale, get_user_doc, has_read_access},
+        context::{
+            BasePageContext, PageMeta, PageType,
+            page::dashboard::{CollectionCard, DashboardPage, GlobalCard},
+        },
+        handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
     },
     core::{
         Document,
@@ -35,8 +36,8 @@ fn build_collection_cards(
     state: &AdminState,
     conn: &BoxedConnection,
     user_doc: Option<&Document>,
-) -> Vec<Value> {
-    let mut cards: Vec<Value> = state
+) -> Vec<CollectionCard> {
+    let mut cards: Vec<CollectionCard> = state
         .registry
         .collections
         .iter()
@@ -44,20 +45,20 @@ fn build_collection_cards(
         .map(|(slug, def)| {
             let count = count_documents(&state.pool, slug, def, &[], None).unwrap_or(0);
 
-            json!({
-                "slug": slug,
-                "display_name": def.display_name(),
-                "singular_name": def.singular_name(),
-                "count": count,
-                "last_updated": last_updated(conn, slug, ""),
-                "is_auth": def.is_auth_collection(),
-                "is_upload": def.upload.is_some(),
-                "has_versions": def.has_versions(),
-            })
+            CollectionCard {
+                slug: slug.to_string(),
+                display_name: def.display_name().to_string(),
+                singular_name: def.singular_name().to_string(),
+                count,
+                last_updated: last_updated(conn, slug, ""),
+                is_auth: def.is_auth_collection(),
+                is_upload: def.upload.is_some(),
+                has_versions: def.has_versions(),
+            }
         })
         .collect();
 
-    cards.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
+    cards.sort_by(|a, b| a.slug.cmp(&b.slug));
 
     cards
 }
@@ -67,8 +68,8 @@ fn build_global_cards(
     state: &AdminState,
     conn: &BoxedConnection,
     user_doc: Option<&Document>,
-) -> Vec<Value> {
-    let mut cards: Vec<Value> = state
+) -> Vec<GlobalCard> {
+    let mut cards: Vec<GlobalCard> = state
         .registry
         .globals
         .iter()
@@ -76,16 +77,16 @@ fn build_global_cards(
         .map(|(slug, def)| {
             let table = global_table(slug);
 
-            json!({
-                "slug": slug,
-                "display_name": def.display_name(),
-                "last_updated": last_updated(conn, &table, " WHERE id = 'default'"),
-                "has_versions": def.has_versions(),
-            })
+            GlobalCard {
+                slug: slug.to_string(),
+                display_name: def.display_name().to_string(),
+                last_updated: last_updated(conn, &table, " WHERE id = 'default'"),
+                has_versions: def.has_versions(),
+            }
         })
         .collect();
 
-    cards.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
+    cards.sort_by(|a, b| a.slug.cmp(&b.slug));
 
     cards
 }
@@ -96,10 +97,16 @@ pub async fn index(
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
-) -> Html<String> {
+) -> Response {
     let conn = match state.pool.get() {
         Ok(c) => c,
-        Err(_) => return Html("<h1>Database error</h1>".to_string()),
+        Err(_) => {
+            return crate::admin::handlers::shared::render_or_error(
+                &state,
+                "errors/500",
+                &serde_json::json!({"message": "Database error"}),
+            );
+        }
     };
 
     let user_doc = get_user_doc(&auth_user);
@@ -109,23 +116,19 @@ pub async fn index(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::Dashboard, "dashboard")
-        .set("collection_cards", Value::Array(collection_cards))
-        .set("global_cards", Value::Array(global_cards))
-        .build();
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::Dashboard, "dashboard"),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state);
 
-    let data = state.hook_runner.run_before_render(data);
+    let ctx = DashboardPage {
+        base,
+        collection_cards,
+        global_cards,
+    };
 
-    match state.render("dashboard/index", &data) {
-        Ok(html) => Html(html),
-        Err(e) => {
-            error!("Template render error: {}", e);
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-        }
-    }
+    render_page(&state, "dashboard/index", &ctx)
 }

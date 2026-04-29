@@ -4,24 +4,44 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
+        context::{BasePageContext, PageMeta, PageType, page::errors::ErrorPage},
     },
     core::richtext::renderer::html_escape,
 };
 
+/// Serialize a typed page-context struct, run the `before_render` Lua hook,
+/// and render the named template. On render failure logs the error and
+/// returns a generic fallback page.
+///
+/// This is the seam between typed Rust page contexts and the JSON-shaped
+/// world the Lua hook + Handlebars renderer operate in.
+pub fn render_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) -> Response {
+    let data = serde_json::to_value(ctx).expect("admin page context serializes infallibly");
+    let data = state.hook_runner.run_before_render(data);
+
+    render_or_error(state, template, &data)
+}
+
 /// Render a 403 Forbidden page with the given message.
 pub fn forbidden(state: &AdminState, message: &str) -> Response {
-    let data = ContextBuilder::new(state, None)
-        .page(PageType::Error403, "forbidden_page_title")
-        .set("message", Value::String(message.to_string()))
-        .build();
+    let ctx = ErrorPage {
+        base: BasePageContext::for_handler(
+            state,
+            None,
+            &None,
+            PageMeta::new(PageType::Error403, "forbidden_page_title"),
+        ),
+        message: message.to_string(),
+    };
 
+    let data = serde_json::to_value(&ctx).expect("ErrorPage serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/403", &data) {
@@ -106,6 +126,21 @@ fn percent_encode_header(s: &str) -> String {
     out
 }
 
+/// Render a typed page context with an `X-Crap-Toast` header attached for
+/// client-side notification. The typed context is serialized + run through
+/// the `before_render` hook before rendering.
+pub fn page_with_toast<T: Serialize>(
+    state: &AdminState,
+    template: &str,
+    ctx: &T,
+    toast: &str,
+) -> Response {
+    let data = serde_json::to_value(ctx).expect("page context serializes infallibly");
+    let data = state.hook_runner.run_before_render(data);
+
+    html_with_toast(state, template, &data, toast)
+}
+
 /// Render a template and set the X-Crap-Toast header for client-side notifications.
 pub fn html_with_toast(state: &AdminState, template: &str, data: &Value, toast: &str) -> Response {
     match state.render(template, data) {
@@ -158,11 +193,17 @@ pub fn render_or_error(state: &AdminState, template: &str, data: &Value) -> Resp
 
 /// Render a 404 Not Found page with the given message.
 pub fn not_found(state: &AdminState, message: &str) -> Response {
-    let data = ContextBuilder::new(state, None)
-        .page(PageType::Error404, "not_found_page_title")
-        .set("message", Value::String(message.to_string()))
-        .build();
+    let ctx = ErrorPage {
+        base: BasePageContext::for_handler(
+            state,
+            None,
+            &None,
+            PageMeta::new(PageType::Error404, "not_found_page_title"),
+        ),
+        message: message.to_string(),
+    };
 
+    let data = serde_json::to_value(&ctx).expect("ErrorPage serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/404", &data) {
@@ -175,11 +216,17 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
 
 /// Render a 500 Internal Server Error page with the given message.
 pub fn server_error(state: &AdminState, message: &str) -> Response {
-    let data = ContextBuilder::new(state, None)
-        .page(PageType::Error500, "server_error_page_title")
-        .set("message", Value::String(message.to_string()))
-        .build();
+    let ctx = ErrorPage {
+        base: BasePageContext::for_handler(
+            state,
+            None,
+            &None,
+            PageMeta::new(PageType::Error500, "server_error_page_title"),
+        ),
+        message: message.to_string(),
+    };
 
+    let data = serde_json::to_value(&ctx).expect("ErrorPage serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/500", &data) {

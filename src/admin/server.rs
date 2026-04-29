@@ -525,8 +525,8 @@ async fn security_headers(
     let nonce = CspNonce::generate();
     let nonce_str = nonce.as_str().to_string();
 
-    // Scope the nonce into a task-local so `ContextBuilder` can pick it up
-    // when assembling the template context for this request.
+    // Scope the nonce into a task-local so `CrapMeta::from_state` can pick
+    // it up when assembling the template context for this request.
     let mut response = CSP_NONCE.scope(nonce, next.run(request)).await;
     let headers = response.headers_mut();
 

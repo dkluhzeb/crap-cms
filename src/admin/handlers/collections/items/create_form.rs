@@ -12,14 +12,15 @@ use crate::{
     admin::{
         AdminState,
         context::{
-            Breadcrumb, ContextBuilder, PageType,
+            BasePageContext, Breadcrumb, CollectionContext, PageMeta, PageType,
             field::{BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs},
+            page::collections::{CollectionCreatePage, UploadFormContext},
         },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, forbidden, is_non_default_locale, not_found, paths,
-            render_or_error, split_sidebar_fields,
+            extract_editor_locale, forbidden, is_non_default_locale, not_found, paths, render_page,
+            split_sidebar_fields,
         },
     },
     core::{AuthUser, Claims, CollectionDefinition},
@@ -88,16 +89,15 @@ fn prepare_create_fields(
 }
 
 /// Build the upload accept context for upload collection create forms.
-fn upload_accept_context(def: &CollectionDefinition) -> Value {
-    let mut ctx = json!({});
-
-    if let Some(ref u) = def.upload
-        && !u.mime_types.is_empty()
-    {
-        ctx["accept"] = json!(u.mime_types.join(","));
+fn upload_accept_context(def: &CollectionDefinition) -> UploadFormContext {
+    UploadFormContext {
+        accept: def
+            .upload
+            .as_ref()
+            .filter(|u| !u.mime_types.is_empty())
+            .map(|u| u.mime_types.join(",")),
+        ..UploadFormContext::default()
     }
-
-    ctx
 }
 
 /// GET /admin/collections/{slug}/create — show create form
@@ -133,30 +133,36 @@ pub async fn create_form(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let mut builder = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionCreate, "create_name")
-        .page_title_name(def.singular_name())
-        .collection_def(&def)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .set("editing", json!(false))
-        .set("has_drafts", json!(def.has_drafts()))
-        .breadcrumbs(vec![
-            Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), paths::collection(&slug)),
-            Breadcrumb::current("create_name").with_name(def.singular_name()),
-        ])
-        .merge(locale_data);
+    let breadcrumbs = vec![
+        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::current("create_name").with_name(def.singular_name()),
+    ];
 
-    if def.is_upload_collection() {
-        builder = builder.set("upload", upload_accept_context(&def));
-    }
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionCreate, "create_name")
+            .with_title_name(def.singular_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
 
-    let data = builder.build();
-    let data = state.hook_runner.run_before_render(data);
+    let upload = def
+        .is_upload_collection()
+        .then(|| upload_accept_context(&def));
 
-    render_or_error(&state, "collections/edit", &data)
+    let ctx = CollectionCreatePage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        fields: main_fields,
+        sidebar_fields,
+        editing: false,
+        has_drafts: def.has_drafts(),
+        locale_data,
+        upload,
+    };
+
+    render_page(&state, "collections/edit", &ctx)
 }

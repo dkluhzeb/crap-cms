@@ -3,12 +3,12 @@
 //! A fresh nonce is generated once per HTTP request, inserted into a
 //! `tokio::task_local!` slot, and consumed by both the response's CSP header
 //! (via the `security_headers` middleware) and the admin template context
-//! (via `ContextBuilder`). Any inline `<script>` emitted by a built-in or
-//! overlay template must carry `nonce="{{crap.csp_nonce}}"` to be allowed
+//! (via `CrapMeta::from_state`). Any inline `<script>` emitted by a built-in
+//! or overlay template must carry `nonce="{{crap.csp_nonce}}"` to be allowed
 //! by the browser.
 //!
 //! Using a task-local keeps handler signatures unchanged — no need to thread
-//! the nonce through every `ContextBuilder::new` call. `try_with` returns
+//! the nonce through every page-context construction. `try_with` returns
 //! `Err` outside of a request scope (tests, startup paths), in which case
 //! the empty string is substituted and inline scripts will be CSP-blocked
 //! exactly as they would be without a matching nonce.
@@ -42,7 +42,7 @@ task_local! {
 }
 
 /// Read the current task's nonce, or empty string if called outside a request
-/// scope (tests, background tasks). Used by `ContextBuilder` to populate
+/// scope (tests, background tasks). Used by `CrapMeta::from_state` to populate
 /// `crap.csp_nonce` without threading the nonce through every handler.
 pub fn current_nonce_or_empty() -> String {
     CSP_NONCE

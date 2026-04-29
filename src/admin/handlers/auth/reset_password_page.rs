@@ -1,16 +1,14 @@
 use axum::{
     extract::{Query, State},
-    response::Html,
+    response::Response,
 };
-use serde_json::json;
 use tokio::task;
-use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
-        handlers::auth::ResetPasswordQuery,
+        context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
+        handlers::{auth::ResetPasswordQuery, shared::render_page},
     },
     core::Registry,
     db::DbPool,
@@ -45,7 +43,7 @@ fn is_valid_reset_token(pool: &DbPool, registry: &Registry, token: &str) -> bool
 pub async fn reset_password_page(
     State(state): State<AdminState>,
     Query(query): Query<ResetPasswordQuery>,
-) -> Html<String> {
+) -> Response {
     let pool = state.pool.clone();
     let registry = state.registry.clone();
     let token = query.token.clone();
@@ -54,24 +52,14 @@ pub async fn reset_password_page(
         .await
         .unwrap_or(false);
 
-    let mut builder =
-        ContextBuilder::auth(&state).page(PageType::AuthReset, "reset_password_page_title");
+    let ctx = ResetPasswordPage {
+        base: AuthBasePageContext::for_state(
+            &state,
+            PageMeta::new(PageType::AuthReset, "reset_password_page_title"),
+        ),
+        token: valid.then(|| query.token.clone()),
+        error: (!valid).then(|| "error_reset_link_invalid".to_string()),
+    };
 
-    if valid {
-        builder = builder.set("token", json!(query.token));
-    } else {
-        builder = builder.set("error", json!("error_reset_link_invalid"));
-    }
-
-    let data = builder.build();
-    let data = state.hook_runner.run_before_render(data);
-
-    match state.render("auth/reset_password", &data) {
-        Ok(html) => Html(html),
-        Err(e) => {
-            error!("Template render error: {}", e);
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-        }
-    }
+    render_page(&state, "auth/reset_password", &ctx)
 }

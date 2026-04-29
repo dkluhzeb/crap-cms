@@ -4,15 +4,18 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, GlobalContext, PageMeta, PageType, PaginationContext,
+            page::globals::GlobalVersionsListPage,
+        },
         handlers::shared::{
             Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
-            redirect_response, render_or_error, server_error, version_to_json,
+            redirect_response, render_page, server_error, version_to_json,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -71,28 +74,33 @@ pub async fn list_versions_page(
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::GlobalVersions, "version_history_for")
-        .page_title_name(def.display_name())
-        .global_def(&def)
-        .set("versions", json!(versions))
-        .set("restore_url_prefix", json!(paths::global(&slug)))
-        .with_pagination(
-            &pagination,
-            paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1) as u64),
-            paths::global_versions_page(&slug, (pg.page + 1) as u64),
-        )
-        .breadcrumbs(vec![
-            Breadcrumb::link("dashboard", "/admin"),
-            Breadcrumb::link(def.display_name(), paths::global(&slug)),
-            Breadcrumb::current("version_history"),
-        ])
-        .build();
 
-    let data = state.hook_runner.run_before_render(data);
+    let prev_url = paths::global_versions_page(&slug, pg.page.saturating_sub(1).max(1) as u64);
+    let next_url = paths::global_versions_page(&slug, (pg.page + 1) as u64);
 
-    render_or_error(&state, "globals/versions", &data)
+    let breadcrumbs = vec![
+        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::link(def.display_name(), paths::global(&slug)),
+        Breadcrumb::current("version_history"),
+    ];
+
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::GlobalVersions, "version_history_for")
+            .with_title_name(def.display_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
+
+    let ctx = GlobalVersionsListPage {
+        base,
+        global: GlobalContext::from_def(&def),
+        pagination: PaginationContext::from_result(&pagination, prev_url, next_url),
+        versions,
+        restore_url_prefix: paths::global(&slug),
+    };
+
+    render_page(&state, "globals/versions", &ctx)
 }

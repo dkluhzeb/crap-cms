@@ -3,20 +3,22 @@
 use axum::{
     extract::{Form, Query, State},
     http::{HeaderMap, header::COOKIE},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
-use serde_json::json;
 use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
-        handlers::auth::{
-            MfaForm, MfaQuery, append_cookies, clear_mfa_pending_cookie, create_session_token,
-            session_redirect,
+        context::{AuthBasePageContext, PageMeta, PageType, page::auth::MfaPage},
+        handlers::{
+            auth::{
+                MfaForm, MfaQuery, append_cookies, clear_mfa_pending_cookie, create_session_token,
+                session_redirect,
+            },
+            shared::render_page,
         },
         server::extract_cookie,
     },
@@ -33,23 +35,15 @@ fn extract_mfa_token(headers: &HeaderMap) -> Option<String> {
 
 /// Render the MFA code entry form with an optional error message.
 fn render_mfa_form(state: &AdminState, error: Option<&str>) -> Response {
-    let mut builder = ContextBuilder::auth(state).page(PageType::AuthMfa, "mfa_page_title");
+    let ctx = MfaPage {
+        base: AuthBasePageContext::for_state(
+            state,
+            PageMeta::new(PageType::AuthMfa, "mfa_page_title"),
+        ),
+        error: error.map(str::to_string),
+    };
 
-    if let Some(err) = error {
-        builder = builder.set("error", json!(err));
-    }
-
-    let data = builder.build();
-
-    match state.render("auth/mfa", &data) {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            error!("MFA template render error: {}", e);
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                .into_response()
-        }
-    }
+    render_page(state, "auth/mfa", &ctx)
 }
 
 /// GET /admin/mfa — show the MFA code entry form.

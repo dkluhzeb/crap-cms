@@ -12,12 +12,14 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
+        context::{
+            BasePageContext, GlobalContext, PageMeta, PageType, page::globals::GlobalFormErrorPage,
+        },
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
-                enrich_field_contexts, forbidden, get_user_doc, html_with_toast, htmx_redirect,
+                enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
                 paths, redirect_response, split_sidebar_fields, translate_validation_errors,
             },
         },
@@ -125,16 +127,21 @@ fn render_validation_error(
 
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 
-    let data = ContextBuilder::new(state, None)
-        .locale_from_auth(auth_user)
-        .filter_nav_by_access(state, auth_user)
-        .page(PageType::GlobalEdit, def.display_name())
-        .global_def(def)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .build();
+    let base = BasePageContext::for_handler(
+        state,
+        None,
+        auth_user,
+        PageMeta::new(PageType::GlobalEdit, def.display_name()),
+    );
 
-    html_with_toast(state, "globals/edit", &data, toast_msg)
+    let ctx = GlobalFormErrorPage {
+        base,
+        global: GlobalContext::from_def(def),
+        fields: main_fields,
+        sidebar_fields,
+    };
+
+    page_with_toast(state, "globals/edit", &ctx, toast_msg)
 }
 
 /// POST /admin/globals/{slug} — update a global

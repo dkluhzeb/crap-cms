@@ -9,11 +9,14 @@ use serde_json::json;
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, GlobalContext, PageMeta, PageType,
+            page::globals::GlobalRestoreConfirmPage,
+        },
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, not_found, paths, redirect_response,
-            render_or_error, server_error,
+            load_version_with_missing_relations, not_found, paths, redirect_response, render_page,
+            server_error,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -72,24 +75,29 @@ pub async fn restore_confirm(
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::GlobalVersions, "restore_version")
-        .global_def(&def)
-        .set("version_number", json!(version.version))
-        .set("missing_relations", json!(missing))
-        .set("restore_url", json!(restore_url))
-        .set("back_url", json!(back_url))
-        .breadcrumbs(vec![
-            Breadcrumb::link("dashboard", "/admin"),
-            Breadcrumb::link(def.display_name(), paths::global(&slug)),
-            Breadcrumb::current("restore_version"),
-        ])
-        .build();
+    let breadcrumbs = vec![
+        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::link(def.display_name(), paths::global(&slug)),
+        Breadcrumb::current("restore_version"),
+    ];
 
-    let data = state.hook_runner.run_before_render(data);
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::GlobalVersions, "restore_version"),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
 
-    render_or_error(&state, "globals/restore", &data)
+    let ctx = GlobalRestoreConfirmPage {
+        base,
+        global: GlobalContext::from_def(&def),
+        version_number: json!(version.version),
+        missing_relations: missing.into_iter().map(|m| json!(m)).collect(),
+        restore_url,
+        back_url,
+    };
+
+    render_page(&state, "globals/restore", &ctx)
 }

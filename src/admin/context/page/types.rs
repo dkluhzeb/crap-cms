@@ -41,6 +41,10 @@ pub enum PageType {
     Error404,
     /// Internal server error page (500).
     Error500,
+    /// Setup-required notice (no auth collection configured).
+    AuthRequired,
+    /// Authenticated but not authorized for admin.
+    AdminDenied,
 }
 
 impl PageType {
@@ -63,12 +67,14 @@ impl PageType {
             PageType::Error403 => "error_403",
             PageType::Error404 => "error_404",
             PageType::Error500 => "error_500",
+            PageType::AuthRequired => "auth_required",
+            PageType::AdminDenied => "admin_denied",
         }
     }
 }
 
 /// A breadcrumb entry with a label and optional URL.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Breadcrumb {
     /// The text label to display for the breadcrumb.
     pub label: String,
