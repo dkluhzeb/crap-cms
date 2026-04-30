@@ -15,6 +15,7 @@ use std::{cmp::Ordering, fs, path::Path};
 use anyhow::{Context as _, Result, bail};
 use include_dir::Dir;
 use semver::Version;
+use similar::{ChangeTag, TextDiff};
 
 use crate::{
     cli, scaffold,
@@ -61,11 +62,18 @@ enum Drift {
     Ahead { from: String },
     /// Header version is present but unparseable as semver.
     UnknownVersion { raw: String },
-    /// No header found — probably hand-written or comment-stripped.
+    /// No header found, but an upstream embedded version exists — the
+    /// file is overriding a built-in default but was probably hand-written
+    /// or had its header stripped.
     NoHeader,
     /// Header is present but the file no longer exists in the embedded
     /// upstream (deleted / renamed by a later release).
     OrphanedUpstream,
+    /// File has no upstream embedded counterpart and no source header —
+    /// it's user-authored content that was never part of the CMS
+    /// (custom admin pages, custom slot files, plugin-shipped widgets,
+    /// custom web components). Reported informationally; never a warning.
+    UserOriginal,
 }
 
 struct OverlayEntry {
@@ -96,6 +104,7 @@ pub fn status(config_dir: &Path) -> Result<()> {
     let mut unknown = 0usize;
     let mut no_header = 0usize;
     let mut orphaned = 0usize;
+    let mut user_original = 0usize;
 
     println!(
         "Templates customization status (config dir: {}, running version: {})",
@@ -137,8 +146,12 @@ pub fn status(config_dir: &Path) -> Result<()> {
                 orphaned += 1;
                 (
                     "✗",
-                    "orphaned: no longer exists in upstream embedded files".to_string(),
+                    "orphaned: extracted from upstream but no longer exists there".to_string(),
                 )
+            }
+            Drift::UserOriginal => {
+                user_original += 1;
+                ("·", "user-original (no upstream counterpart)".to_string())
             }
         };
 
@@ -147,8 +160,8 @@ pub fn status(config_dir: &Path) -> Result<()> {
 
     println!();
     println!(
-        "Summary: {} current, {} behind, {} ahead, {} pristine, {} unknown header, {} no header, {} orphaned",
-        current, behind, ahead, pristine, unknown, no_header, orphaned
+        "Summary: {} current, {} behind, {} ahead, {} pristine, {} unknown header, {} no header, {} orphaned, {} user-original",
+        current, behind, ahead, pristine, unknown, no_header, orphaned, user_original
     );
 
     if behind > 0 || orphaned > 0 {
@@ -250,28 +263,37 @@ fn classify_file(abs: &Path, kind: &str, sub_path: &str) -> Result<Drift> {
     let user_bytes =
         fs::read(abs).with_context(|| format!("read overlay file {}", abs.display()))?;
 
-    // Pristine check: byte-equal to upstream (header included or not).
-    if let Some(upstream) = lookup_embedded(kind, sub_path) {
-        if user_bytes == upstream {
-            return Ok(Drift::Pristine);
-        }
-    } else {
-        return Ok(Drift::OrphanedUpstream);
-    }
-
     let user_text = String::from_utf8_lossy(&user_bytes);
     let header = parse_source_version(&user_text);
-    let Some(raw) = header else {
-        return Ok(Drift::NoHeader);
-    };
+    let upstream = lookup_embedded(kind, sub_path);
 
-    match (Version::parse(&raw), Version::parse(CRATE_VERSION)) {
-        (Ok(file_v), Ok(crate_v)) => Ok(match file_v.cmp(&crate_v) {
-            Ordering::Equal => Drift::Current,
-            Ordering::Less => Drift::Behind { from: raw },
-            Ordering::Greater => Drift::Ahead { from: raw },
-        }),
-        _ => Ok(Drift::UnknownVersion { raw }),
+    // Decision matrix:
+    //
+    //   has_upstream | has_header | classification
+    //   ─────────────┼────────────┼──────────────────────────────
+    //   yes          | (any)      | Pristine if byte-equal, else
+    //                |            | classify by header version.
+    //                |            | NoHeader if header missing.
+    //   no           | yes        | OrphanedUpstream — file claims
+    //                |            | to extend an upstream that's
+    //                |            | gone.
+    //   no           | no         | UserOriginal — never had an
+    //                |            | upstream counterpart (custom
+    //                |            | page, custom widget, etc.).
+
+    match (upstream, &header) {
+        (Some(upstream_bytes), _) if user_bytes == upstream_bytes => Ok(Drift::Pristine),
+        (Some(_), None) => Ok(Drift::NoHeader),
+        (Some(_), Some(raw)) => match (Version::parse(raw), Version::parse(CRATE_VERSION)) {
+            (Ok(file_v), Ok(crate_v)) => Ok(match file_v.cmp(&crate_v) {
+                Ordering::Equal => Drift::Current,
+                Ordering::Less => Drift::Behind { from: raw.clone() },
+                Ordering::Greater => Drift::Ahead { from: raw.clone() },
+            }),
+            _ => Ok(Drift::UnknownVersion { raw: raw.clone() }),
+        },
+        (None, Some(_)) => Ok(Drift::OrphanedUpstream),
+        (None, None) => Ok(Drift::UserOriginal),
     }
 }
 
@@ -295,71 +317,73 @@ fn lookup_embedded(kind: &str, sub_path: &str) -> Option<&'static [u8]> {
     dir.get_file(sub_path).map(|f| f.contents())
 }
 
-/// Tiny line-diff printer — no external diff dependency. Shows context
-/// lines around changed regions; identical lines are summarized.
+/// Render a unified-style line diff between `a` (upstream) and `b`
+/// (user) to stdout. Uses the [`similar`] crate's Myers diff so adds /
+/// deletes group correctly even when blocks of comments or new branches
+/// have been inserted (the previous lockstep heuristic produced
+/// unreadable noise on overlays that added more than a couple of lines).
 fn print_unified_diff(label_a: &str, label_b: &str, a: &str, b: &str) {
     println!("--- {}", label_a);
     println!("+++ {}", label_b);
 
-    let a_lines: Vec<&str> = a.lines().collect();
-    let b_lines: Vec<&str> = b.lines().collect();
+    let diff = TextDiff::from_lines(a, b);
 
-    // Use the standard LCS-based diff via a simple Myers-like sweep —
-    // keep it minimal: walk both sides emitting `-` / `+` for differing
-    // regions, ` ` (space) for matched lines.
-    let mut i = 0usize;
-    let mut j = 0usize;
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => "-",
+            ChangeTag::Insert => "+",
+            ChangeTag::Equal => " ",
+        };
 
-    while i < a_lines.len() || j < b_lines.len() {
-        match (a_lines.get(i), b_lines.get(j)) {
-            (Some(la), Some(lb)) if la == lb => {
-                println!(" {}", la);
-                i += 1;
-                j += 1;
-            }
-            (Some(la), Some(lb)) => {
-                // Heuristic: look ahead a few lines on each side to find
-                // the next match — emit minus/plus for the difference
-                // region.
-                let next_match_b = b_lines[j..]
-                    .iter()
-                    .take(20)
-                    .position(|l| Some(l) == Some(la));
-                let next_match_a = a_lines[i..]
-                    .iter()
-                    .take(20)
-                    .position(|l| Some(l) == Some(lb));
+        // `change.value()` includes the trailing newline if the source
+        // line had one; keep formatting identical to the previous impl
+        // by trimming that final `\n` and emitting our own newline via
+        // println!.
+        let line = change.value();
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        println!("{sign}{line}");
+    }
+}
 
-                match (next_match_a, next_match_b) {
-                    (Some(skip_a), _) => {
-                        for k in 0..skip_a {
-                            println!("-{}", a_lines[i + k]);
-                        }
-                        i += skip_a;
-                    }
-                    (None, Some(skip_b)) => {
-                        for k in 0..skip_b {
-                            println!("+{}", b_lines[j + k]);
-                        }
-                        j += skip_b;
-                    }
-                    (None, None) => {
-                        println!("-{}", la);
-                        println!("+{}", lb);
-                        i += 1;
-                        j += 1;
-                    }
-                }
-            }
-            (Some(la), None) => {
-                println!("-{}", la);
-                i += 1;
-            }
-            (None, Some(lb)) => {
-                println!("+{}", lb);
-                j += 1;
-            }
-            (None, None) => break,
-        }
+#[cfg(test)]
+mod tests {
+    use super::print_unified_diff;
+
+    /// Smoke: a clean insertion (block of new lines added between two
+    /// matching anchors) renders as a contiguous run of `+` lines, not
+    /// interleaved `-`/`+` noise.
+    #[test]
+    fn diff_groups_inserted_block() {
+        // Capture stdout via a temp file is overkill — exercise the
+        // backing similar crate's behaviour directly to assert the
+        // grouping. (The println! body in `print_unified_diff` is a
+        // thin formatter; the algorithmic correctness lives in
+        // `TextDiff::from_lines` + `iter_all_changes`.)
+        use similar::{ChangeTag, TextDiff};
+
+        let upstream = "a\nb\nc\n";
+        let user = "a\nNEW1\nNEW2\nb\nc\n";
+        let diff = TextDiff::from_lines(upstream, user);
+
+        let tags: Vec<_> = diff.iter_all_changes().map(|c| c.tag()).collect();
+        // Expect: Equal(a), Insert(NEW1), Insert(NEW2), Equal(b), Equal(c)
+        assert_eq!(
+            tags,
+            vec![
+                ChangeTag::Equal,
+                ChangeTag::Insert,
+                ChangeTag::Insert,
+                ChangeTag::Equal,
+                ChangeTag::Equal,
+            ]
+        );
+    }
+
+    /// `print_unified_diff` shouldn't panic on empty inputs.
+    #[test]
+    fn diff_handles_empty_inputs() {
+        print_unified_diff("a", "b", "", "");
+        print_unified_diff("a", "b", "x\n", "");
+        print_unified_diff("a", "b", "", "y\n");
     }
 }
