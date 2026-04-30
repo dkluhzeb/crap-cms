@@ -26,7 +26,21 @@ use serde_json::Value;
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct BaseFieldData {
+    /// Form-input name attribute / qualified data-key — the prefixed
+    /// path version (e.g. `"seo__rating"` for a rating inside a group,
+    /// `"items[0][rating]"` inside an array row). What the browser
+    /// submits and what server-side validation keys off.
     pub name: String,
+
+    /// Bare field name as declared on the [`FieldDefinition`], without
+    /// any group/array prefix. A field declared as `name = "rating"`
+    /// always has `field_name == "rating"` regardless of nesting depth.
+    /// Templates use this when they want to match on the
+    /// "kind of field" rather than its position in the form (e.g. an
+    /// overlay rendering a stars widget for any field literally named
+    /// `rating`, whether it lives at the top level or inside a group).
+    pub field_name: String,
+
     pub label: String,
     pub required: bool,
     pub value: Value,

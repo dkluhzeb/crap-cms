@@ -17,6 +17,7 @@ use super::*;
 fn base(name: &str, _field_type_hint: &str) -> BaseFieldData {
     BaseFieldData {
         name: name.to_string(),
+        field_name: name.to_string(),
         label: name.to_string(),
         required: false,
         value: Value::String(String::new()),

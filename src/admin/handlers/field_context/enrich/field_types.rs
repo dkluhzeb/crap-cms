@@ -488,6 +488,7 @@ fn build_group_child(
 
     let base = crate::admin::context::field::BaseFieldData {
         name: nested_name.to_string(),
+        field_name: nested_sf.name.clone(),
         label: nested_label,
         required: nested_sf.required,
         value: Value::String(nested_val.to_string()),

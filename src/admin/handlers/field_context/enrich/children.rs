@@ -105,6 +105,7 @@ fn build_child_base(
 
     BaseFieldData {
         name: child_name.to_string(),
+        field_name: child.name.clone(),
         label,
         required: child.required,
         value: Value::String(child_val.to_string()),

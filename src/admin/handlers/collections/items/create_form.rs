@@ -67,6 +67,7 @@ fn prepare_create_fields(
         fields.push(FieldContext::Password(TextField {
             base: BaseFieldData {
                 name: "password".to_string(),
+                field_name: "password".to_string(),
                 label: "password".to_string(),
                 required: true,
                 value: Value::String(String::new()),

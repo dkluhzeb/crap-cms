@@ -82,6 +82,7 @@ fn build_base_field_data(
 
     let base = BaseFieldData {
         name: full_name.clone(),
+        field_name: field.name.clone(),
         label,
         required: field.required,
         value: Value::String(value_str.clone()),

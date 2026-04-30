@@ -1,0 +1,7 @@
+{{!--
+  Side-load the `<crap-stars>` web component that powers the rating
+  field. The script is served from `<config_dir>/static/components/`
+  via the static-file overlay; the CSP nonce keeps it whitelisted
+  alongside the built-in components.
+--}}
+<script type="module" nonce="{{crap.csp_nonce}}" src="/static/components/crap-stars.js"></script>

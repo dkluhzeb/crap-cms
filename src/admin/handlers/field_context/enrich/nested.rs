@@ -88,6 +88,7 @@ fn build_sub_field_base(
 
     BaseFieldData {
         name: indexed_name.to_string(),
+        field_name: sf.name.clone(),
         label: sf_label,
         required: sf.required,
         value: Value::String(val.to_string()),
