@@ -14,9 +14,10 @@
  *    field name.
  *
  * @module conditions
+ * @stability stable
  */
 
-import { readCsrfCookie } from './util/cookies.js';
+import { readCsrfCookie } from './_internal/util/cookies.js';
 
 /**
  * @typedef {{ field?: string, equals?: any, not_equals?: any,

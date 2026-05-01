@@ -22,6 +22,10 @@ pub struct CrapMeta {
     pub auth_enabled: bool,
     /// Per-request CSP nonce (empty string outside request scope).
     pub csp_nonce: String,
+    /// Branding string shown in the admin header wordmark and `<title>`
+    /// tags. Defaults to `"Crap CMS"`; configurable via
+    /// `[admin] site_name = "..."` in `crap.toml`.
+    pub site_name: String,
 }
 
 impl CrapMeta {
@@ -34,6 +38,7 @@ impl CrapMeta {
             dev_mode: state.config.admin.dev_mode,
             auth_enabled: has_auth_collections(state),
             csp_nonce: current_nonce_or_empty(),
+            site_name: state.config.admin.site_name.clone(),
         }
     }
 
@@ -46,6 +51,7 @@ impl CrapMeta {
             dev_mode: state.config.admin.dev_mode,
             auth_enabled: true,
             csp_nonce: current_nonce_or_empty(),
+            site_name: state.config.admin.site_name.clone(),
         }
     }
 }

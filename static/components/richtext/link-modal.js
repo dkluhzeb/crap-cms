@@ -2,10 +2,11 @@
  * Link insert/edit modal for `<crap-richtext>`.
  *
  * @module richtext/link-modal
+ * @stability internal
  */
 
-import { h } from '../h.js';
-import { t } from '../i18n.js';
+import { h } from '../_internal/h.js';
+import { t } from '../_internal/i18n.js';
 
 /** Allowed protocols for inserted links — blocks `javascript:` etc. */
 const ALLOWED_LINK_PROTOS = new Set(['http', 'https', 'mailto', 'tel', '']);

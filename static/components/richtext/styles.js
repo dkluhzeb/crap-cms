@@ -5,9 +5,10 @@
  * Lives in its own module so the main component file stays readable.
  *
  * @module richtext/styles
+ * @stability internal
  */
 
-import { css } from '../css.js';
+import { css } from '../_internal/css.js';
 
 export const sheet = css`
   :host { display: block; }

@@ -4,6 +4,7 @@
  * Pure functions of `(PM, schema, has)`. No `this` dependency.
  *
  * @module richtext/plugins
+ * @stability internal
  */
 
 /**

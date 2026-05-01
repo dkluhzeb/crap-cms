@@ -250,9 +250,9 @@ impl Default for CspConfig {
             // Built-in and overlay templates must mark inline scripts with
             // `nonce="{{crap.csp_nonce}}"`. Only `'self'` is allowed because
             // every script the built-in admin loads is served from the same
-            // origin: `/static/htmx.js` (vendored — see
-            // `scripts/bundle-htmx.sh`), `/static/codemirror.js`,
-            // `/static/prosemirror.js`, and the ES-module entry
+            // origin: `/static/vendor/htmx.js` (vendored — see
+            // `scripts/bundle-htmx.sh`), `/static/vendor/codemirror.js`,
+            // `/static/vendor/prosemirror.js`, and the ES-module entry
             // `/static/components/index.js`.
             script_src: vec!["'self'".into()],
             // `'unsafe-inline'` is intentionally absent. The built-in admin
@@ -265,7 +265,7 @@ impl Default for CspConfig {
             //   - HTMX's only inline style is the indicator-styles injection,
             //     disabled via `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
             //     in `base.hbs`; the equivalent CSS rules ship in
-            //     `static/styles.css`.
+            //     `static/styles/base/reset.css`.
             //   - Programmatic `element.style.foo = ...` is exempt from CSP
             //     and remains available for runtime layout.
             style_src: vec!["'self'".into(), "https://fonts.googleapis.com".into()],
@@ -347,6 +347,11 @@ pub struct AdminConfig {
     /// When true (default), block admin panel if no auth collection exists.
     /// Set to false for open dev mode with no authentication.
     pub require_auth: bool,
+    /// Display name shown in the admin header wordmark and `<title>`
+    /// tags. Defaults to `"Crap CMS"`. Override in `crap.toml` to
+    /// rebrand without touching templates.
+    #[serde(default = "default_site_name")]
+    pub site_name: String,
     /// Optional Lua function ref that gates admin panel access.
     /// Checked after successful authentication. None = any authenticated user.
     pub access: Option<String>,
@@ -370,11 +375,16 @@ fn default_csrf_cookie_lifetime() -> u64 {
     86400
 }
 
+fn default_site_name() -> String {
+    "Crap CMS".to_string()
+}
+
 impl Default for AdminConfig {
     fn default() -> Self {
         Self {
             dev_mode: false,
             require_auth: true,
+            site_name: default_site_name(),
             access: None,
             csp: CspConfig::default(),
             default_timezone: String::new(),
@@ -589,7 +599,7 @@ mod tests {
         assert!(h.contains("script-src 'self'"));
         assert!(
             !h.contains("https://unpkg.com"),
-            "no third-party CDN; htmx is now vendored at /static/htmx.js"
+            "no third-party CDN; htmx is now vendored at /static/vendor/htmx.js"
         );
         assert!(!h.contains("script-src 'self' 'unsafe-inline'"));
         // `style-src` is also free of `'unsafe-inline'` — HTMX's runtime style

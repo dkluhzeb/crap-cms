@@ -15,12 +15,14 @@
  *   });
  *
  * @module create-panel
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { clear, h } from './h.js';
-import { t } from './i18n.js';
-import { toast } from './util/toast.js';
+import { css } from './_internal/css.js';
+import { clear, h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { toast } from './_internal/util/toast.js';
+import { EV_CREATE_PANEL_REQUEST } from './events.js';
 
 /**
  * @typedef {{ id: string, label: string }} CreatedItem
@@ -175,7 +177,7 @@ class CrapCreatePanel extends HTMLElement {
     this._attachPanelResponseListeners();
     if (this._registered) return;
     this._registered = true;
-    document.addEventListener('crap:create-panel-request', this._handleRequest);
+    document.addEventListener(EV_CREATE_PANEL_REQUEST, this._handleRequest);
   }
 
   disconnectedCallback() {
@@ -185,7 +187,7 @@ class CrapCreatePanel extends HTMLElement {
     }
     if (!this._registered) return;
     this._registered = false;
-    document.removeEventListener('crap:create-panel-request', this._handleRequest);
+    document.removeEventListener(EV_CREATE_PANEL_REQUEST, this._handleRequest);
   }
 
   /**

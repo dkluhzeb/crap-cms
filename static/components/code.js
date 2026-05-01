@@ -14,10 +14,12 @@
  * </crap-code>
  *
  * @module code
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { EV_CHANGE } from './events.js';
 
 const sheet = css`
   :host { display: block; }
@@ -388,7 +390,7 @@ class CrapCode extends HTMLElement {
     if (hidden instanceof HTMLInputElement) {
       hidden.value = language;
       this.dispatchEvent(
-        new CustomEvent('crap:change', {
+        new CustomEvent(EV_CHANGE, {
           bubbles: true,
           detail: { name: hidden.name, value: language },
         }),

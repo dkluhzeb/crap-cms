@@ -5,6 +5,7 @@
  * no DOM access — testable in isolation given a PM stub.
  *
  * @module richtext/schema
+ * @stability internal
  */
 
 /**

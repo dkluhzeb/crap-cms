@@ -5,7 +5,10 @@
  * index rewriting, live row label watchers, empty state, and max_rows.
  *
  * @module array-fields
+ * @stability experimental
  */
+
+import { EV_REQUEST_ADD_BLOCK } from './events.js';
 
 /**
  * Kinds of reference sites a row contains. Each call to {@link rewriteRefs}
@@ -100,14 +103,16 @@ class CrapArrayField extends HTMLElement {
     this.addEventListener('dragover', this._onDragOver.bind(this));
     this.addEventListener('drop', this._onDrop.bind(this));
     this.addEventListener(
-      'crap:request-add-block',
+      EV_REQUEST_ADD_BLOCK,
       /** @param {Event} e */ (e) => {
         const ce = /** @type {CustomEvent} */ (e);
         if (/** @type {HTMLElement} */ (ce.target).closest('crap-array-field') !== this) return;
         this._addBlockRow(ce.detail.templateId);
       },
     );
-    this._initLabelWatchers();
+    // Row-label watching now lives on `<crap-array-row>`'s own
+    // connectedCallback — no per-row wiring needed here. (See the
+    // `array-row` module.)
   }
 
   disconnectedCallback() {
@@ -154,41 +159,6 @@ class CrapArrayField extends HTMLElement {
         break;
       case 'noop':
         break;
-    }
-  }
-
-  /* ── Row label watchers ────────────────────────────────────── */
-
-  _initLabelWatchers() {
-    const fs = this._fieldset;
-    if (!fs) return;
-    const labelField = fs.getAttribute('data-label-field');
-    if (!labelField) return;
-    for (const row of /** @type {NodeListOf<HTMLElement>} */ (
-      fs.querySelectorAll(':scope > .form__array-rows > .form__array-row')
-    )) {
-      this._setupRowLabelWatcher(row, labelField);
-    }
-  }
-
-  /**
-   * @param {HTMLElement} row
-   * @param {string} labelFieldName
-   */
-  _setupRowLabelWatcher(row, labelFieldName) {
-    if (row.dataset.labelInit) return;
-    row.dataset.labelInit = '1';
-    const titleEl = row.querySelector('.form__array-row-title');
-    if (!titleEl) return;
-    const suffix = `[${labelFieldName}]`;
-    for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (
-      row.querySelectorAll('input, select, textarea')
-    )) {
-      if (!input.name?.endsWith(suffix)) continue;
-      input.addEventListener('input', () => {
-        if (input.value) titleEl.textContent = input.value;
-      });
-      break;
     }
   }
 
@@ -449,21 +419,28 @@ class CrapArrayField extends HTMLElement {
   }
 
   /**
-   * Re-run `connectedCallback` on richtext components inside a freshly
-   * inserted clone (cloneNode does not fire it) and install the label
-   * watcher.
+   * Initialise a freshly inserted row clone:
    *
-   * @param {HTMLElement} html
-   * @param {string} [labelOverride]
+   *  - Re-fires `connectedCallback` on `<crap-richtext>` descendants
+   *    (in-tree cloneNode doesn't always trigger custom-element
+   *    upgrades reliably; the explicit call is defensive).
+   *  - For block rows: stamps the row element with the block-specific
+   *    `data-label-field` so the row's own label watcher (registered
+   *    by `<crap-array-row>`'s connectedCallback) picks it up.
+   *
+   * @param {HTMLElement} html The freshly cloned outer row element.
+   * @param {string} [labelOverride] Block-specific label field name,
+   *   from the block-template's `data-label-field`.
    */
   _initClonedSubtree(html, labelOverride) {
+    if (labelOverride && html.tagName === 'CRAP-ARRAY-ROW') {
+      html.setAttribute('data-label-field', labelOverride);
+    }
     for (const el of /** @type {NodeListOf<HTMLElement & {connectedCallback?: () => void}>} */ (
       html.querySelectorAll('crap-richtext')
     )) {
       el.connectedCallback?.();
     }
-    const labelField = labelOverride || this._fieldset?.getAttribute('data-label-field');
-    if (labelField) this._setupRowLabelWatcher(html, labelField);
   }
 
   /* ── Drag-and-drop ─────────────────────────────────────────── */

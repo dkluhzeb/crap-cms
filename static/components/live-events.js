@@ -9,13 +9,14 @@
  * Auto-reconnects on connection loss.
  *
  * @module live-events
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
-import { t } from './i18n.js';
-import { getHttpVerb } from './util/htmx.js';
-import { toast } from './util/toast.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { getHttpVerb } from './_internal/util/htmx.js';
+import { toast } from './_internal/util/toast.js';
 
 /** Within this window after a save, our own update events are filtered out. */
 const SAVE_GRACE_MS = 5000;

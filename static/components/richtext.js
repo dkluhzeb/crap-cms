@@ -32,9 +32,11 @@
  * </crap-richtext>
  *
  * @module richtext
+ * @stability stable
  */
 
-import { h } from './h.js';
+import { h } from './_internal/h.js';
+import { parseJsonAttribute } from './_internal/util/json.js';
 import { openLinkModal } from './richtext/link-modal.js';
 import { openNodeEditModal } from './richtext/node-modal.js';
 import { CustomNodeView } from './richtext/node-view.js';
@@ -47,7 +49,6 @@ import {
   isCommandActive,
   markActive,
 } from './richtext/toolbar.js';
-import { parseJsonAttribute } from './util/json.js';
 
 /**
  * @typedef {(name: string) => boolean} FeatureCheck

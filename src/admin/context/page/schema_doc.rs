@@ -2,7 +2,7 @@
 //!
 //! Walks every per-page typed context (login, dashboard, collection edit,
 //! …), produces a Markdown reference at
-//! `docs/src/admin-ui/template-context.md`, and verifies (via the
+//! `docs/src/admin-ui/reference/template-context.md`, and verifies (via the
 //! [`template_context_doc_is_in_sync`] test) that the committed file matches
 //! what the typed structs would produce. Run with
 //! `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync` to bless
@@ -411,7 +411,7 @@ fn generate_template_context_md() -> String {
 #[test]
 fn template_context_doc_is_in_sync() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("docs/src/admin-ui/template-context.md");
+        .join("docs/src/admin-ui/reference/template-context.md");
 
     let generated = generate_template_context_md();
 

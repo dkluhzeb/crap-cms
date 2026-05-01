@@ -12,10 +12,12 @@
  *    picked option carries the metadata directly.
  *
  * @module uploads
+ * @stability stable
  */
 
-import { h } from './h.js';
-import { t } from './i18n.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { EV_CHANGE } from './events.js';
 
 /**
  * @typedef {{
@@ -75,7 +77,7 @@ class CrapUploadPreview extends HTMLElement {
   }
 
   _setupSearch() {
-    this.addEventListener('crap:change', () => {
+    this.addEventListener(EV_CHANGE, () => {
       /** @type {HTMLInputElement|null} */
       const hidden = this.querySelector('crap-relationship-search input[type="hidden"]');
       this._updatePreview(hidden?.value ? readUploadMeta(hidden) : EMPTY_META);

@@ -15,9 +15,10 @@
  * the storage key changes here, change it there too.
  *
  * @module theme
+ * @stability stable
  */
 
-import { CrapPickerBase } from './picker-base.js';
+import { CrapPickerBase } from './_internal/picker-base.js';
 
 const STORAGE_KEY = 'crap-theme';
 

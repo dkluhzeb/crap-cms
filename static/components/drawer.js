@@ -8,7 +8,7 @@
  * fills in.
  *
  * @example
- * const evt = new CustomEvent('crap:drawer-request', { detail: {} });
+ * const evt = new CustomEvent(EV_DRAWER_REQUEST, { detail: {} });
  * document.dispatchEvent(evt);
  * const drawer = evt.detail.instance;
  * drawer?.open({ title: 'Browse Media' });
@@ -16,11 +16,13 @@
  * // ... user closes, or call `drawer.close()`.
  *
  * @module drawer
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { clear, h } from './h.js';
-import { t } from './i18n.js';
+import { css } from './_internal/css.js';
+import { clear, h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { EV_DRAWER_REQUEST } from './events.js';
 
 const sheet = css`
   :host {
@@ -341,14 +343,14 @@ class CrapDrawer extends HTMLElement {
       const detail = /** @type {CustomEvent} */ (e).detail;
       if (!detail.instance) detail.instance = this;
     };
-    document.addEventListener('crap:drawer-request', this._handleRequest);
+    document.addEventListener(EV_DRAWER_REQUEST, this._handleRequest);
   }
 
   disconnectedCallback() {
     if (!this._connected) return;
     this._connected = false;
     if (this._handleRequest) {
-      document.removeEventListener('crap:drawer-request', this._handleRequest);
+      document.removeEventListener(EV_DRAWER_REQUEST, this._handleRequest);
     }
   }
 

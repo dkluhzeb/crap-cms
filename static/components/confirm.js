@@ -18,10 +18,12 @@
  * </crap-confirm>
  *
  * @module confirm
+ * @stability stable
  */
 
-import { t } from './i18n.js';
-import { discoverSingleton } from './util/discover.js';
+import { t } from './_internal/i18n.js';
+import { discoverSingleton } from './_internal/util/discover.js';
+import { EV_CONFIRM_DIALOG_REQUEST } from './events.js';
 
 class CrapConfirm extends HTMLElement {
   constructor() {
@@ -74,7 +76,7 @@ class CrapConfirm extends HTMLElement {
    * @returns {Promise<boolean>}
    */
   _ask(message) {
-    const dialog = discoverSingleton('crap:confirm-dialog-request');
+    const dialog = discoverSingleton(EV_CONFIRM_DIALOG_REQUEST);
     if (!dialog) {
       console.warn(
         '<crap-confirm>: no <crap-confirm-dialog> mounted; falling back to window.confirm()',

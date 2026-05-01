@@ -890,7 +890,7 @@ fn cmd_templates_extract_all_static() {
         "templates extract all static should succeed: {:?}",
         result.err()
     );
-    assert!(tmp.path().join("static/styles.css").exists());
+    assert!(tmp.path().join("static/styles/main.css").exists());
 }
 
 #[test]

@@ -10,10 +10,11 @@
  *   - `[data-ui-locale-dropdown]` — container of `[data-ui-locale-value="…"]` items
  *
  * @module ui-locale-picker
+ * @stability stable
  */
 
-import { CrapPickerBase } from './picker-base.js';
-import { readCsrfCookie } from './util/cookies.js';
+import { CrapPickerBase } from './_internal/picker-base.js';
+import { readCsrfCookie } from './_internal/util/cookies.js';
 
 const LOCALE_ENDPOINT = '/admin/api/locale';
 

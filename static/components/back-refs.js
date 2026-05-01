@@ -7,6 +7,7 @@
  * Shadow DOM, then hides the trigger.
  *
  * @module back-refs
+ * @stability stable
  *
  * @example
  * <crap-back-refs slug="media" doc-id="m1">
@@ -16,9 +17,9 @@
  * </crap-back-refs>
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
-import { t } from './i18n.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 
 /**
  * @typedef {Object} BackRef

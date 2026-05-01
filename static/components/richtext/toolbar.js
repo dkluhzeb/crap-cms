@@ -7,9 +7,10 @@
  *    pure helpers that read PM state to decide which toolbar buttons are lit.
  *
  * @module richtext/toolbar
+ * @stability internal
  */
 
-import { h } from '../h.js';
+import { h } from '../_internal/h.js';
 
 /**
  * @typedef {(name: string) => boolean} FeatureCheck

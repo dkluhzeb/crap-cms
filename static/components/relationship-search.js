@@ -19,11 +19,13 @@
  * @attr data-error   Boolean attribute for error styling.
  *
  * @module relationship-search
+ * @stability experimental
  */
 
-import { css } from './css.js';
-import { clear, h } from './h.js';
-import { t } from './i18n.js';
+import { css } from './_internal/css.js';
+import { clear, h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { EV_CHANGE, EV_CREATE_PANEL_REQUEST, EV_DRAWER_REQUEST, EV_PICK } from './events.js';
 
 /** Debounce window for the inline search input. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -182,50 +184,10 @@ const sheet = css`
     box-shadow: none;
   }
   .relationship-search__tags-input::placeholder { color: var(--text-tertiary); }
-  .relationship-search__chips { display: contents; }
-  .relationship-search__chip {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-xs);
-    padding: var(--space-xs) var(--space-sm);
-    background: var(--color-primary-bg);
-    border: 1px solid color-mix(in srgb, var(--color-primary) 20%, transparent);
-    border-radius: var(--radius-md);
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-primary);
-    line-height: 1.4;
-    white-space: nowrap;
-  }
-  .relationship-search__chip-remove {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-tertiary);
-    font-size: var(--icon-sm);
-    padding: 0;
-    line-height: 1;
-    margin-left: var(--space-2xs);
-    border-radius: var(--radius-sm);
-    transition: color var(--transition-fast), background var(--transition-fast);
-  }
-  .relationship-search__chip-remove:hover {
-    color: var(--color-danger);
-    background: var(--color-danger-bg);
-  }
-  .relationship-search__chip-collection {
-    font-size: 0.7em;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-secondary);
-    background: var(--surface-secondary);
-    padding: 1px 5px;
-    border-radius: var(--radius-sm);
-    margin-right: var(--space-xs);
-  }
+  /* Chip cluster styling lives on the <crap-pill-list> atom — see
+     pill-list.js. That component injects its own stylesheet onto
+     document.adoptedStyleSheets on first connect, so the chips
+     render correctly regardless of which host mounts them. */
   .relationship-search__group-header {
     font-size: var(--text-xs);
     font-weight: 600;
@@ -378,7 +340,7 @@ class CrapRelationshipSearch extends HTMLElement {
     /** @type {HTMLDivElement|null} */ this._hiddenContainer = null;
     /** @type {HTMLDivElement|null} */ this._inputWrapper = null;
     /** @type {HTMLDivElement|null} */ this._tagsContainer = null;
-    /** @type {HTMLDivElement|null} */ this._chipsContainer = null;
+    /** @type {HTMLElement|null} */ this._chipsContainer = null;
     /** @type {HTMLInputElement|null} */ this._input = null;
     /** @type {HTMLDivElement|null} */ this._dropdown = null;
     /** @type {HTMLButtonElement|null} */ this._clearBtn = null;
@@ -396,6 +358,7 @@ class CrapRelationshipSearch extends HTMLElement {
     this._setupDrawerPicker();
     this._setupInlineCreate();
     this._setupPickEvent();
+    this._setupPillRemoval();
 
     this._syncHiddenInputs();
     if (this._hasMany) this._renderChips();
@@ -481,7 +444,15 @@ class CrapRelationshipSearch extends HTMLElement {
 
   /** @param {HTMLInputElement} input */
   _buildTagsWrapper(input) {
-    this._chipsContainer = h('div', { class: 'relationship-search__chips' });
+    // The chip cluster is its own atom (`<crap-pill-list>`); we own
+    // canonical `this._selected` state and push it into the element's
+    // `data-items` attribute. The element bubbles `crap:pill-removed`
+    // events that we listen to via `_setupPillRemoval`.
+    const pillList = document.createElement('crap-pill-list');
+    if (this._polymorphic) pillList.setAttribute('data-polymorphic', '');
+    if (this._readonly) pillList.setAttribute('data-readonly', '');
+    this._chipsContainer = pillList;
+
     this._tagsContainer = h(
       'div',
       {
@@ -490,7 +461,7 @@ class CrapRelationshipSearch extends HTMLElement {
           if (e.target === this._tagsContainer) input.focus();
         },
       },
-      this._chipsContainer,
+      pillList,
       input,
     );
     return h('div', { class: 'relationship-search__input-wrapper' }, this._tagsContainer);
@@ -511,7 +482,7 @@ class CrapRelationshipSearch extends HTMLElement {
     if (!this._hiddenContainer) return;
     clear(this._hiddenContainer);
     this._hiddenContainer.appendChild(this._buildHiddenInput());
-    this.dispatchEvent(new Event('crap:change', { bubbles: true }));
+    this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
     this._updateViewLink();
   }
 
@@ -562,12 +533,15 @@ class CrapRelationshipSearch extends HTMLElement {
 
   /* ── Rendering ──────────────────────────────────────────────── */
 
+  /**
+   * Push the canonical `_selected` state into the `<crap-pill-list>`
+   * atom and toggle the parent's "has items" class. The atom emits
+   * `crap:pill-removed` for remove clicks; we listen for that in
+   * `_setupPillRemoval`.
+   */
   _renderChips() {
     if (!this._chipsContainer) return;
-    clear(this._chipsContainer);
-    for (const item of this._selected) {
-      this._chipsContainer.appendChild(this._buildChip(item));
-    }
+    this._chipsContainer.setAttribute('data-items', JSON.stringify(this._selected));
     if (this._tagsContainer) {
       this._tagsContainer.classList.toggle(
         'relationship-search__tags--has-items',
@@ -576,30 +550,18 @@ class CrapRelationshipSearch extends HTMLElement {
     }
   }
 
-  /** @param {Item} item */
-  _buildChip(item) {
-    return h(
-      'span',
-      { class: 'relationship-search__chip' },
-      this._polymorphic &&
-        item.collection &&
-        h('span', {
-          class: 'relationship-search__chip-collection',
-          text: item.collection,
-        }),
-      item.label,
-      !this._readonly &&
-        h('button', {
-          type: 'button',
-          class: 'relationship-search__chip-remove',
-          text: '×',
-          onClick: () => {
-            this._selected = this._selected.filter((s) => s.id !== item.id);
-            this._renderChips();
-            this._syncHiddenInputs();
-          },
-        }),
-    );
+  /**
+   * Wire the pill-list's remove event back into our `_selected` state.
+   * Called once during `_buildDOM` after the element is in the tree.
+   */
+  _setupPillRemoval() {
+    if (!this._chipsContainer || this._readonly) return;
+    this._chipsContainer.addEventListener('crap:pill-removed', (e) => {
+      const id = /** @type {CustomEvent<{ id: string }>} */ (e).detail.id;
+      this._selected = this._selected.filter((s) => s.id !== id);
+      this._renderChips();
+      this._syncHiddenInputs();
+    });
   }
 
   _renderHasOneDisplay() {
@@ -876,7 +838,7 @@ class CrapRelationshipSearch extends HTMLElement {
   /* ── External pick (drawer / picker) ────────────────────────── */
 
   _setupPickEvent() {
-    this.addEventListener('crap:pick', (e) => {
+    this.addEventListener(EV_PICK, (e) => {
       this._suppressFocus = true;
       this._selectItem(/** @type {CustomEvent<Item>} */ (e).detail);
       setTimeout(() => {
@@ -908,7 +870,7 @@ class CrapRelationshipSearch extends HTMLElement {
   }
 
   _openDrawerPicker() {
-    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    const drawerEvt = new CustomEvent(EV_DRAWER_REQUEST, { detail: {} });
     document.dispatchEvent(drawerEvt);
     /** @type {{ open: (opts: { title: string }) => void, close: () => void, body: HTMLElement }|undefined} */
     const drawer = /** @type {any} */ (drawerEvt).detail.instance;
@@ -1072,7 +1034,7 @@ class CrapRelationshipSearch extends HTMLElement {
    * @param {{ close: () => void }} drawer
    */
   _onDrawerPick(item, drawer) {
-    this.dispatchEvent(new CustomEvent('crap:pick', { detail: item }));
+    this.dispatchEvent(new CustomEvent(EV_PICK, { detail: item }));
     if (!this._hasMany) drawer.close();
   }
 
@@ -1100,7 +1062,7 @@ class CrapRelationshipSearch extends HTMLElement {
    * @param {string} title
    */
   _openInlineCreatePanel(collection, title) {
-    const evt = new CustomEvent('crap:create-panel-request', { detail: {} });
+    const evt = new CustomEvent(EV_CREATE_PANEL_REQUEST, { detail: {} });
     document.dispatchEvent(evt);
     /** @type {{ open: (opts: any) => void }|undefined} */
     const panel = /** @type {any} */ (evt).detail.instance;

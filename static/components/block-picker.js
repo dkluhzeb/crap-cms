@@ -13,10 +13,12 @@
  *    a row. The slotted select + button are hidden via host-attribute CSS.
  *
  * @module block-picker
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { EV_REQUEST_ADD_BLOCK } from './events.js';
 
 const sheet = css`
   :host {
@@ -210,7 +212,7 @@ class CrapBlockPicker extends HTMLElement {
   /** @param {string} templateId */
   _requestAddBlock(templateId) {
     this.dispatchEvent(
-      new CustomEvent('crap:request-add-block', {
+      new CustomEvent(EV_REQUEST_ADD_BLOCK, {
         bubbles: true,
         detail: { templateId },
       }),

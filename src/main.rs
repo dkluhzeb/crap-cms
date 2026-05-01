@@ -543,6 +543,10 @@ async fn run(cli: Cli) -> Result<()> {
                 let config = commands::resolve_config_dir(config_flag)?;
                 commands::templates::diff(&config, &path)
             }
+            TemplatesAction::Layout => {
+                let config = commands::resolve_config_dir(config_flag)?;
+                commands::templates::layout(&config)
+            }
         },
         Command::Jobs { action } => {
             let config = commands::resolve_config_dir(config_flag)?;

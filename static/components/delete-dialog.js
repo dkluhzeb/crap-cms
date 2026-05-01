@@ -19,13 +19,15 @@
  * });
  *
  * @module delete-dialog
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
-import { t } from './i18n.js';
-import { readCsrfCookie } from './util/cookies.js';
-import { toast } from './util/toast.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { readCsrfCookie } from './_internal/util/cookies.js';
+import { toast } from './_internal/util/toast.js';
+import { EV_DELETE_DIALOG_REQUEST } from './events.js';
 
 const sheet = css`
   :host { display: contents; }
@@ -194,7 +196,7 @@ class CrapDeleteDialog extends HTMLElement {
     };
     this._handleClick = (e) => this._onDocumentClick(e);
 
-    document.addEventListener('crap:delete-dialog-request', this._handleRequest);
+    document.addEventListener(EV_DELETE_DIALOG_REQUEST, this._handleRequest);
     document.addEventListener('click', this._handleClick);
   }
 
@@ -202,7 +204,7 @@ class CrapDeleteDialog extends HTMLElement {
     if (!this._connected) return;
     this._connected = false;
     if (this._handleRequest) {
-      document.removeEventListener('crap:delete-dialog-request', this._handleRequest);
+      document.removeEventListener(EV_DELETE_DIALOG_REQUEST, this._handleRequest);
     }
     if (this._handleClick) {
       document.removeEventListener('click', this._handleClick);

@@ -152,7 +152,7 @@ mod tests {
                 "page",
                 &json!({
                     "_locale": "en",
-                    "crap": { "csp_nonce": "test-nonce" },
+                    "crap": { "csp_nonce": "test-nonce", "site_name": "Crap CMS" },
                     "nav": { "collections": [], "globals": [] },
                     "available_locales": ["en"],
                     "page": { "title": "x", "title_name": "" },
@@ -420,6 +420,122 @@ mod tests {
             !html.contains("material-symbols"),
             "no icon expected: {html}"
         );
+    }
+
+    #[test]
+    fn logo_partial_passes_class_through() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/logo class="my-logo"}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert!(html.contains(r#"class="my-logo""#), "{html}");
+        assert!(html.contains("<svg"), "should render an SVG: {html}");
+        assert!(
+            html.contains(r#"fill="currentColor""#),
+            "should preserve currentColor for theming: {html}"
+        );
+    }
+
+    #[test]
+    fn meta_tags_partial_emits_required_defaults() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/meta-tags}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert!(html.contains(r#"charset="utf-8""#), "{html}");
+        assert!(html.contains(r#"name="viewport""#), "{html}");
+        assert!(html.contains(r#"name="theme-color""#), "{html}");
+        assert!(html.contains(r#"rel="icon""#), "{html}");
+    }
+
+    #[test]
+    fn meta_tags_partial_can_be_overridden_via_overlay() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let partials_dir = tmp.path().join("templates").join("partials");
+        fs::create_dir_all(&partials_dir).unwrap();
+        fs::write(partials_dir.join("meta-tags.hbs"), "<meta name=\"x\">").unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/meta-tags}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert_eq!(html, "<meta name=\"x\">");
+    }
+
+    #[test]
+    fn icon_font_partial_emits_default_link() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/icon-font}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert!(html.contains(r#"rel="stylesheet""#), "{html}");
+        assert!(
+            html.contains("Material+Symbols+Outlined"),
+            "default Material Symbols URL expected: {html}"
+        );
+    }
+
+    #[test]
+    fn icon_font_partial_can_be_overridden_to_self_host() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let partials_dir = tmp.path().join("templates").join("partials");
+        fs::create_dir_all(&partials_dir).unwrap();
+        fs::write(
+            partials_dir.join("icon-font.hbs"),
+            r#"<link rel="stylesheet" href="/static/vendor/material-symbols.css" />"#,
+        )
+        .unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/icon-font}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert!(
+            html.contains("/static/vendor/material-symbols.css"),
+            "{html}"
+        );
+        assert!(
+            !html.contains("fonts.googleapis.com"),
+            "overlay must replace, not augment: {html}"
+        );
+    }
+
+    /// Regression: the partial is the override seam for the brand
+    /// mark — overriding it must replace the SVG without touching
+    /// the layout templates that include it.
+    #[test]
+    fn logo_partial_can_be_overridden_via_overlay() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let partials_dir = tmp.path().join("templates").join("partials");
+        fs::create_dir_all(&partials_dir).unwrap();
+        fs::write(partials_dir.join("logo.hbs"), "CUSTOM_LOGO").unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path()));
+        let mut hbs =
+            (*create_handlebars(tmp.path(), false, translations, None).expect("hbs")).clone();
+        hbs.register_template_string("t", r#"{{> partials/logo class="x"}}"#)
+            .expect("register caller");
+
+        let html = hbs.render("t", &json!({})).expect("render");
+        assert_eq!(html, "CUSTOM_LOGO");
     }
 
     #[test]

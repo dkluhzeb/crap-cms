@@ -6,7 +6,11 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["static/components/**/*.js", "static/*.css", "!static/normalize.css"],
+    "includes": [
+      "static/components/**/*.js",
+      "static/styles/**/*.css",
+      "!static/styles/base/normalize.css"
+    ],
     "ignoreUnknown": true
   },
   "formatter": {

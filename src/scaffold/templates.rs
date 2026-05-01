@@ -542,9 +542,16 @@ mod tests {
     #[test]
     fn test_templates_extract_static_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
+        templates_extract(
+            tmp.path(),
+            &["styles/main.css".to_string()],
+            false,
+            None,
+            false,
+        )
+        .unwrap();
 
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
@@ -617,7 +624,7 @@ mod tests {
         // Should have created template files
         assert!(tmp.path().join("templates/layout/base.hbs").exists());
         // Should NOT have created static files
-        assert!(!tmp.path().join("static/styles.css").exists());
+        assert!(!tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
@@ -626,7 +633,7 @@ mod tests {
         templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
 
         // Should have created static files
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
         // Should NOT have created template files
         assert!(!tmp.path().join("templates/layout/base.hbs").exists());
     }
@@ -657,7 +664,7 @@ mod tests {
 
         // Should have created both template and static files
         assert!(tmp.path().join("templates/layout/base.hbs").exists());
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
@@ -683,10 +690,10 @@ mod tests {
         // First extraction
         templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
         // Write marker
-        fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
+        fs::write(tmp.path().join("static/styles/main.css"), "CUSTOM").unwrap();
         // Second extraction without force — should skip
         templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
-        let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
+        let content = fs::read_to_string(tmp.path().join("static/styles/main.css")).unwrap();
         assert_eq!(content, "CUSTOM");
     }
 
@@ -737,26 +744,40 @@ mod tests {
         // Extract only static files (styles.css should be found in static)
         templates_extract(
             tmp.path(),
-            &["styles.css".to_string()],
+            &["styles/main.css".to_string()],
             false,
             Some("static"),
             false,
         )
         .unwrap();
 
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
     fn test_templates_extract_specific_skips_existing() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // First extract
-        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
+        templates_extract(
+            tmp.path(),
+            &["styles/main.css".to_string()],
+            false,
+            None,
+            false,
+        )
+        .unwrap();
         // Write marker
-        fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
+        fs::write(tmp.path().join("static/styles/main.css"), "CUSTOM").unwrap();
         // Extract again without force — should skip
-        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
-        let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
+        templates_extract(
+            tmp.path(),
+            &["styles/main.css".to_string()],
+            false,
+            None,
+            false,
+        )
+        .unwrap();
+        let content = fs::read_to_string(tmp.path().join("static/styles/main.css")).unwrap();
         assert_eq!(content, "CUSTOM");
     }
 

@@ -14,7 +14,7 @@ To allow all operations on collections without access functions (e.g., during de
 
 ## Three Levels
 
-1. **Admin panel-level** — `admin.access` in `crap.toml`. A Lua function that gates access to the entire admin UI, checked after login. See [Admin UI](../admin-ui/overview.md#access).
+1. **Admin panel-level** — `admin.access` in `crap.toml`. A Lua function that gates access to the entire admin UI, checked after login. See [Admin UI](../admin-ui/index.md#access).
 2. **Collection-level** — controls who can read, create, update, or delete documents in a collection. See [Collection-Level](collection-level.md).
 3. **Field-level** — controls which fields are visible or writable per-user. See [Field-Level](field-level.md).
 

@@ -280,7 +280,7 @@ async fn relationship_has_many_multiple_chips() {
 
     // Should have 2 chips
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chip_count: i64 = result.into_value().unwrap_or(0);
@@ -349,20 +349,20 @@ async fn relationship_remove_chip() {
 
     // Should have a chip
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips_before: i64 = result.into_value().unwrap_or(0);
     assert!(chips_before > 0, "should have a chip after selecting");
 
     // Click remove on the chip
-    page.evaluate("() => document.querySelector('.relationship-search__chip-remove')?.click()")
+    page.evaluate("() => document.querySelector('.pill-list__chip-remove')?.click()")
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips_after: i64 = result.into_value().unwrap_or(0);
@@ -448,7 +448,7 @@ async fn relationship_enter_selects_first_result() {
 
     // Should have a chip
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips: i64 = result.into_value().unwrap_or(0);
@@ -650,7 +650,7 @@ async fn has_many_relationship_persists() {
 
     // Should have 2 chips
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips: i64 = result.into_value().unwrap_or(0);

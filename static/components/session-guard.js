@@ -12,12 +12,13 @@
  *  - **Log out** — navigate to `LOGOUT_URL`.
  *
  * @module session-guard
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
-import { t } from './i18n.js';
-import { readCookie, readCsrfCookie } from './util/cookies.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { readCookie, readCsrfCookie } from './_internal/util/cookies.js';
 
 /** Show the warning this many seconds before expiry. */
 const WARNING_SECONDS = 5 * 60;

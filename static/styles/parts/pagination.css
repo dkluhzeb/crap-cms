@@ -1,0 +1,19 @@
+/**
+ * Pagination — list-view next/prev controls.
+ *
+ * Used by `templates/partials/pagination.hbs` and the items-list view.
+ */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+  padding: var(--space-md) 0;
+}
+
+.pagination__info {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}

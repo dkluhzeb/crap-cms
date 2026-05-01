@@ -1,0 +1,45 @@
+/**
+ * Admin UI stylesheet entry point.
+ *
+ * Order matters: tokens first (every later rule references custom
+ * properties), vendor normalize next, our base layer (resets,
+ * utilities, web-component plumbing), then layout, parts, and
+ * finally themes (which override token values via
+ * `html[data-theme="…"]` selectors and so must load last).
+ *
+ * Customizers replace the entire admin look by dropping
+ * `<config_dir>/static/styles/themes/themes-<name>.css` files; this
+ * entry point doesn't need to be touched. To override the entire
+ * cascade, drop a replacement at
+ * `<config_dir>/static/styles/main.css` — your version wins per
+ * the standard overlay rule.
+ */
+
+/* Tokens — the public theming surface. */
+@import url("/static/styles/tokens.css");
+
+/* Vendor normalize before any of our rules. */
+@import url("/static/styles/base/normalize.css");
+
+/* Variable font face declarations. */
+@import url("/static/styles/base/fonts.css");
+
+/* Global resets, utilities, and Web Components plumbing. */
+@import url("/static/styles/base/reset.css");
+
+/* Page chrome — header, sidebar, edit-sidebar. */
+@import url("/static/styles/layout/layout.css");
+@import url("/static/styles/layout/edit-sidebar.css");
+
+/* Reusable parts. */
+@import url("/static/styles/parts/cards.css");
+@import url("/static/styles/parts/forms.css");
+@import url("/static/styles/parts/buttons.css");
+@import url("/static/styles/parts/lists.css");
+@import url("/static/styles/parts/tables.css");
+@import url("/static/styles/parts/breadcrumb.css");
+@import url("/static/styles/parts/badges.css");
+@import url("/static/styles/parts/pagination.css");
+
+/* Themes — last so they can override token values. */
+@import url("/static/styles/themes/default.css");

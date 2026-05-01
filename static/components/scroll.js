@@ -7,9 +7,10 @@
  * HTMX swap).
  *
  * @module scroll
+ * @stability stable
  */
 
-import { getHttpVerb } from './util/htmx.js';
+import { getHttpVerb } from './_internal/util/htmx.js';
 
 const STORAGE_KEY = 'crap-form-state';
 

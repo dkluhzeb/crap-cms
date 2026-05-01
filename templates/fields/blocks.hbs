@@ -41,7 +41,7 @@
       id="array-rows-{{template_id}}"
     >
       {{#each rows}}
-        <div
+        <crap-array-row
           class="form__array-row{{#if ../init_collapsed}}{{#unless this.has_errors}} form__array-row--collapsed{{/unless}}{{/if}}{{#if this.has_errors}} form__array-row--has-errors{{/if}}"
           data-row-index="{{this.index}}"
         >
@@ -73,7 +73,7 @@
               {{/each}}
             </div>
           </div>
-        </div>
+        </crap-array-row>
       {{/each}}
     </div>
 
@@ -88,7 +88,7 @@
         id="block-template-{{../template_id}}-{{this.block_type}}"
         {{#if this.label_field}} data-label-field="{{this.label_field}}"{{/if}}
       >
-        <div
+        <crap-array-row
           class="form__array-row"
           data-row-index="__INDEX__"
         >
@@ -113,7 +113,7 @@
               {{/each}}
             </div>
           </div>
-        </div>
+        </crap-array-row>
       </template>
     {{/each}}
 

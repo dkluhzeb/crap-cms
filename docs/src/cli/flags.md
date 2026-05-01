@@ -813,7 +813,7 @@ crap-cms fmt --check                      # CI: exit 1 if any file would change
 cat my.hbs | crap-cms fmt --stdio         # editor pipe
 ```
 
-The formatter is idempotent (`fmt(fmt(x)) == fmt(x)`) and applies the rule set documented in the [Admin UI: Template Formatter](../admin-ui/template-formatter.md) page (block-helper indentation, attribute stacking, comment preservation, etc.).
+The formatter is idempotent (`fmt(fmt(x)) == fmt(x)`) and applies the rule set documented in the [Admin UI: Template Formatter](../admin-ui/guides/template-formatter.md) page (block-helper indentation, attribute stacking, comment preservation, etc.).
 
 **Editor integration (Neovim + conform.nvim):**
 

@@ -373,6 +373,11 @@ pub enum TemplatesAction {
         /// (e.g. `templates/layout/base.hbs`, `static/styles.css`)
         path: String,
     },
+    /// Report old-layout files in the config dir and recommend `git mv`
+    /// commands to migrate to the current layout. Read-only — never moves
+    /// files. Honest about what it can't see (internal imports inside
+    /// moved files, dynamic CSS `@import url(...)` references, etc.).
+    Layout,
 }
 
 /// Actions for the `jobs` subcommand.

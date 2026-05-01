@@ -6,6 +6,7 @@
  * across navigation is handled by `<crap-scroll-restore>`.
  *
  * @module tabs
+ * @stability stable
  */
 
 const ACTIVE_TAB = 'form__tabs-tab--active';

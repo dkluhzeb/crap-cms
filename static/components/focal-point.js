@@ -22,11 +22,12 @@
  * </crap-focal-point>
  *
  * @module focal-point
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
-import { t } from './i18n.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
 
 const sheet = css`
   :host {

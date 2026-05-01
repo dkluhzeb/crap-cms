@@ -23,10 +23,12 @@
  * </crap-tags>
  *
  * @module tags
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { EV_CHANGE } from './events.js';
 
 const sheet = css`
   :host { display: block; }
@@ -278,7 +280,7 @@ class CrapTags extends HTMLElement {
   _sync() {
     if (!this._hidden) return;
     this._hidden.value = this._values.join(',');
-    this.dispatchEvent(new Event('crap:change', { bubbles: true }));
+    this.dispatchEvent(new Event(EV_CHANGE, { bubbles: true }));
   }
 }
 

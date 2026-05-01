@@ -22,12 +22,13 @@
  * </crap-validate-form>
  *
  * @module validate-form
+ * @stability stable
  */
 
-import { h } from './h.js';
-import { t } from './i18n.js';
-import { readCsrfCookie } from './util/cookies.js';
-import { toast } from './util/toast.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { readCsrfCookie } from './_internal/util/cookies.js';
+import { toast } from './_internal/util/toast.js';
 
 /**
  * @typedef {{

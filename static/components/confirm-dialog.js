@@ -12,11 +12,13 @@
  * Usage: add `hx-confirm="Are you sure?"` to any HTMX-powered element.
  *
  * @module confirm-dialog
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
-import { t } from './i18n.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { EV_CONFIRM_DIALOG_REQUEST } from './events.js';
 
 const sheet = css`
   :host { display: contents; }
@@ -152,7 +154,7 @@ class CrapConfirmDialog extends HTMLElement {
       const detail = /** @type {CustomEvent} */ (e).detail;
       if (!detail.instance) detail.instance = this;
     };
-    document.addEventListener('crap:confirm-dialog-request', this._handleRequest);
+    document.addEventListener(EV_CONFIRM_DIALOG_REQUEST, this._handleRequest);
 
     // Intercept HTMX's native confirm and show the styled dialog instead.
     this._handleHtmxConfirm = async (e) => {
@@ -171,7 +173,7 @@ class CrapConfirmDialog extends HTMLElement {
 
   disconnectedCallback() {
     if (this._handleRequest) {
-      document.removeEventListener('crap:confirm-dialog-request', this._handleRequest);
+      document.removeEventListener(EV_CONFIRM_DIALOG_REQUEST, this._handleRequest);
     }
     if (this._handleHtmxConfirm) {
       document.removeEventListener('htmx:confirm', this._handleHtmxConfirm);

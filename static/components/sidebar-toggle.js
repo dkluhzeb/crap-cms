@@ -7,6 +7,7 @@
  * dismisses the menu).
  *
  * @module sidebar-toggle
+ * @stability stable
  */
 
 const SIDEBAR_OPEN_CLASS = 'sidebar--open';

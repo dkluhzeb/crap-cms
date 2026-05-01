@@ -11,6 +11,7 @@
  * `base.hbs`, not by this component.
  *
  * @module sticky-header
+ * @stability stable
  */
 
 class CrapStickyHeader extends HTMLElement {

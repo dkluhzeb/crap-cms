@@ -8,10 +8,12 @@
  * tab close.
  *
  * @module dirty-form
+ * @stability stable
  */
 
-import { t } from './i18n.js';
-import { getHttpVerb } from './util/htmx.js';
+import { t } from './_internal/i18n.js';
+import { getHttpVerb } from './_internal/util/htmx.js';
+import { EV_CHANGE, EV_CONFIRM_DIALOG_REQUEST } from './events.js';
 
 /**
  * Array/blocks row actions that should mark the form dirty when the
@@ -71,7 +73,7 @@ class CrapDirtyForm extends HTMLElement {
 
     // `crap:change` is the agreed signal from custom inputs (relationship,
     // uploads, tags) that don't fire native input/change.
-    this.addEventListener('crap:change', this._markDirty);
+    this.addEventListener(EV_CHANGE, this._markDirty);
 
     this._onRowAction = (e) => {
       if (!this._armed) return;
@@ -109,7 +111,7 @@ class CrapDirtyForm extends HTMLElement {
       this._form.removeEventListener('change', this._markDirty);
       this._form = null;
     }
-    if (this._markDirty) this.removeEventListener('crap:change', this._markDirty);
+    if (this._markDirty) this.removeEventListener(EV_CHANGE, this._markDirty);
     if (this._onRowAction) document.removeEventListener('click', this._onRowAction);
     if (this._onConfigRequest)
       document.removeEventListener('htmx:configRequest', this._onConfigRequest);
@@ -172,7 +174,7 @@ class CrapDirtyForm extends HTMLElement {
    * @returns {Promise<boolean>}
    */
   _askLeave() {
-    const evt = new CustomEvent('crap:confirm-dialog-request', { detail: {} });
+    const evt = new CustomEvent(EV_CONFIRM_DIALOG_REQUEST, { detail: {} });
     document.dispatchEvent(evt);
     const dialog = evt.detail.instance;
     if (!dialog) return Promise.resolve(true);

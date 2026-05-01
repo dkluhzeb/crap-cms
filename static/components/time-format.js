@@ -10,6 +10,7 @@
  *                 because Safari refuses to parse the space form).
  *
  * @module time-format
+ * @stability stable
  */
 
 const formatter = new Intl.DateTimeFormat(undefined, {

@@ -14,10 +14,11 @@
  * `::slotted(input)` so the toggle button doesn't overlap the text.
  *
  * @module password-toggle
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
 
 const ICON_HIDDEN = 'visibility';
 const ICON_VISIBLE = 'visibility_off';

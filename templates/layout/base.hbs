@@ -1,35 +1,23 @@
 <!DOCTYPE html>
 <html lang="{{#if _locale}}{{_locale}}{{else}}en{{/if}}">
   <head>
-    <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
+    {{> partials/meta-tags}}
     <script nonce="{{crap.csp_nonce}}">
       (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
     </script>
     <link
-      rel="icon"
-      type="image/svg+xml"
-      href="/static/favicon.svg"
-    />
-    <link
-      href="/static/styles.css"
+      href="/static/styles/main.css"
       rel="stylesheet"
     />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
-    />
+    {{> partials/icon-font}}
     <!-- Disable HTMX's runtime `<style>` injection. Indicator rules are shipped
-       in styles.css instead, so CSP `style-src` doesn't need `'unsafe-inline'`. -->
+       in styles/base/reset.css instead, so CSP `style-src` doesn't need `'unsafe-inline'`. -->
     <meta
       name="htmx-config"
       content='{"includeIndicatorStyles":false}'
     />
     <script
-      src="/static/htmx.js"
+      src="/static/vendor/htmx.js"
       defer
     >
     </script>
@@ -41,12 +29,12 @@
       })();
     </script>
     <script
-      src="/static/prosemirror.js"
+      src="/static/vendor/prosemirror.js"
       defer
     >
     </script>
     <script
-      src="/static/codemirror.js"
+      src="/static/vendor/codemirror.js"
       defer
     >
     </script>
@@ -56,7 +44,7 @@
     >
     </script>
 
-    <title>{{t page.title name=page.title_name}}- Crap CMS</title>
+    <title>{{t page.title name=page.title_name}}-{{crap.site_name}}</title>
     <script
       type="application/json"
       id="crap-i18n"

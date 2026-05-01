@@ -10,10 +10,11 @@
  *   - `[data-locale-dropdown]` — container of `[data-locale-value="…"]` items
  *
  * @module locale-picker
+ * @stability stable
  */
 
-import { CrapPickerBase } from './picker-base.js';
-import { writeCookie } from './util/cookies.js';
+import { CrapPickerBase } from './_internal/picker-base.js';
+import { writeCookie } from './_internal/util/cookies.js';
 
 /** Cookie lifetime for the editor-locale preference: 1 year. */
 const LOCALE_COOKIE_MAX_AGE = 31536000;

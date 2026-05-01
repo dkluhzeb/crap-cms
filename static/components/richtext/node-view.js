@@ -5,9 +5,10 @@
  * delegates to the host component's edit modal.
  *
  * @module richtext/node-view
+ * @stability internal
  */
 
-import { h } from '../h.js';
+import { h } from '../_internal/h.js';
 
 /**
  * @typedef {{

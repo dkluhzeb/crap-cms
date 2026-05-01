@@ -5,7 +5,7 @@
  * auto-dismiss. Two ways to show one:
  *  - **Programmatic**: dispatch `crap:toast-request` with
  *    `{ message, type?, duration? }` in `detail`. Sugar:
- *    `import { toast } from './util/toast.js'; toast({ ... })` or
+ *    `import { toast } from './_internal/util/toast.js'; toast({ ... })` or
  *    `window.crap.toast({ ... })`.
  *  - **HTMX response header**: `X-Crap-Toast` carrying either a plain
  *    string message or a JSON `{ "message": "…", "type": "…" }`.
@@ -14,7 +14,7 @@
  * <crap-toast></crap-toast>
  *
  * @example
- * document.dispatchEvent(new CustomEvent('crap:toast-request', {
+ * document.dispatchEvent(new CustomEvent(EV_TOAST_REQUEST, {
  *   detail: { message: 'Item created', type: 'success' },
  * }));
  *
@@ -22,10 +22,12 @@
  * X-Crap-Toast: {"message": "Saved", "type": "success"}
  *
  * @module toast
+ * @stability stable
  */
 
-import { css } from './css.js';
-import { h } from './h.js';
+import { css } from './_internal/css.js';
+import { h } from './_internal/h.js';
+import { EV_TOAST_REQUEST } from './events.js';
 
 /** Default auto-dismiss delay in ms. Pass `0` to {@link CrapToast.show} to keep open. */
 const DEFAULT_DURATION_MS = 3000;
@@ -106,15 +108,14 @@ class CrapToast extends HTMLElement {
     };
     this._onAfterRequest = (e) => this._handleHtmxResponse(e);
 
-    document.addEventListener('crap:toast-request', this._onToastRequest);
+    document.addEventListener(EV_TOAST_REQUEST, this._onToastRequest);
     document.body.addEventListener('htmx:afterRequest', this._onAfterRequest);
   }
 
   disconnectedCallback() {
     if (!this._connected) return;
     this._connected = false;
-    if (this._onToastRequest)
-      document.removeEventListener('crap:toast-request', this._onToastRequest);
+    if (this._onToastRequest) document.removeEventListener(EV_TOAST_REQUEST, this._onToastRequest);
     if (this._onAfterRequest)
       document.body.removeEventListener('htmx:afterRequest', this._onAfterRequest);
     this._onToastRequest = null;
