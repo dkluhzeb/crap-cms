@@ -19,8 +19,8 @@ pub(crate) use execution::{
     apply_after_read_inner, resolve_hook_function, run_field_hooks_inner, run_hooks_inner,
 };
 pub(crate) use types::{
-    DefaultDeny, HookDepth, HookDepthGuard, LuaInvalidationTransport, LuaPopulateSingleflight,
-    LuaStorage, MaxHookDepth, TxContext, UiLocaleContext, UserContext,
+    DefaultDeny, HookDepth, HookDepthGuard, LuaInvalidationTransport, LuaLocaleConfig,
+    LuaPopulateSingleflight, LuaStorage, MaxHookDepth, TxContext, UiLocaleContext, UserContext,
 };
 pub use validation::ValidationCtx;
 pub use validation::evaluate_condition_table;

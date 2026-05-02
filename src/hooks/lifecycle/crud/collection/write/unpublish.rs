@@ -73,27 +73,37 @@ pub(super) fn handle_unpublish(
     }
 
     let lua_infra = hook_lua_infra(lua);
+    let locale_config = hook_locale_config(lua);
 
-    let mut ctx_builder = ServiceContext::collection(ctx.collection, ctx.def).conn(conn);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let svc_ctx = ctx_builder.build();
+    let svc_ctx = ServiceContext::collection(ctx.collection, ctx.def)
+        .conn(conn)
+        .locale_config(locale_config.as_ref())
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     persist_unpublish(&svc_ctx, ctx.id)
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;
 
-    // Internal hook lifecycle lookup — fetches doc state after unpublish, not a user-facing read.
-    let updated_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None, false)
-        .map_err(|e| RuntimeError(format!("find error after unpublish: {e:#}")))?
-        .ok_or_else(|| {
-            RuntimeError(format!(
-                "Document {} not found after unpublish in {}",
-                ctx.id, ctx.collection
-            ))
-        })?;
+    // Internal hook lifecycle lookup — fetches doc state after unpublish, not
+    // a user-facing read. Use the same locale-aware context as the unpublish
+    // read so localized fields produce a SELECT that matches actual columns.
+    let post_locale_ctx = svc_ctx.default_locale_ctx();
+
+    let updated_doc = query::find_by_id_raw(
+        conn,
+        ctx.collection,
+        ctx.def,
+        ctx.id,
+        post_locale_ctx.as_ref(),
+        false,
+    )
+    .map_err(|e| RuntimeError(format!("find error after unpublish: {e:#}")))?
+    .ok_or_else(|| {
+        RuntimeError(format!(
+            "Document {} not found after unpublish in {}",
+            ctx.id, ctx.collection
+        ))
+    })?;
 
     if hooks_enabled {
         let mut after_data = updated_doc.fields.clone();
@@ -210,17 +220,16 @@ fn unpublish_document_lua(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    let mut ctx_builder = ServiceContext::collection(&collection, &def)
+    let locale_config = hook_locale_config(lua);
+
+    let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .override_access(override_access)
+        .locale_config(locale_config.as_ref())
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let doc = unpublish_document(&ctx, &id)
         .map_err(|e| RuntimeError(format!("unpublish error: {e:#}")))?;

@@ -17,7 +17,7 @@ use crate::{
             InitPhase, LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
             crud::register_crud_functions,
             execution::scan_registered_events,
-            types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
+            types::{DefaultDeny, HookDepth, LuaLocaleConfig, MaxHookDepth, MaxInstructions},
         },
     },
 };
@@ -213,6 +213,7 @@ fn init_app_data(
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
+    lua.set_app_data(LuaLocaleConfig(config.locale.clone()));
 
     let storage = upload::create_storage(config_dir, &config.upload)
         .context("Failed to create storage backend for Lua VM")?;

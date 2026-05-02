@@ -217,14 +217,35 @@ fn claim_pending_jobs_sqlite(
 
         if affected > 0 {
             *extra_running.entry(slug).or_insert(0) += 1;
-            claimed.push(parse_job_row(row)?);
+            // SQLite path: the row was SELECTed pre-update, so its
+            // `attempt` is the value before the `attempt = attempt + 1`
+            // we just executed. Bump the parsed value so the JobRun
+            // reflects the post-update DB state, matching what the
+            // Postgres `RETURNING` path produces natively.
+            let mut job = parse_job_row(row)?;
+            job.attempt += 1;
+            claimed.push(job);
         }
     }
 
     Ok(claimed)
 }
 
-/// Parse a job row from SELECT/RETURNING into a JobRun.
+/// Parse a job row from a DB read into a `JobRun`. The `attempt` value is
+/// taken verbatim from the row — callers are responsible for ensuring it
+/// reflects "the attempt number now being executed":
+///
+/// - **Postgres claim path** (`UPDATE ... RETURNING attempt`) returns the
+///   post-update value, which is exactly the attempt being executed —
+///   pass straight through.
+/// - **SQLite claim path** (`SELECT` then `UPDATE`) reads the pre-update
+///   value; the caller must `+1` it before constructing the `JobRun` to
+///   match the just-incremented DB state.
+///
+/// Mixing those up was a real bug in earlier alpha.8: a single `+1` in
+/// this function plus the SQL increment on the Postgres path produced a
+/// double-count, causing jobs to fail one execution earlier than
+/// `max_attempts` configures and skewing the retry-backoff index.
 fn parse_job_row(row: &DbRow) -> Result<JobRun> {
     let id = match row.get_value(0) {
         Some(DbValue::Text(s)) => s.clone(),
@@ -263,7 +284,7 @@ fn parse_job_row(row: &DbRow) -> Result<JobRun> {
         .status(JobStatus::Running)
         .queue(queue)
         .data(data)
-        .attempt(attempt + 1)
+        .attempt(attempt)
         .max_attempts(max_attempts);
 
     if let Some(sb) = scheduled_by {
@@ -798,6 +819,53 @@ mod tests {
         // No more pending
         let claimed2 = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
         assert_eq!(claimed2.len(), 0);
+    }
+
+    /// Regression: the SQL claim already does `attempt = attempt + 1` on
+    /// the row, and the doc on `fail_job` says the passed `attempt` is
+    /// "already incremented by claim". `parse_job_row` previously also
+    /// did `.attempt(attempt + 1)`, double-counting — a job inserted with
+    /// `attempt = 0` and `max_attempts = 3` would surface as
+    /// `JobRun.attempt = 2` after the first claim and reach
+    /// `attempt = 3` after the second, hitting the
+    /// `attempt < max_attempts` retry threshold one execution early.
+    /// Net effect: jobs effectively got `max_attempts - 1` retries and
+    /// the failure-backoff delay used the wrong attempt index.
+    #[test]
+    fn claim_reports_attempt_count_consistent_with_db_increment() {
+        let (_dir, conn) = setup_db();
+        insert_job(&conn, "retry_test", "{}", "manual", 3, "default").unwrap();
+
+        let running = HashMap::new();
+        let conc = HashMap::new();
+
+        // First claim of a fresh job: DB attempt was 0, SQL bumps it to 1,
+        // and the parsed JobRun should reflect "this is attempt 1".
+        let first = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            first[0].attempt, 1,
+            "first claim of attempt=0 job must surface as attempt=1, got {}",
+            first[0].attempt
+        );
+
+        // Simulate a retry: requeue the job (claim_pending_jobs only looks
+        // at status='pending', so flip back).
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'pending' WHERE id = ?1",
+            &[DbValue::Text(first[0].id.clone())],
+        )
+        .unwrap();
+
+        // Second claim: DB attempt is now 1, SQL bumps to 2, JobRun must
+        // surface attempt=2 (NOT 3).
+        let second = claim_pending_jobs(&conn, 10, &running, &conc).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            second[0].attempt, 2,
+            "second claim of the same job must surface as attempt=2, got {}",
+            second[0].attempt
+        );
     }
 
     #[test]

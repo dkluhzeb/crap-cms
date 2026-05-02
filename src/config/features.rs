@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    McpApiKey, SmtpPassword,
+    McpApiKey, S3SecretKey, SmtpPassword,
     parsing::{serde_duration, serde_duration_option, serde_filesize},
 };
 
@@ -288,9 +288,11 @@ pub struct S3Config {
     /// Access key ID.
     #[serde(default)]
     pub access_key: String,
-    /// Secret access key.
+    /// Secret access key. Stored in a redacted-on-Debug/Serialize newtype
+    /// so it does not leak via tracing, JSON dumps of `CrapConfig`, or
+    /// `crap.config.get` from a Lua hook.
     #[serde(default)]
-    pub secret_key: String,
+    pub secret_key: S3SecretKey,
     /// Optional key prefix prepended to all storage keys.
     #[serde(default)]
     pub prefix: String,

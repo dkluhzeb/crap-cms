@@ -24,6 +24,7 @@ use crate::{
             },
         },
     },
+    config::LocaleConfig,
     core::{
         Document, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
         event::SharedEventTransport, validate::ValidationError,
@@ -48,6 +49,7 @@ struct UpdateParams {
     join_data: HashMap<String, Value>,
     locale_ctx: Option<LocaleContext>,
     locale: Option<String>,
+    locale_config: LocaleConfig,
     draft: bool,
     user_doc: Option<Document>,
     ui_locale: Option<String>,
@@ -64,6 +66,7 @@ fn execute_update(
         .user(params.user_doc.as_ref())
         .event_transport(params.event_transport)
         .cache(params.cache)
+        .locale_config(Some(&params.locale_config))
         .build();
 
     if params.action == "unpublish" && params.def.has_versions() {
@@ -183,6 +186,7 @@ pub async fn update_action(
         join_data: join_data.clone(),
         locale_ctx,
         locale,
+        locale_config: state.config.locale.clone(),
         draft: action == "save_draft",
         user_doc: get_user_doc(&auth_user).cloned(),
         ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),

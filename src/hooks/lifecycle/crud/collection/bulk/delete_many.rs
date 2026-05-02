@@ -120,18 +120,14 @@ fn delete_many_documents(
 
     let invalidation_transport = hook_invalidation_transport(lua);
 
-    let mut ctx_builder = ServiceContext::collection(collection, &service_def)
+    let ctx = ServiceContext::collection(collection, &service_def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(override_access)
-        .invalidation_transport(invalidation_transport);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .invalidation_transport(invalidation_transport)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let delete_opts = DeleteManyOptions {
         run_hooks: hooks_enabled,

@@ -4,6 +4,7 @@ use mlua::Lua;
 use serde_json::Value;
 
 use crate::{
+    config::LocaleConfig,
     core::{
         Document,
         cache::SharedCache,
@@ -141,6 +142,12 @@ pub(crate) struct LuaInvalidationTransport(pub(crate) SharedInvalidationTranspor
 /// Lua calls the service layer's guardrail discards whatever we pass here,
 /// so the Arc only pays off for ordinary (non-override) Lua reads.
 pub(crate) struct LuaPopulateSingleflight(pub(crate) SharedPopulateSingleflight);
+
+/// Locale configuration, stored in Lua `app_data` so Lua CRUD write paths
+/// (notably `unpublish`) can build a default `LocaleContext` for raw reads
+/// of collections with localized fields. Without this the service layer
+/// falls back to bare column names and SQLite errors with `no such column`.
+pub(crate) struct LuaLocaleConfig(pub(crate) LocaleConfig);
 
 /// Infrastructure for Lua CRUD event publishing, cache invalidation, and event
 /// queueing. Stored in Lua `app_data` alongside `TxContext` so that CRUD

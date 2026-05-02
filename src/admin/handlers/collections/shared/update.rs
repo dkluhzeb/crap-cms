@@ -88,6 +88,11 @@ async fn spawn_update(
         _ => None,
     });
     let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
+    // The unpublish branch reads the row via `find_by_id_raw`, which needs
+    // a `LocaleContext` to emit `title__en`/`title__de` for localized
+    // fields when locales are enabled. Threading the config through
+    // `ServiceContext` lets the service build a default `All` context.
+    let locale_config = state.config.locale.clone();
 
     task::spawn_blocking(move || {
         let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
@@ -96,6 +101,7 @@ async fn spawn_update(
             .user(user_doc.as_ref())
             .event_transport(event_transport)
             .cache(cache)
+            .locale_config(Some(&locale_config))
             .build();
 
         let result = if input.action == "unpublish" && def_owned.has_versions() {

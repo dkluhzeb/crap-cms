@@ -10,14 +10,15 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::{
+    config::LocaleConfig,
     core::{
         CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition,
         event::SharedInvalidationTransport,
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
-        HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport, LuaPopulateSingleflight,
-        MaxHookDepth, UiLocaleContext, UserContext,
+        HookDepth, HookDepthGuard, LuaCrudInfra, LuaInvalidationTransport, LuaLocaleConfig,
+        LuaPopulateSingleflight, MaxHookDepth, UiLocaleContext, UserContext,
         access::check_access_with_lua,
         converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
     },
@@ -73,6 +74,14 @@ pub(crate) fn hook_lua_infra(lua: &Lua) -> Option<LuaCrudInfra> {
 pub(crate) fn hook_invalidation_transport(lua: &Lua) -> Option<SharedInvalidationTransport> {
     lua.app_data_ref::<LuaInvalidationTransport>()
         .map(|t| t.0.clone())
+}
+
+/// Extract the locale configuration from Lua app_data (set during VM
+/// initialization). Used by write paths (notably `unpublish`) to thread
+/// `LocaleConfig` into a `ServiceContext` so the service layer can build
+/// a default `LocaleContext` for raw reads of localized fields.
+pub(crate) fn hook_locale_config(lua: &Lua) -> Option<LocaleConfig> {
+    lua.app_data_ref::<LuaLocaleConfig>().map(|lc| lc.0.clone())
 }
 
 /// Look up a collection definition from the shared registry, returning a

@@ -5,7 +5,10 @@ use mlua::{Error::RuntimeError, Lua, Table, Value};
 
 use super::serializers::collection_config_to_lua;
 
-use crate::{core::SharedRegistry, hooks::api::parse::parse_collection_definition};
+use crate::{
+    core::SharedRegistry,
+    hooks::{api::parse::parse_collection_definition, lifecycle::InitPhase},
+};
 
 /// Register `crap.collections.define`, `crap.collections.config.get`, and `crap.collections.config.list`.
 pub(super) fn register_collections(
@@ -42,6 +45,20 @@ pub(super) fn register_collections(
 
 /// Parse and register a collection definition.
 fn define(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
+    // Collections drive table creation, route registration, and admin-UI
+    // wiring — all of which run once at startup from the live registry.
+    // A runtime call writes into the SharedRegistry but no migration runs,
+    // so the table never exists; the first read/write through the new
+    // collection errors with a confusing "no such table" diagnostic and
+    // the admin sidebar never gains the entry. Refuse explicitly.
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(
+            "crap.collections.define must be called from a definition file or init.lua \
+             — runtime registration does not create the table or admin routes"
+                .into(),
+        ));
+    }
+
     let def = parse_collection_definition(lua, slug, config)
         .map_err(|e| RuntimeError(format!("Failed to parse collection '{slug}': {e}")))?;
 
@@ -77,4 +94,45 @@ fn list(lua: &Lua, reg: &SharedRegistry) -> mlua::Result<Table> {
     }
 
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::Registry;
+    use std::sync::{Arc, RwLock};
+
+    /// Regression: `crap.collections.define` called outside the init phase
+    /// must fail loudly. Without the guard, a runtime hook could insert a
+    /// collection into `SharedRegistry` that has no backing table, no admin
+    /// route, and no sidebar entry — every subsequent reference to it
+    /// errors at use time with a misleading "no such table" / 404. The
+    /// init-phase requirement matches the rest of the registration APIs
+    /// (`crap.pages.register`, `crap.template_data.register`, etc.).
+    #[test]
+    fn define_outside_init_phase_is_rejected() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
+        register_collections(&lua, &crap, registry.clone()).unwrap();
+        lua.globals().set("crap", crap).unwrap();
+        // Note: NO `set_app_data(InitPhase)` — simulating a runtime hook.
+
+        let err = lua
+            .load(r#"crap.collections.define("posts", {})"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("definition file") || err.contains("runtime registration"),
+            "expected init-only error message, got: {err}"
+        );
+
+        // The collection MUST NOT have been registered.
+        let reg = registry.read().unwrap();
+        assert!(
+            reg.get_collection("posts").is_none(),
+            "collection must NOT be registered when call is refused",
+        );
+    }
 }

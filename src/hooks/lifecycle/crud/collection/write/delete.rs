@@ -59,18 +59,14 @@ fn delete_document_lua(
     let storage = lua.app_data_ref::<LuaStorage>().map(|s| s.0.clone());
     let invalidation_transport = hook_invalidation_transport(lua);
 
-    let mut ctx_builder = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(override_access)
-        .invalidation_transport(invalidation_transport);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .invalidation_transport(invalidation_transport)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     delete_document(&ctx, &id, storage.as_deref(), Some(lc))
         .map_err(|e| RuntimeError(format!("delete error: {e:#}")))?;

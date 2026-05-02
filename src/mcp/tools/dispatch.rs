@@ -31,8 +31,8 @@ use super::{
         read::{exec_count, exec_find, exec_find_by_id},
         versions::{exec_list_versions, exec_restore_version},
         write::{
-            exec_create, exec_create_many, exec_delete, exec_delete_many, exec_undelete,
-            exec_unpublish, exec_update, exec_update_many,
+            UnpublishParams, exec_create, exec_create_many, exec_delete, exec_delete_many,
+            exec_undelete, exec_unpublish, exec_update, exec_update_many,
         },
     },
     globals::{exec_read_global, exec_update_global},
@@ -493,15 +493,16 @@ pub fn execute_tool(
                 event_transport,
                 cache,
             ),
-            ToolOp::Unpublish => exec_unpublish(
+            ToolOp::Unpublish => exec_unpublish(UnpublishParams {
                 args,
-                &parsed.slug,
+                slug: &parsed.slug,
                 registry,
                 pool,
                 runner,
+                config,
                 event_transport,
                 cache,
-            ),
+            }),
             ToolOp::ListVersions => exec_list_versions(args, &parsed.slug, registry, pool, runner),
             ToolOp::RestoreVersion => exec_restore_version(
                 args,

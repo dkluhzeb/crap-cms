@@ -9,7 +9,7 @@ use tracing::warn;
 use std::sync::Arc;
 
 use crate::{
-    config::{EmailConfig, ServerConfig},
+    config::{EmailConfig, LocaleConfig, ServerConfig},
     core::{
         CollectionDefinition, Document, FieldDefinition,
         cache::SharedCache,
@@ -160,6 +160,13 @@ pub struct ServiceContext<'a> {
     pub slug: &'a str,
     /// Collection or global definition.
     pub def: Def<'a>,
+    /// Locale configuration. Required when the def has localized fields and
+    /// the operation may need to read raw rows without an explicit
+    /// `LocaleContext` (e.g. unpublish, version snapshot). Without this,
+    /// internal `find_by_id_raw` calls fall back to non-locale-aware column
+    /// names, generating SELECTs that reference `title` instead of
+    /// `title__en` and failing with `no such column`.
+    pub locale_config: Option<&'a LocaleConfig>,
 }
 
 impl<'a> ServiceContext<'a> {
@@ -207,6 +214,38 @@ impl<'a> ServiceContext<'a> {
     pub fn runner(&self) -> Result<&HookRunner, ServiceError> {
         self.runner
             .ok_or_else(|| ServiceError::Internal(anyhow!("runner not set")))
+    }
+
+    /// Build a default `LocaleContext` from the attached locale config.
+    /// Used by write paths that need to read raw rows (e.g. unpublish,
+    /// version snapshot) on collections with localized fields.
+    ///
+    /// Returns `None` when no locale config is attached or when
+    /// localization is disabled — in both cases the SELECT fallback to
+    /// bare column names is correct.
+    ///
+    /// Uses `LocaleMode::Default` (resolved at the default locale, flat
+    /// keys) rather than `LocaleMode::All` (grouped `{en, de}` objects).
+    /// `All` triggered `group_locale_fields` and produced
+    /// `title: {"en": "X", "de": null}` shape that:
+    /// - diverged from what `persist_draft_version` snapshots (Single
+    ///   mode, flat resolved value),
+    /// - broke user hooks expecting flat keys,
+    /// - leaked through broadcast events.
+    ///
+    /// The default-locale-resolved shape matches every other write path.
+    /// Snapshot fidelity for non-default locales is the same as regular
+    /// draft saves (lossy for non-default-locale columns) — preserving
+    /// all locales in snapshots is a separate change.
+    pub fn default_locale_ctx(&self) -> Option<crate::db::query::LocaleContext> {
+        let config = self.locale_config?;
+        if !config.is_enabled() {
+            return None;
+        }
+        Some(crate::db::query::LocaleContext {
+            mode: crate::db::query::LocaleMode::Default,
+            config: config.clone(),
+        })
     }
 
     /// Get the definition as a `CollectionDefinition`. Panics if not a collection.
@@ -457,6 +496,7 @@ pub struct ServiceContextBuilder<'a> {
     event_queue: Option<EventQueue>,
     verification_queue: Option<VerificationQueue>,
     invalidation_transport: Option<SharedInvalidationTransport>,
+    locale_config: Option<&'a LocaleConfig>,
 }
 
 impl<'a> ServiceContextBuilder<'a> {
@@ -477,6 +517,7 @@ impl<'a> ServiceContextBuilder<'a> {
             event_queue: None,
             verification_queue: None,
             invalidation_transport: None,
+            locale_config: None,
         }
     }
 
@@ -549,8 +590,12 @@ impl<'a> ServiceContextBuilder<'a> {
 
     /// Apply infrastructure from a `LuaCrudInfra` bundle (event transport,
     /// cache, event queue, verification queue). Used by Lua CRUD functions
-    /// to transfer the parent's infrastructure in a single call.
-    pub fn lua_infra(mut self, infra: &crate::hooks::LuaCrudInfra) -> Self {
+    /// to transfer the parent's infrastructure in a single call. Optional
+    /// shape mirrors the other per-context attachments so callers can pass
+    /// the result of `hook_lua_infra(lua).as_ref()` directly without an
+    /// `if let` wrapper.
+    pub fn lua_infra(mut self, infra: Option<&crate::hooks::LuaCrudInfra>) -> Self {
+        let Some(infra) = infra else { return self };
         if infra.event_transport.is_some() {
             self.event_transport = infra.event_transport.clone();
         }
@@ -573,6 +618,19 @@ impl<'a> ServiceContextBuilder<'a> {
         self
     }
 
+    /// Attach the locale configuration. Required for write paths
+    /// (`unpublish_document`, `persist_unpublish`) on collections with
+    /// localized fields when locales are enabled — without it, the raw
+    /// SELECT inside the read step misses the `__en` / `__de` suffixes
+    /// and fails with `no such column`. Optional shape mirrors the other
+    /// per-context attachments (`cache`, `event_transport`, …) so callers
+    /// can forward `ctx.locale_config` straight into a child builder
+    /// without an `if let`.
+    pub fn locale_config(mut self, config: Option<&'a LocaleConfig>) -> Self {
+        self.locale_config = config;
+        self
+    }
+
     pub fn build(self) -> ServiceContext<'a> {
         ServiceContext {
             pool: self.pool,
@@ -590,6 +648,7 @@ impl<'a> ServiceContextBuilder<'a> {
             invalidation_transport: self.invalidation_transport,
             slug: self.slug,
             def: self.def,
+            locale_config: self.locale_config,
         }
     }
 }

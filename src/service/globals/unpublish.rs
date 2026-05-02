@@ -47,7 +47,14 @@ pub fn unpublish_global_document(ctx: &ServiceContext) -> Result<Document> {
 
     let gtable = global_table(ctx.slug);
 
-    let doc = query::get_global(&tx, ctx.slug, def, None)?;
+    // Same locale-aware read fix as the collection unpublish path: when the
+    // global has localized fields and locales are enabled, the fallback in
+    // `get_global` emits bare column names (`title`) instead of locale-
+    // suffixed ones (`title__en`), failing with `no such column`. Build a
+    // default LocaleContext from the attached config to fetch all locales.
+    let locale_ctx = ctx.default_locale_ctx();
+
+    let doc = query::get_global(&tx, ctx.slug, def, locale_ctx.as_ref())?;
 
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(doc.fields.clone())
