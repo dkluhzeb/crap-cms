@@ -179,6 +179,14 @@ pub fn validate_template_name(name: &str) -> Result<(), String> {
             "template name `{name}` must not start with `/` (use a path relative to templates/)"
         ));
     }
+    if name.ends_with('/') {
+        return Err(format!("template name `{name}` must not end with `/`"));
+    }
+    if name.contains("//") {
+        return Err(format!(
+            "template name `{name}` must not contain empty path segments (`//`)"
+        ));
+    }
     if name
         .split('/')
         .any(|segment| segment == ".." || segment == ".")
@@ -254,6 +262,9 @@ mod tests {
         for bad in [
             "",                     // empty
             "/fields/rating",       // absolute
+            "fields/rating/",       // trailing slash
+            "fields//rating",       // empty segment
+            "fields/",              // bare trailing slash
             "../../etc/passwd",     // traversal
             "fields/../leaked",     // mid-path traversal
             "fields/./rating",      // current-dir
@@ -261,6 +272,9 @@ mod tests {
             "fields/with;semi",     // shell metachar
             "fields/with$var",      // dollar
             "fields/with\nnewline", // newline
+            "fields/with\0null",    // NULL byte
+            "fields/with\\back",    // backslash
+            "fields/with%enc",      // percent (encode-attack vector)
         ] {
             assert!(
                 validate_template_name(bad).is_err(),

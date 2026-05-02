@@ -306,7 +306,7 @@ Declare `rating` as a `number` field with `min = 1`, `max = 5`,
 and point it at a custom render template via `admin.template`:
 
 ```lua
-crap.collections.register("products", {
+crap.collections.define("products", {
   fields = {
     crap.fields.text({ name = "name", required = true }),
     crap.fields.number({
@@ -331,7 +331,7 @@ Drop the per-field template at
 
 ```hbs
 {{#> partials/field}}
-  <crap-rating
+  <crap-stars
     name="{{name}}"
     value="{{value}}"
     data-min="{{min}}"
@@ -339,11 +339,11 @@ Drop the per-field template at
     data-icon="{{extra.icon}}"
     data-empty-icon="{{extra.empty_icon}}"
     data-color="{{extra.color}}"
-  ></crap-rating>
+  ></crap-stars>
 {{/partials/field}}
 ```
 
-Register a `<crap-rating>` Web Component via `custom.js`:
+Register a `<crap-stars>` Web Component via `custom.js`:
 
 ```js
 // <config_dir>/static/components/custom.js
@@ -352,12 +352,12 @@ import './rating.js';
 
 ```js
 // <config_dir>/static/components/rating.js
-class CrapRating extends HTMLElement {
+class CrapStars extends HTMLElement {
   // ... render N clickable stars (where N = data-max), write value
   // back to a hidden input, fire crap:change for <crap-dirty-form>
   // integration.
 }
-customElements.define('crap-rating', CrapRating);
+customElements.define('crap-stars', CrapStars);
 ```
 
 **How this works**:
@@ -418,12 +418,12 @@ crap.fields.json({ name = "rating" })
 ```
 
 The data is opaque to crap-cms. Override
-`templates/fields/json.hbs` (globally) to insert your `<crap-rating>`
+`templates/fields/json.hbs` (globally) to insert your `<crap-stars>`
 component when the field name matches:
 
 ```hbs
 {{#if (eq name "rating")}}
-  <crap-rating ...></crap-rating>
+  <crap-stars ...></crap-stars>
 {{else}}
   {{!-- original json textarea --}}
 {{/if}}

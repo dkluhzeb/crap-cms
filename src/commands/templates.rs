@@ -583,11 +583,21 @@ const PREFIX_LAYOUT_MOVES: &[(&str, &str, &str)] = &[
 /// user-original file at e.g. `templates/pages/custom/foo.hbs` is on
 /// the current layout (just user-original), not "unknown."
 const CURRENT_LAYOUT_PREFIXES: &[(&str, &str)] = &[
-    // Templates: each top-level current-layout dir.
+    // Templates: each top-level current-layout dir. Includes both the
+    // shipped page-family folders (auth/, collections/, dashboard/,
+    // errors/, globals/) — Phase E was a research-driven no-op, so
+    // these stay flat instead of moving under `pages/` — and the
+    // reserved-but-empty slot for filesystem-routed custom pages
+    // (`pages/`, used by `/admin/p/<slug>` rendering).
     ("templates", "layout/"),
     ("templates", "pages/"),
     ("templates", "partials/"),
     ("templates", "fields/"),
+    ("templates", "auth/"),
+    ("templates", "collections/"),
+    ("templates", "dashboard/"),
+    ("templates", "errors/"),
+    ("templates", "globals/"),
     ("templates", "slots/"),
     ("templates", "email/"),
     // Static: each top-level current-layout dir.
@@ -873,6 +883,16 @@ mod tests {
             ("templates", "pages/dashboard/index.hbs", true),
             ("templates", "slots/dashboard_widgets/foo.hbs", true),
             ("templates", "email/reset-password.hbs", true),
+            // Page-family folders (no `pages/` umbrella per Phase E
+            // research): auth, collections, dashboard, errors, globals
+            // all stay flat as siblings of layout/, partials/, etc.
+            // User-original files at these paths (e.g. an extra
+            // `templates/auth/banner.hbs`) must NOT be flagged Unknown.
+            ("templates", "auth/banner.hbs", true),
+            ("templates", "collections/items_table_extra.hbs", true),
+            ("templates", "dashboard/welcome.hbs", true),
+            ("templates", "errors/maintenance.hbs", true),
+            ("templates", "globals/extras.hbs", true),
             ("static", "totally-bespoke.css", false),
             ("templates", "totally-bespoke.hbs", false),
         ];

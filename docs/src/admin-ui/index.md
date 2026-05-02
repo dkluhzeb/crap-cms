@@ -35,7 +35,7 @@ one-off customizations only need one of these.
 |---|---|---|
 | **Add** content at a defined extension point (extra dashboard widget, extra metadata tag, extra sidebar entry) | **slot** | drop `.hbs` files into `templates/slots/<name>/` |
 | **Replace** a markup chunk reused in multiple places (logo, meta tags, icon-font link) | **partial** | drop a same-named file at `templates/partials/<name>.hbs` |
-| **Replace** a single text value (site name) | **config field** | set `[admin] foo = "..."` in `crap.toml`, render via `{{crap.foo}}` |
+| **Replace** the brand wordmark / page `<title>` | **config field** | set `[admin] site_name = "Acme"` in `crap.toml`; rendered via `{{crap.site_name}}` in templates. (Adding new top-level config fields requires a Rust patch — `[admin]` is a typed struct.) |
 | **Replace** **one field instance's** rendering (rating, color picker, custom widget) | **`admin.template` + `admin.extra`** | declare the per-field path + config in the field's `admin = {…}` block; drop the template at the named path |
 | **Replace** a CSS rule or token (brand colors, spacing) | drop CSS | `static/styles/themes/themes-<name>.css` (or override `static/styles/parts/<name>.css`) |
 | **Replace** an entire page template (collections list, dashboard) | drop HBS | drop a same-named file at `templates/<page>.hbs` |

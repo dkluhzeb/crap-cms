@@ -1,7 +1,9 @@
 {{!--
   Rating field rendering — a 1..5 (or 1..max) star widget powered by
   the `<crap-stars>` web component shipped at
-  `static/components/crap-stars.js`.
+  `example/static/components/crap-stars.js` (loaded via the
+  `body_end_scripts` slot — see
+  `example/templates/slots/body_end_scripts/rating.hbs`).
 
   Selected per-field via Lua `admin.template = "fields/rating"` (see
   `plugins/rating.lua`). Lua `admin.extra` flattens to the

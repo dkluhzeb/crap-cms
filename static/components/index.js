@@ -14,12 +14,13 @@
  * - `_internal/` holds plumbing modules (`h`, `css`, `i18n`, helpers,
  *   `util/`). Underscore-prefix marks the namespace as framework-
  *   reserved; not part of the override contract.
- * - `custom.js` is an auto-imported user seam — drop one at
- *   `<config_dir>/static/components/custom.js` to register bespoke
- *   components without forking `index.js`. Most "extend a built-in
- *   component" goals are better solved by listening to its public
- *   event in capture phase from `custom.js` than by replacing the
- *   component file.
+ * - `custom.js` is an auto-imported user seam. The default ships
+ *   empty (so fresh installs don't 404 on every page render); drop a
+ *   replacement at `<config_dir>/static/components/custom.js` to
+ *   register bespoke components without forking `index.js`. Most
+ *   "extend a built-in component" goals are better solved by
+ *   listening to its public event in capture phase from `custom.js`
+ *   than by replacing the component file.
  *
  * @module index
  * @stability internal
