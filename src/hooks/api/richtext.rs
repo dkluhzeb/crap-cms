@@ -1,6 +1,6 @@
 //! Registers `crap.richtext` — custom ProseMirror node registration and rendering.
 
-use mlua::{Error::RuntimeError, Function, Lua, Table, Value};
+use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
@@ -12,7 +12,7 @@ use crate::core::{
 
 /// Validates that a node name is non-empty and contains only alphanumeric characters
 /// and underscores.
-fn validate_node_name(name: &str) -> mlua::Result<()> {
+fn validate_node_name(name: &str) -> LuaResult<()> {
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(RuntimeError(format!(
             "Invalid node name '{}': must be non-empty and contain only alphanumeric characters and underscores",
@@ -25,7 +25,7 @@ fn validate_node_name(name: &str) -> mlua::Result<()> {
 
 /// Parses the `attrs` table from a node spec, validates that all types are scalar,
 /// and warns on irrelevant features.
-fn parse_node_attrs(lua: &Lua, name: &str, spec: &Table) -> mlua::Result<Vec<FieldDefinition>> {
+fn parse_node_attrs(lua: &Lua, name: &str, spec: &Table) -> LuaResult<Vec<FieldDefinition>> {
     let attrs_tbl = match spec.get::<Table>("attrs") {
         Ok(tbl) => tbl,
         Err(_) => return Ok(Vec::new()),
@@ -56,7 +56,7 @@ fn parse_searchable_attrs(
     name: &str,
     attrs: &[FieldDefinition],
     spec: &Table,
-) -> mlua::Result<Vec<String>> {
+) -> LuaResult<Vec<String>> {
     let searchable_attrs: Vec<String> = match spec.get::<Table>("searchable_attrs") {
         Ok(sa_tbl) => sa_tbl
             .sequence_values::<String>()
@@ -90,7 +90,7 @@ fn store_node_in_lua(
     inline: bool,
     has_render: bool,
     spec: &Table,
-) -> mlua::Result<()> {
+) -> LuaResult<()> {
     let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
 
     let node_entry = lua.create_table()?;
@@ -109,12 +109,7 @@ fn store_node_in_lua(
 
 /// Handles the `crap.richtext.register_node(name, spec)` call — validates input,
 /// parses attrs, and stores the node definition in both Lua and Rust registries.
-fn register_node(
-    lua: &Lua,
-    registry: &SharedRegistry,
-    name: String,
-    spec: Table,
-) -> mlua::Result<()> {
+fn register_node(lua: &Lua, registry: &SharedRegistry, name: String, spec: Table) -> LuaResult<()> {
     validate_node_name(&name)?;
 
     let label: String = spec.get::<String>("label").unwrap_or_else(|_| name.clone());
@@ -146,7 +141,7 @@ fn register_node(
 
 /// Renders richtext content (JSON or HTML) to HTML, invoking Lua render functions
 /// for custom nodes.
-fn render(lua: &Lua, content: String) -> mlua::Result<String> {
+fn render(lua: &Lua, content: String) -> LuaResult<String> {
     let content = content.trim();
 
     if content.is_empty() {

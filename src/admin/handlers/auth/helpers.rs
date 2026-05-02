@@ -151,11 +151,7 @@ pub(in crate::admin::handlers) fn show_forgot_password(state: &AdminState) -> bo
         .any(|def| def.auth.as_ref().is_some_and(|a| a.forgot_password))
 }
 
-pub(in crate::admin::handlers) fn get_auth_collections(
-    state: &AdminState,
-) -> Vec<crate::admin::context::page::auth::AuthCollection> {
-    use crate::admin::context::page::auth::AuthCollection;
-
+pub(in crate::admin::handlers) fn get_auth_collections(state: &AdminState) -> Vec<AuthCollection> {
     let mut collections: Vec<AuthCollection> = state
         .registry
         .collections

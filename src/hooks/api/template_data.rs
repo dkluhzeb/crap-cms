@@ -22,7 +22,7 @@
 //! request thanks to the per-request VM acquisition.
 
 use anyhow::Result;
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Function, Lua, Result as LuaResult, Table, Value};
 
 /// Named registry value that holds the `name → Function` map.
 pub(crate) const TEMPLATE_DATA_KEY: &str = "_crap_template_data";
@@ -49,12 +49,12 @@ pub(super) fn register_template_data(lua: &Lua, crap: &Table) -> Result<()> {
     Ok(())
 }
 
-fn register_template_data_fn(lua: &Lua, name: &str, func: Function) -> mlua::Result<()> {
+fn register_template_data_fn(lua: &Lua, name: &str, func: Function) -> LuaResult<()> {
     let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY)?;
     table.set(name, func)
 }
 
-fn list_template_data(lua: &Lua) -> mlua::Result<Table> {
+fn list_template_data(lua: &Lua) -> LuaResult<Table> {
     let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY)?;
     let names = lua.create_table()?;
     let mut i = 1;

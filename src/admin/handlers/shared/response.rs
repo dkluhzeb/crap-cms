@@ -5,7 +5,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Value, json, to_value};
 use tracing::error;
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
 /// This is the seam between typed Rust page contexts and the JSON-shaped
 /// world the Lua hook + Handlebars renderer operate in.
 pub fn render_page<T: Serialize>(state: &AdminState, template: &str, ctx: &T) -> Response {
-    let data = serde_json::to_value(ctx).expect("admin page context serializes infallibly");
+    let data = to_value(ctx).expect("admin page context serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(state, template, &data)
@@ -41,7 +41,7 @@ pub fn forbidden(state: &AdminState, message: &str) -> Response {
         message: message.to_string(),
     };
 
-    let data = serde_json::to_value(&ctx).expect("ErrorPage serializes infallibly");
+    let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/403", &data) {
@@ -135,7 +135,7 @@ pub fn page_with_toast<T: Serialize>(
     ctx: &T,
     toast: &str,
 ) -> Response {
-    let data = serde_json::to_value(ctx).expect("page context serializes infallibly");
+    let data = to_value(ctx).expect("page context serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     html_with_toast(state, template, &data, toast)
@@ -203,7 +203,7 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
         message: message.to_string(),
     };
 
-    let data = serde_json::to_value(&ctx).expect("ErrorPage serializes infallibly");
+    let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/404", &data) {
@@ -226,7 +226,7 @@ pub fn server_error(state: &AdminState, message: &str) -> Response {
         message: message.to_string(),
     };
 
-    let data = serde_json::to_value(&ctx).expect("ErrorPage serializes infallibly");
+    let data = to_value(&ctx).expect("ErrorPage serializes infallibly");
     let data = state.hook_runner.run_before_render(data);
 
     let html = match state.render("errors/500", &data) {

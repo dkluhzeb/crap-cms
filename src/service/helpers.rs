@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
+    core::{Document, FieldDefinition, FieldType, collection::Hooks},
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
@@ -66,8 +66,6 @@ pub(crate) fn collect_api_hidden_field_names(
     fields: &[FieldDefinition],
     prefix: &str,
 ) -> Vec<String> {
-    use crate::core::FieldType;
-
     let mut hidden = Vec::new();
 
     for field in fields {

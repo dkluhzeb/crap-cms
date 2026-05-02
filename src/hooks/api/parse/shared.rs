@@ -6,7 +6,9 @@ use tracing::warn;
 
 use crate::core::{
     FieldDefinition,
-    collection::{Access, Hooks, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig},
+    collection::{
+        Access, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig,
+    },
 };
 
 use super::{fields::parse_fields, helpers::*};
@@ -178,11 +180,7 @@ pub(super) fn parse_versions_config(config: &Table) -> LuaResult<Option<Versions
 }
 
 /// Parse `indexes` from a collection Lua table.
-pub(super) fn parse_indexes(
-    config: &Table,
-) -> LuaResult<Vec<crate::core::collection::IndexDefinition>> {
-    use crate::core::collection::IndexDefinition;
-
+pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
     let Ok(tbl) = get_table(config, "indexes") else {
         return Ok(Vec::new());
     };

@@ -9,9 +9,10 @@ use serde_json::{Value, from_str};
 use crate::{
     admin::{
         context::field::{
-            ArrayField, ArrayRow, BlockRow, BlocksField, CheckboxField, ChoiceField, DateField,
-            FieldContext, GroupField, NumberField, RelationshipField, RowField, SelectOption,
-            TabPanel, TabsField, TextField, TimezoneOption, UploadField,
+            ArrayField, ArrayRow, BlockDefinition as BlockDefinitionContext, BlockRow, BlocksField,
+            CheckboxField, ChoiceField, ConditionData, DateField, FieldContext, GroupField,
+            NumberField, RelationshipField, RowField, SelectOption, TabPanel, TabsField, TextField,
+            TimezoneOption, UploadField, ValidationAttrs,
         },
         handlers::{
             field_context::{
@@ -27,7 +28,7 @@ use crate::{
         },
     },
     core::{
-        field::{FieldDefinition, FieldType},
+        field::{BlockDefinition, FieldDefinition, FieldTab, FieldType},
         timezone::TIMEZONE_OPTIONS,
     },
     db::query::helpers::utc_to_local,
@@ -345,10 +346,10 @@ fn build_nested_blocks_row(
 
 /// Build a single typed block definition for the template.
 fn build_block_def_template(
-    bd: &crate::core::field::BlockDefinition,
+    bd: &BlockDefinition,
     indexed_name: &str,
     opts: &SubFieldOpts,
-) -> crate::admin::context::field::BlockDefinition {
+) -> BlockDefinitionContext {
     let template_prefix = format!("{}[__INDEX__]", indexed_name);
 
     let block_fields: Vec<FieldContext> = bd
@@ -372,7 +373,7 @@ fn build_block_def_template(
         .map(|ls| ls.resolve_default().to_string())
         .unwrap_or_else(|| bd.block_type.clone());
 
-    crate::admin::context::field::BlockDefinition {
+    BlockDefinitionContext {
         block_type: bd.block_type.clone(),
         label,
         fields: block_fields,
@@ -509,8 +510,8 @@ fn build_group_child(
         template: nested_sf.admin.template.clone(),
         extra: nested_sf.admin.extra.clone(),
         error: opts.errors.get(nested_name).cloned(),
-        validation: crate::admin::context::field::ValidationAttrs::default(),
-        condition: crate::admin::context::field::ConditionData::default(),
+        validation: ValidationAttrs::default(),
+        condition: ConditionData::default(),
     };
 
     if opts.depth + 1 >= super::super::MAX_FIELD_DEPTH {
@@ -722,7 +723,7 @@ pub(super) fn sub_row_collapsible_group(
 
 /// Build a single typed [`TabPanel`] with sub_fields and error count.
 fn build_tab_context(
-    tab: &crate::core::field::FieldTab,
+    tab: &FieldTab,
     raw_value: Option<&Value>,
     indexed_name: &str,
     opts: &SubFieldOpts,

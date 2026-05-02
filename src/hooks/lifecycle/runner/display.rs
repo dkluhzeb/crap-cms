@@ -2,15 +2,21 @@
 
 use std::collections::HashMap;
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Function, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
-use crate::hooks::{
-    HookRunner, api,
-    lifecycle::{
-        execution::{call_display_condition_with_lua, has_registered_hooks, resolve_hook_function},
-        types::DisplayConditionResult,
+use crate::{
+    admin::custom_pages::CustomPage,
+    hooks::{
+        HookRunner, api,
+        api::pages::PAGES_KEY,
+        lifecycle::{
+            execution::{
+                call_display_condition_with_lua, has_registered_hooks, resolve_hook_function,
+            },
+            types::DisplayConditionResult,
+        },
     },
 };
 
@@ -120,16 +126,12 @@ impl HookRunner {
     ///
     /// Returns an empty Vec if Lua isn't available or no pages are
     /// registered.
-    pub fn extract_custom_pages(&self) -> Vec<crate::admin::custom_pages::CustomPage> {
-        use crate::admin::custom_pages::CustomPage;
-
+    pub fn extract_custom_pages(&self) -> Vec<CustomPage> {
         let Ok(lua) = self.pool.acquire() else {
             return Vec::new();
         };
 
-        let Ok(pages_table): mlua::Result<Table> =
-            lua.named_registry_value(crate::hooks::api::pages::PAGES_KEY)
-        else {
+        let Ok(pages_table): LuaResult<Table> = lua.named_registry_value(PAGES_KEY) else {
             return Vec::new();
         };
 

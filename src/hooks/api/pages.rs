@@ -19,7 +19,7 @@
 //! separate "page data" concept.
 
 use anyhow::Result;
-use mlua::{Lua, Table, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 /// Named registry value that holds the `slug → page-table` map.
 pub(crate) const PAGES_KEY: &str = "_crap_custom_pages";
@@ -41,9 +41,9 @@ pub(super) fn register_pages(lua: &Lua, crap: &Table) -> Result<()> {
     Ok(())
 }
 
-fn register_page(lua: &Lua, slug: &str, opts: Table) -> mlua::Result<()> {
+fn register_page(lua: &Lua, slug: &str, opts: Table) -> LuaResult<()> {
     if !is_valid_slug(slug) {
-        return Err(mlua::Error::RuntimeError(format!(
+        return Err(RuntimeError(format!(
             "crap.pages.register: invalid slug {slug:?} (use a-z, 0-9, '-', '_')"
         )));
     }
@@ -53,7 +53,7 @@ fn register_page(lua: &Lua, slug: &str, opts: Table) -> mlua::Result<()> {
     Ok(())
 }
 
-fn list_pages(lua: &Lua) -> mlua::Result<Table> {
+fn list_pages(lua: &Lua) -> LuaResult<Table> {
     let pages: Table = lua.named_registry_value(PAGES_KEY)?;
     let names = lua.create_table()?;
     let mut i = 1;

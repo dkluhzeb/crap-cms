@@ -26,7 +26,8 @@ use crate::{
     },
     core::{
         Document,
-        field::{FieldDefinition, FieldType, to_title_case},
+        collection::CollectionDefinition,
+        field::{BlockDefinition, FieldDefinition, FieldType, to_title_case},
         registry::Registry,
         upload,
     },
@@ -68,7 +69,7 @@ fn doc_to_label_item(doc: &Document, title_field: &Option<String>) -> Relationsh
 fn resolve_has_many_items(
     ids: &[String],
     collection: &str,
-    related_def: &crate::core::collection::CollectionDefinition,
+    related_def: &CollectionDefinition,
     title_field: &Option<String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
@@ -89,7 +90,7 @@ fn resolve_has_many_items(
 fn resolve_has_one_item(
     current_value: &str,
     collection: &str,
-    related_def: &crate::core::collection::CollectionDefinition,
+    related_def: &CollectionDefinition,
     title_field: &Option<String>,
     conn: &dyn DbConnection,
     rel_locale_ctx: Option<&LocaleContext>,
@@ -279,7 +280,7 @@ pub(super) fn enrich_array(
 /// Assemble sizes and build a typed upload item for a document.
 fn prepare_upload_doc(
     mut doc: Document,
-    related_def: &crate::core::collection::CollectionDefinition,
+    related_def: &CollectionDefinition,
     title_field: &Option<String>,
     admin_thumbnail: &Option<String>,
     include_filename: bool,
@@ -299,7 +300,7 @@ fn prepare_upload_doc(
 fn resolve_upload_has_many(
     ids: &[String],
     collection: &str,
-    related_def: &crate::core::collection::CollectionDefinition,
+    related_def: &CollectionDefinition,
     title_field: &Option<String>,
     admin_thumbnail: &Option<String>,
     conn: &dyn DbConnection,
@@ -323,7 +324,7 @@ fn resolve_upload_has_many(
 fn resolve_upload_has_one(
     uf: &mut UploadField,
     collection: &str,
-    related_def: &crate::core::collection::CollectionDefinition,
+    related_def: &CollectionDefinition,
     title_field: &Option<String>,
     admin_thumbnail: &Option<String>,
     conn: &dyn DbConnection,
@@ -445,7 +446,7 @@ pub(super) fn build_upload_item(
 
 /// Build typed sub-field contexts for a single blocks row.
 fn build_blocks_row_sub_fields(
-    block_def: &crate::core::field::BlockDefinition,
+    block_def: &BlockDefinition,
     row: &Value,
     field_name: &str,
     idx: usize,

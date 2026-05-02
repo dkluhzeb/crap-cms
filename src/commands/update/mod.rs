@@ -15,12 +15,17 @@ pub mod github;
 pub mod platform;
 pub mod store;
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use clap::{CommandFactory, Subcommand};
 use clap_complete::Shell;
+use dialoguer::Confirm;
 use semver::Version;
-use std::path::PathBuf;
 
 use crate::cli;
 
@@ -270,7 +275,7 @@ fn run_install(version: &str, reinstall: bool, force: bool) -> Result<()> {
 /// Tiny scoped tempdir — we don't depend on the `tempfile` crate at runtime.
 /// Cleans up on drop (best-effort).
 struct ScratchDir {
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 impl ScratchDir {
@@ -278,17 +283,17 @@ impl ScratchDir {
         let base = std::env::temp_dir();
         let suffix = nanoid::nanoid!(12);
         let dir = base.join(format!("crap-cms-update-{}-{suffix}", std::process::id()));
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(Self { path: dir })
     }
-    fn path(&self) -> &std::path::Path {
+    fn path(&self) -> &Path {
         &self.path
     }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -330,8 +335,7 @@ fn run_where() -> Result<()> {
             link.display()
         );
     }
-    let resolved =
-        std::fs::read_link(&link).with_context(|| format!("reading {}", link.display()))?;
+    let resolved = fs::read_link(&link).with_context(|| format!("reading {}", link.display()))?;
     println!("{}", resolved.display());
     Ok(())
 }
@@ -418,7 +422,7 @@ fn ensure_self_managed(store: &store::Store, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn looks_distro_managed(path: &std::path::Path) -> bool {
+fn looks_distro_managed(path: &Path) -> bool {
     let s = path.to_string_lossy();
     s.starts_with("/usr/")
         || s.starts_with("/opt/")
@@ -429,7 +433,7 @@ fn looks_distro_managed(path: &std::path::Path) -> bool {
 
 /// Resolve the first `crap-cms` executable on `$PATH`, matching what the user's
 /// shell would pick when they type `crap-cms`.
-fn resolve_on_path(name: &str) -> Option<std::path::PathBuf> {
+fn resolve_on_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
@@ -439,7 +443,7 @@ fn resolve_on_path(name: &str) -> Option<std::path::PathBuf> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&candidate)
+            if let Ok(meta) = fs::metadata(&candidate)
                 && meta.permissions().mode() & 0o111 != 0
             {
                 return Some(candidate);
@@ -491,7 +495,6 @@ fn warn_if_path_misaligned(store: &store::Store) {
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
-    use dialoguer::Confirm;
     Ok(Confirm::with_theme(&crate::cli::crap_theme())
         .with_prompt(prompt)
         .default(true)
@@ -540,24 +543,20 @@ mod tests {
 
     #[test]
     fn looks_distro_managed_recognises_system_paths() {
-        assert!(looks_distro_managed(std::path::Path::new(
-            "/usr/bin/crap-cms"
-        )));
-        assert!(looks_distro_managed(std::path::Path::new(
+        assert!(looks_distro_managed(Path::new("/usr/bin/crap-cms")));
+        assert!(looks_distro_managed(Path::new(
             "/opt/crap-cms/bin/crap-cms"
         )));
-        assert!(looks_distro_managed(std::path::Path::new(
+        assert!(looks_distro_managed(Path::new(
             "/nix/store/abc/bin/crap-cms"
         )));
     }
 
     #[test]
     fn looks_distro_managed_ignores_home_paths() {
-        assert!(!looks_distro_managed(std::path::Path::new(
+        assert!(!looks_distro_managed(Path::new(
             "/home/someone/.local/bin/crap-cms"
         )));
-        assert!(!looks_distro_managed(std::path::Path::new(
-            "/tmp/my-install/crap-cms"
-        )));
+        assert!(!looks_distro_managed(Path::new("/tmp/my-install/crap-cms")));
     }
 }

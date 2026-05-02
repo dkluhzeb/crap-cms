@@ -4,10 +4,12 @@
 use std::os::unix::fs::MetadataExt;
 use std::{
     fs,
+    net::IpAddr,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
+use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -245,10 +247,6 @@ impl CrapConfig {
     /// Also fails on malformed entries so typos are caught at startup
     /// rather than silently disabling protection.
     fn validate_trusted_proxies(&self) -> Result<()> {
-        use std::net::IpAddr;
-
-        use ipnet::IpNet;
-
         if self.server.trust_proxy && self.server.trusted_proxies.is_empty() {
             bail!(
                 "server.trust_proxy is enabled without server.trusted_proxies. \

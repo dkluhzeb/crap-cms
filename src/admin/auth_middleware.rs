@@ -4,12 +4,14 @@ use std::collections::HashMap;
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    extract::State,
+    http::{Request, StatusCode, header::COOKIE},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{Value, to_value};
+use tokio::task::spawn_blocking;
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -20,7 +22,7 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        AuthUser, Registry, Slug,
+        AuthUser, Document, Registry, Slug,
         auth::{self, ClaimsBuilder},
         collection::Auth as CollectionAuth,
     },
@@ -28,9 +30,6 @@ use crate::{
     hooks::HookRunner,
     service::{self, ServiceContext},
 };
-
-use axum::extract::State;
-use axum::http::header::COOKIE;
 
 /// Validate JWT from `crap_session` cookie and optionally load the full user document.
 #[cfg(not(tarpaulin_include))]
@@ -235,10 +234,9 @@ pub(super) async fn auth_middleware(
         let pool = state.pool.clone();
         let hook_runner = state.hook_runner.clone();
 
-        let strategy_result = tokio::task::spawn_blocking(move || {
-            try_strategy_auth(&auth_defs, &headers, &pool, &hook_runner)
-        })
-        .await;
+        let strategy_result =
+            spawn_blocking(move || try_strategy_auth(&auth_defs, &headers, &pool, &hook_runner))
+                .await;
 
         if let Ok(Some(claims)) = strategy_result {
             let auth_user =
@@ -269,7 +267,7 @@ async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<Re
 #[cfg(not(tarpaulin_include))]
 pub(crate) async fn check_admin_gate_for_doc(
     state: &AdminState,
-    user_doc: &crate::core::Document,
+    user_doc: &Document,
 ) -> Option<Response> {
     let access_ref = state.config.admin.access.as_deref()?;
     let pool = state.pool.clone();
@@ -277,7 +275,7 @@ pub(crate) async fn check_admin_gate_for_doc(
     let user_doc = user_doc.clone();
     let access_ref = access_ref.to_string();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let conn = pool.get().ok()?;
         Some(hook_runner.check_access(Some(&access_ref), Some(&user_doc), None, None, &conn))
     })
@@ -297,7 +295,7 @@ pub(crate) async fn check_admin_gate_for_doc(
 /// `before_render` hook (these are last-resort error pages where the hook
 /// would just add noise).
 fn serialize_auth_base(state: &AdminState, page: PageMeta) -> Value {
-    serde_json::to_value(AuthBasePageContext::for_state(state, page))
+    to_value(AuthBasePageContext::for_state(state, page))
         .expect("AuthBasePageContext serializes infallibly")
 }
 

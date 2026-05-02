@@ -8,7 +8,13 @@ use crate::{
     api::handlers::convert::parse_where_json,
     cli::{self, Table},
     core::{CollectionDefinition, SharedRegistry},
-    db::{DbConnection, DbValue, FindQuery, query},
+    db::{
+        DbConnection, DbValue, FindQuery,
+        query::{
+            self,
+            filter::{build_where_clause, resolve_filters},
+        },
+    },
 };
 
 use super::helpers::format_duration;
@@ -172,10 +178,8 @@ fn build_explain_sql(
     conn: &dyn DbConnection,
     slug: &str,
     find_query: &FindQuery,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
 ) -> Result<(String, Vec<DbValue>)> {
-    use crate::db::query::filter::{build_where_clause, resolve_filters};
-
     let resolved = resolve_filters(&find_query.filters, def, None)?;
     let mut params: Vec<DbValue> = Vec::new();
 

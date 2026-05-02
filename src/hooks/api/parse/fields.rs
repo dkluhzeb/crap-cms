@@ -1,5 +1,7 @@
 //! Parsing functions for field definitions from Lua tables.
 
+use std::collections::HashSet;
+
 use anyhow::{Result, anyhow, bail};
 use mlua::{Lua, Table, Value};
 use serde_json::{Number as JsonNumber, Value as JsonValue};
@@ -389,8 +391,6 @@ pub(crate) fn parse_fields(lua: &Lua, fields_tbl: &Table) -> Result<Vec<FieldDef
 
 /// Fail when any two sibling fields (after flattening layout wrappers) share a name.
 fn check_duplicate_field_names(fields: &[FieldDefinition]) -> Result<()> {
-    use std::collections::HashSet;
-
     let mut seen: HashSet<&str> = HashSet::new();
 
     for f in flatten_array_sub_fields(fields) {
