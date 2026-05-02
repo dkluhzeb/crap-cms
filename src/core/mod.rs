@@ -23,7 +23,7 @@ pub use document::Document;
 pub use document_id::DocumentId;
 pub use field::{
     BlockDefinition, FieldAdmin, FieldDefinition, FieldTab, FieldType, LocalizedString,
-    RelationshipConfig, SelectOption,
+    RelationshipConfig, SelectOption, validate_template_name,
 };
 pub use registry::{Registry, SharedRegistry};
 pub use slug::Slug;

@@ -97,6 +97,14 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Opt
         }
         tbl.set("languages", seq)?;
     }
+    if let Some(ref v) = admin.template {
+        tbl.set("template", v.as_str())?;
+    }
+    if !admin.extra.is_empty() {
+        let extra_json = serde_json::Value::Object(admin.extra.clone());
+        let extra_lua = super::json_to_lua(lua, &extra_json)?;
+        tbl.set("extra", extra_lua)?;
+    }
 
     Ok(Some(tbl))
 }

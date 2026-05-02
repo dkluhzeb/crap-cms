@@ -614,7 +614,7 @@ mod tests {
         // Verify it survives re-parse (simulates plugin round-trip)
         let fields_tbl = lua.create_table().unwrap();
         fields_tbl.set(1, tbl).unwrap();
-        let parsed = crate::hooks::api::parse::fields::parse_fields(&fields_tbl).unwrap();
+        let parsed = crate::hooks::api::parse::fields::parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(parsed.len(), 1);
         assert!(
             parsed[0].timezone,

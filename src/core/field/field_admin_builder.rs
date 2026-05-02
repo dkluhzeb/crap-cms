@@ -1,6 +1,7 @@
 //! Builder for [`FieldAdmin`](super::FieldAdmin).
 
 use crate::core::{FieldAdmin, LocalizedString};
+use serde_json::{Map, Value};
 
 /// Builder for [`FieldAdmin`].
 ///
@@ -153,6 +154,32 @@ impl FieldAdminBuilder {
     /// Set whether the field allows vertical resizing (textarea/richtext).
     pub fn resizable(mut self, v: bool) -> Self {
         self.inner.resizable = v;
+        self
+    }
+
+    /// Set a custom template path that overrides the default
+    /// `fields/<field_type>` lookup for this field instance. See
+    /// [`FieldAdmin::template`] for details. The path is **not**
+    /// validated by the builder — call
+    /// [`crate::core::validate_template_name`] before passing user
+    /// input.
+    pub fn template(mut self, v: impl Into<String>) -> Self {
+        self.inner.template = Some(v.into());
+        self
+    }
+
+    /// Set the freeform `extra` map of per-field configuration. See
+    /// [`FieldAdmin::extra`] for details. Replaces any previous extras.
+    pub fn extra(mut self, v: Map<String, Value>) -> Self {
+        self.inner.extra = v;
+        self
+    }
+
+    /// Insert a single key into the freeform `extra` map. Convenience
+    /// over building a full `Map` for the common case of attaching a
+    /// handful of named values.
+    pub fn extra_insert(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.inner.extra.insert(key.into(), value.into());
         self
     }
 

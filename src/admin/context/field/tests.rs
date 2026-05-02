@@ -27,6 +27,8 @@ fn base(name: &str, _field_type_hint: &str) -> BaseFieldData {
         localized: false,
         locale_locked: false,
         position: None,
+        template: None,
+        extra: serde_json::Map::new(),
         error: None,
         validation: ValidationAttrs::default(),
         condition: ConditionData::default(),
@@ -61,6 +63,37 @@ fn base_serializes_all_required_keys() {
     assert!(v.get("min").is_none());
     assert!(v.get("has_min").is_none());
     assert!(v.get("condition_visible").is_none());
+    // Per-field template binding: absent when the field config didn't
+    // set `admin.template` / `admin.extra`.
+    assert!(v.get("template").is_none(), "template absent by default");
+    assert!(v.get("extra").is_none(), "extra absent when empty");
+}
+
+/// `admin.template` / `admin.extra` declared on the field config flatten
+/// to top-level `template` / `extra` keys in the render context, where
+/// `RenderFieldHelper` reads `template` to override the default
+/// `fields/<field_type>` lookup and field templates read `extra.<key>`
+/// for per-field config.
+#[test]
+fn base_template_and_extra_flatten_to_top_level() {
+    let mut b = base("rating", "number");
+    b.template = Some("fields/rating".to_string());
+    b.extra.insert(
+        "color".to_string(),
+        serde_json::Value::String("amber".to_string()),
+    );
+    b.extra
+        .insert("max_stars".to_string(), serde_json::Value::from(5_i64));
+
+    let f = TextField {
+        base: b,
+        has_many: None,
+        tags: None,
+    };
+    let v = serde_json::to_value(FieldContext::Text(f)).unwrap();
+    assert_eq!(v["template"], "fields/rating");
+    assert_eq!(v["extra"]["color"], "amber");
+    assert_eq!(v["extra"]["max_stars"], 5);
 }
 
 #[test]

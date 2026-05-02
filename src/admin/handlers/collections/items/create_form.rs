@@ -77,6 +77,8 @@ fn prepare_create_fields(
                 localized: false,
                 locale_locked: false,
                 position: None,
+                template: None,
+                extra: serde_json::Map::new(),
                 error: None,
                 validation: ValidationAttrs::default(),
                 condition: ConditionData::default(),

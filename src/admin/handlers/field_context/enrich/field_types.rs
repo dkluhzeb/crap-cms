@@ -506,6 +506,8 @@ fn build_group_child(
         localized: nested_sf.localized,
         locale_locked: opts.locale_locked,
         position: nested_sf.admin.position.clone(),
+        template: nested_sf.admin.template.clone(),
+        extra: nested_sf.admin.extra.clone(),
         error: opts.errors.get(nested_name).cloned(),
         validation: crate::admin::context::field::ValidationAttrs::default(),
         condition: crate::admin::context::field::ConditionData::default(),

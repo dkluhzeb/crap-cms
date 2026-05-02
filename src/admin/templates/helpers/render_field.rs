@@ -27,7 +27,18 @@ impl HelperDef for RenderFieldHelper {
             .and_then(|v| v.as_str())
             .unwrap_or("text");
 
-        let template_name = format!("fields/{}", field_type);
+        // Per-instance template binding wins over the type-based default.
+        // `admin.template` (Lua-side) is parsed into `FieldAdmin.template`
+        // and serialized flat into the field render context as `template`
+        // (matching the convention used by `label`, `placeholder`, etc.).
+        // Path safety is enforced at field-parse time via
+        // `validate_template_name`, so any value reaching here has
+        // passed the whitelist.
+        let template_name = field_data
+            .get("template")
+            .and_then(|t| t.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("fields/{}", field_type));
 
         // Inject _locale from parent context so {{t}} works inside field partials
         let render_data = if let Some(locale) = ctx.data().get("_locale") {
@@ -101,6 +112,58 @@ mod tests {
             .render("t", &json!({"ctx": {"name": "untitled"}}))
             .unwrap();
         assert_eq!(result, "DEFAULT_TEXT:untitled");
+    }
+
+    #[test]
+    fn admin_template_overrides_default_type_lookup() {
+        // The rating example: a `number`-typed field opts into a custom
+        // template via Lua-side `admin.template = "fields/rating"`,
+        // which the field-context builder serializes flat as the
+        // top-level `template` key. The helper reads it and skips
+        // the default `fields/number` lookup.
+        let mut hbs = test_hbs();
+        hbs.register_template_string("fields/number", "DEFAULT_NUMBER:{{name}}")
+            .unwrap();
+        hbs.register_template_string("fields/rating", "STARS:{{name}}={{value}}")
+            .unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}")
+            .unwrap();
+        let result = hbs
+            .render(
+                "t",
+                &json!({"ctx": {
+                    "field_type": "number",
+                    "name": "rating",
+                    "value": 4,
+                    "template": "fields/rating",
+                }}),
+            )
+            .unwrap();
+        assert_eq!(result, "STARS:rating=4");
+    }
+
+    #[test]
+    fn admin_template_falls_back_to_text_when_missing() {
+        // If the per-field `template` key points at a template that
+        // doesn't exist (extracted but later renamed, typo, etc.), the
+        // helper logs a warning and falls back to fields/text — same as
+        // the default `fields/<unknown_type>` failure path.
+        let mut hbs = test_hbs();
+        hbs.register_template_string("fields/text", "FALLBACK:{{name}}")
+            .unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}")
+            .unwrap();
+        let result = hbs
+            .render(
+                "t",
+                &json!({"ctx": {
+                    "field_type": "number",
+                    "name": "rating",
+                    "template": "fields/does-not-exist",
+                }}),
+            )
+            .unwrap();
+        assert_eq!(result, "FALLBACK:rating");
     }
 
     #[test]

@@ -25,13 +25,13 @@ fn validate_node_name(name: &str) -> mlua::Result<()> {
 
 /// Parses the `attrs` table from a node spec, validates that all types are scalar,
 /// and warns on irrelevant features.
-fn parse_node_attrs(name: &str, spec: &Table) -> mlua::Result<Vec<FieldDefinition>> {
+fn parse_node_attrs(lua: &Lua, name: &str, spec: &Table) -> mlua::Result<Vec<FieldDefinition>> {
     let attrs_tbl = match spec.get::<Table>("attrs") {
         Ok(tbl) => tbl,
         Err(_) => return Ok(Vec::new()),
     };
 
-    let fields = parse_fields(&attrs_tbl)
+    let fields = parse_fields(lua, &attrs_tbl)
         .map_err(|e| RuntimeError(format!("Invalid node attrs: {:#}", e)))?;
 
     for f in &fields {
@@ -119,7 +119,7 @@ fn register_node(
 
     let label: String = spec.get::<String>("label").unwrap_or_else(|_| name.clone());
     let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
-    let attrs = parse_node_attrs(&name, &spec)?;
+    let attrs = parse_node_attrs(lua, &name, &spec)?;
     let searchable_attrs = parse_searchable_attrs(&name, &attrs, &spec)?;
 
     let has_render = spec

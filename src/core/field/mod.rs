@@ -11,7 +11,7 @@ mod relationship;
 mod select_option;
 
 pub use block_definition::{BlockDefinition, FieldTab};
-pub use field_admin::FieldAdmin;
+pub use field_admin::{FieldAdmin, validate_template_name};
 pub use field_admin_builder::FieldAdminBuilder;
 pub use field_definition::{
     FieldAccess, FieldDefinition, FieldHooks, McpFieldConfig, flatten_array_sub_fields,

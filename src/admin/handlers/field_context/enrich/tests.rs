@@ -245,6 +245,68 @@ fn enriched_sub_field_nested_blocks_populates_rows() {
     assert_eq!(block_defs.len(), 1);
 }
 
+/// Per-field `admin.template` + `admin.extra` survive the nested-field
+/// enrichment path. Builds a deeply-nested rating field — group → array
+/// → number with `admin.template = "fields/rating"` — and verifies the
+/// enriched sub-field context still carries `template` and `extra` at
+/// the top level so `RenderFieldHelper` can route it.
+#[test]
+fn enriched_sub_field_preserves_admin_template_and_extra_when_nested() {
+    use crate::core::field::FieldAdminBuilder;
+
+    // The actual rating field: a number with admin.template + admin.extra.
+    let mut rating = make_field("rating", FieldType::Number);
+    rating.admin = FieldAdminBuilder::new()
+        .template("fields/rating")
+        .extra_insert("color", "amber")
+        .extra_insert("max_stars", 5_i64)
+        .build();
+
+    // Wrap it in an array (so it's a nested sub-field), then in a group
+    // (so we hit the deepest enrichment path).
+    let mut reviews_array = make_field("reviews", FieldType::Array);
+    reviews_array.fields = vec![rating];
+    let mut outer_group = make_field("section", FieldType::Group);
+    outer_group.fields = vec![reviews_array];
+
+    let raw_value = json!({
+        "reviews": [
+            { "rating": "4" },
+            { "rating": "5" },
+        ],
+    });
+
+    let ctx = build_enriched_sub_field_context(
+        &outer_group,
+        Some(&raw_value),
+        "items",
+        0,
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+    );
+
+    // group → array → row[0] → rating
+    let group_subs = ctx["sub_fields"].as_array().unwrap();
+    let arr = &group_subs[0];
+    assert_eq!(arr["field_type"], "array");
+    let rows = arr["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "two array rows from raw_value");
+
+    for (i, row) in rows.iter().enumerate() {
+        let row_fields = row["sub_fields"].as_array().unwrap();
+        let rating_ctx = &row_fields[0];
+        assert_eq!(rating_ctx["field_name"], "rating", "row {i}");
+        assert_eq!(
+            rating_ctx["template"], "fields/rating",
+            "row {i}: template must survive nested enrichment so RenderFieldHelper picks it up",
+        );
+        assert_eq!(
+            rating_ctx["extra"]["color"], "amber",
+            "row {i}: extra.color must survive nested enrichment",
+        );
+        assert_eq!(rating_ctx["extra"]["max_stars"], 5, "row {i}");
+    }
+}
+
 #[test]
 fn enriched_sub_field_nested_group_populates_values() {
     let mut inner_group = make_field("meta", FieldType::Group);

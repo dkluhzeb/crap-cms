@@ -123,6 +123,8 @@ fn build_child_base(
         localized: child.localized,
         locale_locked,
         position: child.admin.position.clone(),
+        template: child.admin.template.clone(),
+        extra: child.admin.extra.clone(),
         error: errors.get(child_name).cloned(),
         validation: ValidationAttrs::default(),
         condition: ConditionData::default(),

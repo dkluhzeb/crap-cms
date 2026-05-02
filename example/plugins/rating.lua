@@ -1,15 +1,15 @@
 --- Rating field plugin: a 1..5 star widget built on top of the stock
---- `crap.fields.number` — no Rust changes, no custom field-type
---- registry. The "custom-ness" comes from three pieces of glue, all
---- using existing functionality:
+--- `crap.fields.number`. Three pieces of glue, all using shipped
+--- mechanisms — no Rust changes, no fragile global template overrides:
 ---
 ---   1. A wrapper function that returns a pre-configured number field
----      (this file).
+---      with `admin.template = "fields/rating"` (this file).
 ---   2. A field-level `before_validate` hook that enforces 1..5 integer
 ---      semantics (`hooks/validate_rating.lua`).
----   3. A template overlay (`templates/fields/number.hbs`) that branches
----      on `name == "rating"` to render `<crap-stars>` instead of the
----      standard number input.
+---   3. A per-field template at `templates/fields/rating.hbs` that
+---      renders `<crap-stars>` instead of a plain number input — invoked
+---      ONLY for fields opted in via `admin.template`, so it doesn't
+---      affect any other `number` fields.
 ---
 --- Use it in a collection like:
 ---
@@ -22,9 +22,11 @@
 ---     },
 ---   })
 ---
---- Naming: the template overlay matches on `name == "rating"`, so the
---- wrapper enforces that name. Callers pass other options (required,
---- default_value, admin.description, etc.) through unchanged.
+--- Naming: the field can be called anything — the rendering template is
+--- selected by `admin.template`, not by name-matching. Multiple
+--- different rating-shaped fields with different names work side by
+--- side; deeply nested fields work correctly because no name match is
+--- happening.
 local M = {}
 
 --- Build a rating field config.
@@ -38,9 +40,16 @@ function M.field(opts)
     admin.description = "Rating from 1 to 5"
   end
 
+  -- Per-instance template binding — render this field with
+  -- templates/fields/rating.hbs instead of the default fields/number.
+  -- `admin.extra` carries config the rating template reads via
+  -- `{{admin.extra.<key>}}` so the same template + JS component can
+  -- power multiple rating-shaped fields with different settings.
+  admin.template = "fields/rating"
+  admin.extra = admin.extra or {}
+  admin.extra.color = admin.extra.color or "amber"
+
   return crap.fields.number({
-    -- The template overlay keys off `name = "rating"`. A different name
-    -- here means the stock number input renders instead.
     name = opts.name or "rating",
     required = opts.required,
     min = 1,

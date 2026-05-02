@@ -100,6 +100,8 @@ fn build_base_field_data(
         localized: field.localized,
         locale_locked,
         position: field.admin.position.clone(),
+        template: field.admin.template.clone(),
+        extra: field.admin.extra.clone(),
         error: errors.get(&full_name).cloned(),
         validation,
         condition: ConditionData::default(),

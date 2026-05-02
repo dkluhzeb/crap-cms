@@ -12,11 +12,11 @@ use crate::{
 use super::shared::*;
 
 /// Parse a Lua table into a `GlobalDefinition`, extracting fields, hooks, and access config.
-pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
+pub fn parse_global_definition(lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
     query::validate_slug(slug)?;
 
     let labels = parse_labels(config);
-    let fields = parse_fields_section(config)?;
+    let fields = parse_fields_section(lua, config)?;
     let hooks = parse_hooks_section(config)?;
     let access = parse_access_config(config);
     let live = parse_live_setting(config);

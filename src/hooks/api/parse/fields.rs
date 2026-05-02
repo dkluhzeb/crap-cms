@@ -1,7 +1,7 @@
 //! Parsing functions for field definitions from Lua tables.
 
 use anyhow::{Result, anyhow, bail};
-use mlua::{Table, Value};
+use mlua::{Lua, Table, Value};
 use serde_json::{Number as JsonNumber, Value as JsonValue};
 
 use crate::{
@@ -177,7 +177,11 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
 }
 
 /// Parse sub-fields for container types (Array, Group, Row, Collapsible).
-fn parse_sub_fields(field_tbl: &Table, field_type: &FieldType) -> Result<Vec<FieldDefinition>> {
+fn parse_sub_fields(
+    lua: &Lua,
+    field_tbl: &Table,
+    field_type: &FieldType,
+) -> Result<Vec<FieldDefinition>> {
     let has_sub = matches!(
         field_type,
         FieldType::Array | FieldType::Group | FieldType::Row | FieldType::Collapsible
@@ -188,24 +192,7 @@ fn parse_sub_fields(field_tbl: &Table, field_type: &FieldType) -> Result<Vec<Fie
     }
 
     get_table(field_tbl, "fields")
-        .map(|tbl| parse_fields(&tbl))
-        .unwrap_or(Ok(Vec::new()))
-}
-
-/// Parse a typed subtable only when the field type matches the expected variant.
-fn parse_typed_subtable<T>(
-    field_tbl: &Table,
-    field_type: &FieldType,
-    expected: &FieldType,
-    key: &str,
-    parser: fn(&Table) -> Result<Vec<T>>,
-) -> Result<Vec<T>> {
-    if field_type != expected {
-        return Ok(Vec::new());
-    }
-
-    get_table(field_tbl, key)
-        .map(|tbl| parser(&tbl))
+        .map(|tbl| parse_fields(lua, &tbl))
         .unwrap_or(Ok(Vec::new()))
 }
 
@@ -243,7 +230,7 @@ fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constraints> {
 }
 
 /// Parse a single field definition from a Lua table.
-fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
+fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDefinition> {
     let name = parse_field_name(field_tbl)?;
 
     let type_str: String = get_string_val(field_tbl, "type").unwrap_or_else(|_| "text".to_string());
@@ -260,7 +247,7 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
         .unwrap_or(Ok(Vec::new()))?;
 
     let admin = get_table(field_tbl, "admin")
-        .map(|tbl| parse_field_admin(&tbl))
+        .map(|tbl| parse_field_admin(lua, &tbl))
         .unwrap_or(Ok(FieldAdmin::default()))?;
 
     let hooks = get_table(field_tbl, "hooks")
@@ -271,21 +258,21 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
         .map(|tbl| parse_field_access(&tbl))
         .unwrap_or_default();
 
-    let sub_fields = parse_sub_fields(field_tbl, &field_type)?;
-    let block_defs = parse_typed_subtable(
-        field_tbl,
-        &field_type,
-        &FieldType::Blocks,
-        "blocks",
-        parse_block_definitions,
-    )?;
-    let tab_defs = parse_typed_subtable(
-        field_tbl,
-        &field_type,
-        &FieldType::Tabs,
-        "tabs",
-        parse_tab_definitions,
-    )?;
+    let sub_fields = parse_sub_fields(lua, field_tbl, &field_type)?;
+    let block_defs = if field_type == FieldType::Blocks {
+        get_table(field_tbl, "blocks")
+            .map(|tbl| parse_block_definitions(lua, &tbl))
+            .unwrap_or(Ok(Vec::new()))?
+    } else {
+        Vec::new()
+    };
+    let tab_defs = if field_type == FieldType::Tabs {
+        get_table(field_tbl, "tabs")
+            .map(|tbl| parse_tab_definitions(lua, &tbl))
+            .unwrap_or(Ok(Vec::new()))?
+    } else {
+        Vec::new()
+    };
 
     let join = if field_type == FieldType::Join {
         let collection = get_string(field_tbl, "collection").unwrap_or_default();
@@ -388,11 +375,11 @@ fn parse_single_field(field_tbl: &Table) -> Result<FieldDefinition> {
 /// Group sub-fields live in their own namespace (columns are prefixed
 /// `group__subfield`), so they are only checked for uniqueness within their
 /// own group (handled recursively via `parse_single_field` -> `parse_sub_fields`).
-pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
+pub(crate) fn parse_fields(lua: &Lua, fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
     let fields: Vec<FieldDefinition> = fields_tbl
         .clone()
         .sequence_values::<Table>()
-        .map(|pair| parse_single_field(&pair?))
+        .map(|pair| parse_single_field(lua, &pair?))
         .collect::<Result<Vec<_>>>()?;
 
     check_duplicate_field_names(&fields)?;
@@ -461,7 +448,7 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("index", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].index, "index should be true");
     }
 
@@ -473,7 +460,7 @@ mod tests {
         field.set("name", "title").unwrap();
         field.set("type", "text").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(!fields[0].index, "index should default to false");
     }
 
@@ -486,7 +473,7 @@ mod tests {
         field.set("type", "checkbox").unwrap();
         field.set("default_value", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].default_value, Some(JsonValue::Bool(true)));
     }
 
@@ -499,7 +486,7 @@ mod tests {
         field.set("type", "number").unwrap();
         field.set("default_value", 42i64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].default_value, Some(JsonValue::Number(42.into())));
     }
 
@@ -512,7 +499,7 @@ mod tests {
         field.set("type", "number").unwrap();
         field.set("default_value", 3.15f64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let dv = fields[0].default_value.as_ref().unwrap();
         assert!(dv.is_number());
     }
@@ -527,7 +514,7 @@ mod tests {
         let inner = lua.create_table().unwrap();
         field.set("default_value", inner).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].default_value.is_none());
     }
 
@@ -545,7 +532,7 @@ mod tests {
         sub.set(1, sf).unwrap();
         field.set("fields", sub).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].fields.len(), 1);
         assert_eq!(fields[0].fields[0].name, "title");
     }
@@ -564,7 +551,7 @@ mod tests {
         sub.set(1, sf).unwrap();
         field.set("fields", sub).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].fields.len(), 1);
         assert_eq!(fields[0].fields[0].name, "first_name");
     }
@@ -583,7 +570,7 @@ mod tests {
         sub.set(1, sf).unwrap();
         field.set("fields", sub).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].fields.len(), 1);
         assert_eq!(fields[0].fields[0].name, "notes");
     }
@@ -597,7 +584,7 @@ mod tests {
         field.set("type", "date").unwrap();
         field.set("picker_appearance", "datetime").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].picker_appearance.as_deref(), Some("datetime"));
     }
 
@@ -610,7 +597,7 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("picker_appearance", "datetime").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].picker_appearance.is_none());
     }
 
@@ -624,7 +611,7 @@ mod tests {
         field.set("min", 0.0f64).unwrap();
         field.set("max", 100.0f64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].min, Some(0.0));
         assert_eq!(fields[0].max, Some(100.0));
     }
@@ -639,7 +626,7 @@ mod tests {
         field.set("min", 1i64).unwrap();
         field.set("max", 99i64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].min, Some(1.0));
         assert_eq!(fields[0].max, Some(99.0));
     }
@@ -654,7 +641,7 @@ mod tests {
         field.set("collection", "posts").unwrap();
         field.set("on", "author").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let join = fields[0].join.as_ref().unwrap();
         assert_eq!(join.collection, "posts");
         assert_eq!(join.on, "author");
@@ -671,7 +658,7 @@ mod tests {
         mcp_tbl.set("description", "A short summary").unwrap();
         field.set("mcp", mcp_tbl).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(
             fields[0].mcp.description.as_deref(),
             Some("A short summary")
@@ -685,7 +672,7 @@ mod tests {
         let field = lua.create_table().unwrap();
         field.set("type", "text").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let result = parse_fields(&fields_tbl);
+        let result = parse_fields(&lua, &fields_tbl);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing 'name'"));
     }
@@ -700,7 +687,7 @@ mod tests {
         field.set("min_rows", 1usize).unwrap();
         field.set("max_rows", 10usize).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].min_rows, Some(1));
         assert_eq!(fields[0].max_rows, Some(10));
     }
@@ -715,7 +702,7 @@ mod tests {
         field.set("min_length", 3usize).unwrap();
         field.set("max_length", 64usize).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].min_length, Some(3));
         assert_eq!(fields[0].max_length, Some(64));
     }
@@ -730,7 +717,7 @@ mod tests {
         field.set("min_date", "1900-01-01").unwrap();
         field.set("max_date", "2100-12-31").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].min_date.as_deref(), Some("1900-01-01"));
         assert_eq!(fields[0].max_date.as_deref(), Some("2100-12-31"));
     }
@@ -757,7 +744,7 @@ mod tests {
         hooks_tbl.set("after_read", ar).unwrap();
         field.set("hooks", hooks_tbl).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let hooks = &fields[0].hooks;
         assert_eq!(hooks.before_validate, vec!["hooks.validate_title"]);
         assert_eq!(hooks.before_change, vec!["hooks.transform_title"]);
@@ -775,7 +762,7 @@ mod tests {
         field.set("min", 100.0f64).unwrap();
         field.set("max", 10.0f64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(err.to_string().contains("min"), "{}", err);
     }
 
@@ -789,7 +776,7 @@ mod tests {
         field.set("min_length", 100usize).unwrap();
         field.set("max_length", 10usize).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(err.to_string().contains("min_length"), "{}", err);
     }
 
@@ -803,7 +790,7 @@ mod tests {
         field.set("min_rows", 10usize).unwrap();
         field.set("max_rows", 3usize).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(err.to_string().contains("min_rows"), "{}", err);
     }
 
@@ -818,7 +805,7 @@ mod tests {
         field.set("timezone", true).unwrap();
         field.set("default_timezone", "America/New_York").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].timezone, "timezone should be true");
         assert_eq!(
             fields[0].default_timezone.as_deref(),
@@ -834,7 +821,7 @@ mod tests {
         field.set("name", "published_at").unwrap();
         field.set("type", "date").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(!fields[0].timezone, "timezone should default to false");
         assert!(fields[0].default_timezone.is_none());
     }
@@ -849,7 +836,7 @@ mod tests {
         field.set("picker_appearance", "dayOnly").unwrap();
         field.set("timezone", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(
             !fields[0].timezone,
             "timezone should be ignored for dayOnly"
@@ -866,7 +853,7 @@ mod tests {
         // No picker_appearance set — defaults to dayOnly
         field.set("timezone", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(
             !fields[0].timezone,
             "timezone should be ignored when picker_appearance defaults to dayOnly"
@@ -883,7 +870,7 @@ mod tests {
         field.set("picker_appearance", "timeOnly").unwrap();
         field.set("timezone", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(
             !fields[0].timezone,
             "timezone should be ignored for timeOnly"
@@ -899,7 +886,7 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("timezone", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(
             !fields[0].timezone,
             "timezone should be ignored for non-date fields"
@@ -916,7 +903,7 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("default_value", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("default_value type mismatch"),
             "Expected type mismatch error: {}",
@@ -934,7 +921,7 @@ mod tests {
         field.set("type", "number").unwrap();
         field.set("default_value", "not-a-number").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("default_value type mismatch"),
             "Expected type mismatch error: {}",
@@ -952,7 +939,7 @@ mod tests {
         field.set("type", "checkbox").unwrap();
         field.set("default_value", 42i64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("default_value type mismatch"),
             "Expected type mismatch error: {}",
@@ -972,7 +959,7 @@ mod tests {
         field.set("type", "checkbox").unwrap();
         field.set("default_value", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        assert!(parse_fields(&fields_tbl).is_ok());
+        assert!(parse_fields(&lua, &fields_tbl).is_ok());
 
         // String default on text — OK
         let fields_tbl = lua.create_table().unwrap();
@@ -981,7 +968,7 @@ mod tests {
         field.set("type", "text").unwrap();
         field.set("default_value", "hello").unwrap();
         fields_tbl.set(1, field).unwrap();
-        assert!(parse_fields(&fields_tbl).is_ok());
+        assert!(parse_fields(&lua, &fields_tbl).is_ok());
 
         // Number default on number — OK
         let fields_tbl = lua.create_table().unwrap();
@@ -990,7 +977,7 @@ mod tests {
         field.set("type", "number").unwrap();
         field.set("default_value", 10i64).unwrap();
         fields_tbl.set(1, field).unwrap();
-        assert!(parse_fields(&fields_tbl).is_ok());
+        assert!(parse_fields(&lua, &fields_tbl).is_ok());
     }
 
     /// BUG-2 regression: two sibling fields with the same name must fail
@@ -1010,7 +997,7 @@ mod tests {
         f2.set("type", "text").unwrap();
         fields_tbl.set(2, f2).unwrap();
 
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("title") && msg.contains("Duplicate"),
@@ -1043,7 +1030,7 @@ mod tests {
         row.set("fields", row_fields).unwrap();
         fields_tbl.set(2, row).unwrap();
 
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("title"),
@@ -1076,6 +1063,6 @@ mod tests {
         mk_group(2, "footer");
 
         // Should NOT error — `hero.label` and `footer.label` are distinct columns.
-        parse_fields(&fields_tbl).expect("groups namespace sub-fields independently");
+        parse_fields(&lua, &fields_tbl).expect("groups namespace sub-fields independently");
     }
 }

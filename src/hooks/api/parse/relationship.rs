@@ -96,7 +96,7 @@ mod tests {
         rel.set("max_depth", 2i32).unwrap();
         field.set("relationship", rel).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let rel = fields[0].relationship.as_ref().unwrap();
         assert_eq!(rel.collection, "users");
         assert!(!rel.has_many);
@@ -113,7 +113,7 @@ mod tests {
         field.set("relation_to", "users").unwrap();
         field.set("has_many", true).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let rel = fields[0].relationship.as_ref().unwrap();
         assert_eq!(rel.collection, "users");
         assert!(rel.has_many);
@@ -128,7 +128,7 @@ mod tests {
         field.set("name", "ref").unwrap();
         field.set("type", "relationship").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].relationship.is_none());
     }
 
@@ -145,7 +145,7 @@ mod tests {
         rel.set("max_depth", 1i32).unwrap();
         field.set("relationship", rel).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let r = fields[0].relationship.as_ref().unwrap();
         assert_eq!(r.collection, "media");
         assert_eq!(r.max_depth, Some(1));
@@ -160,7 +160,7 @@ mod tests {
         field.set("type", "upload").unwrap();
         field.set("relation_to", "media").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         let r = fields[0].relationship.as_ref().unwrap();
         assert_eq!(r.collection, "media");
     }
@@ -176,7 +176,7 @@ mod tests {
         rel.set("collection", lua.create_table().unwrap()).unwrap(); // empty array
         field.set("relationship", rel).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("collection is required"),
             "Empty collection should error, got: {err}"
@@ -194,7 +194,7 @@ mod tests {
         // collection key missing → defaults to ""
         field.set("relationship", rel).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let err = parse_fields(&fields_tbl).unwrap_err();
+        let err = parse_fields(&lua, &fields_tbl).unwrap_err();
         assert!(
             err.to_string().contains("collection is required"),
             "Empty upload collection should error, got: {err}"
@@ -209,7 +209,7 @@ mod tests {
         field.set("name", "doc").unwrap();
         field.set("type", "upload").unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert!(fields[0].relationship.is_none());
     }
 }

@@ -300,37 +300,46 @@ a tracked roadmap item, deferred from the pre-1.0 reshuffle.**
 Until that lands, four workarounds get you most of the way for
 common rating-style use cases — each with real tradeoffs:
 
-### Workaround A — `number` field + global template override
+### Workaround A — `number` field + per-field `admin.template` (recommended)
 
-Declare `rating` as a `number` field with `min = 1`, `max = 5`:
+Declare `rating` as a `number` field with `min = 1`, `max = 5`,
+and point it at a custom render template via `admin.template`:
 
 ```lua
 crap.collections.register("products", {
   fields = {
     crap.fields.text({ name = "name", required = true }),
-    crap.fields.number({ name = "rating", min = 1, max = 5 }),
+    crap.fields.number({
+      name = "rating",
+      min = 1,
+      max = 5,
+      admin = {
+        template = "fields/rating",
+        extra = {
+          icon = "star",
+          empty_icon = "star_outline",
+          color = "amber",
+        },
+      },
+    }),
   },
 })
 ```
 
-Override `templates/fields/number.hbs` globally to render stars
-when the field's name is `rating` (or matches some other detectable
-pattern):
+Drop the per-field template at
+`<config_dir>/templates/fields/rating.hbs`:
 
 ```hbs
 {{#> partials/field}}
-  {{#if (eq name "rating")}}
-    <crap-rating
-      name="{{name}}"
-      value="{{value}}"
-      min="{{min}}"
-      max="{{max}}"
-    ></crap-rating>
-  {{else if has_many}}
-    {{!-- ... original tags rendering ... --}}
-  {{else}}
-    {{!-- ... original number input ... --}}
-  {{/if}}
+  <crap-rating
+    name="{{name}}"
+    value="{{value}}"
+    data-min="{{min}}"
+    data-max="{{max}}"
+    data-icon="{{extra.icon}}"
+    data-empty-icon="{{extra.empty_icon}}"
+    data-color="{{extra.color}}"
+  ></crap-rating>
 {{/partials/field}}
 ```
 
@@ -344,19 +353,37 @@ import './rating.js';
 ```js
 // <config_dir>/static/components/rating.js
 class CrapRating extends HTMLElement {
-  // ... render 5 clickable stars, write value back to a hidden input,
-  // fire crap:change for <crap-dirty-form> integration.
+  // ... render N clickable stars (where N = data-max), write value
+  // back to a hidden input, fire crap:change for <crap-dirty-form>
+  // integration.
 }
 customElements.define('crap-rating', CrapRating);
 ```
 
-**Tradeoffs**: validation (`min`/`max`), SQL schema (integer
-column), sorting, filtering all work natively. **The fragile bit**
-is the field-name match in the template — if you have multiple
-rating-shaped fields, you need to either name them all `rating` or
-make the conditional smarter (match `min == 1 && max == 5`,
-specific name patterns, etc.). Renaming a field breaks the
-rendering.
+**How this works**:
+
+- **`admin.template = "fields/rating"`** opts this *one* field
+  out of the default `fields/number` lookup in `RenderFieldHelper`.
+  Other `number` fields keep using `fields/number.hbs` — no global
+  override, no field-name matching.
+- **`admin.extra = {...}`** in the Lua schema becomes the flat
+  top-level `extra` key on the render context. The template reads
+  it as `{{extra.icon}}`, etc. Same template + JS component can be
+  reused across fields with different settings (different colors,
+  icons, swatches) without forking.
+- **The data is still a `number`**: SQL column is `INTEGER`,
+  validation uses `min`/`max`, sorting and filtering work
+  natively.
+
+**Path safety**: `admin.template` paths are validated at
+field-parse time — only `[a-zA-Z0-9/_-]` allowed, no `..`, no
+absolute paths. A bad path is rejected at startup with a clear
+error.
+
+**Drift tracking**: your custom template lives at
+`<config_dir>/templates/fields/rating.hbs` — it's user-original
+(no upstream counterpart at that path), so `crap-cms templates
+status` flags it as `· user-original`. Nothing to drift against.
 
 ### Workaround B — `select` field + custom rendering
 

@@ -27,15 +27,16 @@ defaults second.
 
 ### When to use what
 
-There are six override mechanisms — pick by what kind of change you're
-making, not by what file you happen to be looking at. Most one-off
-customizations only need one of these.
+There are seven override mechanisms — pick by what kind of change
+you're making, not by what file you happen to be looking at. Most
+one-off customizations only need one of these.
 
 | To… | Mechanism | Where |
 |---|---|---|
 | **Add** content at a defined extension point (extra dashboard widget, extra metadata tag, extra sidebar entry) | **slot** | drop `.hbs` files into `templates/slots/<name>/` |
 | **Replace** a markup chunk reused in multiple places (logo, meta tags, icon-font link) | **partial** | drop a same-named file at `templates/partials/<name>.hbs` |
 | **Replace** a single text value (site name) | **config field** | set `[admin] foo = "..."` in `crap.toml`, render via `{{crap.foo}}` |
+| **Replace** **one field instance's** rendering (rating, color picker, custom widget) | **`admin.template` + `admin.extra`** | declare the per-field path + config in the field's `admin = {…}` block; drop the template at the named path |
 | **Replace** a CSS rule or token (brand colors, spacing) | drop CSS | `static/styles/themes/themes-<name>.css` (or override `static/styles/parts/<name>.css`) |
 | **Replace** an entire page template (collections list, dashboard) | drop HBS | drop a same-named file at `templates/<page>.hbs` |
 | **Replace** a built-in Web Component (toast, drawer, …) | drop JS | drop a same-named file at `static/components/<name>.js` |
@@ -45,6 +46,7 @@ Quick rule of thumb:
 
 - **Need new content?** Slot.
 - **Editing a single value?** Config.
+- **Editing one field instance's UI?** `admin.template` per-field.
 - **Editing markup?** Partial (if it's a chunk) or full template override (if it's a page).
 - **Editing styling?** CSS file at the matching path.
 - **Editing component code?** JS file at the matching path — or a capture-phase listener if you're just tacking behavior on.

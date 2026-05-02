@@ -106,6 +106,8 @@ fn build_sub_field_base(
         localized: sf.localized,
         locale_locked: opts.locale_locked,
         position: sf.admin.position.clone(),
+        template: sf.admin.template.clone(),
+        extra: sf.admin.extra.clone(),
         error: opts.errors.get(indexed_name).cloned(),
         validation: ValidationAttrs::default(),
         condition: ConditionData::default(),

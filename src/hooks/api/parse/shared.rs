@@ -1,7 +1,7 @@
 //! Shared parsing helpers used by both collection and global definition parsers.
 
 use anyhow::Result;
-use mlua::{Result as LuaResult, Table, Value};
+use mlua::{Lua, Result as LuaResult, Table, Value};
 use tracing::warn;
 
 use crate::core::{
@@ -60,11 +60,11 @@ pub(super) fn parse_labels(config: &Table) -> Labels {
 }
 
 /// Parse the `fields` subtable from a Lua config table.
-pub(super) fn parse_fields_section(config: &Table) -> Result<Vec<FieldDefinition>> {
+pub(super) fn parse_fields_section(lua: &Lua, config: &Table) -> Result<Vec<FieldDefinition>> {
     let Ok(fields_tbl) = get_table(config, "fields") else {
         return Ok(Vec::new());
     };
-    parse_fields(&fields_tbl)
+    parse_fields(lua, &fields_tbl)
 }
 
 /// Parse the `hooks` subtable from a Lua config table.
