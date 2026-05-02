@@ -38,6 +38,7 @@ pub fn run(config_dir: &Path, run_check: bool) -> Result<()> {
     cli::kv("Config", &config_dir.display().to_string());
     display::print_db_info(&cfg, &config_dir, &conn);
     display::print_uploads_info(&config_dir);
+    display::print_customizations(&config_dir);
     display::print_locale_info(&cfg);
     display::print_server_info(&cfg);
 

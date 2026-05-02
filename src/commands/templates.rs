@@ -288,6 +288,55 @@ pub fn layout(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// One-line counts of admin-UI customizations under the config dir.
+/// Used by the main `crap-cms status` command to surface customization
+/// state alongside collections / migrations / jobs.
+#[derive(Debug, Clone, Default)]
+pub struct CustomizationCounts {
+    /// Files that shadow built-in defaults (any drift state except
+    /// `UserOriginal`). Includes pristine + current + behind + ahead +
+    /// orphaned + no-header + unknown-version.
+    pub overrides: usize,
+    /// User-original files with no upstream counterpart (custom pages,
+    /// slot widgets, bespoke themes, custom Web Components, etc.).
+    pub additions: usize,
+    /// Files in a state the operator likely wants to act on:
+    /// behind / ahead / orphaned / no-header / unknown-version.
+    pub actionable: usize,
+    /// Extracted-but-unedited files that could be deleted to fall back
+    /// to upstream automatically.
+    pub pristine: usize,
+}
+
+/// Walk the config dir's overlay roots and tally customizations.
+/// Returns zeroed counts when neither `templates/` nor `static/`
+/// exists (e.g. fresh install with only `init.lua`).
+pub fn customization_counts(config_dir: &Path) -> Result<CustomizationCounts> {
+    let entries = collect_overlay_entries(config_dir)?;
+    let mut c = CustomizationCounts::default();
+    for entry in &entries {
+        match &entry.drift {
+            Drift::UserOriginal => c.additions += 1,
+            Drift::Pristine => {
+                c.overrides += 1;
+                c.pristine += 1;
+            }
+            Drift::Current => {
+                c.overrides += 1;
+            }
+            Drift::Behind { .. }
+            | Drift::Ahead { .. }
+            | Drift::OrphanedUpstream
+            | Drift::NoHeader
+            | Drift::UnknownVersion { .. } => {
+                c.overrides += 1;
+                c.actionable += 1;
+            }
+        }
+    }
+    Ok(c)
+}
+
 /// Run `crap-cms overlay diff` for a single overlay path. The path is
 /// relative to the config dir (e.g. `templates/layout/base.hbs` or
 /// `static/styles.css`).
@@ -741,7 +790,7 @@ fn print_unified_diff(label_a: &str, label_b: &str, a: &str, b: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::print_unified_diff;
+    use super::{customization_counts, lookup_embedded, print_unified_diff};
 
     /// Smoke: a clean insertion (block of new lines added between two
     /// matching anchors) renders as a contiguous run of `+` lines, not
@@ -943,5 +992,88 @@ mod tests {
         fs::create_dir_all(&static_dir).unwrap();
         fs::write(static_dir.join("bespoke.css"), "body{}").unwrap();
         layout(tmp.path()).expect("with unknown");
+    }
+
+    // ── customization_counts() — surfaced on `crap-cms status` ────
+
+    #[test]
+    fn customization_counts_zero_for_fresh_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let counts = customization_counts(tmp.path()).unwrap();
+        assert_eq!(counts.overrides, 0);
+        assert_eq!(counts.additions, 0);
+        assert_eq!(counts.actionable, 0);
+        assert_eq!(counts.pristine, 0);
+    }
+
+    #[test]
+    fn customization_counts_distinguishes_overrides_from_additions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // Override (extracted, with current-version header).
+        let layout_dir = tmp.path().join("templates").join("layout");
+        fs::create_dir_all(&layout_dir).unwrap();
+        let crate_version = env!("CARGO_PKG_VERSION");
+        // Use an embedded path that exists. Verified via `lookup_embedded`.
+        let upstream = lookup_embedded("templates", "layout/base.hbs")
+            .expect("layout/base.hbs must be embedded");
+        let upstream_str = std::str::from_utf8(upstream).unwrap();
+        let header = format!("{{{{!-- crap-cms:source {} --}}}}\n", crate_version);
+        let extracted = format!("{}{}", header, upstream_str);
+        fs::write(layout_dir.join("base.hbs"), extracted).unwrap();
+
+        // Addition (user-original — no embedded counterpart).
+        let pages_dir = tmp.path().join("templates").join("pages");
+        fs::create_dir_all(&pages_dir).unwrap();
+        fs::write(pages_dir.join("custom_dashboard.hbs"), "{{!-- mine --}}").unwrap();
+
+        let counts = customization_counts(tmp.path()).unwrap();
+        assert_eq!(
+            counts.overrides, 1,
+            "extracted layout/base counts as override"
+        );
+        assert_eq!(counts.additions, 1, "user-original page counts as addition");
+        assert_eq!(
+            counts.actionable, 0,
+            "current-version override needs no action"
+        );
+        assert_eq!(counts.pristine, 0);
+    }
+
+    #[test]
+    fn customization_counts_flags_actionable_for_behind_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let layout_dir = tmp.path().join("templates").join("layout");
+        fs::create_dir_all(&layout_dir).unwrap();
+        // Stale source-version header → Drift::Behind, which is actionable.
+        fs::write(
+            layout_dir.join("base.hbs"),
+            "{{!-- crap-cms:source 0.0.1-alpha.0 --}}\nfake old\n",
+        )
+        .unwrap();
+
+        let counts = customization_counts(tmp.path()).unwrap();
+        assert_eq!(counts.overrides, 1);
+        assert_eq!(
+            counts.actionable, 1,
+            "behind file should be flagged actionable"
+        );
+    }
+
+    #[test]
+    fn customization_counts_flags_pristine_for_byte_equal_overrides() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let layout_dir = tmp.path().join("templates").join("layout");
+        fs::create_dir_all(&layout_dir).unwrap();
+        // Write the upstream content byte-for-byte (no header) — should
+        // classify as Pristine.
+        let upstream = lookup_embedded("templates", "layout/base.hbs")
+            .expect("layout/base.hbs must be embedded");
+        fs::write(layout_dir.join("base.hbs"), upstream).unwrap();
+
+        let counts = customization_counts(tmp.path()).unwrap();
+        assert_eq!(counts.overrides, 1);
+        assert_eq!(counts.pristine, 1);
+        assert_eq!(counts.actionable, 0);
     }
 }

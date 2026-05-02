@@ -89,6 +89,52 @@ pub fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbConnectio
     }
 }
 
+/// Print admin-UI customization summary — overrides shadowing built-in
+/// defaults plus user-original additions, with a hint about
+/// drift / cleanup state when relevant. Surfaces the data
+/// `crap-cms templates status` shows in detail, condensed to one line
+/// for the project overview.
+///
+/// Silently emits nothing when the config dir has no `templates/` and
+/// no `static/` directories (fresh install) — the kv line would be
+/// noise.
+pub fn print_customizations(config_dir: &Path) {
+    let counts = match crate::commands::templates::customization_counts(config_dir) {
+        Ok(c) => c,
+        Err(_) => return, // I/O issue under config_dir — silently skip
+    };
+
+    if counts.overrides == 0 && counts.additions == 0 {
+        return;
+    }
+
+    let mut value = format!(
+        "{} override(s), {} addition(s)",
+        counts.overrides, counts.additions
+    );
+
+    let mut notes = Vec::new();
+    if counts.actionable > 0 {
+        notes.push(format!("{} need attention", counts.actionable));
+    }
+    if counts.pristine > 0 {
+        notes.push(format!(
+            "{} pristine (extracted, unedited)",
+            counts.pristine
+        ));
+    }
+    if !notes.is_empty() {
+        value.push_str(" — ");
+        value.push_str(&notes.join(", "));
+    }
+
+    cli::kv("Customizations", &value);
+
+    if counts.actionable > 0 || counts.pristine > 0 {
+        cli::hint("Run `crap-cms templates status` for per-file detail.");
+    }
+}
+
 /// Print upload directory stats (total size and file count).
 pub fn print_uploads_info(config_dir: &Path) {
     let uploads_dir = config_dir.join("uploads");

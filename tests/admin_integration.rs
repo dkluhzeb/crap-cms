@@ -246,7 +246,7 @@ async fn static_css_returns_200() {
     let resp = app
         .router
         .oneshot(
-            Request::get("/static/styles.css")
+            Request::get("/static/styles/main.css")
                 .body(Body::empty())
                 .unwrap(),
         )

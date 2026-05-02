@@ -36,6 +36,13 @@ to the detailed entry with full migration steps.
   silently stop applying — move them to `templates/partials/`, and
   rename the two `_`-named files to use `-`. See *Changed → BREAKING:
   `templates/components/` directory removed*.
+- **Static-asset layout reshuffle — old paths now 404.** CSS, vendor
+  bundles, icons, and plumbing JS components moved into role-grouped
+  subdirs (`static/styles/`, `static/vendor/`, `static/icons/`,
+  `static/components/_internal/`). Config-dir overlays at any old
+  path stop serving. Run `crap-cms templates layout` for an exact
+  `git mv` migration recipe. See *Changed → BREAKING: static-asset
+  layout reorganized into role-grouped subdirs*.
 - Inline `style="..."` attributes in overlay templates no longer
   execute. CSP `style-src` no longer allows `'unsafe-inline'`. Use
   classes, the `hidden` attribute, or `data-*` selectors instead;
@@ -252,6 +259,173 @@ to the detailed entry with full migration steps.
 
 ### Added
 
+- **Admin UI customization architecture.** A coherent set of override
+  surfaces so config-dir overlays can add and replace pieces of the
+  admin without forking templates or patching Rust. The customization
+  motion is unchanged — drop a file at the matching path inside the
+  config dir's `static/` or `templates/` folder — but there are now
+  additive mechanisms alongside the existing whole-file replacement.
+
+  **Slot system** — new `{{slot "name"}}` Handlebars helper renders
+  every `*.hbs` file under `templates/slots/<name>/` in alphabetical
+  order. Slots are *additive*: your slot file runs alongside upstream's
+  defaults instead of replacing them. Slot templates render against
+  the same context as their host page. Built-in slot points are
+  declared in `templates/slots/<name>/.gitkeep`-style manifests; pick
+  by what you want to add (extra dashboard widget, sidebar entry,
+  metadata tag) rather than where you want to edit. See
+  `docs/src/admin-ui/guides/slots.md`.
+
+  **`{{data "name"}}` helper** — pulls a named blob registered from
+  Lua via `crap.template_data.register("<name>", function(ctx) … end)`.
+  The registered function runs against the same `ctx` the renderer
+  uses (locale, current user, request path) and returns a Lua table
+  serialized to template scope. This is the canonical way to inject
+  dynamic data into a slot or custom page without forking the host
+  template's handler.
+
+  **`[admin] site_name` config** — typed `String` field on `[admin]`
+  exposed to templates as `{{crap.site_name}}`. Used by the new
+  `templates/partials/logo.hbs` and `meta-tags.hbs` partials so the
+  brand wordmark and `<title>` follow one source of truth. Default
+  remains the literal `"Crap CMS"`.
+
+  **New partials at `templates/partials/`** — `logo.hbs` (header +
+  login wordmark), `meta-tags.hbs` (`<meta>` block in `<head>`),
+  `icon-font.hbs` (Material Symbols stylesheet link). Override any
+  one by dropping a same-named file at the matching path in the
+  config dir; the existing template-overlay mechanism resolves config
+  first, embedded second.
+
+  **`static/components/custom.js` auto-import seam** — the default
+  `static/components/index.js` now does `import('./custom.js').catch(()=>{})`
+  after loading every built-in component. To register bespoke Web
+  Components, drop `static/components/custom.js` in the config dir
+  with `import` statements for your modules. The default ships an
+  empty file (placeholder) so the import never 404s.
+
+  **`_internal/` plumbing convention** — modules that are wired into
+  the admin runtime but not part of the public override surface live
+  under `static/components/_internal/`. The 33 user-facing components
+  stay flat at `static/components/`. Hugo's `_default/` and Next.js
+  `_folder` precedent informs the underscore-prefix convention.
+
+- **Per-field render templates: `admin.template` + `admin.extra`.**
+  Two new optional keys on a field's `admin = {…}` block bind a
+  per-field render template path and a freeform configuration map.
+  Replaces the old "rename my field type" hack for one-off custom
+  widgets.
+
+  ```lua
+  fields = {
+    rating = {
+      type = "number",
+      admin = {
+        template = "fields/rating",      -- resolves under templates/
+        extra = { max = 5, allow_half = false },
+      },
+    },
+  }
+  ```
+
+  At render time, `RenderFieldHelper` reads `template` from the
+  flattened `BaseFieldData` and falls back to `fields/<field_type>`
+  when unset. The `extra` map is exposed to the template as
+  `{{extra.max}}`, `{{extra.allow_half}}`, etc. Both fields are
+  threaded through every `BaseFieldData` construction site (six
+  builders: `single`, enrich/`children`, enrich/`nested`,
+  enrich/`field_types`, collections/items/`create_form`,
+  collections/item/`edit_form`) and survive deeply nested
+  array/group composition — verified by
+  `enriched_sub_field_preserves_admin_template_and_extra_when_nested`.
+
+  **Path validation** — `validate_template_name` rejects 15
+  attack vectors: empty paths, leading/trailing `/`, `//`, `..`,
+  `.`, NULL bytes, backslashes, percent-encoding, newlines, and any
+  character outside `[a-zA-Z0-9/_-]`. No way to traverse out of the
+  templates root.
+
+  **Lua parse plumbing** — `&Lua` is now threaded through the
+  collection/field parse chain
+  (`parse_collection_definition` → `parse_fields_section` →
+  `parse_fields` → `parse_single_field` → `parse_field_admin`) so
+  `admin.template` validation and `admin.extra`'s `lua_to_json`
+  conversion happen at definition time, not render time. Sequences
+  and scalars in `extra` are rejected — must be a Lua table that
+  serializes to `serde_json::Map<String, Value>`.
+
+- **Custom admin pages.** Filesystem-routed at `/admin/p/<slug>` from
+  any `templates/pages/<slug>.hbs` file. Renders against the standard
+  admin context (`crap.*`, `user`, `nav` all available); pull
+  page-specific data via `crap.template_data.register(<slug>_data, …)`
+  and `{{data "<slug>_data"}}`. Sidebar entry registers via
+  `crap.pages.register("<slug>", { section, label, icon, access })`
+  in `init.lua` — section, icon, and access function are optional.
+  Path validation matches the `admin.template` rules. See
+  `docs/src/admin-ui/scenarios/05-custom-page.md`.
+
+- **Six new `crap-cms make` scaffolds.** Each command writes the
+  right files at the right paths and prints any registration snippet
+  to paste into `init.lua`. Slug validation rejects the same attack
+  vectors as `admin.template`; `--force` overwrites existing files.
+  - `make page <slug>` — writes `templates/pages/<slug>.hbs`, prints
+    a `crap.pages.register` snippet (sidebar entry is optional —
+    pages route either way).
+  - `make slot <name> [--file <filename>]` — writes
+    `templates/slots/<name>/<filename>.hbs`.
+  - `make node <name> [--inline]` — scaffolds a custom richtext node
+    template + `crap.richtext.register_node` Lua snippet.
+  - `make field <name> [--base-type <type>]` — generates 3
+    coordinated files: `templates/fields/<name>.hbs`,
+    `lua/plugins/<name>.lua` with `admin.template` + `admin.extra`
+    wiring, and `static/components/<name>.js` Web Component stub.
+  - `make theme <name>` — writes
+    `static/styles/themes/themes-<name>.css` with the full token
+    catalogue commented out for selective override.
+  - `make component <tag>` — writes `static/components/<tag>.js`
+    with a Web Component skeleton; validates HTML custom-element
+    tag rules (must contain a hyphen, lowercase, ASCII alphanumerics).
+
+- **`crap-cms templates` improvements: `layout`, drift detection.**
+  - New `templates layout [config_dir]` subcommand — read-only
+    migration recipe that scans the config dir for templates living
+    in legacy paths (`templates/components/*` and any layout files
+    that moved during the static-asset reshuffle) and prints exact
+    `git mv` commands. Verified path map covers `auth/`,
+    `collections/`, `dashboard/`, `errors/`, `globals/`. Reports
+    nothing when the config dir is already current.
+  - `templates status` and `templates diff -C <dir> <path>` learned
+    drift detection via an optional `{{!-- crap-cms:source X.Y.Z --}}`
+    header that `templates extract` now writes. When the embedded
+    upstream version moves past the recorded source, `status`
+    reports `behind`; `diff` shows the exact upstream change so the
+    operator can re-sync intentionally. Files without a source
+    header report as `unknown source — use git for diff` and remain
+    diffable manually.
+
+- **Customization summary in `crap-cms status`.** New line in the
+  default status output: `Customizations: N override(s), N
+  addition(s) — N need attention`. Counts come from
+  `customization_counts()` in `commands/templates.rs`: `overrides`
+  is files that shadow an embedded default, `additions` is files
+  that introduce new pages/slots/components without an upstream
+  match, `actionable` flags overrides whose recorded source has
+  drifted past the embedded version. Suppressed entirely when all
+  four counts are zero. Hint line points at `crap-cms templates
+  status` for the per-file breakdown.
+
+- **Admin UI documentation rewrite (~2,100 lines).** New structure
+  under `docs/src/admin-ui/`: 8 task-shaped scenarios
+  (`01-restyle` through `08-upgrade`), `guides/` for cross-cutting
+  concerns (themes, template overlay, slots), `reference/` for
+  flat lookup pages (CSS variables, components, template context),
+  and `upgrade/migrating-from-old-layout.md` for the static-asset
+  reshuffle. Replaces the previous "Components", "Customization",
+  "Custom Pages" essays with a four-axis decision table at
+  `docs/src/admin-ui/index.md` keyed by what kind of change you're
+  making. Custom richtext nodes (existing feature) and custom field
+  types are now first-class scenarios.
+
 - **AND + OR filter composition in the admin list drawer.** Each
   row in the filter drawer now has a per-row connector dropdown
   (`AND` / `OR`, default `AND`; the very first row's connector is
@@ -404,6 +578,33 @@ to the detailed entry with full migration steps.
     policy, empty auth collection (0 users).
 
 ### Changed
+
+- **BREAKING: static-asset layout reorganized into role-grouped subdirs.**
+  The previously-flat `static/` directory now groups files by role:
+  - `static/styles/{base,parts,layout,themes}/` — CSS split by
+    concern, composed via `static/styles/main.css` (replaces the
+    flat `static/styles.css` + per-concern siblings).
+  - `static/vendor/{codemirror,htmx,prosemirror}.js` — vendored
+    third-party bundles (replaces flat `static/codemirror.js` etc.).
+  - `static/icons/` — Material Symbols woff2 + stylesheet.
+  - `static/components/_internal/` — plumbing modules
+    (`css.js`, `global.js`, `groups.js`, `h.js`, `i18n.js`,
+    `picker-base.js`, `util/*`). The 33 user-facing components stay
+    flat at `static/components/`.
+
+  **No compat aliases.** Old static paths (`/static/styles.css`,
+  `/static/htmx.js`, `/static/components/css.js`, …) now 404 outright.
+  Config-dir overlays still living at the old paths stop applying.
+  This was a deliberate "the best part is no part" call — runtime
+  alias tables rot silently and add complexity for everyone forever
+  to save a one-time migration effort for the small group of users
+  who actually have overlays.
+
+  **Migration recipe** — run `crap-cms templates layout` for an
+  exact `git mv` script that updates any overlay files in your
+  config dir from old paths to new ones. Recipes don't run anything;
+  copy + paste only when you're ready. Background and full path map
+  at `docs/src/admin-ui/upgrade/migrating-from-old-layout.md`.
 
 - **BREAKING: htmx 2.0.9 vendored locally.** The admin layout no
   longer pulls htmx from `https://unpkg.com`; it serves
@@ -1052,6 +1253,24 @@ to the detailed entry with full migration steps.
   suite was effectively non-functional (see Internal section).
 
 ### Internal
+
+- **Typed admin context structs.** Replaced the previous
+  `serde_json::Value` builders that produced template context for the
+  admin UI with typed page and field context structs at
+  `src/admin/context/page/*` and `src/admin/context/field/*`. Each
+  page type (auth, collections, dashboard, errors, globals, meta) has
+  a typed envelope with `#[serde(skip_serializing_if = …)]` on
+  optional fields. The 691-line `context_builder.rs` orchestrator
+  shrunk to a thin dispatcher; per-page builders are explicit.
+  `BaseFieldData` flattens admin attributes (label, placeholder,
+  template, extra, …) so the Handlebars renderer reads them at the
+  same depth regardless of field type, and the `RenderFieldHelper`
+  reads the new `template` field directly. Schema/doc generation at
+  `src/admin/context/page/schema_doc.rs` enumerates context keys per
+  page so future renames surface as compile-time errors instead of
+  silent template misses. First wave of a broader effort to retire
+  `serde_json::Value` blobs from internal interfaces — admin UI is
+  done, service layer / hook payloads / event streams still pending.
 
 - **e2e browser test suite resurrected** — the entire `browser_*` test
   modules (139 tests across 18 components) had been silently failing for
