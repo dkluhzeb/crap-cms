@@ -16,14 +16,33 @@ your goal:
 | Restyle (colors, spacing, fonts) | CSS tokens | [Themes guide](guides/themes.md), [CSS variables reference](reference/css-variables.md) |
 | Tweak a page's HTML structure | Templates | [Template overlay guide](guides/template-overlay.md), [Template context reference](reference/template-context.md) |
 | Replace or extend a component | Web Components | [Components reference](reference/components.md) |
-| Add a custom content block (richtext node) | Lua | [Custom content block scenario](scenarios/06-custom-content-block.md) |
+| Add a custom richtext node (CTA button, mention pill, embed) | Lua | [Custom richtext node scenario](scenarios/06-custom-richtext-node.md) |
+| Add a custom field type (rating, color picker, slug builder) | Lua + HBS + JS | [Custom field type scenario](scenarios/07-custom-field-type.md) |
 | Add a custom admin page | Lua + HBS template | [Custom admin page scenario](scenarios/05-custom-page.md) |
-| Add a top-level custom field type (e.g. `rating`) | partial workarounds today; full support is a roadmap item | See ["What about a top-level field type?"](scenarios/06-custom-content-block.md#what-about-a-wholly-new-top-level-field-type) for shipped workarounds. |
 
 The customization motion is always the same: **drop a file at the
 matching path inside your config dir's `static/` or `templates/`
 folder.** The admin overlay resolves config-dir paths first, compiled
 defaults second.
+
+### Scaffolding
+
+Every customization mechanism has a matching `crap-cms make`
+subcommand that drops the right files at the right paths and prints
+any registration snippet you need to add to `init.lua`:
+
+| To create… | Run |
+|---|---|
+| Custom admin page | `crap-cms make page <slug> [--label …] [--section …] [--icon …]` |
+| Slot widget | `crap-cms make slot <slot-name> [--file <filename>]` |
+| Custom richtext node | `crap-cms make node <name> [--inline]` |
+| Per-field template (rating-style) | `crap-cms make field <name> [--base-type number]` |
+| Theme starter | `crap-cms make theme <name>` |
+| Custom Web Component | `crap-cms make component <tag>` |
+| Collection / global / hook / job | `crap-cms make collection \| global \| hook \| job <slug>` |
+
+All scaffolds are interactive — omit positional args and the CLI
+prompts. Use `--force` to overwrite existing files.
 
 ### When to use what
 

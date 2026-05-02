@@ -92,10 +92,10 @@ end)
 -- sidebar entry and locks the page to admins via the `admin_only`
 -- access function in `access/admin_only.lua`.
 --
--- TODO (post-refactor): a `crap-cms make page <slug>` scaffold command
--- will generate the .hbs, the optional `crap.template_data.register`
--- snippet, and this `crap.pages.register` block in one shot. Tracked in
--- the project memory under "scaffold widgets" (post-Phase 3/4).
+-- New pages can be scaffolded with:
+--   crap-cms make page <slug> --label "..." --section "..." --icon "..."
+-- which generates the .hbs file and prints the matching
+-- `crap.pages.register(...)` snippet to add here.
 crap.pages.register("system_info", {
 	section = "Tools",
 	label = "System info",

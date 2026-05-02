@@ -114,6 +114,89 @@ pub enum MakeAction {
         #[arg(short, long)]
         force: bool,
     },
+    /// Generate a custom admin page (filesystem-routed at `/admin/p/<slug>`)
+    Page {
+        /// Page slug — also the template filename. Prompted if omitted.
+        slug: Option<String>,
+
+        /// Sidebar label (defaults to title-cased slug)
+        #[arg(short, long)]
+        label: Option<String>,
+
+        /// Sidebar section heading (e.g., "Tools")
+        #[arg(short, long)]
+        section: Option<String>,
+
+        /// Material Symbols icon name (e.g., "monitoring", "heart-pulse")
+        #[arg(short, long)]
+        icon: Option<String>,
+
+        /// Lua function ref for access control (e.g., "access.admin_only")
+        #[arg(short, long)]
+        access: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a slot-widget HBS file
+    Slot {
+        /// Slot name (e.g., "dashboard_widgets"). Prompted if omitted.
+        slot: Option<String>,
+
+        /// Filename inside the slot directory (default: "widget")
+        #[arg(short, long)]
+        file: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Generate a custom richtext-node Lua snippet
+    Node {
+        /// Node name (e.g., "cta", "mention"). Prompted if omitted.
+        name: Option<String>,
+
+        /// Inline node (default: block-level)
+        #[arg(short, long)]
+        inline: bool,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a per-field render template + Lua wrapper + Web Component
+    Field {
+        /// Field name (e.g., "rating"). Prompted if omitted.
+        name: Option<String>,
+
+        /// Base field type to wrap (default: "number"). Allowed: text,
+        /// number, textarea, select, radio, checkbox, date, email, json, code.
+        #[arg(short, long)]
+        base_type: Option<String>,
+
+        /// Overwrite existing files
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a theme starter CSS file
+    Theme {
+        /// Theme name (e.g., "acme"). Prompted if omitted.
+        name: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a custom Web Component skeleton
+    Component {
+        /// Tag name with hyphen (e.g., "my-widget"). Prompted if omitted.
+        tag: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 /// Actions for the `blueprint` subcommand.

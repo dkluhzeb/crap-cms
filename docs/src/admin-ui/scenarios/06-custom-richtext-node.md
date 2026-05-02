@@ -1,23 +1,21 @@
-# Scenario 6: Add a custom content block
+# Scenario 6: Add a custom richtext node
 
-**Goal**: add a new content block type (e.g., a "Call to Action"
+**Goal**: add a new richtext node type (e.g., a "Call to Action"
 button or an `@mention` pill) that authors can insert inside any
 richtext field in any collection.
 
 **Difficulty**: medium. ~30 minutes from scratch to a working
-custom block, with admin UI, validation, and HTML rendering.
+custom node, with admin UI, validation, and HTML rendering.
 
 **You'll touch**: `init.lua` only — no new files, no Rust, no JS.
+Or run `crap-cms make node <name>` to scaffold the registration
+file.
 
-> **Looking to add a top-level custom field type** (e.g. a `rating`
-> column shaped like a 1–5 integer with star UI everywhere `rating`
-> fields appear)? That's a different problem — top-level
-> Lua-registered field types are a **deferred roadmap item**, and
-> the workarounds available today are listed in the [What about a
-> wholly new top-level field type?](#what-about-a-wholly-new-top-level-field-type)
-> section at the bottom of this page. Custom *content blocks* (this
-> scenario) are the closest shipped equivalent: typed data with full
-> admin UI editing, scoped to live inside richtext content.
+> Looking to add a **top-level custom field type** (e.g. a rating
+> column on a collection, with stars in the admin and integer
+> storage)? See [Scenario 7: Add a custom field type](07-custom-field-type.md).
+> That scenario covers per-field render templates via
+> `admin.template` + `admin.extra` — first-class shipped support.
 
 ## Approach
 
@@ -281,180 +279,6 @@ These are real today:
   fetch time.
 - **`searchable_attrs` must be top-level scalars.** You can't
   search into a nested JSON attr.
-
-## What about a wholly new top-level field type?
-
-The above covers "custom data shapes inside richtext content." A
-different problem is **adding a brand new top-level `FieldType`
-variant** — say, a `rating` type that's a 1–5 integer with
-star-rendering everywhere `rating` fields appear in any collection,
-plus first-class sorting / filtering / SQL column-type support.
-
-This currently requires a Rust change. `FieldType` is a hardcoded
-enum in [`src/core/field/field_type.rs`](https://github.com/dkluhs/crap-cms/blob/main/src/core/field/field_type.rs),
-and `FieldAdmin` is a fixed Rust struct (no arbitrary
-`admin.component = "..."` extension key — additional keys are
-rejected at parse time). **Top-level Lua-registered field types are
-a tracked roadmap item, deferred from the pre-1.0 reshuffle.**
-
-Until that lands, four workarounds get you most of the way for
-common rating-style use cases — each with real tradeoffs:
-
-### Workaround A — `number` field + per-field `admin.template` (recommended)
-
-Declare `rating` as a `number` field with `min = 1`, `max = 5`,
-and point it at a custom render template via `admin.template`:
-
-```lua
-crap.collections.define("products", {
-  fields = {
-    crap.fields.text({ name = "name", required = true }),
-    crap.fields.number({
-      name = "rating",
-      min = 1,
-      max = 5,
-      admin = {
-        template = "fields/rating",
-        extra = {
-          icon = "star",
-          empty_icon = "star_outline",
-          color = "amber",
-        },
-      },
-    }),
-  },
-})
-```
-
-Drop the per-field template at
-`<config_dir>/templates/fields/rating.hbs`:
-
-```hbs
-{{#> partials/field}}
-  <crap-stars
-    name="{{name}}"
-    value="{{value}}"
-    data-min="{{min}}"
-    data-max="{{max}}"
-    data-icon="{{extra.icon}}"
-    data-empty-icon="{{extra.empty_icon}}"
-    data-color="{{extra.color}}"
-  ></crap-stars>
-{{/partials/field}}
-```
-
-Register a `<crap-stars>` Web Component via `custom.js`:
-
-```js
-// <config_dir>/static/components/custom.js
-import './rating.js';
-```
-
-```js
-// <config_dir>/static/components/rating.js
-class CrapStars extends HTMLElement {
-  // ... render N clickable stars (where N = data-max), write value
-  // back to a hidden input, fire crap:change for <crap-dirty-form>
-  // integration.
-}
-customElements.define('crap-stars', CrapStars);
-```
-
-**How this works**:
-
-- **`admin.template = "fields/rating"`** opts this *one* field
-  out of the default `fields/number` lookup in `RenderFieldHelper`.
-  Other `number` fields keep using `fields/number.hbs` — no global
-  override, no field-name matching.
-- **`admin.extra = {...}`** in the Lua schema becomes the flat
-  top-level `extra` key on the render context. The template reads
-  it as `{{extra.icon}}`, etc. Same template + JS component can be
-  reused across fields with different settings (different colors,
-  icons, swatches) without forking.
-- **The data is still a `number`**: SQL column is `INTEGER`,
-  validation uses `min`/`max`, sorting and filtering work
-  natively.
-
-**Path safety**: `admin.template` paths are validated at
-field-parse time — only `[a-zA-Z0-9/_-]` allowed, no `..`, no
-absolute paths. A bad path is rejected at startup with a clear
-error.
-
-**Drift tracking**: your custom template lives at
-`<config_dir>/templates/fields/rating.hbs` — it's user-original
-(no upstream counterpart at that path), so `crap-cms templates
-status` flags it as `· user-original`. Nothing to drift against.
-
-### Workaround B — `select` field + custom rendering
-
-Declare as a `select` with five options:
-
-```lua
-crap.fields.select({
-  name = "rating",
-  options = {
-    { value = "1", label = "★" },
-    { value = "2", label = "★★" },
-    { value = "3", label = "★★★" },
-    { value = "4", label = "★★★★" },
-    { value = "5", label = "★★★★★" },
-  },
-})
-```
-
-Stores as a string. No template override needed — the built-in
-`select` rendering shows the labels in a dropdown. **Tradeoffs**:
-no star *click* UI (just a dropdown of star strings), and the
-stored value is a string, not an integer (so SQL sorting orders
-lexicographically, not numerically — workable for 1–5 but breaks if
-you scale to 1–10).
-
-### Workaround C — `json` field + custom Web Component
-
-Declare as `json`:
-
-```lua
-crap.fields.json({ name = "rating" })
-```
-
-The data is opaque to crap-cms. Override
-`templates/fields/json.hbs` (globally) to insert your `<crap-stars>`
-component when the field name matches:
-
-```hbs
-{{#if (eq name "rating")}}
-  <crap-stars ...></crap-stars>
-{{else}}
-  {{!-- original json textarea --}}
-{{/if}}
-```
-
-**Tradeoffs**: no built-in validation (it's whatever JSON shape you
-write; you're responsible for shape-checking). No SQL-level sorting
-or filtering. Maximum flexibility for novel shapes; minimum
-ergonomics for simple cases.
-
-### Workaround D — custom richtext block
-
-If the rating belongs **inside content** (a "Review" article body
-with embedded ratings, not a top-level "rating" column on the
-collection), use `crap.richtext.register_node` per this scenario.
-That's the cleanest shipped path, with no fragility — but it scopes
-the rating to richtext content, not row-level fields.
-
-### When to write the Rust patch instead
-
-If you genuinely need:
-- A new SQL column type (e.g., a `rating` column distinct from
-  `INTEGER`) with custom migration handling,
-- Custom validation rules at the field-type level (not workable as
-  a `before_change` hook),
-- The field type to ship as part of a published collection schema
-  that other crap-cms instances should accept,
-
-…then a Rust patch to add the `FieldType` variant is the honest
-answer today. Track [the Phase 4b roadmap entry](../upgrade/migrating-from-old-layout.md)
-for when Lua-registered field types unblock this without a fork.
 
 ## Verifying
 
