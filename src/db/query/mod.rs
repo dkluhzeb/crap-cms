@@ -34,7 +34,7 @@ pub use pagination_result::{PaginationResult, PaginationResultBuilder, resolve_s
 pub use types::*;
 pub use validation::{
     get_valid_filter_paths, is_valid_identifier, reject_system_field, sanitize_locale,
-    validate_field_name, validate_query_fields, validate_slug,
+    validate_field_name, validate_query_fields, validate_slug, validate_template_slug,
 };
 
 #[allow(unused_imports)]

@@ -17,7 +17,7 @@ pub fn run_slot(config_dir: &Path, action: MakeAction) -> Result<()> {
         None => Input::with_theme(&crap_theme())
             .with_prompt("Slot name (e.g., dashboard_widgets, page_header_actions)")
             .validate_with(|input: &String| -> Result<(), String> {
-                scaffold::validate_slug(input).map_err(|e| e.to_string())
+                scaffold::validate_template_slug(input).map_err(|e| e.to_string())
             })
             .interact_text()
             .context("Failed to read slot name")?,

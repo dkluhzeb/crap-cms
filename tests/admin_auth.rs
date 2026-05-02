@@ -323,7 +323,7 @@ async fn login_page_csp_nonce_matches_inline_scripts() {
     //   - styles use constructable stylesheets in components, classes/`hidden`
     //     in templates, and HTMX's indicator-style injection is disabled via
     //     `htmx.config.includeIndicatorStyles=false` (the indicator CSS rules
-    //     ship in `static/styles.css` instead).
+    //     ship in `static/styles/base/reset.css` instead).
     let script_src = csp
         .split(';')
         .map(str::trim)

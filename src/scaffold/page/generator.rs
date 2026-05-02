@@ -12,7 +12,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli,
-    scaffold::{to_title_case, validate_slug},
+    scaffold::{to_title_case, validate_template_slug},
 };
 
 /// Options for `make_page`.
@@ -32,7 +32,7 @@ pub struct MakePageOptions<'a> {
 
 /// Scaffold the page template.
 pub fn make_page(opts: &MakePageOptions) -> Result<()> {
-    validate_slug(opts.slug)?;
+    validate_template_slug(opts.slug)?;
 
     let dir = opts.config_dir.join("templates").join("pages");
     fs::create_dir_all(&dir).context("Failed to create templates/pages/ directory")?;
@@ -199,5 +199,25 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn accepts_hyphenated_slug() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_page(&MakePageOptions {
+            config_dir: tmp.path(),
+            slug: "system-status",
+            label: None,
+            section: None,
+            icon: None,
+            access: None,
+            force: false,
+        })
+        .unwrap();
+        assert!(
+            tmp.path()
+                .join("templates/pages/system-status.hbs")
+                .exists()
+        );
     }
 }

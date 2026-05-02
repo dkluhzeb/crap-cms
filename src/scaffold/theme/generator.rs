@@ -13,7 +13,7 @@ use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::{cli, scaffold::validate_slug};
+use crate::{cli, scaffold::validate_template_slug};
 
 /// Options for `make_theme`.
 pub struct MakeThemeOptions<'a> {
@@ -24,7 +24,7 @@ pub struct MakeThemeOptions<'a> {
 
 /// Scaffold a theme CSS file in `static/styles/themes/themes-<name>.css`.
 pub fn make_theme(opts: &MakeThemeOptions) -> Result<()> {
-    validate_slug(opts.name)?;
+    validate_template_slug(opts.name)?;
 
     let dir = opts.config_dir.join("static").join("styles").join("themes");
     fs::create_dir_all(&dir).context("Failed to create static/styles/themes/ directory")?;
@@ -169,5 +169,21 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn accepts_hyphenated_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_theme(&MakeThemeOptions {
+            config_dir: tmp.path(),
+            name: "acme-dark",
+            force: false,
+        })
+        .unwrap();
+        assert!(
+            tmp.path()
+                .join("static/styles/themes/themes-acme-dark.css")
+                .exists()
+        );
     }
 }

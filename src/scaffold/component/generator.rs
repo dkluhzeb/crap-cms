@@ -92,9 +92,21 @@ fn render_component_js(tag: &str) -> String {
  * `static formAssociated = true` and the `setFormValue` call if you
  * don't need form integration.
  *
+ * Styling uses constructable stylesheets (`adoptedStyleSheets`) and
+ * DOM is built with the `h()` helper — both pierce the strict CSP
+ * without needing `'unsafe-inline'`.
+ *
  * @module {tag}
  * @stability stable
  */
+
+import {{ css }} from './_internal/css.js';
+import {{ h }} from './_internal/h.js';
+
+const sheet = css`
+  :host {{ display: inline-block; }}
+  .container {{ padding: var(--space-sm, 0.5rem); }}
+`;
 
 class {class_name} extends HTMLElement {{
   static formAssociated = true;
@@ -105,6 +117,12 @@ class {class_name} extends HTMLElement {{
     /** @type {{ElementInternals}} */
     this._internals = this.attachInternals();
     this.attachShadow({{ mode: 'open' }});
+    this.shadowRoot.adoptedStyleSheets = [sheet];
+
+    this._value = h('span', {{ part: 'value' }});
+    this.shadowRoot.append(
+      h('div', {{ class: 'container', part: 'container' }}, this._value),
+    );
   }}
 
   connectedCallback() {{
@@ -127,17 +145,8 @@ class {class_name} extends HTMLElement {{
   }}
 
   _render() {{
-    if (!this.shadowRoot) return;
-    const v = this.value;
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {{ display: inline-block; }}
-        .container {{ padding: var(--space-sm, 0.5rem); }}
-      </style>
-      <div class="container" part="container">
-        <span part="value">${{v || '(empty)'}}</span>
-      </div>
-    `;
+    if (!this._value) return;
+    this._value.textContent = this.value || '(empty)';
   }}
 
   /** Dispatch `crap:change` so <crap-dirty-form> picks up edits. */
@@ -187,6 +196,33 @@ mod tests {
         assert!(body.contains("class MyWidget extends HTMLElement"));
         assert!(body.contains("customElements.define('my-widget'"));
         assert!(body.contains("static formAssociated = true"));
+    }
+
+    /// Regression: the previous scaffold shipped `shadowRoot.innerHTML = …`
+    /// with an inline `<style>` block — the exact pattern that alpha.8
+    /// migrated all built-in components away from. Lock the scaffold in
+    /// to the new constructable-stylesheet + `h()` pattern so new
+    /// components don't drift back.
+    #[test]
+    fn uses_constructable_stylesheets_and_h_helper() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_component(&MakeComponentOptions {
+            config_dir: tmp.path(),
+            tag: "my-widget",
+            force: false,
+        })
+        .unwrap();
+        let file = tmp.path().join("static/components/my-widget.js");
+        let body = fs::read_to_string(&file).unwrap();
+
+        assert!(body.contains("import { css } from './_internal/css.js'"));
+        assert!(body.contains("import { h } from './_internal/h.js'"));
+        assert!(body.contains("adoptedStyleSheets = [sheet]"));
+        assert!(body.contains("h('div'"));
+
+        // No inline-style or innerHTML pattern.
+        assert!(!body.contains("innerHTML"));
+        assert!(!body.contains("<style>"));
     }
 
     #[test]

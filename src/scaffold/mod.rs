@@ -46,4 +46,11 @@ pub use self::wizard::interactive_field_wizard;
 pub(crate) use crate::core::field::to_title_case;
 
 // Re-export from canonical location for backward compatibility.
-pub use crate::db::query::validate_slug;
+//
+// `validate_slug` — strict, used for slugs that map to SQL or Lua
+// identifiers (collections, globals, fields, jobs, nodes).
+//
+// `validate_template_slug` — looser, allows hyphens, used for slugs
+// that map to file paths or URL segments (custom pages, slots,
+// themes).
+pub use crate::db::query::{validate_slug, validate_template_slug};

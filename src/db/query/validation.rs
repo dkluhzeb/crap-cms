@@ -63,6 +63,11 @@ pub fn reject_system_field(field: &str) -> Result<()> {
 }
 
 /// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
+///
+/// Used for slugs that map to SQL identifiers, Lua identifiers, or
+/// dotted-access keys (collection names, global names, field/node/job
+/// names). For URL- and filename-style slugs that allow hyphens
+/// (custom pages, slots, themes), use [`validate_template_slug`].
 pub fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
         bail!("Slug cannot be empty");
@@ -80,6 +85,49 @@ pub fn validate_slug(slug: &str) -> Result<()> {
 
     if slug.starts_with('_') {
         bail!("Slug cannot start with underscore");
+    }
+
+    Ok(())
+}
+
+/// Validate a URL/filename-style slug: lowercase alphanumeric, hyphens,
+/// underscores. Used by scaffold targets whose slug maps to a file path
+/// or URL segment (custom pages, slots, themes) — not to a Lua or SQL
+/// identifier. Strictly tighter than the runtime `is_valid_slug` in
+/// `admin::custom_pages` so scaffold output is always a subset of what
+/// the runtime accepts.
+///
+/// Rules:
+/// - non-empty
+/// - only `[a-z0-9_-]`
+/// - cannot start with `-` or `_`
+/// - cannot end with `-`
+/// - no `--` or `__` runs
+pub fn validate_template_slug(slug: &str) -> Result<()> {
+    if slug.is_empty() {
+        bail!("Slug cannot be empty");
+    }
+
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
+        bail!(
+            "Invalid slug '{}' — use lowercase letters, digits, '-', and '_' only",
+            slug
+        );
+    }
+
+    if slug.starts_with('-') || slug.starts_with('_') {
+        bail!("Slug '{}' cannot start with '-' or '_'", slug);
+    }
+
+    if slug.ends_with('-') {
+        bail!("Slug '{}' cannot end with '-'", slug);
+    }
+
+    if slug.contains("--") || slug.contains("__") {
+        bail!("Slug '{}' cannot contain '--' or '__'", slug);
     }
 
     Ok(())
@@ -340,6 +388,32 @@ mod tests {
         assert!(validate_slug("Posts").is_err());
         assert!(validate_slug("my-slug").is_err());
         assert!(validate_slug("_private").is_err());
+    }
+
+    #[test]
+    fn validate_template_slug_accepts_lowercase_with_hyphens_and_underscores() {
+        assert!(validate_template_slug("status").is_ok());
+        assert!(validate_template_slug("system-status").is_ok());
+        assert!(validate_template_slug("my_widget").is_ok());
+        assert!(validate_template_slug("v2-users").is_ok());
+        assert!(validate_template_slug("a").is_ok());
+    }
+
+    #[test]
+    fn validate_template_slug_rejects_invalid() {
+        // Empty, charset violations, and edge positions.
+        assert!(validate_template_slug("").is_err());
+        assert!(validate_template_slug("Status").is_err());
+        assert!(validate_template_slug("with space").is_err());
+        assert!(validate_template_slug("dot.dot").is_err());
+        assert!(validate_template_slug("../etc").is_err());
+        assert!(validate_template_slug("with/slash").is_err());
+        // Leading/trailing/double separators.
+        assert!(validate_template_slug("-leading").is_err());
+        assert!(validate_template_slug("_leading").is_err());
+        assert!(validate_template_slug("trailing-").is_err());
+        assert!(validate_template_slug("double--hyphen").is_err());
+        assert!(validate_template_slug("double__underscore").is_err());
     }
 
     /// Regression: get_valid_filter_paths did not recurse into layout wrappers,

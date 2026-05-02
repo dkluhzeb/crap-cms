@@ -11,7 +11,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli,
-    scaffold::{to_title_case, validate_slug},
+    scaffold::{to_title_case, validate_template_slug},
 };
 
 /// Built-in slots and their typical use cases. Used by the scaffold to
@@ -54,9 +54,9 @@ pub struct MakeSlotOptions<'a> {
 
 /// Scaffold the slot widget HBS file.
 pub fn make_slot(opts: &MakeSlotOptions) -> Result<()> {
-    validate_slug(opts.slot)?;
+    validate_template_slug(opts.slot)?;
     let file = opts.file.unwrap_or("widget");
-    validate_slug(file)?;
+    validate_template_slug(file)?;
 
     let dir = opts
         .config_dir
@@ -177,5 +177,22 @@ mod tests {
         make_slot(&opts).unwrap();
         let err = make_slot(&opts).unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn accepts_hyphenated_slot_and_file_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_slot(&MakeSlotOptions {
+            config_dir: tmp.path(),
+            slot: "dashboard-widgets",
+            file: Some("status-card"),
+            force: false,
+        })
+        .unwrap();
+        assert!(
+            tmp.path()
+                .join("templates/slots/dashboard-widgets/status-card.hbs")
+                .exists()
+        );
     }
 }

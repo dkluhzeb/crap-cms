@@ -5,29 +5,35 @@ into a stable, role-grouped layout. This page is the **one-stop
 migration guide** for any config dir built against the previous
 layout.
 
+> **Breaking change — no compatibility aliases.** Old paths now 404
+> outright. Config-dir overlays at any old path silently stop serving
+> after the upgrade. **Migrate before you upgrade**, using the recipe
+> below.
+
 ## TL;DR
 
 - **Public components** (`<crap-toast>`, `<crap-richtext>`, etc.):
   override paths are **unchanged**. If your config dir has
   `static/components/toast.js`, it still works exactly as before.
 - **CSS files**: moved from `static/*.css` flat into
-  `static/styles/{base,parts,layout,themes}/`. Your overlays at the
-  old paths still work via aliases (deprecation warnings emitted).
+  `static/styles/{base,parts,layout,themes}/`. Overlays at the old
+  flat paths return 404.
 - **Vendored JS** (`htmx.js`, `codemirror.js`, `prosemirror.js`):
-  moved to `static/vendor/`. Aliased.
+  moved to `static/vendor/`. Old paths 404.
 - **Icons** (`favicon.svg`, `crap-cms.svg`): moved to `static/icons/`.
-  Aliased.
+  Old paths 404.
 - **Plumbing JS modules** (`h.js`, `css.js`, `i18n.js`, `util/`,
-  others): moved to `static/components/_internal/`. Aliased. **Most
-  users should never have overridden these.**
+  others): moved to `static/components/_internal/`. Old paths 404.
+  **Most users should never have overridden these.**
 - **Templates**: not moved. Page-family folders (`auth/`,
   `collections/`, `dashboard/`, `errors/`, `globals/`) stay at the
   top level alongside `partials/`, `fields/`, `layout/`, `email/`.
 
-Compatibility aliases ship with this release and **will be removed at
-1.0**. Plan to migrate before then. Run
-`crap-cms templates layout` against your config dir for an
-auto-generated migration recipe.
+Run `crap-cms templates layout` against your config dir for an
+auto-generated migration recipe (`mkdir -p` + `git mv` lines plus
+flagged manual cleanups). Run it **before** upgrading: once you're
+on alpha.8, overlays at the old paths simply stop serving and the
+admin falls back to the embedded defaults without a warning.
 
 ## Why the change
 
@@ -78,19 +84,19 @@ static/styles/
 ```
 
 The entry HTML reference is now `<link href="/static/styles/main.css">`.
-**The old URL `/static/styles.css` keeps working** via an alias for
-this release.
+The old URL `/static/styles.css` returns 404 — update overlays before
+upgrading.
 
 ### `static/vendor/` — bundled third-party
 
 `htmx.js`, `codemirror.js`, `prosemirror.js` moved here. The HBS
 layout `<script>` tags now reference `/static/vendor/<name>.js`. Old
-URLs aliased.
+URLs (`/static/htmx.js`, etc.) return 404.
 
 ### `static/icons/` — SVGs
 
 `favicon.svg` and `crap-cms.svg` moved here. The favicon `<link>` now
-references `/static/icons/favicon.svg`. Old URLs aliased.
+references `/static/icons/favicon.svg`. Old URLs return 404.
 
 ### `static/components/_internal/` — plumbing
 
@@ -157,9 +163,9 @@ When the file is absent, the auto-import is a silent no-op.
 
 ## Path-by-path migration map
 
-The full move table. All old paths still resolve via aliases for this
-release (with a deprecation warning logged once per process per old
-path). Migrate before 1.0.
+The full move table. Every old path in this table returns 404 in
+alpha.8. Run `crap-cms templates layout` to get the exact `git mv`
+lines for the files you actually have.
 
 ### Static — CSS
 
@@ -238,15 +244,13 @@ moved CSS, relative `import` paths inside moved JS).
 
 The command is **read-only** — it describes; you transform.
 
-## When the aliases go away
+## Why no compatibility aliases?
 
-Compatibility aliases ship with this release. They will be **removed
-at 1.0**. Until then:
-
-- Old URLs serve transparently. Your existing overlays keep working.
-- Each first hit of an aliased path emits a `WARN` log entry pointing
-  at the new path and this guide.
-- `crap-cms templates layout` lists everything that needs to move.
-
-After 1.0, requests to old paths return 404. There's no further
-rescue. Migrate while the warnings are visible.
+Every alias is a permanent maintenance tax: it pins a second public
+URL to the same asset, has to be tested across upgrades, and tends to
+outlive the deprecation it was meant to soften. The reshuffle is
+small, mechanical, and tooling-assisted (`crap-cms templates layout`
+gives you the exact `git mv` lines), so a one-shot migration is less
+costly than maintaining aliases through 1.0 and beyond. If you need a
+soft rollout, stage the upgrade in pre-prod with the migration
+applied, verify under the strict CSP, then bump production.

@@ -25,7 +25,7 @@ pub fn run_page(config_dir: &Path, action: MakeAction) -> Result<()> {
         None => Input::with_theme(&crap_theme())
             .with_prompt("Page slug (URL becomes /admin/p/<slug>)")
             .validate_with(|input: &String| -> Result<(), String> {
-                scaffold::validate_slug(input).map_err(|e| e.to_string())
+                scaffold::validate_template_slug(input).map_err(|e| e.to_string())
             })
             .interact_text()
             .context("Failed to read page slug")?,
