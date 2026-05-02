@@ -79,6 +79,7 @@ mod tests {
             CollectionDefinition, Document, FieldDefinition,
             collection::{Hooks, VersionsConfig},
             field::FieldType,
+            validate::ValidationError,
         },
         db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},
@@ -180,6 +181,15 @@ mod tests {
             _operation: &str,
         ) -> Vec<String> {
             Vec::new()
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &HashMap<String, Value>,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
         }
     }
 

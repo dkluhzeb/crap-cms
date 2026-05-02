@@ -14,7 +14,7 @@ use crate::{
         self, HookRunner,
         api::{self, VmLabel},
         lifecycle::{
-            LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
+            InitPhase, LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
             crud::register_crud_functions,
             execution::scan_registered_events,
             types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
@@ -162,11 +162,19 @@ fn create_lua_vm(
         populate_singleflight,
     )?;
 
+    // Mark the init phase so register-only APIs (`crap.pages.register`,
+    // `crap.template_data.register`, ...) accept calls. The marker is
+    // removed at the end so any later runtime hook that calls those APIs
+    // gets a clear error instead of a silent no-op or per-VM fragmentation.
+    lua.set_app_data(InitPhase);
+
     load_def_dir(&lua, config_dir, "collection")?;
     load_def_dir(&lua, config_dir, "global")?;
     load_def_dir(&lua, config_dir, "job")?;
 
     execute_init_lua(&lua, config_dir, vm_index)?;
+
+    lua.remove_app_data::<InitPhase>();
 
     Ok(lua)
 }

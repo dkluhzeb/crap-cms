@@ -29,6 +29,8 @@
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
+use crate::hooks::lifecycle::InitPhase;
+
 /// Named registry value that holds the `slug → page-table` map.
 pub(crate) const PAGES_KEY: &str = "_crap_custom_pages";
 
@@ -50,6 +52,19 @@ pub(super) fn register_pages(lua: &Lua, crap: &Table) -> Result<()> {
 }
 
 fn register_page(lua: &Lua, slug: &str, opts: Table) -> LuaResult<()> {
+    // Custom pages are read into `AdminState.custom_pages` once at startup
+    // (see `admin::server::start`). A runtime call would only land in the
+    // current VM's named registry and never reach the live registry, so the
+    // sidebar entry would silently fail to appear and the route would not
+    // be added. Refuse explicitly with a pointer to the right place.
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(
+            "crap.pages.register must be called from init.lua or a definition file \
+             — runtime registration has no effect on the sidebar or routes"
+                .into(),
+        ));
+    }
+
     if !is_valid_slug(slug) {
         return Err(RuntimeError(format!(
             "crap.pages.register: invalid slug {slug:?} (use a-z, 0-9, '-', '_')"
@@ -85,12 +100,20 @@ fn is_valid_slug(s: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn register_and_lookup_a_page() {
+    /// Build a Lua VM with `crap.pages` registered AND the `InitPhase`
+    /// marker set, mimicking the state during `execute_init_lua`.
+    fn lua_in_init_phase() -> Lua {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
         register_pages(&lua, &crap).unwrap();
         lua.globals().set("crap", crap).unwrap();
+        lua.set_app_data(InitPhase);
+        lua
+    }
+
+    #[test]
+    fn register_and_lookup_a_page() {
+        let lua = lua_in_init_phase();
 
         lua.load(
             r#"
@@ -112,21 +135,42 @@ mod tests {
 
     #[test]
     fn invalid_slug_is_rejected() {
-        let lua = Lua::new();
-        let crap = lua.create_table().unwrap();
-        register_pages(&lua, &crap).unwrap();
-        lua.globals().set("crap", crap).unwrap();
+        let lua = lua_in_init_phase();
 
         let result = lua.load(r#"crap.pages.register("../bad", {})"#).exec();
         assert!(result.is_err());
     }
 
+    /// Regression: `crap.pages.register` called outside the init phase must
+    /// fail loudly. Custom pages are read once at startup; a runtime call
+    /// would silently land in the current VM's named registry only and
+    /// never reach the live `CustomPageRegistry`.
     #[test]
-    fn list_returns_registered_slugs() {
+    fn register_outside_init_phase_is_rejected() {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
         register_pages(&lua, &crap).unwrap();
         lua.globals().set("crap", crap).unwrap();
+        // Note: NO `set_app_data(InitPhase)` — we're simulating a runtime hook.
+
+        let err = lua
+            .load(r#"crap.pages.register("status", {})"#)
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("init.lua") || err.contains("runtime registration"),
+            "expected init-only error message, got: {err}"
+        );
+
+        let pages: Table = lua.named_registry_value(PAGES_KEY).unwrap();
+        let entry: Result<Table, _> = pages.get("status");
+        assert!(entry.is_err(), "page must NOT be registered when refused");
+    }
+
+    #[test]
+    fn list_returns_registered_slugs() {
+        let lua = lua_in_init_phase();
 
         lua.load(
             r#"

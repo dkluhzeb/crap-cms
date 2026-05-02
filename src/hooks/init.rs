@@ -9,6 +9,7 @@ use tracing::{debug, info};
 use crate::{
     config::CrapConfig,
     core::{FieldDefinition, FieldType, Registry, SharedRegistry},
+    hooks::lifecycle::InitPhase,
 };
 
 use super::api;
@@ -27,11 +28,18 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
     setup_package_paths(&lua, config_dir)?;
     api::register_api(&lua, registry.clone(), config)?;
 
+    // Mark init phase so register-only APIs (`crap.pages.register`,
+    // `crap.template_data.register`, …) accept calls. Cleared after
+    // init.lua so any later runtime call gets a clear error.
+    lua.set_app_data(InitPhase);
+
     let n_collections = load_def_dir(&lua, config_dir, "collection")?;
     let n_globals = load_def_dir(&lua, config_dir, "global")?;
     let n_jobs = load_def_dir(&lua, config_dir, "job")?;
 
     let has_init = execute_init_lua(&lua, config_dir)?;
+
+    lua.remove_app_data::<InitPhase>();
 
     info!(
         "Lua init: loaded {} collection(s), {} global(s), {} job(s){}",

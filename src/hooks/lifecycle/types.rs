@@ -4,9 +4,14 @@ use mlua::Lua;
 use serde_json::Value;
 
 use crate::{
-    core::{Document, cache::SharedCache, event::SharedEventTransport},
-    db::DbConnection,
-    service::{EventQueue, VerificationQueue},
+    core::{
+        Document,
+        cache::SharedCache,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+        upload::SharedStorage,
+    },
+    db::{DbConnection, query::SharedPopulateSingleflight},
+    service::{EventQueue, ServiceContext, VerificationQueue},
 };
 
 /// Result of evaluating a display condition function.
@@ -122,14 +127,12 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
 /// Storage backend, stored in Lua `app_data` for upload file cleanup in CRUD hooks.
-pub(crate) struct LuaStorage(pub(crate) crate::core::upload::SharedStorage);
+pub(crate) struct LuaStorage(pub(crate) SharedStorage);
 
 /// User-invalidation transport, stored in Lua `app_data` so CRUD delete
 /// and lock paths can publish live-stream tear-down signals from inside
 /// Lua-invoked service calls. `None` (missing app_data) = no-op.
-pub(crate) struct LuaInvalidationTransport(
-    pub(crate) crate::core::event::SharedInvalidationTransport,
-);
+pub(crate) struct LuaInvalidationTransport(pub(crate) SharedInvalidationTransport);
 
 /// Process-wide populate singleflight, stored in Lua `app_data` so Lua-invoked
 /// `crap.collections.find` / `crap.collections.find_by_id` calls can dedup
@@ -137,7 +140,7 @@ pub(crate) struct LuaInvalidationTransport(
 /// app_data) falls back to a fresh per-call singleflight. For override-access
 /// Lua calls the service layer's guardrail discards whatever we pass here,
 /// so the Arc only pays off for ordinary (non-override) Lua reads.
-pub(crate) struct LuaPopulateSingleflight(pub(crate) crate::db::query::SharedPopulateSingleflight);
+pub(crate) struct LuaPopulateSingleflight(pub(crate) SharedPopulateSingleflight);
 
 /// Infrastructure for Lua CRUD event publishing, cache invalidation, and event
 /// queueing. Stored in Lua `app_data` alongside `TxContext` so that CRUD
@@ -159,7 +162,7 @@ impl LuaCrudInfra {
     /// Build from a parent `ServiceContext`, attaching the given queues.
     /// Clones the context's event transport and cache (cheap Arc clones).
     pub fn from_ctx(
-        ctx: &crate::service::ServiceContext,
+        ctx: &ServiceContext,
         event_queue: Option<EventQueue>,
         verification_queue: Option<VerificationQueue>,
     ) -> Self {
@@ -189,6 +192,16 @@ pub(crate) struct MaxHookDepth(pub(crate) u32);
 /// Whether the system is in default-deny mode for access control.
 /// Stored in Lua `app_data` so access checks can read it without signature changes.
 pub(crate) struct DefaultDeny(pub(crate) bool);
+
+/// Marker stored in Lua `app_data` for the duration of init-time loading
+/// (collection / global / job def files plus `init.lua`). APIs that only
+/// make sense at init time — `crap.pages.register`,
+/// `crap.template_data.register`, etc. — check for this marker and refuse
+/// when called from a runtime hook. Without this, runtime registration
+/// would either no-op silently (custom pages — read once at startup) or
+/// fragment across the Lua VM pool (template data — registered into one
+/// VM only), both of which are footguns for plugin authors.
+pub struct InitPhase;
 
 /// RAII guard that restores `HookDepth` to its original value on drop.
 /// Prevents depth leaks when hooks return errors via `?`.
@@ -303,12 +316,12 @@ mod tests {
     /// delete/delete_many CRUD functions can clean up upload files.
     #[test]
     fn lua_storage_stored_and_retrieved() {
-        use crate::core::upload::storage::LocalStorage;
         use std::sync::Arc;
 
+        use crate::core::upload::storage::LocalStorage;
+
         let lua = Lua::new();
-        let storage: crate::core::upload::SharedStorage =
-            Arc::new(LocalStorage::new("/tmp/test-uploads"));
+        let storage: SharedStorage = Arc::new(LocalStorage::new("/tmp/test-uploads"));
         lua.set_app_data(LuaStorage(storage));
 
         let retrieved = lua.app_data_ref::<LuaStorage>().unwrap();
