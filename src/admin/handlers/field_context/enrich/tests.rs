@@ -208,6 +208,83 @@ fn enriched_sub_field_nested_array_populates_rows() {
     );
 }
 
+/// Regression: a Code field directly inside an Array row must inherit
+/// `admin.language` from its definition. Previously `dispatch_sub_field_type`
+/// had no `Code` arm, so the language stayed empty and CodeMirror fell back
+/// to the default mode for code fields nested in array rows. The same field
+/// inside a Row/Tabs/Collapsible wrapper inside the array was handled
+/// correctly by `children.rs`, producing inconsistent rendering for the
+/// same field config based on nesting position.
+#[test]
+fn enriched_sub_field_code_in_array_row_inherits_admin_language() {
+    use crate::core::field::FieldAdminBuilder;
+
+    let mut array = make_field("snippets", FieldType::Array);
+    let mut code = make_field("body", FieldType::Code);
+    code.admin = FieldAdminBuilder::new()
+        .language("javascript".to_string())
+        .build();
+    array.fields = vec![code];
+
+    let raw_value = json!([{"body": "console.log(1);"}]);
+
+    let ctx = build_enriched_sub_field_context(
+        &array,
+        Some(&raw_value),
+        "doc",
+        0,
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+    );
+
+    let rows = ctx["rows"].as_array().unwrap();
+    let sub_fields = rows[0]["sub_fields"].as_array().unwrap();
+    assert_eq!(sub_fields[0]["field_type"], "code");
+    assert_eq!(sub_fields[0]["language"], "javascript");
+}
+
+/// Regression: a localized field inside a layout wrapper (Row/Tabs/Collapsible)
+/// inside a non-localized Array must remain editable in non-default locales.
+/// The top-level array enrichment computes `locale_locked = non_default_locale
+/// && !array.localized = true` and passes it down. Previously the wrapper's
+/// `build_sub_field_base` and the wrapper-children's `build_child_base` both
+/// inherited that flag verbatim instead of recomputing
+/// `non_default_locale && !child.localized` per field, so a localized field
+/// inside a Row inside an Array went read-only in non-default locales — users
+/// couldn't translate it.
+#[test]
+fn localized_field_in_layout_wrapper_in_array_is_editable_in_non_default_locale() {
+    let mut row = make_field("layout", FieldType::Row);
+    let mut title = make_field("title", FieldType::Text);
+    title.localized = true;
+    row.fields = vec![title];
+
+    // Simulate the state after the top-level `enrich_array` ran on a
+    // non-localized array in a non-default locale: `locale_locked = true`
+    // is propagated into the per-row sub-field opts.
+    let errors = HashMap::new();
+    let opts = SubFieldOpts::builder(&errors)
+        .locale_locked(true)
+        .non_default_locale(true)
+        .depth(1)
+        .build();
+
+    let row_value = json!({"title": "Hello"});
+    let ctx = build_enriched_sub_field_context(&row, Some(&row_value), "items[0]", 0, &opts);
+
+    assert_eq!(ctx["field_type"], "row");
+    // Row is non-localized → locale_locked stays true on the wrapper itself.
+    assert_eq!(ctx["locale_locked"], true);
+
+    let title_ctx = &ctx["sub_fields"][0];
+    assert_eq!(title_ctx["field_name"], "title");
+    assert_eq!(title_ctx["localized"], true);
+    assert_eq!(
+        title_ctx["locale_locked"], false,
+        "localized field inside layout wrapper must be unlocked in non-default locale"
+    );
+    assert_eq!(title_ctx["readonly"], false);
+}
+
 #[test]
 fn enriched_sub_field_nested_blocks_populates_rows() {
     let mut inner_blocks = make_field("sections", FieldType::Blocks);

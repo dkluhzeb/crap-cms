@@ -1,18 +1,26 @@
 //! Register `crap.pages` — declare custom admin pages and their sidebar
 //! metadata from Lua. The page TEMPLATE lives at
 //! `<config_dir>/templates/pages/<slug>.hbs` (rendered by Handlebars);
-//! this API only adds the sidebar entry.
+//! this API only adds the sidebar entry and the optional access gate.
 //!
 //! ## Usage
 //!
 //! ```lua
 //! crap.pages.register("status", {
-//!   section = "Tools",
-//!   label   = "System status",
-//!   icon    = "heart-pulse",
-//!   permission = "admin",
+//!   section = "Tools",                  -- optional sidebar section heading
+//!   label   = "System status",          -- optional; defaults to title-cased slug
+//!   icon    = "heart-pulse",            -- optional Material Symbols icon
+//!   access  = "access.admin_only",      -- optional Lua function ref
 //! })
 //! ```
+//!
+//! Recognized keys: `section`, `label`, `icon`, `access`. All four are
+//! optional — every key may be omitted, in which case the page still
+//! routes at `/admin/p/<slug>` but no sidebar entry is rendered (when
+//! `label` is missing) and no access gate runs (when `access` is missing).
+//! `access` is a Lua function reference name (e.g. `"access.admin_only"`)
+//! resolved against the same registry the collection-level `access.*`
+//! entries use; **not** a role string.
 //!
 //! For dynamic page data, use the existing `crap.template_data.register`
 //! plus the `{{data "name"}}` helper — same pattern as slot widgets, no

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
+use tracing::warn;
 
 use crate::{
     admin::{
@@ -38,13 +39,35 @@ use crate::{
 };
 
 /// Extract selected IDs from a has-many field value.
+///
+/// Logs a warning when the stored value isn't an array. Empty / missing keys
+/// are normal (no rows yet) and stay quiet; a string value here usually
+/// signals a `has_many` flag that disagrees with the storage shape (data
+/// migrated from has_one without a backfill, hand-edited DB row, or a
+/// faulty Lua hook), which would otherwise present as an empty selector
+/// without explanation.
 fn extract_selected_ids(doc_fields: &HashMap<String, Value>, field_name: &str) -> Vec<String> {
     match doc_fields.get(field_name) {
         Some(Value::Array(arr)) => arr
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),
-        _ => Vec::new(),
+        None | Some(Value::Null) => Vec::new(),
+        Some(other) => {
+            let kind = match other {
+                Value::String(_) => "string",
+                Value::Number(_) => "number",
+                Value::Bool(_) => "bool",
+                Value::Object(_) => "object",
+                _ => "other",
+            };
+            warn!(
+                field = field_name,
+                kind = kind,
+                "has_many relationship value is not an array; selected items will be empty",
+            );
+            Vec::new()
+        }
     }
 }
 
@@ -148,6 +171,16 @@ pub(super) fn enrich_relationship(
             rel_locale_ctx,
         )
     } else {
+        // has_one expects a single string id. If the stored value is an
+        // array (e.g. `has_many` flipped to `has_one` without a backfill),
+        // `as_str()` silently returns None and the selector renders empty.
+        // Warn so the operator sees the mismatch.
+        if matches!(rf.base.value, Value::Array(_)) {
+            warn!(
+                field = field_def.name.as_str(),
+                "has_one relationship value is an array; selector will render empty",
+            );
+        }
         let current_value = rf.base.value.as_str().unwrap_or("");
         resolve_has_one_item(
             current_value,

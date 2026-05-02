@@ -86,6 +86,13 @@ fn build_sub_field_base(
         .map(|ls| ls.resolve_default().to_string())
         .unwrap_or_else(|| auto_label_from_name(&sf.name));
 
+    // Recompute per-field instead of inheriting from the parent: a localized
+    // field inside a non-localized parent must stay editable in non-default
+    // locales. Layout wrappers (Row/Tabs/Collapsible) themselves are always
+    // non-localized, so they pick up the parent's lock state naturally via
+    // this same formula.
+    let locale_locked = opts.non_default_locale && !sf.localized;
+
     BaseFieldData {
         name: indexed_name.to_string(),
         field_name: sf.name.clone(),
@@ -102,9 +109,9 @@ fn build_sub_field_base(
             .description
             .as_ref()
             .map(|ls| ls.resolve_default().to_string()),
-        readonly: sf.admin.readonly || opts.locale_locked,
+        readonly: sf.admin.readonly || locale_locked,
         localized: sf.localized,
-        locale_locked: opts.locale_locked,
+        locale_locked,
         position: sf.admin.position.clone(),
         template: sf.admin.template.clone(),
         extra: sf.admin.extra.clone(),
@@ -323,6 +330,12 @@ fn dispatch_sub_field_type(
             tf.resizable = sf.admin.resizable;
         }
         FieldContext::Richtext(rf) => enrich_sub_richtext(rf, sf, indexed_name, opts.errors),
+        FieldContext::Code(cf) => {
+            cf.language = sf.admin.language.as_deref().unwrap_or("json").to_string();
+            if !sf.admin.languages.is_empty() {
+                cf.languages = Some(sf.admin.languages.clone());
+            }
+        }
         FieldContext::Text(tf) if sf.has_many => field_types::sub_text_has_many_tags(tf, val),
         FieldContext::Number(nf) if sf.has_many => field_types::sub_number_has_many_tags(nf, val),
         _ => {}

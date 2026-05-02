@@ -87,13 +87,14 @@ fn resolve_child_name_and_value<'a>(
 }
 
 /// Build the typed shared base data for a child field. `locale_locked` is
-/// inherited from the parent layout wrapper's row, not recomputed from
-/// `non_default_locale && !field.localized` like the build phase does.
+/// recomputed per child as `non_default_locale && !child.localized`, matching
+/// the build-phase semantics. A localized field inside a non-localized layout
+/// wrapper must stay editable in non-default locales.
 fn build_child_base(
     child: &FieldDefinition,
     child_name: &str,
     child_val: &str,
-    locale_locked: bool,
+    non_default_locale: bool,
     errors: &HashMap<String, String>,
 ) -> BaseFieldData {
     let label = child
@@ -102,6 +103,8 @@ fn build_child_base(
         .as_ref()
         .map(|ls| ls.resolve_default().to_string())
         .unwrap_or_else(|| auto_label_from_name(&child.name));
+
+    let locale_locked = non_default_locale && !child.localized;
 
     BaseFieldData {
         name: child_name.to_string(),
@@ -399,7 +402,7 @@ fn build_child(
         child,
         &child_name,
         &child_val,
-        opts.locale_locked,
+        opts.non_default_locale,
         opts.errors,
     );
 
