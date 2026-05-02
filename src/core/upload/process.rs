@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context as _, Result};
 
 use super::{
+    exif::apply_exif_orientation,
     resize::process_image_sizes,
     validate::{check_image_dimensions, sanitize_filename, validate_upload},
 };
@@ -111,6 +112,14 @@ pub fn process_upload(
         check_image_dimensions(&file.data)?;
 
         let img = image::load_from_memory(&file.data).context("Failed to decode image")?;
+        // Phones and cameras commonly record images sideways with an EXIF
+        // `Orientation` tag instructing the renderer to rotate. The `image`
+        // crate ignores the tag, so without this step every portrait photo
+        // would ship sideways through the resize and format-conversion
+        // pipeline. Re-encoding into PNG/WebP/AVIF below also strips the
+        // remaining EXIF metadata (GPS coords, camera identifiers) — a
+        // privacy win for any uploads served publicly.
+        let img = apply_exif_orientation(&file.data, img);
 
         width = Some(img.width());
         height = Some(img.height());

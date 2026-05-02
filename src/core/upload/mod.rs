@@ -1,6 +1,7 @@
 //! Upload handling: file validation, image resizing, and format conversion (WebP/AVIF).
 
 mod collection_upload;
+mod exif;
 mod format;
 mod image_fit;
 mod image_size;

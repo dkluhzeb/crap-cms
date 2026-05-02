@@ -63,6 +63,11 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "avif"] }
 webp = "0.3"
+# EXIF parsing for orientation handling. The `image` crate decodes pixel
+# data but ignores EXIF metadata, so portrait photos from phones (which
+# encode rotation via the orientation tag rather than rotating pixels)
+# would otherwise display sideways.
+kamadak-exif = "0.6"
 
 # HTTP client (blocking — used in Lua spawn_blocking context)
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
