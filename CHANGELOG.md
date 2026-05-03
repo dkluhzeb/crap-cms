@@ -256,6 +256,83 @@ to the detailed entry with full migration steps.
   generic `@template {keyof HTMLElementTagNameMap} K` propagates the
   correct element type to tsserver, so `h('button', {})` narrows to
   `HTMLButtonElement` in IDE hover.
+- **MFA brute-force protection — single-use codes + constant-time
+  compare** — `verify_mfa_code` previously cleared the stored code
+  only on success. An attacker holding a valid MFA-pending JWT could
+  brute-force the 6-digit code at request rate (1M codes / 5-min
+  window). The code is now single-use: clear-on-every-attempt,
+  success or failure, so a typo means re-requesting a fresh code.
+  Comparison goes through `subtle::ConstantTimeEq` so response-time
+  variance can't recover the stored code byte-by-byte. Regression
+  tests in `db/query/auth/mfa.rs::tests` cover the wrong-then-correct
+  rejection, the expired-code path, and the missing-user / no-code
+  edges.
+- **Polymorphic relationship writes enforce the `polymorphic`
+  allowlist** — fields declared as `relationship = { polymorphic =
+  ["posts", "articles"] }` previously accepted any `(collection, id)`
+  pair on the write path: `db::query::join::hydrate::save::save_join_data_inner`
+  (and the scalar-column write for non-`has_many`) trusted whatever
+  the client submitted. The stored ref then leaked at enrich time as
+  a label from a collection the field author never intended to
+  expose. New `check_polymorphic_allowlist` validation walks both the
+  array shape (`["collection/id", …]` for `has_many`) and the scalar
+  / object shape, no-ops on plain (non-polymorphic) relationships,
+  and returns a field-error with the rejected collection name. 8
+  unit tests cover the scalar / array / object shapes,
+  allowed-vs-disallowed targets, and the non-polymorphic no-op path.
+- **`upload.s3.secret_key` redacted in `Debug` and `Serialize`** — was
+  the only secret in `CrapConfig` stored as a bare `String`. The other
+  three (`auth.secret` → `JwtSecret`, `email.smtp_pass` →
+  `SmtpPassword`, `mcp.api_key` → `McpApiKey`) all wrap a redacted-
+  on-output newtype emitting `"[REDACTED]"`. New `S3SecretKey`
+  follows the same pattern (`config/s3_secret_key.rs`);
+  `tracing::debug!("{:?}", config)` and any JSON dump of `CrapConfig`
+  no longer leak the S3 credential. Also covers a Lua-hook leak
+  vector via `crap.config.get`-style serialization paths.
+- **Init-only registration APIs refuse runtime calls** — six
+  registration APIs that only make sense during init now error
+  loudly when called from a runtime hook instead of silently
+  no-op'ing or fragmenting across the Lua VM pool:
+  `crap.pages.register`, `crap.template_data.register`,
+  `crap.richtext.register_node`, `crap.collections.define`,
+  `crap.globals.define`, `crap.jobs.define`. Each checks for an
+  `InitPhase` marker in `lua.app_data` (set during def-loading and
+  `init.lua` execution, removed afterwards) and returns a runtime
+  error pointing the caller at `init.lua` if absent. Without these
+  guards a runtime registration would either land in one VM of the
+  pool and be intermittent across requests
+  (`template_data.register`, `richtext.register_node`), land in
+  `SharedRegistry` without the corresponding migration / sidebar
+  entry / scheduler enrollment and surface as confusing "no such
+  table" or 404 errors at first use (`collections.define`,
+  `globals.define`, `jobs.define`), or land in the per-VM named
+  registry only and never reach the live `CustomPageRegistry`
+  (`pages.register`). Regression test per API asserts the runtime
+  call is rejected and the registry state remains untouched.
+- **Scaffold-generated slugs revalidated** — every `crap-cms make`
+  command (`page`, `slot`, `node`, `field`, `theme`, `component`)
+  runs the slug through `validate_template_slug` (`[a-z0-9_-]+`, no
+  leading / trailing hyphens) before writing files. The `make
+  component` HTML custom-element rule (must contain a hyphen,
+  lowercase ASCII alphanumerics) is enforced separately. Closes a
+  path-traversal vector for callers who pipe untrusted strings into
+  `crap-cms make`.
+- **Version restore re-validates the snapshot** — the restore write
+  path (`service::versions::restore_with_snapshot`) now calls
+  `validate_fields` before writing the snapshot back to the table.
+  Previously a snapshot that was valid when first saved could become
+  invalid against later collection-definition changes (added required
+  fields, tightened constraints) and still land in the table on
+  restore, producing rows that fail every subsequent validation pass.
+  `WriteHooks` gained a `validate_fields` method (with `ValidateResult`
+  alias to disambiguate from the shadowed `Result`), implemented by
+  both `RunnerWriteHooks` and `LuaWriteHooks`.
+- **Richtext custom node names can't shadow built-ins** —
+  `crap.richtext.register_node("paragraph", …)` previously appeared
+  to succeed but the resolver still picked the built-in, leaving the
+  user to wonder why their custom node never ran. A new
+  `RESERVED_NODE_NAMES` const enumerates every built-in node + mark
+  and rejects matches at registration time with a clear error.
 
 ### Added
 
@@ -1252,6 +1329,108 @@ to the detailed entry with full migration steps.
   otherwise. This was masked in development because the e2e browser
   suite was effectively non-functional (see Internal section).
 
+- **JPEG EXIF orientation now applied before re-encode** — uploaded
+  JPEGs from phones (which rely on the EXIF `Orientation` tag rather
+  than rotating the pixel data) used to display sideways or mirrored
+  after upload. The image crate strips EXIF on re-encode but doesn't
+  auto-rotate, so the orientation hint was lost and the original
+  pixel data shipped through unchanged. New `core/upload/exif.rs`
+  reads the tag with `kamadak-exif` (new dep), applies the rotation
+  / flip via `image::imageops` (8 cases), and passes the corrected
+  image into the conversion pipeline. 8 unit tests cover every
+  orientation value plus an end-to-end JPEG round-trip.
+
+- **NaN / Infinity rejected in number fields** — number-field
+  validation previously checked `min` / `max` bounds without first
+  ensuring the value was finite. `Number::as_f64()` returns the
+  inner value verbatim, so `serde_json::Value::Number(NaN)` /
+  `Infinity` slipped through every comparison (NaN comparisons are
+  always false). The bounds check now starts with `is_finite()` and
+  emits a `validation.number_not_finite` error otherwise. Same code
+  path that gates `min` / `max`; alpha.4 introduced a sibling check
+  on a different write path.
+
+- **gRPC `ServiceError → Status` mapping aligned to gRPC spec** —
+  - `ServiceError::UniqueViolation` was mapped to `INVALID_ARGUMENT`;
+    it's now `ALREADY_EXISTS` (code 6). Client SDKs branch on this
+    code for "use existing / pick another" flows; the old mapping
+    made conflicts indistinguishable from plain validation errors.
+  - `ServiceError::InvalidToken` was mapped to `INVALID_ARGUMENT`;
+    it's now `UNAUTHENTICATED` (code 16). Client SDKs trigger
+    token-refresh on this code; the old mapping looked like a
+    malformed request and silently suppressed refresh.
+  Per-variant regression tests in
+  `api/handlers/collection/error_mapping.rs::tests` lock both new
+  codes in.
+
+- **Job claim no longer pre-bumps the attempt counter** —
+  `parse_job_row` previously added `+1` to the parsed `attempts`
+  column on the assumption that the row would be bumped server-side
+  on success; the SQLite path then ALSO bumped it, doubling the
+  increment. Postgres' `FOR UPDATE SKIP LOCKED` claim already bumps
+  and parses in one round trip, but the SQLite path separates them.
+  `parse_job_row` now reports the row's stored count verbatim; the
+  SQLite path bumps locally before returning. Net effect: retry-budget
+  calculations finally match across backends. Doc-string on the
+  function spells out the contract; regression test
+  `claim_reports_attempt_count_consistent_with_db_increment` pins
+  it.
+
+- **`S3Storage::exists()` propagates non-404 errors** — the previous
+  fall-through returned `Ok(false)` for any error, so a 403
+  AccessDenied or 503 Slow Down silently looked like a missing file
+  and let upload-then-verify orphan its DB rows on transient
+  outages. New `is_not_found_error` classifier matches `404` /
+  `NoSuchKey` / `Not Found`; everything else surfaces as `Err`
+  with the underlying message preserved. Unit tests cover both the
+  recognised forms and the non-404 (auth / transient / network /
+  signature) failures.
+
+- **S3 region parse rejects garbage strings at startup** —
+  `aws_region::Region::FromStr` is infallible: unknown strings fall
+  through to `Region::Custom { region: x, endpoint: x }`, which
+  DNS-fails at first request with no startup hint. `create_s3_storage`
+  now matches on `Ok(Region::Custom { … })` (only valid when an
+  explicit `upload.s3.endpoint` is set) and bails with a clear
+  diagnostic pointing the operator at known region codes or
+  `upload.s3.endpoint` for custom S3-compatible providers. Sanity
+  test on `eu-west-1`, custom-endpoint bypass test on `auto`.
+
+- **Unpublish on collections with localized fields no longer fails
+  silently** — `unpublish_document` (and `persist_unpublish`,
+  `unpublish_global_document`) called `find_by_id_raw(... None ...)`,
+  which fell back to bare column names from `get_column_names` —
+  e.g. `title` instead of `title__en` / `title__de`. SQLite errored
+  `no such column: title`, the catch-all error arm in `do_update`
+  redirected silently, and the user saw "unpublish button does
+  nothing." `LocaleConfig` is now threaded through `ServiceContext`
+  (new optional `locale_config` attachment + `default_locale_ctx()`
+  helper); the unpublish path builds a `LocaleMode::Default` context
+  for the raw read so the SELECT references the actual locale-
+  suffixed columns. Bug existed across every unpublish surface
+  (admin collections + globals, gRPC, MCP, Lua CRUD); all six
+  fixed. The fix uses `LocaleMode::Default` (resolved at the default
+  locale, flat keys) rather than `LocaleMode::All` (grouped
+  `{en, de}` objects) so the snapshot saved by `persist_unpublish`,
+  the BeforeChange / AfterChange hook context, and the broadcast
+  event all match the shape produced by every other write path —
+  preserving snapshot fidelity for non-default locales is the same
+  as regular draft saves and is a separate change.
+  `versioned_collection_unpublish_with_localized_field` exercises
+  the full PUT path, asserts `_status = 'draft'` post-unpublish,
+  and pins the snapshot shape (`title` is a flat string, not a
+  grouped object).
+
+- **`locale_locked` recomputed for nested fields** — sub-field
+  enrichment (`build_sub_field_base`, `build_child_base`) previously
+  inherited `locale_locked` from the parent context. With a parent
+  group that's `localized = false` containing a child that's
+  `localized = true`, the child wrongly appeared locked when editing
+  in a non-default locale. Both builders now recompute
+  `locale_locked = non_default_locale && !sf.localized` from the
+  sub-field's own definition; the `dispatch_sub_field_type` Code
+  arm threads `non_default_locale` into the new builder signature.
+
 ### Internal
 
 - **Typed admin context structs.** Replaced the previous
@@ -1345,6 +1524,26 @@ to the detailed entry with full migration steps.
   case (e.g. `&FindQuery::default()` passed to a function that just
   needs the default query); the builder is the path whenever any
   field is set.
+
+- **`ServiceContext` builder: `lua_infra` and `locale_config` take
+  `Option<&T>`** — both methods previously took `&T` with the
+  caller-side `if let Some(ref x) = parent_x { builder = builder.x(x); }`
+  wrapper, repeated 11× across Lua CRUD paths
+  (`collection/{create,update,delete,undelete,unpublish}`,
+  `bulk/{create_many,update_many,delete_many}`, `versions/restore`,
+  `globals/update`). Now `Option<&T>` matches the existing optional-
+  attachment shape (`cache`, `event_transport`,
+  `invalidation_transport`, `email_ctx`); every caller drops the `if
+  let` and folds the call into the builder chain. The `lua_infra`
+  body internally short-circuits on `None`. `inner_ctx` in
+  `unpublish_document_pool` likewise threads `ctx.locale_config`
+  straight through.
+
+- **`crap-cms make component` scaffold uses constructable stylesheets**
+  — the generated component skeleton now uses the `css` tagged-template
+  helper + `h()` builder pattern that matches every built-in
+  component since the CSP hardening pass. Keeps the scaffolded
+  output current with the override-template-author guidance.
 
 ## [0.1.0-alpha.7] — 2026-04-18
 
