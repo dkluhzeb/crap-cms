@@ -218,7 +218,7 @@ pub(super) fn populate_poly_has_one(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

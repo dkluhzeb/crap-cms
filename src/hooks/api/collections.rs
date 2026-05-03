@@ -47,16 +47,33 @@ pub(super) fn register_collections(
 fn define(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
     // Collections drive table creation, route registration, and admin-UI
     // wiring — all of which run once at startup from the live registry.
-    // A runtime call writes into the SharedRegistry but no migration runs,
-    // so the table never exists; the first read/write through the new
-    // collection errors with a confusing "no such table" diagnostic and
-    // the admin sidebar never gains the entry. Refuse explicitly.
+    // A NEW runtime registration writes into the SharedRegistry but no
+    // migration runs, so the table never exists; the first read/write
+    // through the new collection errors with a confusing "no such table"
+    // diagnostic and the admin sidebar never gains the entry. Refuse it.
+    //
+    // BUT: re-defining an existing slug at runtime is a documented
+    // round-trip pattern (`config.get → modify → define`) — admins use it
+    // to programmatically tweak field lists, hooks, etc. The new
+    // definition lands in the registry; the DB schema and admin routes
+    // stay as they were. Schema-vs-registry drift on column-bearing
+    // changes is a footgun the caller has to weigh, but the call itself
+    // is legitimate, so accept it.
     if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.collections.define must be called from a definition file or init.lua \
-             — runtime registration does not create the table or admin routes"
-                .into(),
-        ));
+        let already_registered = reg
+            .read()
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+            .get_collection(slug)
+            .is_some();
+
+        if !already_registered {
+            return Err(RuntimeError(
+                "crap.collections.define must be called from a definition file or init.lua \
+                 for a NEW collection — runtime registration does not create the table \
+                 or admin routes. Re-defining an already-registered collection is allowed."
+                    .into(),
+            ));
+        }
     }
 
     let def = parse_collection_definition(lua, slug, config)
@@ -133,6 +150,46 @@ mod tests {
         assert!(
             reg.get_collection("posts").is_none(),
             "collection must NOT be registered when call is refused",
+        );
+    }
+
+    /// Regression: re-defining an EXISTING collection at runtime must
+    /// succeed. The `config.get → modify → define` round-trip is a
+    /// documented Lua API — admins use it to programmatically tweak
+    /// field lists, hooks, etc. The registry update lands; the DB
+    /// schema and admin routes stay as they were. Schema-vs-registry
+    /// drift on column-bearing changes is a footgun the caller weighs,
+    /// but the call itself is legitimate. Without this exception the
+    /// `tests/lua_api_filters.rs` redefine tests panic.
+    #[test]
+    fn redefine_existing_collection_at_runtime_is_allowed() {
+        use crate::core::CollectionDefinition;
+
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
+        register_collections(&lua, &crap, registry.clone()).unwrap();
+        lua.globals().set("crap", crap).unwrap();
+
+        // Pre-populate: simulate an init-time registration without
+        // going through the Lua API (avoids the bigger test setup of a
+        // valid Lua collection definition).
+        {
+            let mut reg = registry.write().unwrap();
+            reg.register_collection(CollectionDefinition::new("posts"));
+        }
+
+        // Without InitPhase, the runtime redefine must succeed.
+        lua.load(r#"crap.collections.define("posts", {})"#)
+            .exec()
+            .expect("redefining an existing collection at runtime must succeed");
+
+        // The collection is still registered (and has been updated to
+        // the new — empty — definition).
+        let reg = registry.read().unwrap();
+        assert!(
+            reg.get_collection("posts").is_some(),
+            "collection must remain registered after redefine",
         );
     }
 }

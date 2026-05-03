@@ -133,7 +133,7 @@ fn populate_join_docs(
     Ok(populated)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use anyhow::Result as AnyResult;
     use serde_json::json;

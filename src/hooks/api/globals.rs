@@ -42,15 +42,28 @@ pub(super) fn register_globals(lua: &Lua, crap: &Table, registry: SharedRegistry
 /// Parse and register a global definition.
 fn define(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
     // Globals drive single-row table creation, admin route registration,
-    // and live-event wiring — all of which run once at startup. A runtime
-    // call would land in `SharedRegistry` without the backing row or the
-    // admin route, and every later read errors with a confusing diagnostic.
+    // and live-event wiring — all of which run once at startup. A NEW
+    // runtime registration would land in `SharedRegistry` without the
+    // backing row or the admin route; later reads error confusingly.
+    //
+    // Re-defining an EXISTING slug at runtime is the documented
+    // `config.get → modify → define` round-trip pattern — accepted with
+    // the same caveats as `crap.collections.define`.
     if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.globals.define must be called from a definition file or init.lua \
-             — runtime registration does not create the row or admin routes"
-                .into(),
-        ));
+        let already_registered = reg
+            .read()
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
+            .get_global(slug)
+            .is_some();
+
+        if !already_registered {
+            return Err(RuntimeError(
+                "crap.globals.define must be called from a definition file or init.lua \
+                 for a NEW global — runtime registration does not create the row or admin \
+                 routes. Re-defining an already-registered global is allowed."
+                    .into(),
+            ));
+        }
     }
 
     let def = parse_global_definition(lua, slug, config)
@@ -123,6 +136,36 @@ mod tests {
         assert!(
             reg.get_global("settings").is_none(),
             "global must NOT be registered when call is refused",
+        );
+    }
+
+    /// Regression: re-defining an EXISTING global at runtime must
+    /// succeed — same `config.get → modify → define` round-trip pattern
+    /// as `crap.collections.define`. Without this exception the
+    /// `tests/lua_api_filters.rs::globals_*_redefine` tests panic.
+    #[test]
+    fn redefine_existing_global_at_runtime_is_allowed() {
+        use crate::core::collection::GlobalDefinition;
+
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
+        register_globals(&lua, &crap, registry.clone()).unwrap();
+        lua.globals().set("crap", crap).unwrap();
+
+        {
+            let mut reg = registry.write().unwrap();
+            reg.register_global(GlobalDefinition::new("settings"));
+        }
+
+        lua.load(r#"crap.globals.define("settings", {})"#)
+            .exec()
+            .expect("redefining an existing global at runtime must succeed");
+
+        let reg = registry.read().unwrap();
+        assert!(
+            reg.get_global("settings").is_some(),
+            "global must remain registered after redefine",
         );
     }
 }

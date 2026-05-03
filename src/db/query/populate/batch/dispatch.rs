@@ -346,7 +346,7 @@ fn populate_join_fields(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

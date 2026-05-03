@@ -13,6 +13,6 @@ pub(crate) use snapshot::{VersionSnapshotCtx, create_version_snapshot};
 pub use unpublish::unpublish_with_snapshot;
 
 pub use list::list_versions;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub(crate) use restore::restore_collection_version_core;
 pub use restore::{restore_collection_version, restore_global_version};
