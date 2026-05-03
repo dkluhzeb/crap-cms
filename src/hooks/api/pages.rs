@@ -79,11 +79,9 @@ fn register_page(lua: &Lua, slug: &str, opts: Table) -> LuaResult<()> {
 fn list_pages(lua: &Lua) -> LuaResult<Table> {
     let pages: Table = lua.named_registry_value(PAGES_KEY)?;
     let names = lua.create_table()?;
-    let mut i = 1;
-    for pair in pages.pairs::<Value, Value>() {
+    for (i, pair) in (1..).zip(pages.pairs::<Value, Value>()) {
         let (key, _) = pair?;
         names.set(i, key)?;
-        i += 1;
     }
     Ok(names)
 }

@@ -313,30 +313,24 @@ enum BlockKind {
 fn body_is_single_logical_line(body: &[Token<'_>]) -> Result<bool> {
     for tok in body {
         match tok {
-            Token::Text(s) => {
-                // Reject text that has internal blank lines or trailing
-                // newlines that aren't pure trim-space.
-                if s.contains('\n') {
-                    let trimmed = s.trim();
-                    if !trimmed.is_empty() && trimmed.contains('\n') {
-                        return Ok(false);
-                    }
-                }
-            }
-            Token::HtmlComment(s) | Token::HbsComment(s) => {
-                if s.contains('\n') {
+            // Reject text that has internal blank lines or trailing
+            // newlines that aren't pure trim-space.
+            Token::Text(s) if s.contains('\n') => {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() && trimmed.contains('\n') {
                     return Ok(false);
                 }
+            }
+            Token::HtmlComment(s) | Token::HbsComment(s) if s.contains('\n') => {
+                return Ok(false);
             }
             // Nested block-level openers that themselves have bodies
             // disqualify the inline collapse — we only inline atoms
             // and one-liner siblings.
             Token::HtmlStart {
                 name, self_closed, ..
-            } => {
-                if !self_closed && !is_void(name) {
-                    return Ok(false);
-                }
+            } if !self_closed && !is_void(name) => {
+                return Ok(false);
             }
             Token::HbsBlockOpen(_) | Token::HbsPartialOpen(_) => return Ok(false),
             // RawText body (inside <script>/<style>/<pre>/<textarea>)

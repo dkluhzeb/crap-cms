@@ -1,0 +1,15 @@
+# Pin the Rust toolchain so local development and CI use the same
+# rustc / clippy version. Without this, CI's `dtolnay/rust-toolchain@stable`
+# resolves to whatever rustup considers stable at action runtime, which
+# drifts ahead of local installs and surfaces "passes locally, fails CI"
+# clippy regressions every release cycle.
+#
+# rustup auto-installs the named version on first `cargo` / `rustc`
+# invocation in this directory; `dtolnay/rust-toolchain@<sha>` honours
+# this file when no explicit `with: toolchain:` is passed in CI.
+#
+# When bumping: update the version, run `cargo clippy --all-targets`
+# and address any new lints in the same commit.
+[toolchain]
+channel = "1.95"
+components = ["rustfmt", "clippy"]

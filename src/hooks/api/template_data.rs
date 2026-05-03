@@ -72,11 +72,9 @@ fn register_template_data_fn(lua: &Lua, name: &str, func: Function) -> LuaResult
 fn list_template_data(lua: &Lua) -> LuaResult<Table> {
     let table: Table = lua.named_registry_value(TEMPLATE_DATA_KEY)?;
     let names = lua.create_table()?;
-    let mut i = 1;
-    for pair in table.pairs::<Value, Value>() {
+    for (i, pair) in (1..).zip(table.pairs::<Value, Value>()) {
         let (key, _) = pair?;
         names.set(i, key)?;
-        i += 1;
     }
     Ok(names)
 }
