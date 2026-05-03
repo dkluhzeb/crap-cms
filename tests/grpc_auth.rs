@@ -746,7 +746,10 @@ async fn full_password_reset_flow() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    // Per gRPC spec, invalid/missing auth credentials map to UNAUTHENTICATED
+    // (code 16), not INVALID_ARGUMENT — see the alpha.8 ServiceError → Status
+    // mapping fix. Client SDKs trigger token-refresh on this code.
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
 #[tokio::test]
@@ -777,7 +780,7 @@ async fn reset_password_expired_token() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
 #[tokio::test]
@@ -793,7 +796,7 @@ async fn reset_password_invalid_token() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
 }
 
 // ── Email Verification ────────────────────────────────────────────────────

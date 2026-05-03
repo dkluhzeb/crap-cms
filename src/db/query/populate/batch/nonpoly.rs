@@ -195,7 +195,7 @@ pub(super) fn batch_fetch_single_collection(
     Ok(doc_map)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

@@ -182,4 +182,9 @@ jobs:
           chrome-version: stable
 
       - name: Run browser e2e tests
-        run: cargo test --test e2e --features browser-tests
+        # `--test-threads=1` is required: chromiumoxide reuses
+        # /tmp/chromiumoxide-runner as the profile dir, and parallel
+        # Chrome instances race for the same SingletonLock — all but one
+        # exit with "Failed to create a ProcessSingleton for your profile
+        # directory" and the test panics on `Browser::launch().unwrap()`.
+        run: cargo test --test e2e --features browser-tests -- --test-threads=1

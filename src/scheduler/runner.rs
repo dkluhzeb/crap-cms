@@ -452,7 +452,7 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use chrono::Timelike;
     use r2d2::Pool;

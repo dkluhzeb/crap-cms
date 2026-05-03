@@ -46,7 +46,7 @@ pub(super) fn resolve_join_fallback_locale(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

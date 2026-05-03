@@ -235,7 +235,7 @@ fn validate_scalar_field(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::config::LocaleConfig;
     use crate::core::field::{FieldAdmin, FieldDefinition, FieldTab, FieldType, JoinConfig};

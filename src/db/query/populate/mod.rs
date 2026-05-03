@@ -23,7 +23,7 @@ pub(crate) use types::{PopulateCtx, locale_cache_key};
 pub use wrappers::{populate_relationships, populate_relationships_batch};
 
 /// Shared test helpers for populate tests — DB setup and collection definitions.
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub(crate) mod test_helpers {
     use crate::core::{Registry, Slug, collection::*, field::*};
     use crate::db::{DbConnection, InMemoryConn};

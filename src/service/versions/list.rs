@@ -63,7 +63,7 @@ pub fn list_versions(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use std::collections::HashMap;
 

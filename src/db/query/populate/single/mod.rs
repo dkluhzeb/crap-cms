@@ -5,7 +5,7 @@ mod join;
 pub(crate) mod nested;
 mod nonpoly;
 mod poly;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests;
 
 pub use dispatch::{

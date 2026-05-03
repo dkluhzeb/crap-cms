@@ -116,7 +116,7 @@ pub fn validate_timezone(tz: &str) -> bool {
     tz.parse::<Tz>().is_ok()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
