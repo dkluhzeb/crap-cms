@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.1.0-alpha.8] — Unreleased
+## [0.1.0-alpha.8] — 2026-05-03
 
 ### Breaking Changes
 
