@@ -61,7 +61,7 @@ pub(crate) fn check_unique(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::config::LocaleConfig;
     use crate::core::field::{FieldDefinition, FieldType};
