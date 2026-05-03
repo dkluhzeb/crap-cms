@@ -42,7 +42,13 @@ jobs:
 
       - name: Install Biome
         run: |
-          curl -fsSL "https://github.com/biomejs/biome/releases/download/cli%2Fv2.3.15/biome-linux-x64" -o /usr/local/bin/biome
+          # Biome 2.x tags as `@biomejs/biome@X.Y.Z`; the legacy `cli/vX.Y.Z`
+          # scheme that 1.x used has no 2.x assets, so the old URL 404s.
+          # Pin the version to the one in biome.json's `$schema` URL —
+          # which tracks Arch's `extra` repo so contributors lint locally
+          # with the same version CI uses. Bump CI + schema together when
+          # Arch picks up a newer release.
+          curl -fsSL "https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%402.3.15/biome-linux-x64" -o /usr/local/bin/biome
           chmod +x /usr/local/bin/biome
           biome --version
 
