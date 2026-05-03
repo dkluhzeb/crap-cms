@@ -15,8 +15,9 @@ use tracing_subscriber::{Layer, Registry, layer::SubscriberExt, util::Subscriber
 use crap_cms::{
     cli::{self, crap_theme},
     commands::{
-        self, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
-        MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction, serve::ServeMode,
+        self, BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction,
+        MakeAction, MigrateAction, TemplatesAction, TrashAction, UpdateCmd, UserAction,
+        serve::ServeMode,
     },
     config::{CrapConfig, LogRotation},
 };
@@ -101,7 +102,11 @@ enum Command {
     },
 
     /// Show project status (collections, globals, migrations)
-    Status,
+    Status {
+        /// Run best-practice health checks on configuration and project state
+        #[arg(long)]
+        check: bool,
+    },
 
     /// User management for auth collections
     #[command(name = "user")]
@@ -214,7 +219,7 @@ enum Command {
         collection: Option<String>,
     },
 
-    /// List and extract default admin templates and static files
+    /// Manage admin template / static customizations: list, extract, status, diff
     Templates {
         #[command(subcommand)]
         action: TemplatesAction,
@@ -253,6 +258,27 @@ enum Command {
 
         #[command(subcommand)]
         action: Option<LogsAction>,
+    },
+
+    /// Benchmark hooks, queries, and write cycles
+    Bench {
+        #[command(subcommand)]
+        action: BenchAction,
+    },
+
+    /// Format Handlebars templates (.hbs)
+    Fmt {
+        /// Paths to format. Files or directories. Defaults to `templates/`.
+        paths: Vec<PathBuf>,
+
+        /// Don't write — exit non-zero if any file would change. CI gate.
+        #[arg(long)]
+        check: bool,
+
+        /// Read source from stdin and write the formatted result to stdout.
+        /// Used by editor formatter integrations.
+        #[arg(long, conflicts_with = "check")]
+        stdio: bool,
     },
 
     /// Manage installed versions of crap-cms
@@ -395,9 +421,9 @@ async fn run(cli: Cli) -> Result<()> {
             }
             commands::work::run(&config, queues, concurrency, no_cron).await
         }
-        Command::Status => {
+        Command::Status { check } => {
             let config = commands::resolve_config_dir(config_flag)?;
-            commands::status::run(&config)
+            commands::status::run(&config, check)
         }
         Command::User { action } => {
             let config = commands::resolve_config_dir(config_flag)?;
@@ -509,6 +535,18 @@ async fn run(cli: Cli) -> Result<()> {
                 let config = commands::resolve_config_dir(config_flag)?;
                 commands::templates::extract(&config, &paths, all, r#type, force)
             }
+            TemplatesAction::Status => {
+                let config = commands::resolve_config_dir(config_flag)?;
+                commands::templates::status(&config)
+            }
+            TemplatesAction::Diff { path } => {
+                let config = commands::resolve_config_dir(config_flag)?;
+                commands::templates::diff(&config, &path)
+            }
+            TemplatesAction::Layout => {
+                let config = commands::resolve_config_dir(config_flag)?;
+                commands::templates::layout(&config)
+            }
         },
         Command::Jobs { action } => {
             let config = commands::resolve_config_dir(config_flag)?;
@@ -534,11 +572,20 @@ async fn run(cli: Cli) -> Result<()> {
             let config_dir = commands::resolve_config_dir(config_flag)?;
             commands::logs::run(&config_dir, action, follow, lines)
         }
+        Command::Bench { action } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::bench::run(&config, action)
+        }
+        Command::Fmt {
+            paths,
+            check,
+            stdio,
+        } => commands::fmt::run(paths, check, stdio),
         Command::Update { yes, force, action } => {
             // Run on a blocking thread — `reqwest::blocking` spawns its own
             // tokio runtime internally, and dropping that while inside
             // `#[tokio::main]` panics. spawn_blocking isolates it.
-            tokio::task::spawn_blocking(move || commands::update::run(action, yes, force))
+            tokio::task::spawn_blocking(move || commands::update::run::<Cli>(action, yes, force))
                 .await
                 .context("update task panicked")?
         }

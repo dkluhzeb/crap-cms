@@ -1,6 +1,6 @@
 //! Version restore operations for collections and globals.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Context as _;
 use serde_json::Value;
@@ -10,9 +10,20 @@ use crate::{
     config::LocaleConfig,
     core::{Document, FieldDefinition, FieldType, event::EventOperation},
     db::{AccessResult, query, query::helpers::global_table},
-    hooks::LuaCrudInfra,
+    hooks::{LuaCrudInfra, ValidationCtx},
     service::{RunnerWriteHooks, ServiceContext, ServiceError, helpers},
 };
+
+/// Convert a snapshot JSON object into a `HashMap<String, Value>` suitable
+/// for `validate_fields`. The snapshot's top-level keys are field names
+/// (group fields appear in either flat `seo__title` or nested `seo: {…}`
+/// form — the validator handles both via the schema walk).
+fn snapshot_to_validation_data(snapshot: &Value) -> HashMap<String, Value> {
+    snapshot
+        .as_object()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
+}
 
 /// Collect every column/field name expected by the current schema for a given
 /// field list. Used to detect snapshot keys that have drifted out of the
@@ -218,6 +229,21 @@ pub(crate) fn restore_collection_version_core(
 
     warn_on_snapshot_drift(&version.snapshot, &def.fields, ctx.slug, version_id);
 
+    // Re-run schema validation against the restored data, so a snapshot
+    // saved before a schema tightening (e.g. a field gained `required = true`
+    // or a stricter regex) is rejected rather than silently overwriting
+    // valid live data with invalid contents. User-defined hooks are not
+    // re-run — restore is meant to be transparent — but type / required /
+    // unique / regex constraints from the current schema bite.
+    let validation_data = snapshot_to_validation_data(&version.snapshot);
+    let val_ctx = ValidationCtx::builder(conn, ctx.slug)
+        .exclude_id(Some(document_id))
+        .soft_delete(def.soft_delete)
+        .build();
+    write_hooks
+        .validate_fields(&def.fields, &validation_data, &val_ctx)
+        .map_err(ServiceError::Validation)?;
+
     let mut doc = query::restore_version(
         conn,
         ctx.slug,
@@ -307,6 +333,14 @@ pub(crate) fn restore_global_version_core(
         .ok_or_else(|| ServiceError::NotFound(format!("Version '{version_id}' not found")))?;
 
     warn_on_snapshot_drift(&version.snapshot, &def.fields, ctx.slug, version_id);
+
+    // Re-run schema validation against the restored data — see the
+    // collection variant above for the full rationale.
+    let validation_data = snapshot_to_validation_data(&version.snapshot);
+    let val_ctx = ValidationCtx::builder(conn, &gtable).build();
+    write_hooks
+        .validate_fields(&def.fields, &validation_data, &val_ctx)
+        .map_err(ServiceError::Validation)?;
 
     let mut doc = query::restore_global_version(
         conn,

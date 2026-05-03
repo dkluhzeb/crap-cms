@@ -1,0 +1,29 @@
+{{!--
+  Rating field rendering — a 1..5 (or 1..max) star widget powered by
+  the `<crap-stars>` web component shipped at
+  `example/static/components/crap-stars.js` (loaded via the
+  `body_end_scripts` slot — see
+  `example/templates/slots/body_end_scripts/rating.hbs`).
+
+  Selected per-field via Lua `admin.template = "fields/rating"` (see
+  `plugins/rating.lua`). Lua `admin.extra` flattens to the
+  top-level `extra` key on the field render context.
+
+    - `extra.color`  — accent colour name passed to the widget;
+                       default "amber".
+
+  The standard `partials/field` wrapper provides label, required marker,
+  error message, and help text — same chrome as every other field.
+--}}
+{{#> partials/field}}
+  <crap-stars
+    id="field-{{name}}"
+    name="{{name}}"
+    value="{{value}}"
+    max="{{#if has_max}}{{max}}{{else}}5{{/if}}"
+    {{#if extra.color}}data-color="{{extra.color}}"{{/if}}
+    {{#if required}}required{{/if}}
+    {{#if readonly}}readonly{{/if}}
+    {{#if error}}data-error{{/if}}
+  ></crap-stars>
+{{/partials/field}}

@@ -1,76 +1,85 @@
 <div class="edit-sidebar">
   {{!-- Save panel --}}
-  <div class="edit-sidebar__panel">
-    <div class="edit-sidebar__panel-body">
-      <div class="edit-sidebar__actions">
-        {{#if global.has_drafts}}
-          <button type="submit" name="_action" value="publish" class="button button--primary">
-            {{t "publish"}}
-          </button>
-          <button type="submit" name="_action" value="save_draft" class="button button--secondary">
-            {{t "save_draft"}}
-          </button>
-          {{#if (eq doc_status "published")}}
-          <button type="submit" name="_action" value="unpublish" class="button button--ghost">
+  {{#> partials/sidebar-panel}}
+    <div class="edit-sidebar__actions">
+      {{#if global.has_drafts}}
+        <button
+          type="submit"
+          name="_action"
+          value="publish"
+          class="button button--primary"
+        >
+          {{t "publish"}}
+        </button>
+        <button
+          type="submit"
+          name="_action"
+          value="save_draft"
+          formnovalidate
+          class="button button--secondary"
+        >
+          {{t "save_draft"}}
+        </button>
+        {{#if (eq doc_status "published")}}
+          <button
+            type="submit"
+            name="_action"
+            value="unpublish"
+            class="button button--ghost"
+          >
             {{t "unpublish"}}
           </button>
-          {{/if}}
-        {{else}}
-          <button type="submit" class="button button--primary">
-            {{t "save"}} {{global.display_name}}
-          </button>
         {{/if}}
-        <a class="button button--ghost" href="/admin"
-          hx-get="/admin" hx-target="body" hx-push-url="true">
-          {{t "cancel"}}
-        </a>
-      </div>
+      {{else}}
+        <button
+          type="submit"
+          class="button button--primary"
+        >
+          {{t "save"}}
+          {{global.display_name}}
+        </button>
+      {{/if}}
+
+      {{> partials/loading-indicator variant="sidebar"}}
+      {{> partials/htmx-nav-link href="/admin" label_key="cancel"}}
     </div>
-  </div>
+  {{/partials/sidebar-panel}}
 
   {{#if sidebar_fields}}
-  {{!-- Sidebar fields panel --}}
-  <div class="edit-sidebar__panel">
-    <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined">tune</span>
-      {{t "fields"}}
-    </div>
-    <div class="edit-sidebar__panel-body">
+    {{!-- Sidebar fields panel --}}
+    {{#> partials/sidebar-panel icon="tune" label_key="fields"}}
       {{#each sidebar_fields}}
-      <div class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
-        {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
-        {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
-        data-field-name="{{name}}">
-        {{{render_field this}}}
-      </div>
+        <div
+          class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
+          {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
+          {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
+          data-field-name="{{name}}"
+        >
+          {{{render_field this}}}
+        </div>
       {{/each}}
-    </div>
-  </div>
+    {{/partials/sidebar-panel}}
   {{/if}}
 
   {{!-- Info panel --}}
-  <div class="edit-sidebar__panel">
-    <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined">info</span>
-      {{t "global"}}
-    </div>
-    <div class="edit-sidebar__panel-body">
-      <div class="edit-sidebar__meta">
-        {{#if global.has_drafts}}
+  {{#> partials/sidebar-panel icon="info" label_key="global"}}
+    <div class="edit-sidebar__meta">
+      {{#if global.has_drafts}}
         <div class="edit-sidebar__meta-row">
           <span class="edit-sidebar__meta-label">{{t "status"}}</span>
-          <span class="edit-sidebar__meta-value"><span class="badge badge--{{doc_status}}">{{doc_status}}</span></span>
+          <span class="edit-sidebar__meta-value">
+            {{> partials/status-badge status=doc_status}}
+          </span>
         </div>
-        {{/if}}
-        <div class="edit-sidebar__meta-row">
-          <span class="edit-sidebar__meta-label">{{t "slug"}}</span>
-          <span class="edit-sidebar__meta-value">{{global.slug}}</span>
-        </div>
+      {{/if}}
+      <div class="edit-sidebar__meta-row">
+        <span class="edit-sidebar__meta-label">{{t "slug"}}</span>
+        <span class="edit-sidebar__meta-value">{{global.slug}}</span>
       </div>
     </div>
-  </div>
+  {{/partials/sidebar-panel}}
 
   {{#if global.has_versions}}
-  {{> components/version_sidebar}}
+    {{> partials/version-sidebar}}
   {{/if}}
 </div>

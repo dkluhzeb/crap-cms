@@ -172,7 +172,7 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         .expect("Second sync with timestamps");
 
     // Verify we can query (the bug: SELECT ... created_at, updated_at would fail)
-    let find_query = query::FindQuery::new();
+    let find_query = query::FindQuery::default();
     let conn = pool.get().unwrap();
     let docs = query::find(&conn, "posts", &def, &find_query, None)
         .expect("Find should succeed after adding timestamp columns");
@@ -229,11 +229,12 @@ fn filter_rejects_invalid_field_name() {
     }
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
 
-    let mut find_query = query::FindQuery::new();
-    find_query.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "nonexistent".to_string(),
-        op: query::FilterOp::Equals("test".to_string()),
-    })];
+    let find_query = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "nonexistent".to_string(),
+            op: query::FilterOp::Equals("test".to_string()),
+        })])
+        .build();
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
@@ -256,8 +257,9 @@ fn order_by_rejects_invalid_field_name() {
     }
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
 
-    let mut find_query = query::FindQuery::new();
-    find_query.order_by = Some("nonexistent".to_string());
+    let find_query = query::FindQuery::builder()
+        .order_by(Some("nonexistent".to_string()))
+        .build();
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
@@ -280,11 +282,12 @@ fn sql_injection_in_filter_field_blocked() {
     }
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
 
-    let mut find_query = query::FindQuery::new();
-    find_query.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "1=1; DROP TABLE posts; --".to_string(),
-        op: query::FilterOp::Equals("x".to_string()),
-    })];
+    let find_query = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "1=1; DROP TABLE posts; --".to_string(),
+            op: query::FilterOp::Equals("x".to_string()),
+        })])
+        .build();
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
@@ -573,11 +576,12 @@ fn count_where_field_eq_with_exclude() {
     let conn = pool.get().expect("DB connection");
 
     // Find one published doc to exclude
-    let mut fq = query::FindQuery::new();
-    fq.filters = vec![query::FilterClause::Single(query::Filter {
-        field: "status".to_string(),
-        op: query::FilterOp::Equals("published".to_string()),
-    })];
+    let fq = query::FindQuery::builder()
+        .filters(vec![query::FilterClause::Single(query::Filter {
+            field: "status".to_string(),
+            op: query::FilterOp::Equals("published".to_string()),
+        })])
+        .build();
     let docs = ops::find_documents(&pool, "posts", &def, &fq, None).expect("Find failed");
     assert!(!docs.is_empty());
     let exclude_id = &docs[0].id;

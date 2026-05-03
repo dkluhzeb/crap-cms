@@ -14,9 +14,12 @@ use tracing::{debug, error};
 use crate::{
     admin::{
         AdminState, auth_middleware,
-        handlers::auth::{
-            LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
-            login_error, mfa_pending_cookie, session_redirect,
+        handlers::{
+            auth::{
+                LoginForm, append_cookies, client_ip, create_session_token, headers_to_map,
+                login_error, mfa_pending_cookie, session_redirect,
+            },
+            shared::paths,
         },
     },
     config::EmailConfig,
@@ -274,8 +277,7 @@ fn handle_mfa_challenge(
 
     // Set MFA pending cookie and redirect to MFA page
     let cookie = mfa_pending_cookie(&mfa_token, state.config.admin.dev_mode);
-    let mut response =
-        Redirect::to(&format!("/admin/mfa?collection={}", form.collection)).into_response();
+    let mut response = Redirect::to(&paths::mfa_with_collection(&form.collection)).into_response();
 
     append_cookies(&mut response, &[cookie]);
 
@@ -302,6 +304,7 @@ fn build_session_response(
         &form.collection,
         user_email,
         session_version,
+        Utc::now().timestamp().max(0) as u64,
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -320,7 +323,7 @@ pub async fn login_action(
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
+    let ip = client_ip(&headers, &addr, &state.config.server);
 
     // Check rate limits before doing any work (both email and IP)
     if state.login_limiter.is_blocked(&form.email) || state.ip_login_limiter.is_blocked(&ip) {

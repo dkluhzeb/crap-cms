@@ -1,117 +1,171 @@
 {{#> layout/base}}
-<crap-list-settings>
-<crap-sticky-header>
-<div class="page-header">
-  <h1>{{collection.display_name}}{{#if is_trash}} — {{t "trash"}}{{/if}}</h1>
-  <div class="page-header__actions">
-    {{#if has_soft_delete}}
-    {{#if is_trash}}
-    <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
-      hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">arrow_back</span>
-      {{t "back_to_list"}}
-    </a>
+  <crap-list-settings>
+    <crap-sticky-header>
+      <div class="page-header">
+        <h1>
+          {{collection.display_name}}
+          {{#if is_trash}}
+            —
+            {{t "trash"}}
+          {{/if}}
+        </h1>
+        <div class="page-header__actions">
+          {{#if has_soft_delete}}
+            {{#if is_trash}}
+              {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug) label_key="back_to_list" icon="arrow_back"}}
+              {{#if docs}}
+                {{#if collection.can_permanently_delete}}
+                  <button
+                    type="button"
+                    class="button button--danger"
+                    data-empty-trash-slug="{{ collection.slug }}"
+                    data-empty-trash-count="{{ pagination.total_docs }}"
+                  >
+                    <span class="material-symbols-outlined">delete_forever</span>
+                    {{t "empty_trash"}}
+                  </button>
+                {{/if}}
+              {{/if}}
+            {{else}}
+              {{> partials/htmx-nav-link href=(concat "/admin/collections/" collection.slug "?trash=1") label_key="trash" icon="delete"}}
+            {{/if}}
+          {{/if}}
+          {{#unless is_trash}}
+            {{> partials/htmx-nav-link
+              href=(concat "/admin/collections/" collection.slug "/create")
+              label=(concat (t "create") " " collection.singular_name)
+              variant="primary"
+              icon="add"}}
+          {{/unless}}
+        </div>
+      </div>
+      <div class="list-toolbar">
+        <form
+          class="list-toolbar__search"
+          action="/admin/collections/{{ collection.slug }}"
+          hx-get="/admin/collections/{{ collection.slug }}"
+          hx-target="body"
+          hx-push-url="true"
+          hx-trigger="submit"
+        >
+          <div class="list-toolbar__search-field">
+            <label
+              for="list-search-input"
+              class="sr-only"
+            >
+              {{t "search_placeholder"}}
+              {{collection.display_name}}
+            </label>
+            <span
+              class="material-symbols-outlined search-bar__icon"
+              aria-hidden="true"
+            >
+              search
+            </span>
+            <input
+              type="search"
+              name="search"
+              value="{{ search }}"
+              placeholder='{{ t "search_placeholder" }} {{ collection.display_name }}...'
+              class="search-bar__input"
+              id="list-search-input"
+              hx-get="/admin/collections/{{ collection.slug }}"
+              hx-target="body"
+              hx-push-url="true"
+              hx-trigger="input changed delay:300ms, search"
+              hx-include="closest form"
+              hx-indicator="#upload-loading"
+            />
+            {{#if search}}
+              <a
+                class="search-bar__clear"
+                href="/admin/collections/{{ collection.slug }}"
+                hx-get="/admin/collections/{{ collection.slug }}"
+                hx-target="body"
+                hx-push-url="true"
+                aria-label='{{ t "clear_search" }}'
+              >
+                <span
+                  class="material-symbols-outlined"
+                  aria-hidden="true"
+                >
+                  close
+                </span>
+              </a>
+            {{/if}}
+          </div>
+          {{#if sort}}
+            <input
+              type="hidden"
+              name="sort"
+              value="{{ sort }}"
+            />
+          {{/if}}
+        </form>
+        <div class="list-toolbar__actions">
+          <button
+            type="button"
+            class="button button--ghost"
+            data-action="open-filter-builder"
+          >
+            <span class="material-symbols-outlined">filter_list</span>
+            {{t "filters"}}
+            {{#if active_filter_count}}
+              <span class="list-toolbar__badge">{{active_filter_count}}</span>
+            {{/if}}
+          </button>
+          <button
+            type="button"
+            class="button button--ghost"
+            data-action="open-column-picker"
+          >
+            <span class="material-symbols-outlined">view_column</span>
+            {{t "columns"}}
+          </button>
+        </div>
+      </div>
+      {{#if active_filters}}
+        <div class="filter-pills">
+          {{#each active_filters}}
+            <span class="filter-pill">
+              <span class="filter-pill__label">{{t this.field_label}}</span>
+              <span class="filter-pill__op">{{this.op}}</span>
+              {{#if this.value}}
+                <span class="filter-pill__value">{{this.value}}</span>
+              {{/if}}
+              <a
+                class="filter-pill__remove"
+                href="{{ this.remove_url }}"
+                hx-get="{{ this.remove_url }}"
+                hx-target="body"
+                hx-push-url="true"
+              >
+                <span class="material-symbols-outlined">close</span>
+              </a>
+            </span>
+          {{/each}}
+        </div>
+      {{/if}}
+    </crap-sticky-header>
     {{#if docs}}
-    {{#if collection.can_permanently_delete}}
-    <button type="button" class="button button--danger"
-      data-empty-trash-slug="{{collection.slug}}"
-      data-empty-trash-count="{{pagination.total_docs}}">
-      <span class="material-symbols-outlined">delete_forever</span>
-      {{t "empty_trash"}}
-    </button>
-    {{/if}}
-    {{/if}}
+      {{> collections/items_table}}
+      {{> partials/pagination}}
     {{else}}
-    <a class="button button--ghost" href="/admin/collections/{{collection.slug}}?trash=1"
-      hx-get="/admin/collections/{{collection.slug}}?trash=1" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">delete</span>
-      {{t "trash"}}
-    </a>
+      {{> collections/items_empty}}
     {{/if}}
-    {{/if}}
-    {{#unless is_trash}}
-    <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
-      hx-get="/admin/collections/{{collection.slug}}/create" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">add</span>
-      {{t "create"}} {{collection.singular_name}}
-    </a>
-    {{/unless}}
-  </div>
-</div>
-
-<div class="list-toolbar">
-  <form class="list-toolbar__search"
-        action="/admin/collections/{{collection.slug}}"
-        hx-get="/admin/collections/{{collection.slug}}"
-        hx-target="body"
-        hx-push-url="true"
-        hx-trigger="submit"
-        hx-include="find input">
-    <label for="list-search-input" class="sr-only">{{t "search_placeholder"}} {{collection.display_name}}</label>
-    <span class="material-symbols-outlined search-bar__icon" aria-hidden="true">search</span>
-    <input
-      type="text"
-      name="search"
-      value="{{search}}"
-      placeholder="{{t "search_placeholder"}} {{collection.display_name}}..."
-      class="search-bar__input"
-      id="list-search-input"
-      hx-get="/admin/collections/{{collection.slug}}"
-      hx-target="body"
-      hx-push-url="true"
-      hx-trigger="input changed delay:300ms, search"
-      hx-include="closest form"
-    />
-    {{#if sort}}<input type="hidden" name="sort" value="{{sort}}" />{{/if}}
-    {{#if search}}
-    <a class="search-bar__clear"
-       href="/admin/collections/{{collection.slug}}"
-       hx-get="/admin/collections/{{collection.slug}}"
-       hx-target="body"
-       hx-push-url="true"
-       aria-label="{{t "clear_search"}}">
-      <span class="material-symbols-outlined" aria-hidden="true">close</span>
-    </a>
-    {{/if}}
-  </form>
-  <div class="list-toolbar__actions">
-    <button type="button" class="button button--ghost" data-action="open-filter-builder">
-      <span class="material-symbols-outlined">filter_list</span>
-      {{t "filters"}}
-      {{#if active_filter_count}}<span class="list-toolbar__badge">{{active_filter_count}}</span>{{/if}}
-    </button>
-    <button type="button" class="button button--ghost" data-action="open-column-picker">
-      <span class="material-symbols-outlined">view_column</span>
-      {{t "columns"}}
-    </button>
-  </div>
-  </div>
-
-{{#if active_filters}}
-<div class="filter-pills">
-  {{#each active_filters}}
-  <span class="filter-pill">
-    <span class="filter-pill__label">{{t this.field_label}}</span>
-    <span class="filter-pill__op">{{this.op}}</span>
-    {{#if this.value}}<span class="filter-pill__value">{{this.value}}</span>{{/if}}
-    <a class="filter-pill__remove" href="{{this.remove_url}}"
-       hx-get="{{this.remove_url}}" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined">close</span>
-    </a>
-  </span>
-  {{/each}}
-</div>
-{{/if}}
-</crap-sticky-header>
-
-{{#if docs}}
-{{> collections/items_table}}
-{{> components/pagination}}
-{{else}}
-{{> collections/items_empty}}
-{{/if}}
-
-<script type="application/json" id="crap-column-options">{{{json column_options}}}</script>
-<script type="application/json" id="crap-filter-fields">{{{json filter_fields}}}</script>
-</crap-list-settings>
+    <script
+      type="application/json"
+      id="crap-column-options"
+      nonce="{{crap.csp_nonce}}"
+    >
+      {{{json column_options}}}
+    </script>
+    <script
+      type="application/json"
+      id="crap-filter-fields"
+      nonce="{{crap.csp_nonce}}"
+    >
+      {{{json filter_fields}}}
+    </script>
+  </crap-list-settings>
 {{/layout/base}}

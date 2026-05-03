@@ -1,3 +1,9 @@
+-- Custom field wrapper: see plugins/rating.lua. Demonstrates how to
+-- ship a "custom field" using only existing functionality —
+-- a Lua wrapper, a `before_validate` hook, and a template overlay
+-- that branches on field name.
+local rating = require("plugins.rating")
+
 crap.collections.define("testimonials", {
   labels = { singular = "Testimonial", plural = "Testimonials" },
   timestamps = true,
@@ -16,14 +22,7 @@ crap.collections.define("testimonials", {
       required = true,
       admin = { rows = 4, placeholder = "What the client said..." },
     }),
-    crap.fields.number({
-      name = "rating",
-      required = true,
-      min = 1,
-      max = 5,
-      default_value = 5,
-      admin = { step = "1", description = "Rating from 1 to 5" },
-    }),
+    rating.field({ name = "rating", required = true }),
     crap.fields.relationship({
       name = "project",
       relationship = { collection = "projects" },

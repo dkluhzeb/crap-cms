@@ -5,12 +5,17 @@ use std::{collections::BTreeMap, fs, io::Write, path::Path};
 use anyhow::{Context as _, Result, bail};
 use include_dir::{Dir, include_dir};
 
-use crate::cli;
+use crate::{cli, scaffold::source_header::prepend_source_header};
+
+/// Current crate version, baked in at compile time. Written into the
+/// source-version header of every extracted file so `overlay status` can
+/// detect drift later.
+const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Embedded default templates — compiled into the binary.
-static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+pub(crate) static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 /// Embedded default static files — compiled into the binary.
-static EMBEDDED_STATIC: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static");
+pub(crate) static EMBEDDED_STATIC: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 /// The embedded proto file content — compiled into the binary.
 const PROTO_CONTENT: &str = include_str!("../../proto/content.proto");
@@ -90,9 +95,9 @@ const TEMPLATE_CATEGORIES: &[FileCategory] = &[
         prefixes: &["email/"],
     },
     FileCategory {
-        label: "Components",
-        description: "Breadcrumb, pagination, version history partials",
-        prefixes: &["components/"],
+        label: "Partials",
+        description: "Field wrapper, sidebar panel, breadcrumb, pagination, etc.",
+        prefixes: &["partials/"],
     },
 ];
 
@@ -105,8 +110,18 @@ const STATIC_CATEGORIES: &[FileCategory] = &[
     },
     FileCategory {
         label: "Components",
-        description: "JS modules (toast, confirm dialog, richtext editor, ...)",
+        description: "JS modules — Web Components, helpers, util/* (toast, confirm, richtext, ...)",
         prefixes: &["components/"],
+    },
+    FileCategory {
+        label: "Vendor",
+        description: "Bundled libraries (CodeMirror, ProseMirror) — replace to swap implementations",
+        prefixes: &[".js"],
+    },
+    FileCategory {
+        label: "Assets",
+        description: "Favicon and brand SVGs",
+        prefixes: &[".svg"],
     },
     FileCategory {
         label: "Fonts",
@@ -275,6 +290,8 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
 }
 
 /// Write all files from an embedded dir into `config_dir/subdir/`, returning count written.
+/// Each file is prepended with a `crap-cms:source <version>` header (for file
+/// types where it's safely commentable) so `overlay status` can detect drift.
 fn extract_dir(dir: &Dir, subdir: &str, config_dir: &Path, force: bool) -> Result<usize> {
     let files = collect_embedded_files_flat(dir);
     let mut count = 0;
@@ -291,7 +308,8 @@ fn extract_dir(dir: &Dir, subdir: &str, config_dir: &Path, force: bool) -> Resul
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&dest, content)?;
+        let body = prepend_source_header(&dest, CRATE_VERSION, content);
+        fs::write(&dest, &body)?;
         count += 1;
     }
 
@@ -410,7 +428,8 @@ fn extract_specific(
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&dest, file.contents())?;
+        let body = prepend_source_header(&dest, CRATE_VERSION, file.contents());
+        fs::write(&dest, &body)?;
         cli::success(&format!("{kind}/{path}"));
         extracted += 1;
     }
@@ -523,9 +542,16 @@ mod tests {
     #[test]
     fn test_templates_extract_static_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
+        templates_extract(
+            tmp.path(),
+            &["styles/main.css".to_string()],
+            false,
+            None,
+            false,
+        )
+        .unwrap();
 
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
@@ -598,7 +624,7 @@ mod tests {
         // Should have created template files
         assert!(tmp.path().join("templates/layout/base.hbs").exists());
         // Should NOT have created static files
-        assert!(!tmp.path().join("static/styles.css").exists());
+        assert!(!tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
@@ -607,7 +633,7 @@ mod tests {
         templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
 
         // Should have created static files
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
         // Should NOT have created template files
         assert!(!tmp.path().join("templates/layout/base.hbs").exists());
     }
@@ -638,7 +664,7 @@ mod tests {
 
         // Should have created both template and static files
         assert!(tmp.path().join("templates/layout/base.hbs").exists());
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
@@ -664,10 +690,10 @@ mod tests {
         // First extraction
         templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
         // Write marker
-        fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
+        fs::write(tmp.path().join("static/styles/main.css"), "CUSTOM").unwrap();
         // Second extraction without force — should skip
         templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
-        let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
+        let content = fs::read_to_string(tmp.path().join("static/styles/main.css")).unwrap();
         assert_eq!(content, "CUSTOM");
     }
 
@@ -718,26 +744,40 @@ mod tests {
         // Extract only static files (styles.css should be found in static)
         templates_extract(
             tmp.path(),
-            &["styles.css".to_string()],
+            &["styles/main.css".to_string()],
             false,
             Some("static"),
             false,
         )
         .unwrap();
 
-        assert!(tmp.path().join("static/styles.css").exists());
+        assert!(tmp.path().join("static/styles/main.css").exists());
     }
 
     #[test]
     fn test_templates_extract_specific_skips_existing() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // First extract
-        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
+        templates_extract(
+            tmp.path(),
+            &["styles/main.css".to_string()],
+            false,
+            None,
+            false,
+        )
+        .unwrap();
         // Write marker
-        fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
+        fs::write(tmp.path().join("static/styles/main.css"), "CUSTOM").unwrap();
         // Extract again without force — should skip
-        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
-        let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
+        templates_extract(
+            tmp.path(),
+            &["styles/main.css".to_string()],
+            false,
+            None,
+            false,
+        )
+        .unwrap();
+        let content = fs::read_to_string(tmp.path().join("static/styles/main.css")).unwrap();
         assert_eq!(content, "CUSTOM");
     }
 

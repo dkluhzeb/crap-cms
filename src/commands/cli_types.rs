@@ -114,6 +114,89 @@ pub enum MakeAction {
         #[arg(short, long)]
         force: bool,
     },
+    /// Generate a custom admin page (filesystem-routed at `/admin/p/<slug>`)
+    Page {
+        /// Page slug — also the template filename. Prompted if omitted.
+        slug: Option<String>,
+
+        /// Sidebar label (defaults to title-cased slug)
+        #[arg(short, long)]
+        label: Option<String>,
+
+        /// Sidebar section heading (e.g., "Tools")
+        #[arg(short, long)]
+        section: Option<String>,
+
+        /// Material Symbols icon name (e.g., "monitoring", "heart-pulse")
+        #[arg(short, long)]
+        icon: Option<String>,
+
+        /// Lua function ref for access control (e.g., "access.admin_only")
+        #[arg(short, long)]
+        access: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a slot-widget HBS file
+    Slot {
+        /// Slot name (e.g., "dashboard_widgets"). Prompted if omitted.
+        slot: Option<String>,
+
+        /// Filename inside the slot directory (default: "widget")
+        #[arg(short, long)]
+        file: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Generate a custom richtext-node Lua snippet
+    Node {
+        /// Node name (e.g., "cta", "mention"). Prompted if omitted.
+        name: Option<String>,
+
+        /// Inline node (default: block-level)
+        #[arg(short, long)]
+        inline: bool,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a per-field render template + Lua wrapper + Web Component
+    Field {
+        /// Field name (e.g., "rating"). Prompted if omitted.
+        name: Option<String>,
+
+        /// Base field type to wrap (default: "number"). Allowed: text,
+        /// number, textarea, select, radio, checkbox, date, email, json, code.
+        #[arg(short, long)]
+        base_type: Option<String>,
+
+        /// Overwrite existing files
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a theme starter CSS file
+    Theme {
+        /// Theme name (e.g., "acme"). Prompted if omitted.
+        name: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Generate a custom Web Component skeleton
+    Component {
+        /// Tag name with hyphen (e.g., "my-widget"). Prompted if omitted.
+        tag: Option<String>,
+
+        /// Overwrite existing file
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 /// Actions for the `blueprint` subcommand.
@@ -331,6 +414,12 @@ pub enum DbAction {
 }
 
 /// Actions for the `templates` subcommand.
+///
+/// Manages the user's customization layer — the files in
+/// `<config_dir>/{templates,static}/` that override the compiled-in
+/// defaults. `list` and `extract` are bootstrap helpers; `status` and
+/// `diff` answer "what have I overridden, and is it drifting from
+/// upstream?".
 #[derive(Subcommand)]
 pub enum TemplatesAction {
     /// List all available default templates and static files
@@ -343,7 +432,9 @@ pub enum TemplatesAction {
         #[arg(short, long)]
         verbose: bool,
     },
-    /// Extract default files into the config directory for customization
+    /// Extract default files into the config directory for customization.
+    /// A `crap-cms:source <version>` header is prepended (when the file
+    /// type allows comments) so `templates status` can detect drift later.
     Extract {
         /// File paths to extract (e.g., "layout/base.hbs" "styles.css")
         paths: Vec<String>,
@@ -357,6 +448,19 @@ pub enum TemplatesAction {
         #[arg(short, long)]
         force: bool,
     },
+    /// Report drift status for every customized file in the config dir
+    Status,
+    /// Show a unified diff between a customized file and the embedded default
+    Diff {
+        /// Path relative to the config dir
+        /// (e.g. `templates/layout/base.hbs`, `static/styles.css`)
+        path: String,
+    },
+    /// Report old-layout files in the config dir and recommend `git mv`
+    /// commands to migrate to the current layout. Read-only — never moves
+    /// files. Honest about what it can't see (internal imports inside
+    /// moved files, dynamic CSS `@import url(...)` references, etc.).
+    Layout,
 }
 
 /// Actions for the `jobs` subcommand.
@@ -472,6 +576,74 @@ pub enum ImagesAction {
         /// Delete entries older than this (e.g., "7d", "24h", "30m")
         #[arg(long, default_value = "7d")]
         older_than: String,
+    },
+}
+
+/// Actions for the `bench` subcommand.
+#[derive(Subcommand)]
+pub enum BenchAction {
+    /// Time individual Lua hooks (interactive selection by default)
+    Hooks {
+        /// Filter to a specific collection
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Number of iterations per hook
+        #[arg(short = 'n', long, default_value = "10")]
+        iterations: usize,
+
+        /// Run only these hooks (comma-separated function refs)
+        #[arg(long)]
+        hooks: Option<String>,
+
+        /// Run all hooks except these (comma-separated function refs)
+        #[arg(long)]
+        exclude: Option<String>,
+
+        /// Run all hooks (skip interactive selection). WARNING: hooks may have side effects.
+        #[arg(long)]
+        all: bool,
+
+        /// Input data as JSON object (overrides automatic data resolution)
+        #[arg(short, long)]
+        data: Option<String>,
+    },
+
+    /// Time find queries on each collection
+    Queries {
+        /// Filter to a specific collection
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Show EXPLAIN QUERY PLAN output (SQLite only)
+        #[arg(long)]
+        explain: bool,
+
+        /// JSON filter clause (same format as gRPC `where` parameter)
+        #[arg(short, long)]
+        r#where: Option<String>,
+    },
+
+    /// Time a full document create cycle (transaction is rolled back)
+    Create {
+        /// Collection slug to benchmark
+        collection: String,
+
+        /// Number of iterations
+        #[arg(short = 'n', long, default_value = "5")]
+        iterations: usize,
+
+        /// Input data as JSON object
+        #[arg(short, long)]
+        data: Option<String>,
+
+        /// Skip hooks (measure pure validation + persist)
+        #[arg(long)]
+        no_hooks: bool,
+
+        /// Skip confirmation prompt for hook side effects
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 

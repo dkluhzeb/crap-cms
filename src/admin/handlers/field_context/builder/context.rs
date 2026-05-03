@@ -2,30 +2,31 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde_json::{Value, from_str, json};
+use serde_json::from_str;
 
-use crate::core::FieldDefinition;
+use crate::{
+    admin::context::field::{FieldContext, SelectOption},
+    core::FieldDefinition,
+};
 
 use super::single::build_single_field_context;
 
-/// Build select/radio options with `selected` flags, handling both single and multi-select.
-/// Returns `(options_json, is_has_many)`.
+/// Build select/radio options with `selected` flags, handling both single and
+/// multi-select. Returns `(options, is_has_many)`.
 pub(in crate::admin::handlers::field_context) fn build_select_options(
     field: &FieldDefinition,
     value: &str,
-) -> (Vec<Value>, bool) {
+) -> (Vec<SelectOption>, bool) {
     if field.has_many {
         let selected_values: HashSet<String> = from_str(value).unwrap_or_default();
 
         let options: Vec<_> = field
             .options
             .iter()
-            .map(|opt| {
-                json!({
-                    "label": opt.label.resolve_default(),
-                    "value": opt.value,
-                    "selected": selected_values.contains(&opt.value),
-                })
+            .map(|opt| SelectOption {
+                label: opt.label.resolve_default().to_string(),
+                value: opt.value.clone(),
+                selected: selected_values.contains(&opt.value),
             })
             .collect();
 
@@ -34,12 +35,10 @@ pub(in crate::admin::handlers::field_context) fn build_select_options(
         let options: Vec<_> = field
             .options
             .iter()
-            .map(|opt| {
-                json!({
-                    "label": opt.label.resolve_default(),
-                    "value": opt.value,
-                    "selected": opt.value == value,
-                })
+            .map(|opt| SelectOption {
+                label: opt.label.resolve_default().to_string(),
+                value: opt.value.clone(),
+                selected: opt.value == value,
             })
             .collect();
 
@@ -58,15 +57,21 @@ pub(in crate::admin::handlers::field_context) fn build_select_options(
 /// preserve. The `filter_hidden` toggle does not apply.
 ///
 /// `non_default_locale`: when true, non-localized fields are rendered readonly
-/// (locked) because they are shared across all locales and should only be edited
-/// from the default locale.
+/// (locked) because they are shared across all locales and should only be
+/// edited from the default locale.
+///
+/// Returns `Vec<FieldContext>` — typed end-to-end. Downstream consumers
+/// (`enrich_field_contexts`, `apply_display_conditions`,
+/// `split_sidebar_fields`, the `fields` field on each typed page context)
+/// all consume typed values; serialization to `serde_json::Value` happens
+/// once when the page context is serialized for the `before_render` hook.
 pub fn build_field_contexts(
     fields: &[FieldDefinition],
     values: &HashMap<String, String>,
     errors: &HashMap<String, String>,
     filter_hidden: bool,
     non_default_locale: bool,
-) -> Vec<Value> {
+) -> Vec<FieldContext> {
     fields
         .iter()
         .filter(|field| !field.hidden)

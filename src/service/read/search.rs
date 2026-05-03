@@ -107,15 +107,16 @@ pub fn search_documents(
         }
     }
 
-    let pagination = helpers::build_pagination(
-        &docs,
+    let pagination = helpers::build_pagination(helpers::PaginationInputs {
+        docs: &docs,
         total,
-        &fq,
-        input.cursor_enabled,
-        def.timestamps,
+        fq: &fq,
+        cursor_enabled: input.cursor_enabled,
+        has_timestamps: def.timestamps,
+        has_drafts: def.has_drafts(),
         had_cursor,
         cursor_has_more,
-    );
+    });
 
     Ok(PaginatedResult {
         docs,

@@ -61,13 +61,7 @@ mod tests {
 
     use serde_json::json;
 
-    fn test_hbs_with_translations(config_dir: &std::path::Path) -> handlebars::Handlebars<'static> {
-        let translations =
-            std::sync::Arc::new(crate::admin::translations::Translations::load(config_dir));
-        let hbs = crate::admin::templates::create_handlebars(config_dir, false, translations)
-            .expect("hbs");
-        (*hbs).clone()
-    }
+    use crate::admin::templates::helpers::test_helpers::test_hbs_with_translations;
 
     #[test]
     fn simple_key() {

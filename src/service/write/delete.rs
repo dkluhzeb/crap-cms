@@ -163,7 +163,7 @@ pub fn delete_document_core(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use std::sync::Arc;
 
@@ -175,6 +175,7 @@ mod tests {
             collection::{Auth, Hooks},
             event::{InProcessInvalidationBus, SharedInvalidationTransport},
             field::FieldType,
+            validate::ValidationError,
         },
         db::DbConnection,
         hooks::ValidationCtx,
@@ -243,6 +244,15 @@ mod tests {
             _operation: &str,
         ) -> Vec<String> {
             Vec::new()
+        }
+
+        fn validate_fields(
+            &self,
+            _fields: &[FieldDefinition],
+            _data: &HashMap<String, Value>,
+            _ctx: &ValidationCtx,
+        ) -> std::result::Result<(), ValidationError> {
+            Ok(())
         }
     }
 

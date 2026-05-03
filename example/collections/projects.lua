@@ -190,7 +190,13 @@ crap.collections.define("projects", {
           label = "Code",
           group = "Technical",
           fields = {
-            crap.fields.code({ name = "code", admin = { language = "javascript" } }),
+            crap.fields.code({
+              name = "code",
+              admin = {
+                language = "javascript",
+                languages = { "javascript", "json", "html", "css", "python" },
+              },
+            }),
             crap.fields.text({ name = "caption" }),
           },
         },

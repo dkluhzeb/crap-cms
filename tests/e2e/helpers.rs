@@ -34,6 +34,10 @@ pub fn setup_app(
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
+    // Test server is HTTP — disable `Secure` flag on session cookies so
+    // chromiumoxide can store them. (Without this the browser drops the
+    // session cookie on HTTP and every authenticated request 401's.)
+    config.admin.dev_mode = true;
     setup_app_with_config(collections, globals, config)
 }
 
@@ -67,7 +71,7 @@ pub fn setup_app_with_config(
         .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -103,14 +107,17 @@ pub fn setup_app_with_config(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
         )
         .unwrap(),
+        // Must match `jwt_secret` above — the login handler signs JWTs with the
+        // token_provider, and the auth middleware verifies with `jwt_secret`.
+        // If these diverge, every authenticated request 401's because the
+        // signature won't validate.
         token_provider: std::sync::Arc::new(crap_cms::core::auth::JwtTokenProvider::new(
-            "test-secret",
+            "test-jwt-secret",
         )),
         password_provider: std::sync::Arc::new(crap_cms::core::auth::Argon2PasswordProvider),
         subscriber_send_timeout_ms: 1000,
@@ -119,6 +126,7 @@ pub fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     let router = build_router(state);

@@ -111,7 +111,7 @@ fn setup_app_with_config(
         .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -151,7 +151,6 @@ fn setup_app_with_config(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
@@ -167,6 +166,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     let router = build_router(state);
@@ -246,7 +246,7 @@ async fn static_css_returns_200() {
     let resp = app
         .router
         .oneshot(
-            Request::get("/static/styles.css")
+            Request::get("/static/styles/main.css")
                 .body(Body::empty())
                 .unwrap(),
         )

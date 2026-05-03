@@ -1,83 +1,48 @@
 /**
  * Admin UI locale picker — `<crap-ui-locale-picker>`.
  *
- * POSTs to /admin/api/locale, then reloads so the server renders
- * in the new language.
+ * Server-rendered toggle + dropdown of available admin UI locales. On
+ * select, POSTs `/admin/api/locale` and reloads so the next render
+ * comes back in the new language.
+ *
+ * Required slotted markup:
+ *   - `[data-ui-locale-toggle]` — open/close button
+ *   - `[data-ui-locale-dropdown]` — container of `[data-ui-locale-value="…"]` items
  *
  * @module ui-locale-picker
+ * @stability stable
  */
 
-/**
- * @returns {string|null}
- */
-function getCsrf() {
-  const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-  return m ? m[1] : null;
-}
+import { CrapPickerBase } from './_internal/picker-base.js';
+import { readCsrfCookie } from './_internal/util/cookies.js';
 
-class CrapUiLocalePicker extends HTMLElement {
-  connectedCallback() {
-    if (this._connected) return;
-    this._connected = true;
+const LOCALE_ENDPOINT = '/admin/api/locale';
 
-    const toggle = this.querySelector('[data-ui-locale-toggle]');
-    const dropdown = this.querySelector('[data-ui-locale-dropdown]');
-    if (!toggle || !dropdown) return;
+class CrapUiLocalePicker extends CrapPickerBase {
+  static toggleSelector = '[data-ui-locale-toggle]';
+  static dropdownSelector = '[data-ui-locale-dropdown]';
+  static itemSelector = '[data-ui-locale-value]';
+  static openClass = 'locale-picker__dropdown--open';
+  static valueDatasetKey = 'uiLocaleValue';
 
-    this._onToggle = (e) => {
-      e.stopPropagation();
-      dropdown.classList.toggle('locale-picker__dropdown--open');
-    };
+  /** @param {string} locale */
+  async _onValue(locale) {
+    const csrf = readCsrfCookie();
+    const body = new URLSearchParams({ locale });
+    if (csrf) body.append('_csrf', csrf);
 
-    this._onSelect = async (e) => {
-      const btn = /** @type {HTMLElement} */ (e.target).closest('[data-ui-locale-value]');
-      if (!btn) return;
-      const locale = /** @type {HTMLElement} */ (btn).dataset.uiLocaleValue;
-      if (!locale) return;
-
-      dropdown.classList.remove('locale-picker__dropdown--open');
-
-      const csrf = getCsrf();
-      const body = new URLSearchParams({ locale });
-      if (csrf) body.append('_csrf', csrf);
-
-      try {
-        const resp = await fetch('/admin/api/locale', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
-          },
-          body,
-        });
-        if (resp.ok) location.reload();
-      } catch {
-        // Silently fail — user can retry
-      }
-    };
-
-    this._onOutsideClick = (e) => {
-      if (!this.contains(/** @type {Node} */ (e.target))) {
-        dropdown.classList.remove('locale-picker__dropdown--open');
-      }
-    };
-
-    toggle.addEventListener('click', this._onToggle);
-    dropdown.addEventListener('click', this._onSelect);
-    document.addEventListener('click', this._onOutsideClick);
-  }
-
-  disconnectedCallback() {
-    const toggle = this.querySelector('[data-ui-locale-toggle]');
-    const dropdown = this.querySelector('[data-ui-locale-dropdown]');
-    if (toggle && this._onToggle) {
-      toggle.removeEventListener('click', this._onToggle);
-    }
-    if (dropdown && this._onSelect) {
-      dropdown.removeEventListener('click', this._onSelect);
-    }
-    if (this._onOutsideClick) {
-      document.removeEventListener('click', this._onOutsideClick);
+    try {
+      const resp = await fetch(LOCALE_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
+        },
+        body,
+      });
+      if (resp.ok) location.reload();
+    } catch {
+      /* user can retry */
     }
   }
 }

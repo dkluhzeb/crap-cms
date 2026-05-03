@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     admin::{AdminState, server::load_auth_user},
@@ -144,10 +144,14 @@ pub fn check_upload_access(
 
     match result {
         Ok(AccessResult::Denied) => Err(Box::new(json_error(StatusCode::FORBIDDEN, deny_msg))),
-        Err(e) => Err(Box::new(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Access check error: {}", e),
-        ))),
+        Err(e) => {
+            error!("Upload access check failed: {}", e);
+
+            Err(Box::new(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Access check failed",
+            )))
+        }
         _ => Ok(()),
     }
 }
@@ -185,6 +189,14 @@ pub fn publish_upload_event(
 }
 
 /// Map a [`ServiceError`] to the appropriate JSON error response.
+///
+/// Semantic errors (validation, access, hook, not-found, unique violation,
+/// referenced, auth failures) surface their `Display` to the client — the
+/// text is user-facing and kept sanitized by the service layer.
+///
+/// `Transient` and `Internal` wrap raw backend / pool errors whose `Display`
+/// can leak DB identifiers or driver vocabulary. Those are logged at `error`
+/// and the client receives a generic phrase only.
 pub fn service_error_to_response(err: ServiceError) -> Response {
     let (status, message) = match &err {
         ServiceError::AccessDenied(_) => (StatusCode::FORBIDDEN, err.to_string()),
@@ -197,11 +209,20 @@ pub fn service_error_to_response(err: ServiceError) -> Response {
         | ServiceError::EmailNotVerified
         | ServiceError::InvalidCredentials => (StatusCode::UNAUTHORIZED, err.to_string()),
         ServiceError::InvalidToken { .. } => (StatusCode::UNAUTHORIZED, err.to_string()),
-        ServiceError::Transient(_) => (StatusCode::SERVICE_UNAVAILABLE, err.to_string()),
-        ServiceError::Internal(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error".to_string(),
-        ),
+        ServiceError::Transient(_) => {
+            error!("Upload service transient error: {}", err);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable".to_string(),
+            )
+        }
+        ServiceError::Internal(_) => {
+            error!("Upload service internal error: {}", err);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            )
+        }
     };
 
     json_error(status, &message)
@@ -367,9 +388,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_error_transient_returns_503() {
-        let resp = service_error_to_response(ServiceError::Transient(anyhow!("db locked")));
+    async fn service_error_transient_returns_503_generic_message() {
+        // The raw DB error text ("database is locked", connection-pool errors,
+        // driver identifiers) must not reach the client — logged only.
+        let resp = service_error_to_response(ServiceError::Transient(anyhow!(
+            "database is locked (secret backend detail)"
+        )));
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "Service temporarily unavailable");
+        assert!(
+            !parsed["error"].as_str().unwrap().contains("database"),
+            "client must not see backend detail",
+        );
     }
 
     #[tokio::test]

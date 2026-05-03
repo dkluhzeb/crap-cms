@@ -1,0 +1,82 @@
+{{#> layout/base}}
+  <h1>System info</h1>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card__header">
+        <span class="material-symbols-outlined">info</span>
+        <h3>Build</h3>
+      </div>
+      <div class="card__body">
+        <p>
+          <strong>Version:</strong>
+          {{crap.version}}
+        </p>
+        <p>
+          <strong>Build hash:</strong>
+          <code>{{crap.build_hash}}</code>
+        </p>
+        <p>
+          <strong>Dev mode:</strong>
+          {{#if crap.dev_mode}}
+            on
+          {{else}}
+            off
+          {{/if}}
+        </p>
+        <p>
+          <strong>Auth enabled:</strong>
+          {{#if crap.auth_enabled}}
+            yes
+          {{else}}
+            no
+          {{/if}}
+        </p>
+      </div>
+    </div>
+
+    {{#with (data "system_info_counts")}}
+      <div class="card">
+        <div class="card__header">
+          <span class="material-symbols-outlined">database</span>
+          <h3>Counts</h3>
+        </div>
+        <div class="card__body">
+          <p>
+            <strong>Collections:</strong>
+            {{collections}}
+          </p>
+          <p>
+            <strong>Globals:</strong>
+            {{globals}}
+          </p>
+          <p>
+            <strong>Custom pages:</strong>
+            {{custom_pages}}
+          </p>
+        </div>
+      </div>
+    {{/with}}
+
+    <div class="card">
+      <div class="card__header">
+        <span class="material-symbols-outlined">person</span>
+        <h3>You</h3>
+      </div>
+      <div class="card__body">
+        {{#if user}}
+          <p>
+            <strong>Email:</strong>
+            {{user.email}}
+          </p>
+          <p>
+            <strong>Collection:</strong>
+            {{user.collection}}
+          </p>
+        {{else}}
+          <p>Not signed in.</p>
+        {{/if}}
+      </div>
+    </div>
+  </div>
+{{/layout/base}}

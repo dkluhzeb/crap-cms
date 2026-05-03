@@ -44,7 +44,7 @@ use tracing::{info, info_span, warn};
 
 use crate::{
     admin::{
-        AdminState, Translations,
+        AdminState, CSP_NONCE, CspNonce, Translations,
         handlers::{
             auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
         },
@@ -124,8 +124,15 @@ pub async fn start(
         cache,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
-    let handlebars =
-        templates::create_handlebars(&config_dir, config.admin.dev_mode, translations.clone())?;
+    let handlebars = templates::create_handlebars(
+        &config_dir,
+        config.admin.dev_mode,
+        translations.clone(),
+        Some(Arc::new(hook_runner.clone())),
+    )?;
+    let custom_pages = crate::admin::custom_pages::CustomPageRegistry::from_pages(
+        hook_runner.extract_custom_pages(),
+    );
     let email_renderer = Arc::new(EmailRenderer::new(&config_dir)?);
     let email_provider = create_email_provider(&config.email)?;
 
@@ -137,7 +144,6 @@ pub async fn start(
 
     let max_sse_connections = config.live.max_sse_connections;
     let subscriber_send_timeout_ms = config.live.subscriber_send_timeout_ms;
-    let csp_header = config.admin.csp.build_header_value();
     let invalidation_transport: SharedInvalidationTransport =
         invalidation_transport.unwrap_or_else(|| Arc::new(InProcessInvalidationBus::new()));
     let state = AdminState {
@@ -160,7 +166,6 @@ pub async fn start(
         shutdown: shutdown.clone(),
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections,
-        csp_header,
         storage,
         token_provider,
         password_provider,
@@ -168,6 +173,7 @@ pub async fn start(
         invalidation_transport,
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
         cache,
+        custom_pages,
     };
 
     let h2c_enabled = state.config.server.h2c;
@@ -276,6 +282,10 @@ fn protected_routes(
     Router::new()
         .route("/", get(dashboard::index))
         .route("/admin", get(dashboard::index))
+        .route(
+            "/admin/p/{slug}",
+            get(crate::admin::handlers::custom_page::render_custom_page),
+        )
         .route("/admin/collections", get(collections::list_collections))
         .route("/admin/collections/{slug}", slug_methods)
         .route(
@@ -511,6 +521,12 @@ async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
 }
 
 /// Security headers middleware — sets protective headers on every response.
+///
+/// Generates a fresh Content-Security-Policy nonce for each request,
+/// scopes it into a task-local for the duration of the inner service so
+/// templates can emit `<script nonce="...">`, and then stamps both the
+/// nonce-bearing CSP header and the usual static protection headers onto
+/// the response.
 // Excluded from coverage: async Axum middleware.
 #[cfg(not(tarpaulin_include))]
 async fn security_headers(
@@ -518,7 +534,12 @@ async fn security_headers(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let mut response = next.run(request).await;
+    let nonce = CspNonce::generate();
+    let nonce_str = nonce.as_str().to_string();
+
+    // Scope the nonce into a task-local so `CrapMeta::from_state` can pick
+    // it up when assembling the template context for this request.
+    let mut response = CSP_NONCE.scope(nonce, next.run(request)).await;
     let headers = response.headers_mut();
 
     headers.insert(
@@ -541,8 +562,8 @@ async fn security_headers(
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
 
-    if let Some(ref csp) = state.csp_header
-        && let Ok(value) = HeaderValue::from_str(csp)
+    if let Some(csp) = state.config.admin.csp.build_header_value(Some(&nonce_str))
+        && let Ok(value) = HeaderValue::from_str(&csp)
     {
         headers.insert(HeaderName::from_static("content-security-policy"), value);
     }
@@ -643,6 +664,7 @@ async fn csrf_middleware(
 ) -> Response {
     let method = request.method().clone();
     let dev_mode = state.config.admin.dev_mode;
+    let cookie_lifetime = state.config.admin.csrf_cookie_lifetime;
 
     // Bearer-authenticated API clients can't use double-submit cookies.
     // CSRF protects browser sessions (cookies); Bearer tokens aren't auto-attached
@@ -686,7 +708,12 @@ async fn csrf_middleware(
             Ok(request) => {
                 let mut response = next.run(request).await;
 
-                ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
+                ensure_csrf_cookie(
+                    &mut response,
+                    csrf_cookie.as_deref(),
+                    dev_mode,
+                    cookie_lifetime,
+                );
 
                 return response;
             }
@@ -697,14 +724,25 @@ async fn csrf_middleware(
     // Non-mutating method — pass through and set cookie if needed
     let mut response = next.run(request).await;
 
-    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
+    ensure_csrf_cookie(
+        &mut response,
+        csrf_cookie.as_deref(),
+        dev_mode,
+        cookie_lifetime,
+    );
 
     response
 }
 
 /// Set the `crap_csrf` cookie on the response if not already present in the request.
 /// Adds `Secure` flag in production mode (same as session cookies).
-fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, dev_mode: bool) {
+/// `lifetime` is the `Max-Age` in seconds, sourced from `admin.csrf_cookie_lifetime`.
+fn ensure_csrf_cookie(
+    response: &mut Response,
+    existing_cookie: Option<&str>,
+    dev_mode: bool,
+    lifetime: u64,
+) {
     if existing_cookie.is_some() {
         return;
     }
@@ -712,8 +750,8 @@ fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, de
     let token = nanoid!(32);
     let secure = if dev_mode { "" } else { "; Secure" };
     let cookie = format!(
-        "crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400{}",
-        token, secure
+        "crap_csrf={}; Path=/; SameSite=Strict; Max-Age={}{}",
+        token, lifetime, secure
     );
 
     if let Ok(value) = cookie.parse() {

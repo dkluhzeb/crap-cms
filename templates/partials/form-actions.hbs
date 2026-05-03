@@ -1,0 +1,13 @@
+{{!-- partials/form-actions
+     Confirm-page form-actions chrome: wrapper + cancel link.
+     Action button(s) go in the slot.
+
+     Params:
+       cancel_href      — required; back-link target
+       cancel_label_key — translation key for cancel label, default "cancel"
+
+     Slot: primary action button(s). --}}
+<div class="form__actions">
+  {{> @partial-block}}
+  {{> partials/htmx-nav-link href=cancel_href label_key=(default cancel_label_key "cancel")}}
+</div>

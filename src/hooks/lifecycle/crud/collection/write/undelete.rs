@@ -43,17 +43,13 @@ fn undelete_document_lua(
         .run_validation(false)
         .build();
 
-    let mut ctx_builder = ServiceContext::collection(collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&wh)
         .user(user.as_ref())
-        .override_access(override_access);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .override_access(override_access)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     undelete_document(&ctx, id).map_err(|e| RuntimeError(format!("{e}")))?;
 

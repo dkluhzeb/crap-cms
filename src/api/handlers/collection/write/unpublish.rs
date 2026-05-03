@@ -32,6 +32,11 @@ impl ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let def_owned = def.clone();
+        // Required by `unpublish_document_core` to build a default
+        // `LocaleContext` for the raw read — without this, collections
+        // with `localized = true` fields fail with `no such column: <name>`
+        // because the SELECT references bare names instead of `__en`/`__de`.
+        let locale_config = self.locale_config.clone();
 
         let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool
@@ -51,6 +56,7 @@ impl ContentService {
                 .user(user_doc.as_ref())
                 .event_transport(event_transport)
                 .cache(cache)
+                .locale_config(Some(&locale_config))
                 .build();
 
             let doc = service::unpublish_document(&ctx, &id)

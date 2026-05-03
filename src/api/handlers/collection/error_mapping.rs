@@ -16,10 +16,15 @@ impl From<ServiceError> for Status {
             ServiceError::Validation(ve) => Status::invalid_argument(ve.to_string()),
             ServiceError::HookError(msg) => Status::invalid_argument(msg),
             ServiceError::UniqueViolation(field) => {
+                // Per gRPC spec, conflict-with-existing-resource is
+                // `ALREADY_EXISTS` (code 6), not `INVALID_ARGUMENT` (3).
+                // Clients use this distinction to drive retry / "use the
+                // existing resource" / "ask the user to pick another
+                // value" flows.
                 if field.is_empty() {
-                    Status::invalid_argument("Unique constraint violated")
+                    Status::already_exists("Unique constraint violated")
                 } else {
-                    Status::invalid_argument(format!(
+                    Status::already_exists(format!(
                         "Unique constraint violated for field '{field}'"
                     ))
                 }
@@ -28,7 +33,11 @@ impl From<ServiceError> for Status {
             ServiceError::EmailNotVerified => Status::permission_denied("Email not verified"),
             ServiceError::InvalidCredentials => Status::unauthenticated("Invalid credentials"),
             ServiceError::InvalidToken { kind, reason } => {
-                Status::invalid_argument(format!("Invalid {kind} token: {reason}"))
+                // Per gRPC spec, missing/invalid auth credentials map to
+                // `UNAUTHENTICATED` (code 16). Client SDKs key token
+                // refresh on this code; mapping to `INVALID_ARGUMENT`
+                // would mask auth failures as logic errors.
+                Status::unauthenticated(format!("Invalid {kind} token: {reason}"))
             }
             ServiceError::Transient(e) => {
                 warn!("Transient error: {}", e);
@@ -94,12 +103,33 @@ mod tests {
         assert_eq!(status.code(), Code::InvalidArgument);
     }
 
+    /// Regression: was previously mapped to `InvalidArgument`, but per
+    /// gRPC spec a unique-constraint conflict is `AlreadyExists` (code 6).
+    /// Client SDKs branch on this code for "use existing / pick another"
+    /// flows; the old mapping made conflicts indistinguishable from plain
+    /// validation errors.
     #[test]
-    fn service_error_unique_violation_to_invalid_argument() {
+    fn service_error_unique_violation_to_already_exists() {
         let se = ServiceError::UniqueViolation("email".into());
         let status = Status::from(se);
-        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.code(), Code::AlreadyExists);
         assert!(status.message().contains("email"));
+    }
+
+    /// Regression: was previously `InvalidArgument`, now correctly
+    /// `Unauthenticated`. Client SDKs trigger token-refresh on this code;
+    /// the old mapping looked like a malformed request and silently
+    /// suppressed refresh.
+    #[test]
+    fn service_error_invalid_token_to_unauthenticated() {
+        let se = ServiceError::InvalidToken {
+            kind: "session",
+            reason: "expired",
+        };
+        let status = Status::from(se);
+        assert_eq!(status.code(), Code::Unauthenticated);
+        assert!(status.message().contains("session"));
+        assert!(status.message().contains("expired"));
     }
 
     #[test]

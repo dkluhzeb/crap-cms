@@ -47,7 +47,7 @@ pub(super) fn reconstruct_group_fields(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType};

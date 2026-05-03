@@ -4,5 +4,5 @@ mod validate;
 
 pub(super) use validate::{SubFieldParams, validate_sub_fields_inner};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests;

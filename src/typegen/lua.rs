@@ -33,8 +33,88 @@ pub(super) fn render(registry: &Registry) -> String {
     }
 
     render_find_overloads(&mut out, registry);
+    render_template_data_types(&mut out);
 
     out
+}
+
+/// Render `crap.template_data_ctx` and `crap.template_data_fn` aliases.
+///
+/// The template-data context is the same JSON shape every admin page
+/// renders (typed in `src/admin/context/page/`). Customers writing widget
+/// functions read fields like `ctx.user.email`, `ctx.page.type`,
+/// `ctx.collection.slug`, `ctx.document.id`. We model them as optional
+/// because no single page populates all of them — auth pages have no
+/// `nav` or `user`, list pages have no `document`, etc. The full per-page
+/// shape lives in `docs/src/admin-ui/template-context.md`.
+fn render_template_data_types(out: &mut String) {
+    out.push_str("-- ─── Template data context (for `crap.template_data.register`) ───\n\n");
+
+    out.push_str("---@class crap.template.crap_meta\n");
+    out.push_str("---@field version string\n");
+    out.push_str("---@field build_hash string\n");
+    out.push_str("---@field dev_mode boolean\n");
+    out.push_str("---@field auth_enabled boolean\n");
+    out.push_str("---@field csp_nonce string\n\n");
+
+    out.push_str("---@class crap.template.user\n");
+    out.push_str("---@field id string\n");
+    out.push_str("---@field email string\n");
+    out.push_str("---@field collection string\n\n");
+
+    out.push_str("---@class crap.template.page\n");
+    out.push_str(
+        "---@field type \"dashboard\" | \"collection_list\" | \"collection_items\" | \"collection_edit\" | \"collection_create\" | \"collection_delete\" | \"collection_versions\" | \"global_edit\" | \"global_versions\" | \"auth_login\" | \"auth_forgot\" | \"auth_reset\" | \"auth_mfa\" | \"error_403\" | \"error_404\" | \"error_500\" | \"auth_required\" | \"admin_denied\"\n",
+    );
+    out.push_str("---@field title string\n");
+    out.push_str("---@field title_name? string\n");
+    out.push_str("---@field breadcrumbs? table\n\n");
+
+    out.push_str("---@class crap.template.nav\n");
+    out.push_str("---@field collections table[]\n");
+    out.push_str("---@field globals table[]\n\n");
+
+    out.push_str("---@class crap.template.collection\n");
+    out.push_str("---@field slug string\n");
+    out.push_str("---@field display_name string\n");
+    out.push_str("---@field singular_name string\n");
+    out.push_str("---@field has_drafts boolean\n");
+    out.push_str("---@field has_versions boolean\n");
+    out.push_str("---@field is_auth boolean\n");
+    out.push_str("---@field is_upload boolean\n\n");
+
+    out.push_str("---@class crap.template.global\n");
+    out.push_str("---@field slug string\n");
+    out.push_str("---@field display_name string\n");
+    out.push_str("---@field has_drafts boolean\n");
+    out.push_str("---@field has_versions boolean\n\n");
+
+    out.push_str("---@class crap.template.document\n");
+    out.push_str("---@field id string\n");
+    out.push_str("---@field created_at? string\n");
+    out.push_str("---@field updated_at? string\n");
+    out.push_str("---@field status? string\n");
+    out.push_str("---@field data? table\n\n");
+
+    out.push_str("---@class crap.template_ctx\n");
+    out.push_str("---@field crap crap.template.crap_meta\n");
+    out.push_str("---@field _locale string\n");
+    out.push_str("---@field available_locales string[]\n");
+    out.push_str("---@field title string\n");
+    out.push_str("---@field page crap.template.page\n");
+    out.push_str("---@field user? crap.template.user\n");
+    out.push_str("---@field nav? crap.template.nav\n");
+    out.push_str("---@field collection? crap.template.collection\n");
+    out.push_str("---@field global? crap.template.global\n");
+    out.push_str("---@field document? crap.template.document\n");
+    out.push_str("---@field has_editor_locales? boolean\n");
+    out.push_str("---@field editor_locale? string\n");
+    out.push_str(
+        "-- For page-specific fields beyond the bases (e.g. `collection_cards`, `versions`),\n",
+    );
+    out.push_str("-- see docs/src/admin-ui/template-context.md or the generated reference.\n\n");
+
+    out.push_str("---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any\n\n");
 }
 
 /// Render type definitions for a single collection.

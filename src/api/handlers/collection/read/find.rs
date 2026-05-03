@@ -34,41 +34,25 @@ fn build_find_query(
         .where_json(req.r#where.as_deref())
         .build()?;
 
-    let mut fq = FindQuery::builder()
-        .filters(filters)
-        .limit(pagination.limit);
-
-    if let Some(ref ob) = req.order_by {
-        fq = fq.order_by(ob.clone());
-    }
-
-    if !pagination.has_cursor() {
-        fq = fq.offset(pagination.offset);
-    }
-
-    if let Some(s) = select {
-        fq = fq.select(s.to_vec());
-    }
-
-    if let Some(ref c) = pagination.after_cursor {
-        fq = fq.after_cursor(c.clone());
-    }
-
-    if let Some(ref c) = pagination.before_cursor {
-        fq = fq.before_cursor(c.clone());
-    }
-
-    if let Some(ref s) = req.search {
-        fq = fq.search(s.clone());
-    }
-
     let is_trash = req.trash.unwrap_or(false) && def.soft_delete;
+    // Default sort for trash listings is a presentation concern.
+    let order_by = req
+        .order_by
+        .clone()
+        .or_else(|| is_trash.then(|| "-_deleted_at".to_string()));
 
-    if is_trash && req.order_by.is_none() {
-        fq = fq.order_by("-_deleted_at");
-    }
+    let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 
-    Ok(fq.build())
+    Ok(FindQuery::builder()
+        .filters(filters)
+        .order_by(order_by)
+        .limit(Some(pagination.limit))
+        .offset(offset)
+        .select(select.map(<[String]>::to_vec))
+        .after_cursor(pagination.after_cursor.clone())
+        .before_cursor(pagination.before_cursor.clone())
+        .search(req.search.clone())
+        .build())
 }
 
 #[cfg(not(tarpaulin_include))]

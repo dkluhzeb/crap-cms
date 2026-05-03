@@ -15,13 +15,21 @@ pub mod github;
 pub mod platform;
 pub mod store;
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use clap::Subcommand;
+use clap::{CommandFactory, Subcommand};
+use clap_complete::Shell;
+use dialoguer::Confirm;
 use semver::Version;
-use std::path::PathBuf;
 
 use crate::cli;
+
+mod completions;
 
 #[derive(Subcommand, Debug)]
 pub enum UpdateCmd {
@@ -54,10 +62,21 @@ pub enum UpdateCmd {
 
     /// Print the path of the currently active binary.
     Where,
+
+    /// Generate shell completions (to stdout) or remove installed completion files.
+    Completions {
+        /// Shell to target (bash, zsh, fish, elvish, powershell). Omit with
+        /// `--uninstall` to remove files for every supported shell.
+        shell: Option<Shell>,
+
+        /// Remove the installed completion file(s) instead of printing.
+        #[arg(long)]
+        uninstall: bool,
+    },
 }
 
 /// Execute an `UpdateCmd`. `None` means "install latest + use latest".
-pub fn run(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
+pub fn run<C: CommandFactory>(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
     match cmd {
         Some(UpdateCmd::Check) => run_check(),
         Some(UpdateCmd::List) => run_list(),
@@ -67,13 +86,14 @@ pub fn run(cmd: Option<UpdateCmd>, yes: bool, force: bool) -> Result<()> {
         }
         Some(UpdateCmd::Use { version }) => {
             refuse_on_windows("use")?;
-            run_use(&version, force)
+            run_use::<C>(&version, force)
         }
         Some(UpdateCmd::Uninstall { version }) => run_uninstall(&version),
         Some(UpdateCmd::Where) => run_where(),
+        Some(UpdateCmd::Completions { shell, uninstall }) => run_completions::<C>(shell, uninstall),
         None => {
             refuse_on_windows("update")?;
-            run_update_latest(yes, force)
+            run_update_latest::<C>(yes, force)
         }
     }
 }
@@ -92,6 +112,31 @@ fn refuse_on_windows(verb: &str) -> Result<()> {
              from https://github.com/dkluhzeb/crap-cms/releases/latest"
         );
     }
+    Ok(())
+}
+
+/// Print shell completions to stdout, or remove installed completion files
+/// when `--uninstall` is passed.
+fn run_completions<C: CommandFactory>(shell: Option<Shell>, uninstall: bool) -> Result<()> {
+    if uninstall {
+        match shell {
+            Some(s) => {
+                completions::uninstall_completions_for(s);
+            }
+            None => completions::uninstall_all_completions(),
+        }
+        return Ok(());
+    }
+
+    let Some(shell) = shell else {
+        bail!(
+            "missing <SHELL> argument.\n\
+             Usage: `crap-cms update completions <SHELL>` to print completions, \
+             or `crap-cms update completions --uninstall` to remove installed files."
+        );
+    };
+
+    completions::print_completions::<C>(shell);
     Ok(())
 }
 
@@ -230,7 +275,7 @@ fn run_install(version: &str, reinstall: bool, force: bool) -> Result<()> {
 /// Tiny scoped tempdir — we don't depend on the `tempfile` crate at runtime.
 /// Cleans up on drop (best-effort).
 struct ScratchDir {
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 impl ScratchDir {
@@ -238,38 +283,45 @@ impl ScratchDir {
         let base = std::env::temp_dir();
         let suffix = nanoid::nanoid!(12);
         let dir = base.join(format!("crap-cms-update-{}-{suffix}", std::process::id()));
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(Self { path: dir })
     }
-    fn path(&self) -> &std::path::Path {
+    fn path(&self) -> &Path {
         &self.path
     }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
 /// Switch the `current` symlink.
-fn run_use(version: &str, force: bool) -> Result<()> {
+fn run_use<C: CommandFactory>(version: &str, force: bool) -> Result<()> {
     let version = normalize_tag(version);
     let store = store::Store::default_for_user()?;
     ensure_self_managed(&store, force)?;
     store.switch_to(&version)?;
     cli::success(&format!("Switched to {version}."));
 
+    completions::install_completions::<C>();
     warn_if_path_misaligned(&store);
     Ok(())
 }
 
-/// Remove a version.
+/// Remove a version. Also removes installed shell completions if no
+/// versions remain — they follow the tool, not any individual version.
 fn run_uninstall(version: &str) -> Result<()> {
     let version = normalize_tag(version);
     let store = store::Store::default_for_user()?;
     store.uninstall(&version)?;
     cli::success(&format!("Removed {version}."));
+
+    if store.installed().map(|v| v.is_empty()).unwrap_or(false) {
+        completions::uninstall_all_completions();
+    }
+
     Ok(())
 }
 
@@ -283,14 +335,13 @@ fn run_where() -> Result<()> {
             link.display()
         );
     }
-    let resolved =
-        std::fs::read_link(&link).with_context(|| format!("reading {}", link.display()))?;
+    let resolved = fs::read_link(&link).with_context(|| format!("reading {}", link.display()))?;
     println!("{}", resolved.display());
     Ok(())
 }
 
 /// `crap-cms update` (no args): install latest + switch to it.
-fn run_update_latest(yes: bool, force: bool) -> Result<()> {
+fn run_update_latest<C: CommandFactory>(yes: bool, force: bool) -> Result<()> {
     let latest = github::latest_tag(github::DEFAULT_REPO)?;
     let current = current_version();
 
@@ -308,7 +359,7 @@ fn run_update_latest(yes: bool, force: bool) -> Result<()> {
     }
 
     run_install(&latest, false, force)?;
-    run_use(&latest, force)?;
+    run_use::<C>(&latest, force)?;
     Ok(())
 }
 
@@ -371,7 +422,7 @@ fn ensure_self_managed(store: &store::Store, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn looks_distro_managed(path: &std::path::Path) -> bool {
+fn looks_distro_managed(path: &Path) -> bool {
     let s = path.to_string_lossy();
     s.starts_with("/usr/")
         || s.starts_with("/opt/")
@@ -382,7 +433,7 @@ fn looks_distro_managed(path: &std::path::Path) -> bool {
 
 /// Resolve the first `crap-cms` executable on `$PATH`, matching what the user's
 /// shell would pick when they type `crap-cms`.
-fn resolve_on_path(name: &str) -> Option<std::path::PathBuf> {
+fn resolve_on_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
@@ -392,7 +443,7 @@ fn resolve_on_path(name: &str) -> Option<std::path::PathBuf> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&candidate)
+            if let Ok(meta) = fs::metadata(&candidate)
                 && meta.permissions().mode() & 0o111 != 0
             {
                 return Some(candidate);
@@ -444,7 +495,6 @@ fn warn_if_path_misaligned(store: &store::Store) {
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
-    use dialoguer::Confirm;
     Ok(Confirm::with_theme(&crate::cli::crap_theme())
         .with_prompt(prompt)
         .default(true)
@@ -493,24 +543,20 @@ mod tests {
 
     #[test]
     fn looks_distro_managed_recognises_system_paths() {
-        assert!(looks_distro_managed(std::path::Path::new(
-            "/usr/bin/crap-cms"
-        )));
-        assert!(looks_distro_managed(std::path::Path::new(
+        assert!(looks_distro_managed(Path::new("/usr/bin/crap-cms")));
+        assert!(looks_distro_managed(Path::new(
             "/opt/crap-cms/bin/crap-cms"
         )));
-        assert!(looks_distro_managed(std::path::Path::new(
+        assert!(looks_distro_managed(Path::new(
             "/nix/store/abc/bin/crap-cms"
         )));
     }
 
     #[test]
     fn looks_distro_managed_ignores_home_paths() {
-        assert!(!looks_distro_managed(std::path::Path::new(
+        assert!(!looks_distro_managed(Path::new(
             "/home/someone/.local/bin/crap-cms"
         )));
-        assert!(!looks_distro_managed(std::path::Path::new(
-            "/tmp/my-install/crap-cms"
-        )));
+        assert!(!looks_distro_managed(Path::new("/tmp/my-install/crap-cms")));
     }
 }

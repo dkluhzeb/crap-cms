@@ -21,6 +21,19 @@ pub struct FindDocumentsInput<'a> {
     /// post-validation. Callers never push `_status` into `query.filters`
     /// themselves.
     pub include_drafts: bool,
+    /// Optional explicit `_status` filter values for the admin list page's
+    /// filter builder. Mutually exclusive with the
+    /// `include_drafts = false` default-published injection — when set,
+    /// the service treats it like an `include_drafts = true` request and
+    /// *additionally* pins the query to documents whose `_status` matches
+    /// one of the supplied values. One value → `_status = X`, multiple
+    /// values → `_status IN (X, Y, …)`. Translated from
+    /// `?where[_status][equals]=X` URL filters (top-level *and* OR-bucket
+    /// forms) by the admin list handler. `parse_where_params` and
+    /// `validate_user_filters` continue to reject `_status` in the
+    /// generic-user-filter path; this typed param is the supported entry
+    /// point.
+    pub status_filter: Option<Vec<String>>,
     pub access_constraints: Option<Vec<FilterClause>>,
     /// Whether cursor-based pagination is enabled (from config).
     /// When true, PaginationResult uses cursor mode; when false, page mode.
@@ -53,6 +66,7 @@ pub struct FindDocumentsInputBuilder<'a> {
     registry: Option<&'a Registry>,
     cache: Option<&'a dyn CacheBackend>,
     include_drafts: bool,
+    status_filter: Option<Vec<String>>,
     access_constraints: Option<Vec<FilterClause>>,
     cursor_enabled: bool,
     trash: bool,
@@ -70,6 +84,7 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             registry: None,
             cache: None,
             include_drafts: false,
+            status_filter: None,
             access_constraints: None,
             cursor_enabled: false,
             trash: false,
@@ -112,6 +127,11 @@ impl<'a> FindDocumentsInputBuilder<'a> {
         self
     }
 
+    pub fn status_filter(mut self, status_filter: Option<Vec<String>>) -> Self {
+        self.status_filter = status_filter;
+        self
+    }
+
     pub fn access_constraints(mut self, access_constraints: Option<Vec<FilterClause>>) -> Self {
         self.access_constraints = access_constraints;
         self
@@ -144,6 +164,7 @@ impl<'a> FindDocumentsInputBuilder<'a> {
             registry: self.registry,
             cache: self.cache,
             include_drafts: self.include_drafts,
+            status_filter: self.status_filter,
             access_constraints: self.access_constraints,
             cursor_enabled: self.cursor_enabled,
             trash: self.trash,
@@ -192,7 +213,7 @@ mod tests {
     /// singleflight across concurrent populates.
     #[test]
     fn builder_threads_singleflight_through() {
-        let fq = FindQuery::new();
+        let fq = FindQuery::default();
         let sf: SharedPopulateSingleflight = Arc::new(Singleflight::new());
         let before = Arc::strong_count(&sf);
 
@@ -211,7 +232,7 @@ mod tests {
 
     #[test]
     fn builder_singleflight_defaults_to_none() {
-        let fq = FindQuery::new();
+        let fq = FindQuery::default();
         let input = FindDocumentsInput::builder(&fq).build();
         assert!(input.singleflight.is_none());
         assert!(PostProcessOpts::singleflight(&input).is_none());

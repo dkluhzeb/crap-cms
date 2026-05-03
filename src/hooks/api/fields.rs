@@ -133,7 +133,7 @@ mod tests {
 
         let fields_arr = lua.create_table().unwrap();
         fields_arr.set(1, result).unwrap();
-        let parsed = super::super::parse::fields::parse_fields(&fields_arr).unwrap();
+        let parsed = super::super::parse::fields::parse_fields(&lua, &fields_arr).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "status");
         assert_eq!(parsed[0].field_type, FieldType::Select);

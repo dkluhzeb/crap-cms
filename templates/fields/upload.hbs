@@ -1,74 +1,93 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
-{{#if has_many}}
-<div class="upload-field upload-field--has-many">
-  <crap-relationship-search
-    collection="{{relationship_collection}}"
-    field-name="{{name}}"
-    field-type="upload"
-    has-many
-    {{#if picker}}picker="{{picker}}"{{/if}}
-    {{#if required}}required{{/if}}
-    {{#if readonly}}readonly{{/if}}
-    {{#if error}}data-error{{/if}}
-    selected='{{json selected_items}}'>
-  </crap-relationship-search>
-  {{#unless locale_locked}}
-  <div class="upload-field__actions">
-    <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
-      data-inline-create="{{relationship_collection}}" data-inline-create-label="{{t "upload_new"}}">
-      <span class="material-symbols-outlined icon--sm">upload</span>
-      {{t "upload_new"}}
-    </a>
-  </div>
-  {{/unless}}
-</div>
-{{else}}
-<crap-upload-preview class="upload-field">
-  <div class="upload-field__preview" {{#unless selected_preview_url}}style="display: none;"{{/unless}}>
-    {{#if selected_preview_url}}
-    <img src="{{selected_preview_url}}" alt="Preview" />
-    {{/if}}
-  </div>
-  <div class="upload-field__info" {{#unless selected_filename}}style="display: none;"{{/unless}}>
-    {{#if selected_filename}}
-    <span class="material-symbols-outlined icon--sm">description</span>
-    <span class="upload-field__filename">{{selected_filename}}</span>
-    {{/if}}
-  </div>
-  {{#if locale_locked}}
-  <input type="hidden" name="{{name}}" value="{{value}}" />
-  <crap-relationship-search
-    collection="{{relationship_collection}}"
-    field-name="{{name}}"
-    field-type="upload"
-    readonly
-    selected='{{json selected_items}}'>
-  </crap-relationship-search>
+{{#> partials/field}}
+  {{#if has_many}}
+    <div class="upload-field upload-field--has-many">
+      <crap-relationship-search
+        collection="{{relationship_collection}}"
+        field-name="{{name}}"
+        field-type="upload"
+        has-many
+        {{#if picker}}picker="{{picker}}"{{/if}}
+        {{#if required}}required{{/if}}
+        {{#if readonly}}readonly{{/if}}
+        {{#if error}}data-error{{/if}}
+        selected="{{json selected_items}}"
+      >
+      </crap-relationship-search>
+      {{#unless locale_locked}}
+        <div class="upload-field__actions">
+          <a
+            class="relationship-field__action"
+            href="/admin/collections/{{relationship_collection}}/create"
+            data-inline-create="{{relationship_collection}}"
+            data-inline-create-label='{{t "upload_new"}}'
+          >
+            <span class="material-symbols-outlined icon--sm">upload</span>
+            {{t "upload_new"}}
+          </a>
+        </div>
+      {{/unless}}
+    </div>
   {{else}}
-  <crap-relationship-search
-    collection="{{relationship_collection}}"
-    field-name="{{name}}"
-    field-type="upload"
-    {{#if picker}}picker="{{picker}}"{{/if}}
-    {{#if required}}required{{/if}}
-    {{#if error}}data-error{{/if}}
-    selected='{{json selected_items}}'>
-  </crap-relationship-search>
-  {{#if relationship_collection}}
-  <div class="upload-field__actions">
-    <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
-      data-inline-create="{{relationship_collection}}" data-inline-create-label="{{t "upload_new"}}">
-      <span class="material-symbols-outlined icon--sm">upload</span>
-      {{t "upload_new"}}
-    </a>
-  </div>
+    <crap-upload-preview class="upload-field">
+      <div
+        class="upload-field__preview"
+        {{#unless selected_preview_url}}hidden{{/unless}}
+      >
+        {{#if selected_preview_url}}
+          <img
+            src="{{selected_preview_url}}"
+            alt="Preview"
+          />
+        {{/if}}
+      </div>
+      <div
+        class="upload-field__info"
+        {{#unless selected_filename}}hidden{{/unless}}
+      >
+        {{#if selected_filename}}
+          <span class="material-symbols-outlined icon--sm">description</span>
+          <span class="upload-field__filename">{{selected_filename}}</span>
+        {{/if}}
+      </div>
+      {{#if locale_locked}}
+        <input
+          type="hidden"
+          name="{{name}}"
+          value="{{value}}"
+        />
+        <crap-relationship-search
+          collection="{{relationship_collection}}"
+          field-name="{{name}}"
+          field-type="upload"
+          readonly
+          selected="{{json selected_items}}"
+        >
+        </crap-relationship-search>
+      {{else}}
+        <crap-relationship-search
+          collection="{{relationship_collection}}"
+          field-name="{{name}}"
+          field-type="upload"
+          {{#if picker}}picker="{{picker}}"{{/if}}
+          {{#if required}}required{{/if}}
+          {{#if error}}data-error{{/if}}
+          selected="{{json selected_items}}"
+        >
+        </crap-relationship-search>
+        {{#if relationship_collection}}
+          <div class="upload-field__actions">
+            <a
+              class="relationship-field__action"
+              href="/admin/collections/{{relationship_collection}}/create"
+              data-inline-create="{{relationship_collection}}"
+              data-inline-create-label='{{t "upload_new"}}'
+            >
+              <span class="material-symbols-outlined icon--sm">upload</span>
+              {{t "upload_new"}}
+            </a>
+          </div>
+        {{/if}}
+      {{/if}}
+    </crap-upload-preview>
   {{/if}}
-  {{/if}}
-</crap-upload-preview>
-{{/if}}
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{/partials/field}}

@@ -129,7 +129,10 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 
                 tokio::spawn(async move {
                     if let Err(e) = process_image_queue(&pool, batch_size, &img_storage).await {
-                        error!("Image queue error: {}", e);
+                        // `{:#}` walks the anyhow chain so the SQLite / pool
+                        // cause shows up in the log instead of only the
+                        // outer "execute failed: UPDATE …" wrapper.
+                        error!("Image queue error: {:#}", e);
                     }
                 });
             }
@@ -321,32 +324,44 @@ async fn process_single_image(
     })
     .await;
 
-    let conn = pool
+    let mut conn = pool
         .get()
         .context("Image queue: failed to get DB connection")?;
 
     match result {
         Ok(Ok(())) => {
-            conn.execute(
-                &format!(
-                    "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
-                    entry.collection,
-                    entry.url_column,
-                    conn.placeholder(1),
-                    conn.placeholder(2)
-                ),
-                &[
-                    DbValue::Text(entry.url_value.clone()),
-                    DbValue::Text(entry.document_id.clone()),
-                ],
-            )
-            .context("Image queue: failed to update document")?;
+            // Atomically: write the new URL into the collection doc AND mark
+            // the queue entry completed. Leaving this as two sequential
+            // statements would orphan the queue row in `processing` whenever
+            // the second write hit `SQLITE_BUSY` after the first succeeded.
+            let commit = record_conversion_success(&mut conn, entry, &entry_id);
 
-            image_query::complete_image_entry(&conn, &entry_id)?;
-            debug!("Image conversion completed: {}", entry_id);
+            match commit {
+                Ok(()) => debug!("Image conversion completed: {}", entry_id),
+                Err(e) => {
+                    // The file is on disk and valid, but the DB commit lost.
+                    // Mark the row failed so startup / retry can pick it back
+                    // up; never leave it stuck in `processing`.
+                    warn!(
+                        "Image queue: DB commit failed after successful conversion {}: {:#}",
+                        entry_id, e
+                    );
+
+                    if let Err(fe) = image_query::fail_image_entry(
+                        &conn,
+                        &entry_id,
+                        &format!("db commit failed: {}", e),
+                    ) {
+                        error!(
+                            "Image queue: failed to record failure for {}: {:#}",
+                            entry_id, fe
+                        );
+                    }
+                }
+            }
         }
         Ok(Err(e)) => {
-            warn!("Image conversion failed: {}: {}", entry_id, e);
+            warn!("Image conversion failed: {}: {:#}", entry_id, e);
             image_query::fail_image_entry(&conn, &entry_id, &e.to_string())?;
         }
         Err(e) => {
@@ -354,6 +369,44 @@ async fn process_single_image(
             image_query::fail_image_entry(&conn, &entry_id, &format!("panic: {}", e))?;
         }
     }
+
+    Ok(())
+}
+
+/// Atomically update the target document's URL column and mark the queue
+/// entry completed. Wrapping both writes in a single transaction guarantees
+/// the queue row never stays in `processing` while the document shows the
+/// new URL (or vice-versa) — on any write failure the whole thing rolls back
+/// and the caller can mark the entry failed for later retry.
+fn record_conversion_success(
+    conn: &mut crate::db::BoxedConnection,
+    entry: &image_query::ImageQueueEntry,
+    entry_id: &str,
+) -> Result<()> {
+    let tx = conn
+        .transaction()
+        .context("Image queue: failed to begin completion transaction")?;
+
+    tx.execute(
+        &format!(
+            "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
+            entry.collection,
+            entry.url_column,
+            tx.placeholder(1),
+            tx.placeholder(2)
+        ),
+        &[
+            DbValue::Text(entry.url_value.clone()),
+            DbValue::Text(entry.document_id.clone()),
+        ],
+    )
+    .context("Image queue: failed to update document")?;
+
+    image_query::complete_image_entry(&tx, entry_id)
+        .context("Image queue: failed to mark entry completed")?;
+
+    tx.commit()
+        .context("Image queue: failed to commit completion transaction")?;
 
     Ok(())
 }

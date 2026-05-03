@@ -1,6 +1,6 @@
 [package]
 name = "crap-cms"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 edition = "2024"
 default-run = "crap-cms"
 description = "Headless CMS in Rust with Lua hooks, gRPC API, and HTMX admin UI"
@@ -42,18 +42,20 @@ mlua = { version = "0.11", features = ["lua54", "vendored", "serialize", "send"]
 
 # Config & CLI
 clap = { version = "4", features = ["derive", "env"] }
-dialoguer = "0.11"
-console = "0.15"
-indicatif = "0.17"
+clap_complete = "4"
+dialoguer = "0.12"
+console = "0.16"
+indicatif = "0.18"
 toml = "1.0"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = { version = "1", features = ["chrono04", "preserve_order"] }
 
 # Auth
 argon2 = "0.5"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "builder", "smtp-transport"] }
@@ -61,6 +63,11 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "avif"] }
 webp = "0.3"
+# EXIF parsing for orientation handling. The `image` crate decodes pixel
+# data but ignores EXIF metadata, so portrait photos from phones (which
+# encode rotation via the orientation tag rather than rotating pixels)
+# would otherwise display sideways.
+kamadak-exif = "0.6"
 
 # HTTP client (blocking — used in Lua spawn_blocking context)
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -72,7 +79,7 @@ rand = "0.9"
 aes-gcm = "0.10"
 
 # Cron scheduling
-cron = "0.12"
+cron = "0.16"
 
 # HTTP/2 cleartext (h2c) support
 hyper = { version = "1", features = ["server", "http2"] }
@@ -85,10 +92,11 @@ tower = { version = "0.5", features = ["util", "timeout"] }
 url = "2"
 
 # Utilities
-nanoid = "0.4"
+nanoid = "0.5"
 dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 mime_guess = "2"
+ipnet = "2"
 anyhow = "1"
 
 # Process management (Unix signals)
@@ -106,8 +114,9 @@ infer = "0.19.0"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tonic-health = "0.14.5"
 chrono-tz = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 semver = "1"
+similar = { version = "3.1.0", features = ["text"] }
 
 [features]
 default = ["sqlite"]
@@ -145,18 +154,17 @@ version = "0.12"
 optional = true
 
 [dependencies.chromiumoxide]
-version = "0.7"
+version = "0.9"
 optional = true
 default-features = false
-features = ["tokio-runtime"]
 
 [dependencies.redis]
-version = "0.29"
+version = "1"
 optional = true
 features = ["tokio-comp"]
 
 [dependencies.rust-s3]
-version = "0.35"
+version = "0.37"
 optional = true
 default-features = false
 features = ["tokio-rustls-tls"]
@@ -164,7 +172,7 @@ features = ["tokio-rustls-tls"]
 [dev-dependencies]
 tempfile = "3"
 http-body-util = "0.1"
-scraper = "0.22"
+scraper = "0.26"
 
 [profile.dev.package.image]
 opt-level = 2

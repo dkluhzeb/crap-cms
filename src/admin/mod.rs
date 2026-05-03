@@ -2,7 +2,8 @@
 
 mod auth_middleware;
 pub mod context;
-pub mod context_builder;
+pub mod csp_nonce;
+pub mod custom_pages;
 pub mod handlers;
 mod mcp_handler;
 pub mod server;
@@ -10,7 +11,7 @@ pub mod server_builder;
 pub mod templates;
 pub mod translations;
 
-pub use context_builder::ContextBuilder;
+pub use csp_nonce::{CSP_NONCE, CspNonce, current_nonce_or_empty};
 pub use translations::Translations;
 
 use std::{
@@ -82,8 +83,6 @@ pub struct AdminState {
     pub sse_connections: Arc<AtomicUsize>,
     /// Maximum allowed concurrent SSE connections. 0 = unlimited.
     pub max_sse_connections: usize,
-    /// Pre-computed Content-Security-Policy header value. None = CSP disabled.
-    pub csp_header: Option<String>,
     /// The storage backend for uploaded files.
     pub storage: SharedStorage,
     /// The token provider for JWT creation and validation.
@@ -101,6 +100,11 @@ pub struct AdminState {
     /// Shared cross-request cache for populated relationship documents.
     /// Passed to service-layer write operations for cache invalidation.
     pub cache: Option<SharedCache>,
+    /// Discovered filesystem-routed custom pages
+    /// (`<config_dir>/templates/pages/<slug>.hbs`). Populated once at
+    /// startup; the route handler validates incoming slugs against this,
+    /// and the sidebar nav reads its `nav_entries`.
+    pub custom_pages: custom_pages::CustomPageRegistry,
 }
 
 impl AdminState {

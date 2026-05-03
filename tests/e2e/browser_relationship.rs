@@ -220,7 +220,8 @@ async fn relationship_has_many_multiple_chips() {
     page.evaluate(
         "() => { \
             const el = document.querySelector('crap-relationship-search[has-many]'); \
-            const input = el?.querySelector('.relationship-search__input'); \
+            const input = el?.querySelector('.relationship-search__tags-input') \
+                       || el?.querySelector('.relationship-search__input'); \
             if (input) input.focus(); \
         }",
     )
@@ -246,7 +247,8 @@ async fn relationship_has_many_multiple_chips() {
     page.evaluate(
         "() => { \
             const el = document.querySelector('crap-relationship-search[has-many]'); \
-            const input = el?.querySelector('.relationship-search__input'); \
+            const input = el?.querySelector('.relationship-search__tags-input') \
+                       || el?.querySelector('.relationship-search__input'); \
             if (input) { \
                 input.focus(); \
                 input.value = ''; \
@@ -278,7 +280,7 @@ async fn relationship_has_many_multiple_chips() {
 
     // Should have 2 chips
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chip_count: i64 = result.into_value().unwrap_or(0);
@@ -325,7 +327,8 @@ async fn relationship_remove_chip() {
     page.evaluate(
         "() => { \
             const el = document.querySelector('crap-relationship-search[has-many]'); \
-            const input = el?.querySelector('.relationship-search__input'); \
+            const input = el?.querySelector('.relationship-search__tags-input') \
+                       || el?.querySelector('.relationship-search__input'); \
             if (input) input.focus(); \
         }",
     )
@@ -346,20 +349,20 @@ async fn relationship_remove_chip() {
 
     // Should have a chip
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips_before: i64 = result.into_value().unwrap_or(0);
     assert!(chips_before > 0, "should have a chip after selecting");
 
     // Click remove on the chip
-    page.evaluate("() => document.querySelector('.relationship-search__chip-remove')?.click()")
+    page.evaluate("() => document.querySelector('.pill-list__chip-remove')?.click()")
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips_after: i64 = result.into_value().unwrap_or(0);
@@ -411,16 +414,23 @@ async fn relationship_enter_selects_first_result() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // Verify dropdown has results
-    let result = page
-        .evaluate(
-            "() => document.querySelectorAll('crap-relationship-search[has-many] .relationship-search__option').length",
-        )
-        .await
-        .unwrap();
-    let options: i64 = result.into_value().unwrap_or(0);
+    // Wait up to 3s for the search dropdown to populate (debounce + network).
+    let mut options = 0i64;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        options = page
+            .evaluate(
+                "() => document.querySelectorAll('crap-relationship-search[has-many] .relationship-search__option').length",
+            )
+            .await
+            .unwrap()
+            .into_value()
+            .unwrap_or(0);
+        if options >= 1 {
+            break;
+        }
+    }
     assert!(options >= 1, "should have search results, got {options}");
 
     // Press Enter without using arrow keys — should select first result
@@ -438,7 +448,7 @@ async fn relationship_enter_selects_first_result() {
 
     // Should have a chip
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips: i64 = result.into_value().unwrap_or(0);
@@ -640,7 +650,7 @@ async fn has_many_relationship_persists() {
 
     // Should have 2 chips
     let result = page
-        .evaluate("() => document.querySelectorAll('.relationship-search__chip').length")
+        .evaluate("() => document.querySelectorAll('.pill-list__chip').length")
         .await
         .unwrap();
     let chips: i64 = result.into_value().unwrap_or(0);
@@ -655,7 +665,7 @@ async fn has_many_relationship_persists() {
     // Verify in database — check join table has both references
     let conn = app.pool.get().unwrap();
     let rows = conn
-        .query_all("SELECT ref_id FROM posts_tags ORDER BY ref_id", &[])
+        .query_all("SELECT related_id FROM posts_tags ORDER BY related_id", &[])
         .unwrap();
     assert_eq!(
         rows.len(),
@@ -760,28 +770,34 @@ async fn relationship_inline_create_selects_item() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Submit the panel form
     page.evaluate(
         "() => { \
             const form = document.querySelector('.create-panel__body form'); \
-            if (form) form.requestSubmit(); \
+            if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); \
         }",
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(3000)).await;
 
-    // Panel should be closed
-    let panel_closed = page
-        .evaluate(
-            "() => { \
-                const dialog = document.querySelector('.create-panel'); \
-                return (!dialog || !dialog.open) ? 'closed' : 'open'; \
-            }",
-        )
-        .await
-        .unwrap();
-    let state2: String = panel_closed.into_value().unwrap_or_default();
+    // Poll up to 6s for the panel to close (fetch + create + DB).
+    let mut state2 = String::new();
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        state2 = page
+            .evaluate(
+                "() => { \
+                    const dialog = document.querySelector('.create-panel'); \
+                    return (!dialog || !dialog.open) ? 'closed' : 'open'; \
+                }",
+            )
+            .await
+            .unwrap()
+            .into_value()
+            .unwrap_or_default();
+        if state2 == "closed" {
+            break;
+        }
+    }
     assert_eq!(
         state2, "closed",
         "create panel should close after successful creation"
@@ -815,6 +831,122 @@ async fn relationship_inline_create_selects_item() {
         rows.len(),
         1,
         "the inline-created category should exist in the database"
+    );
+
+    server_handle.abort();
+}
+
+// ── relationship_inline_create_validation_error_rerenders ────────────────
+//
+// Regression test for the inline-create panel's validation-error path.
+//
+// `_submitForm` previously declared `let body;` inside the async function,
+// shadowing the function parameter `body` that pointed at the panel-body
+// `<div>`. After the fetch the line `this._injectForm(body, html, ...)`
+// passed the SHADOWED inner `body` (`URLSearchParams` or `FormData`) into
+// `_injectForm`, where `body.replaceChildren(...)` immediately threw
+// `TypeError: body.replaceChildren is not a function`. Validation errors
+// from the server thus crashed the panel instead of re-rendering the form.
+//
+// This test triggers a validation error (empty `name` on a required field)
+// and asserts the panel re-renders with the form still mounted — proof
+// that `_injectForm` ran to completion, which was impossible with the bug.
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(feature = "browser-tests")]
+async fn relationship_inline_create_validation_error_rerenders() {
+    let (base_url, server_handle, app) = browser::spawn_server(
+        vec![
+            make_categories_def(),
+            make_rel_posts_def(),
+            make_users_def(),
+        ],
+        vec![],
+    )
+    .await;
+    let user_id = create_test_user(&app, "binline_err@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "binline_err@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+    browser::browser_login(&page, &base_url, "binline_err@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Open the inline-create panel for categories.
+    page.evaluate(
+        "() => { \
+            const link = document.querySelector('[data-inline-create=\"categories\"]'); \
+            if (link) { link.click(); } \
+        }",
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    // Submit the form with the required `name` left empty — this triggers
+    // a 422 from the server and exercises the re-render path.
+    page.evaluate(
+        "() => { \
+            const form = document.querySelector('.create-panel__body form'); \
+            if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); \
+        }",
+    )
+    .await
+    .unwrap();
+
+    // Poll up to 6s for the form to be re-rendered. With the bug,
+    // `_injectForm` throws and the form is never replaced — the input
+    // attribute used as the marker would still be present from the
+    // initial render. With the fix the form is replaced; the input is
+    // present in the new HTML too. The discriminator is whether the
+    // _server-rendered_ validation error element exists on the field.
+    let mut has_error = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let result = page
+            .evaluate(
+                "() => { \
+                    const body = document.querySelector('.create-panel__body'); \
+                    if (!body) return 'no-body'; \
+                    if (!body.querySelector('form')) return 'no-form'; \
+                    return body.querySelector('.form__error, [data-validate-error]') ? 'error' : 'no-error'; \
+                }",
+            )
+            .await
+            .unwrap();
+        let state: String = result.into_value().unwrap_or_default();
+        if state == "error" {
+            has_error = true;
+            break;
+        }
+    }
+
+    let panel_state: String = page
+        .evaluate(
+            "() => { \
+                const dialog = document.querySelector('.create-panel'); \
+                return dialog && dialog.open ? 'open' : 'closed'; \
+            }",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap_or_default();
+    assert_eq!(
+        panel_state, "open",
+        "panel should stay open on validation error"
+    );
+    assert!(
+        has_error,
+        "validation-error response should re-render the form with an error message; \
+         a missing error element means `_injectForm` never ran (the body shadowing bug)"
     );
 
     server_handle.abort();

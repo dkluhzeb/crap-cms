@@ -1,3 +1,5 @@
+#![cfg(feature = "sqlite")]
+
 use crap_cms::config::LocaleConfig;
 use crap_cms::core::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};

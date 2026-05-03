@@ -12,7 +12,7 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{forbidden, get_user_doc, htmx_redirect},
+        handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
     core::auth::AuthUser,
     service::{self, ServiceError},
@@ -120,7 +120,7 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
         }
     }
 
-    htmx_redirect(&format!("/admin/collections/{}", slug))
+    htmx_redirect(&paths::collection(slug))
 }
 
 #[cfg(test)]

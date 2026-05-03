@@ -44,9 +44,22 @@ pub fn find_documents(
         return Err(ServiceError::AccessDenied(msg.into()));
     }
 
-    let mut fq = build_effective_query(input.query, def, input.trash, input.include_drafts);
+    let mut fq = build_effective_query(
+        input.query,
+        def,
+        input.trash,
+        input.include_drafts,
+        input.status_filter.as_deref(),
+    );
 
-    let injecting_status = !input.include_drafts && def.has_drafts();
+    // `_status` filtering is "happening" if the service-layer injected
+    // either the published-only default OR an explicit user-supplied
+    // status. Access-constraint hooks that mention `_status` are
+    // permitted in either case (the SQL `_status` column is being
+    // queried regardless of which value).
+    let injecting_status = (input.status_filter.is_some()
+        || (!input.include_drafts && def.has_drafts()))
+        && def.has_drafts();
 
     if let AccessResult::Constrained(extra) = access {
         validate_access_constraints(&extra, input.trash, injecting_status, ctx.slug)?;
@@ -99,15 +112,16 @@ pub fn find_documents(
 
     post_process_docs(ctx, conn, &mut docs, input);
 
-    let pagination = helpers::build_pagination(
-        &docs,
+    let pagination = helpers::build_pagination(helpers::PaginationInputs {
+        docs: &docs,
         total,
-        &fq,
-        input.cursor_enabled,
-        def.timestamps,
+        fq: &fq,
+        cursor_enabled: input.cursor_enabled,
+        has_timestamps: def.timestamps,
+        has_drafts: def.has_drafts(),
         had_cursor,
         cursor_has_more,
-    );
+    });
 
     Ok(PaginatedResult {
         docs,
@@ -117,23 +131,45 @@ pub fn find_documents(
 }
 
 /// Clone the user-supplied query and inject service-owned system filters
-/// (`_status = "published"` and `_deleted_at EXISTS`) based on the typed flags.
+/// (`_status` and `_deleted_at`) based on the typed flags.
 ///
 /// Runs *after* `validate_user_filters` so the injected filters bypass the
 /// system-column rule that user filters are subject to.
+///
+/// Status precedence: an explicit `status_filter` (translated by the admin
+/// list handler from `?where[_status][equals]=X` URL params, including
+/// OR-bucket forms) wins. One value injects `_status = X`; multiple
+/// values widen to `_status IN (X, Y, …)`. Otherwise the
+/// default-when-drafts rule fires: `include_drafts = false` &&
+/// `def.has_drafts()` injects `_status = "published"`.
 fn build_effective_query(
     user_query: &FindQuery,
     def: &CollectionDefinition,
     trash: bool,
     include_drafts: bool,
+    status_filter: Option<&[String]>,
 ) -> FindQuery {
     let mut fq = user_query.clone();
 
-    if !include_drafts && def.has_drafts() {
-        fq.filters.push(FilterClause::Single(Filter {
-            field: "_status".to_string(),
-            op: FilterOp::Equals("published".to_string()),
-        }));
+    match status_filter {
+        Some(values) if def.has_drafts() && !values.is_empty() => {
+            let op = if values.len() == 1 {
+                FilterOp::Equals(values[0].clone())
+            } else {
+                FilterOp::In(values.to_vec())
+            };
+            fq.filters.push(FilterClause::Single(Filter {
+                field: "_status".to_string(),
+                op,
+            }));
+        }
+        _ if !include_drafts && def.has_drafts() => {
+            fq.filters.push(FilterClause::Single(Filter {
+                field: "_status".to_string(),
+                op: FilterOp::Equals("published".to_string()),
+            }));
+        }
+        _ => {}
     }
 
     if trash && def.soft_delete {

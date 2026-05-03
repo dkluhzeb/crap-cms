@@ -17,5 +17,5 @@ pub use sub_field_opts_builder::SubFieldOptsBuilder;
 
 pub(super) use context::EnrichCtx;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests;

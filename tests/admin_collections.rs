@@ -106,7 +106,7 @@ fn setup_app_with_config(
         .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -146,7 +146,6 @@ fn setup_app_with_config(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
@@ -162,6 +161,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     let router = build_router(state);
@@ -356,6 +356,414 @@ async fn list_items_returns_200() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// Regression test for the user-reported "list shows all (published)
+/// items when filter is set to draft" symptom. `_status` is a system
+/// column (`_*` prefix) so it cannot ride the generic user-filter
+/// pipeline (`validate_user_filters` rejects `_*`). The admin list
+/// handler extracts `?where[_status][equals]=X` from the raw query
+/// via `extract_status_filter` and forwards it as a typed
+/// `status_filter` on `FindDocumentsInput` so it bypasses
+/// validation and reaches SQL via the trusted post-validation
+/// injection path in `build_effective_query`.
+///
+/// This test asserts:
+/// - unfiltered shows both draft and published rows;
+/// - `?where[_status][equals]=draft` narrows to drafts only;
+/// - `?where[_status][equals]=published` narrows to published only.
+#[tokio::test]
+async fn list_items_url_status_filter_narrows_drafts_only() {
+    use crap_cms::core::collection::VersionsConfig;
+
+    fn posts_with_drafts_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.versions = Some(VersionsConfig::new(true, 10));
+        def.admin.use_as_title = Some("title".to_string());
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
+        def
+    }
+
+    let app = setup_app(vec![posts_with_drafts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "statusf@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "statusf@test.com");
+
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    // Both rows start `_status='published'` (column default per
+    // `migrate/collection/create.rs:131`). Demote one to `draft` via a
+    // direct UPDATE — this is what the service-layer
+    // `persist::create_document` does internally when `is_draft = true`,
+    // we just skip the service wrapper here to keep the test focused on
+    // the filter pipeline.
+    let mut data1 = std::collections::HashMap::new();
+    data1.insert("title".to_string(), "Live Article".to_string());
+    query::create(&tx, "posts", &def, &data1, None).expect("publish create ok");
+
+    let mut data2 = std::collections::HashMap::new();
+    data2.insert("title".to_string(), "Pending Draft".to_string());
+    let draft_doc = query::create(&tx, "posts", &def, &data2, None).expect("draft create ok");
+    use crap_cms::db::DbConnection;
+    use crap_cms::db::DbValue;
+    tx.execute(
+        "UPDATE posts SET _status = 'draft' WHERE id = ?1",
+        &[DbValue::Text(draft_doc.id.to_string())],
+    )
+    .expect("set _status=draft");
+    tx.commit().unwrap();
+    drop(conn);
+
+    fn count_table_rows(body: &str) -> usize {
+        let Some(start) = body.find("<tbody") else {
+            return 0;
+        };
+        let Some(end) = body[start..].find("</tbody>").map(|i| start + i) else {
+            return 0;
+        };
+        body[start..end].matches("<tr").count()
+    }
+
+    // Sanity: unfiltered shows both (admin defaults include_drafts=true).
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "unfiltered admin list should show both draft and published"
+    );
+
+    // Filter to drafts only via `?where[_status][equals]=draft`. URL-encoded
+    // brackets — what the browser sends from the filter drawer.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5B_status%5D%5Bequals%5D=draft")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "?where[_status][equals]=draft should narrow to 1 draft row"
+    );
+    assert!(body.contains("Pending Draft"));
+    assert!(
+        !body.contains("Live Article"),
+        "draft filter must NOT include the published doc — typed-param plumbing regression"
+    );
+
+    // Symmetric: filter to published only.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5B_status%5D%5Bequals%5D=published")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "?where[_status][equals]=published should narrow to 1 published row"
+    );
+    assert!(body.contains("Live Article"));
+    assert!(!body.contains("Pending Draft"));
+
+    // Empty `where[_status][equals]=` value (the "All" option in the
+    // filter drawer) should fall through to showing both rows — the
+    // extractor returns None for empty values, the filter UI's
+    // `_collectFilters` skips empty-value rows, but both forms must
+    // resolve to the unfiltered list.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5B_status%5D%5Bequals%5D=")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "empty where[_status][equals]= (All) should show both draft and published"
+    );
+
+    // Multiple `_status` values across an OR-clause (`(_status=draft OR
+    // _status=published)`) widen back to "show both" — the extractor
+    // collects every value, the service injects `_status IN (...)`.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?where[or][0][0][_status][equals]=draft\
+                 &where[or][0][1][_status][equals]=published",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "_status IN (draft, published) should show both rows"
+    );
+    assert!(body.contains("Live Article"));
+    assert!(body.contains("Pending Draft"));
+}
+
+/// Regression for the same-field IN-merge: `?where[title][equals]=A&where[title][equals]=B`
+/// collapses to `WHERE title IN ('A', 'B')` and returns rows matching either.
+/// Cross-field OR via the `where[or][G][N][…]` URL form widens to a true OR.
+#[tokio::test]
+async fn list_items_or_clause_widens_results() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "or-filter@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "or-filter@test.com");
+
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    for title in ["Alpha", "Bravo", "Charlie"] {
+        let mut data = std::collections::HashMap::new();
+        data.insert("title".to_string(), title.to_string());
+        query::create(&tx, "posts", &def, &data, None).unwrap();
+    }
+    tx.commit().unwrap();
+    drop(conn);
+
+    fn count_table_rows(body: &str) -> usize {
+        let Some(start) = body.find("<tbody") else {
+            return 0;
+        };
+        let Some(end) = body[start..].find("</tbody>").map(|i| start + i) else {
+            return 0;
+        };
+        body[start..end].matches("<tr").count()
+    }
+
+    // Same-field IN merge: two `equals` rows on `title` → `title IN ('Alpha', 'Bravo')`.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?where[title][equals]=Alpha&where[title][equals]=Bravo",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(count_table_rows(&body), 2, "IN merge returns 2 rows");
+    assert!(body.contains("Alpha"));
+    assert!(body.contains("Bravo"));
+    assert!(!body.contains("Charlie"));
+
+    // Cross-field OR via `where[or][G][N][…]`: title=Alpha OR title=Charlie.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get(
+                "/admin/collections/posts?\
+                 where[or][0][0][title][equals]=Alpha\
+                 &where[or][0][1][title][equals]=Charlie",
+            )
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(count_table_rows(&body), 2, "OR clause returns 2 rows");
+    assert!(body.contains("Alpha"));
+    assert!(body.contains("Charlie"));
+    assert!(!body.contains("Bravo"));
+}
+
+/// Regression test for the user-reported "filter has no effect" symptom.
+/// Both `where[status][equals]=draft` (raw) and the URL-encoded form
+/// `where%5Bstatus%5D%5Bequals%5D=draft` (which is what the browser
+/// produces when you click Apply) must narrow the list to draft items
+/// only.
+#[tokio::test]
+async fn list_items_url_filter_narrows_results() {
+    fn posts_with_status_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.admin.use_as_title = Some("title".to_string());
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("status", FieldType::Select)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
+                    SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
+                ])
+                .build(),
+        ];
+        def
+    }
+
+    /// Count `<tr>` rows inside the items `<tbody>` of the rendered list page.
+    fn count_table_rows(body: &str) -> usize {
+        let Some(start) = body.find("<tbody") else {
+            return 0;
+        };
+        let Some(end) = body[start..].find("</tbody>").map(|i| start + i) else {
+            return 0;
+        };
+        body[start..end].matches("<tr").count()
+    }
+
+    let app = setup_app(vec![posts_with_status_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "filter@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "filter@test.com");
+
+    // Insert one draft + one published post.
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let mut data1 = std::collections::HashMap::new();
+    data1.insert("title".to_string(), "Draft Post".to_string());
+    data1.insert("status".to_string(), "draft".to_string());
+    query::create(&tx, "posts", &def, &data1, None).unwrap();
+    let mut data2 = std::collections::HashMap::new();
+    data2.insert("title".to_string(), "Published Post".to_string());
+    data2.insert("status".to_string(), "published".to_string());
+    query::create(&tx, "posts", &def, &data2, None).unwrap();
+    tx.commit().unwrap();
+    drop(conn);
+
+    // Sanity: no filter shows both.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        2,
+        "unfiltered list should show both posts"
+    );
+    assert!(
+        body.contains("Draft Post"),
+        "title 'Draft Post' must appear"
+    );
+    assert!(
+        body.contains("Published Post"),
+        "title 'Published Post' must appear"
+    );
+
+    // Filter via raw `where[status][equals]=draft`. List should only
+    // show the draft post.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where[status][equals]=draft")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "raw-filter list should narrow to 1 row (the draft post)"
+    );
+    assert!(body.contains("Draft Post"));
+    assert!(
+        !body.contains("Published Post"),
+        "raw-filter list must NOT contain the published post"
+    );
+
+    // Filter via URL-encoded `where%5Bstatus%5D%5Bequals%5D=draft` — what
+    // the browser actually sends when JS builds the URL.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?where%5Bstatus%5D%5Bequals%5D=draft")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert_eq!(
+        count_table_rows(&body),
+        1,
+        "encoded-filter list should narrow to 1 row"
+    );
+    assert!(body.contains("Draft Post"));
+    assert!(
+        !body.contains("Published Post"),
+        "encoded-filter list must NOT contain the published post"
+    );
 }
 
 #[tokio::test]

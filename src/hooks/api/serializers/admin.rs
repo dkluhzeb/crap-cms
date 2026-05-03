@@ -90,6 +90,21 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Opt
         }
         tbl.set("nodes", seq)?;
     }
+    if !admin.languages.is_empty() {
+        let seq = lua.create_table()?;
+        for (i, v) in admin.languages.iter().enumerate() {
+            seq.set(i + 1, v.as_str())?;
+        }
+        tbl.set("languages", seq)?;
+    }
+    if let Some(ref v) = admin.template {
+        tbl.set("template", v.as_str())?;
+    }
+    if !admin.extra.is_empty() {
+        let extra_json = serde_json::Value::Object(admin.extra.clone());
+        let extra_lua = super::json_to_lua(lua, &extra_json)?;
+        tbl.set("extra", extra_lua)?;
+    }
 
     Ok(Some(tbl))
 }
@@ -119,5 +134,27 @@ mod tests {
         let tbl = result.unwrap();
         assert_eq!(tbl.get::<String>("label").unwrap(), "Title");
         assert!(tbl.get::<bool>("hidden").unwrap());
+    }
+
+    /// Regression: the serializer must include `languages` so a Lua-side
+    /// roundtrip (`crap.collections.config.list()` → mutate → `crap.collections.define()`)
+    /// doesn't silently drop the code-field language allow-list. Plugins like
+    /// `seo.lua` do exactly this roundtrip; without `languages` in this
+    /// serializer the SEO plugin would clobber the user's code-field picker
+    /// every startup.
+    #[test]
+    fn test_field_admin_to_lua_includes_languages() {
+        let lua = mlua::Lua::new();
+        let admin = FieldAdmin::builder()
+            .languages(vec!["javascript".to_string(), "python".to_string()])
+            .build();
+        let result = field_admin_to_lua(&lua, &admin).unwrap();
+        let tbl = result.expect("non-default admin should produce Some(Table)");
+        let langs: Table = tbl.get("languages").expect("languages key must be set");
+        let collected: Vec<String> = langs
+            .sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(collected, vec!["javascript", "python"]);
     }
 }

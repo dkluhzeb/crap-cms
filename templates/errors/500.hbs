@@ -1,11 +1,1 @@
-{{#> layout/base title="Server Error"}}
-<div class="error-page">
-  <h1>500</h1>
-  <p>{{t "error_server"}}</p>
-  {{#if message}}<p class="error-detail">{{message}}</p>{{/if}}
-  <a class="button button--primary" href="/admin"
-    hx-get="/admin" hx-target="body" hx-push-url="true">
-    {{t "go_to_dashboard"}}
-  </a>
-</div>
-{{/layout/base}}
+{{> partials/error-page code="500" message_key="error_server" detail=message}}

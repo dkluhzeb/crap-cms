@@ -1,10 +1,41 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+#
+# Canonical pre-commit hook. Mirrors the fast CI gates so a local
+# `git commit` catches the same things `cargo clippy --all-targets -- -D
+# warnings` catches in CI. Slow gates (cargo test, cargo audit) live in
+# CI only — keep this hook under a few seconds of warm-cache work.
+#
+# Activate once per clone:
+#     git config core.hooksPath .githooks
+#
+# rust-toolchain.toml pins the rustc/clippy version so this hook and CI
+# evaluate the same lint set. Without that pin, a newer CI clippy fires
+# lints that a local clippy doesn't know about and the hook is silent
+# about real failures — see the alpha.8 "rust-toolchain.toml" entry.
 
-echo "Running rustfmt..."
-cargo fmt -- --check
+set -euo pipefail
 
-echo "Running clippy..."
+echo "[pre-commit] cargo fmt --check"
+cargo fmt --all -- --check
+
+echo "[pre-commit] cargo clippy --all-targets -- -D warnings"
 cargo clippy --all-targets -- -D warnings
 
-echo "Pre-commit checks passed."
+echo "[pre-commit] crap-cms fmt --check (Handlebars templates)"
+cargo run --quiet --bin crap-cms -- fmt --check
+
+# Biome lints JS + CSS only. Most Rust-only commits don't need it, but
+# any commit that touches static/components/**/*.js or static/styles/**/*.css
+# must pass biome ci. Skip with a warning if biome isn't installed —
+# CI will catch it regardless, and we don't want to block Rust-only
+# contributors who haven't installed biome locally.
+if command -v biome >/dev/null 2>&1; then
+  echo "[pre-commit] biome ci (JS + CSS)"
+  biome ci
+else
+  echo "[pre-commit] WARNING: biome not installed — skipping JS/CSS check"
+  echo "                       install with 'sudo pacman -S biome' (Arch)"
+  echo "                       or grab the binary from biomejs.dev"
+fi
+
+echo "[pre-commit] OK"

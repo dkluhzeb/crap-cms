@@ -4,6 +4,1547 @@ All notable changes to this project will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0-alpha.8] — 2026-05-03
+
+### Breaking Changes
+
+Read this section first when upgrading from `alpha.7`. Each item links
+to the detailed entry with full migration steps.
+
+**Deployment / config**
+
+- `server.trust_proxy = true` now fails startup unless
+  `server.trusted_proxies` is set. Add an allowlist (bare IPs, CIDR
+  ranges, or `"*"`) before upgrading. See *Security → `trust_proxy`
+  requires an allowlist*.
+- `mcp.api_key` must be at least 32 characters when `mcp.http = true`
+  — startup fails otherwise. Rotate short keys to
+  `openssl rand -hex 32` before upgrading. See *Security → MCP HTTP
+  key hardening*.
+- JWT validation is pinned to `HS256` and `exp` is now required.
+  Tokens issued under a different algorithm or without an `exp`
+  claim are rejected. See *Security → JWT validation hardening*.
+- `auth.session_absolute_max_age` defaults to 30 days. Existing
+  sessions older than 30 days from their original login (or last
+  refresh, for legacy tokens) are forced to re-authenticate. Set to
+  `0` to disable. See *Security → Absolute session cap*.
+
+**Template overlays**
+
+- `templates/components/` directory removed. Overlays at
+  `config/templates/components/{breadcrumb,pagination,version_sidebar,version_table}.hbs`
+  silently stop applying — move them to `templates/partials/`, and
+  rename the two `_`-named files to use `-`. See *Changed → BREAKING:
+  `templates/components/` directory removed*.
+- **Static-asset layout reshuffle — old paths now 404.** CSS, vendor
+  bundles, icons, and plumbing JS components moved into role-grouped
+  subdirs (`static/styles/`, `static/vendor/`, `static/icons/`,
+  `static/components/_internal/`). Config-dir overlays at any old
+  path stop serving. Run `crap-cms templates layout` for an exact
+  `git mv` migration recipe. See *Changed → BREAKING: static-asset
+  layout reorganized into role-grouped subdirs*.
+- Inline `style="..."` attributes in overlay templates no longer
+  execute. CSP `style-src` no longer allows `'unsafe-inline'`. Use
+  classes, the `hidden` attribute, or `data-*` selectors instead;
+  programmatic `element.style.foo = ...` from JS is exempt. See
+  *Security → CSP hardening: `'unsafe-inline'` removed from
+  `style-src`*.
+- Inline `<script>` tags in overlay templates must carry
+  `nonce="{{crap.csp_nonce}}"` to execute. Inline event handlers
+  (`onclick=`, …) are blocked outright — port them to Web Components
+  or addEventListener-based wiring. See *Security → CSP hardening:
+  nonce-based `script-src`*.
+- Overlays that replace `templates/layout/base.hbs` and reproduce the
+  `<script id="crap-i18n">` data island must call `{{{admin_i18n}}}`
+  inside the script tag (replacing the previous per-key `"key":
+  "{{t \"key\"}}"` JSON). Without this, the admin JS `t(key)`
+  helper falls back to raw keys and every translatable label
+  shows up untranslated.
+- **htmx 1.9.12 → 2.0.9.** htmx is now vendored at `static/htmx.js`
+  and served from `'self'`; the CDN `<script src="https://unpkg.com/…">`
+  is gone, and `https://unpkg.com` is no longer in the default CSP
+  `script-src`. Overlays that referenced the old pinned URL/SRI
+  must drop both. Most htmx 2 breaking changes do not affect us
+  (we use no `hx-on=`, no `hx-ws`/`hx-sse`, no extensions), but
+  overlays may need adjustment for: `hx-on=` syntax (now
+  `hx-on:event-name`), `selfRequestsOnly` defaults to `true`
+  (cross-origin requires opt-in), and DELETE encodes form fields
+  in the URL by default. See *Changed → htmx 2.0.9 vendored
+  locally* for the full migration list.
+
+**Web Components / overlay JS**
+
+- Singleton discovery events renamed: `crap:toast` →
+  `crap:toast-request`, `crap:delete-dialog` →
+  `crap:delete-dialog-request`. The new events are discovery-only;
+  read `event.detail.instance` and call methods on it (or use the
+  `window.crap.*` sugar).
+- Globals moved: `window.CrapTheme` → `window.crap.theme`,
+  `window.CrapDeleteDialog` → `window.crap.deleteDialog`.
+- `<crap-toast>.show(message, type, duration)` (positional args)
+  removed. Use `show({ message, type, duration })`.
+- `<crap-confirm>` no longer renders its own dialog — it delegates to
+  the page-singleton `<crap-confirm-dialog>`. Custom layouts that
+  drop the singleton fall back to the native `window.confirm()`.
+- `<crap-password-toggle>` now self-renders its toggle button. The
+  required template shape collapsed to just
+  `<crap-password-toggle><input type="password" …/></crap-password-toggle>`
+  — drop the wrapper class and the inner `<button>`. The
+  `.form__password-wrapper` / `.form__password-toggle` CSS classes
+  were removed. See *Changed → `<crap-password-toggle>` shadow DOM*.
+- Web Component styles are now constructable stylesheets
+  (`new CSSStyleSheet()` + `adoptedStyleSheets`), not `<style>` blocks
+  inside `shadowRoot.innerHTML`. Overlays that previously injected a
+  `<style>` block via `shadowRoot.innerHTML` will not survive the
+  CSP. Override theming through the documented CSS custom properties
+  (which pierce the shadow boundary) or push onto
+  `shadowRoot.adoptedStyleSheets` directly.
+- `static/components/richtext.js` split into `richtext/` submodules
+  (`schema`, `plugins`, `toolbar`, `styles`, `link-modal`,
+  `node-modal`, `node-view`). Per-submodule overlays now work
+  granularly, but overlays that re-implemented the whole monolith
+  need to be re-pointed.
+
+### Security
+
+- **Upload path traversal hardening** — `LocalStorage` now validates every
+  storage key, rejecting `..` traversal, absolute paths, backslash-based
+  separators, and null bytes before touching the filesystem. `local_path`
+  and `exists` fail safe (returning `None` / `false`) on invalid keys.
+  Attacker-controlled filenames that slip past sanitisation in a future
+  caller will no longer escape `base_dir`.
+- **Upload MIME/extension cross-check** — uploaded files whose extension
+  implies a browser-renderable type (HTML, SVG, XHTML, XML, JavaScript)
+  are rejected unless the actual content matches. Closes the "HTML
+  payload stored as `evil.html`, served as `text/html`" XSS vector for
+  `image/*`-allow-listed upload fields.
+- **`trust_proxy` requires an allowlist** — `server.trust_proxy = true`
+  now fails startup unless `server.trusted_proxies` is set. The
+  allowlist takes bare IPs, CIDR ranges (`10.0.0.0/8`, `::1/128`), or
+  the explicit `"*"` wildcard for dev / isolated-network deployments
+  that intentionally want to accept `X-Forwarded-For` from any peer.
+  `client_ip` only honours XFF when the immediate peer IP is in the
+  allowlist; otherwise the TCP peer address is used, preventing clients
+  from rotating per-IP rate-limit buckets by spoofing the header.
+- **JWT validation hardening** — `JwtTokenProvider` now pins the
+  algorithm to `HS256` via `Validation::new(...)` (previously used
+  `Validation::default()` which, while correct today, would silently
+  accept a different default in future jsonwebtoken releases). Tokens
+  whose header declares any other algorithm — including the classic
+  `"alg": "none"` — are rejected outright. `required_spec_claims` is
+  also no longer cleared, so any hand-crafted token without an `exp`
+  claim is refused rather than treated as a non-expiring token.
+- **SVG XXE pre-upload scan** — SVGs containing `<!DOCTYPE>` or
+  `<!ENTITY>` declarations are now rejected at upload time. Closes the
+  XXE / external-entity vector for any future code path that decides to
+  parse or inline-render SVGs server- or client-side, regardless of the
+  existing `Content-Disposition: attachment` + CSP-sandbox defences on
+  the serve side.
+- **Upload decompression-bomb ratio cap** — `check_image_dimensions`
+  now also rejects images whose pixel count divided by file size
+  exceeds 500 pixels/byte, closing the class of "tiny, heavily
+  compressed, absurd dimensions" attacks that slip under the 100 MP
+  absolute cap. Normal photographs sit in the single-digit range.
+- **Upload error responses scrubbed** — `/api/upload/*` endpoints no
+  longer echo inner error detail (multipart parse errors, tokio task
+  join errors, service errors, access-check errors) to the client. Full
+  detail is logged at `error` level; clients see a generic phrase with
+  the same status code, so DB / parser / backend identifiers stay out
+  of the wire.
+- **SMTP plaintext warning** — when `email.smtp_tls = "none"` is paired
+  with a non-loopback host, startup emits a `warn!` naming the host and
+  noting that credentials travel unencrypted. Local dev SMTP
+  (`localhost`, `127.0.0.1`, `::1`) stays silent; no config change is
+  required.
+- **Configurable CSRF cookie lifetime** — new `admin.csrf_cookie_lifetime`
+  (default `86400`, 24h). Accepts integer seconds or human strings
+  (`"4h"`, `"30m"`). Previously hardcoded; shorten to narrow the replay
+  window for stolen double-submit tokens.
+- **Absolute session cap via `auth_time`** — new `auth.session_absolute_max_age`
+  config (default `2592000` = 30 days) caps cumulative session
+  lifetime from original login, regardless of how many times the token
+  has been refreshed. Claims now carry an `auth_time` field
+  (OIDC-standard name) set at login and preserved across refreshes;
+  legacy tokens without the claim fall back to `iat` on first refresh,
+  giving them up to 30 days from their most-recent issuance before the
+  cap kicks in. Set `session_absolute_max_age = 0` to disable the cap
+  for long-lived internal-tool sessions; values above 30 days emit a
+  startup `warn!`.
+- **MCP HTTP key hardening** — `mcp.api_key` must be at least 32 characters
+  when `mcp.http = true`; startup fails with a clear message pointing at
+  `openssl rand -hex 32` / `/dev/urandom` otherwise. Failed Bearer-auth
+  attempts on `/mcp` are now logged at `warn` with the peer IP and
+  whether an Authorization header was supplied, so operators can spot
+  brute-force scans without leaking the attempted key into logs.
+- **Dependency patches for active advisories** —
+  - `rustls-webpki` bumped past RUSTSEC-2026-0098 / 0099 / 0104
+    (name-constraint bypass and CRL-parsing panic). The old
+    `0.101.7` line (pulled in transitively via `rust-s3 0.35`) is
+    retired by bumping `rust-s3` to `0.37`; the `0.103.x` line in
+    `reqwest` / `lettre` / `quinn` moves to `0.103.13`.
+  - `rand 0.9.x` bumped to `0.9.4` and `rand 0.10.x` to `0.10.1`
+    (RUSTSEC-2026-0097). `nanoid 0.4` → `0.5` retires the last
+    runtime path to `rand 0.8.5`: the new release moves nanoid's
+    own dependency to `rand = "0.9"`. The 0.8.5 entry that remains
+    in `Cargo.lock` is now a build/test-only transitive (via
+    `scraper` → `html5ever` → `phf_codegen`) — not present in the
+    shipped binary. nanoid's public API (`nanoid::nanoid!()` /
+    `nanoid!(10)`) is unchanged at every call site; default-RNG
+    output is bit-identical for the alphabets we use.
+- **`cargo audit` is now a CI gate** — `.github/workflows/ci.yml`
+  installs `cargo-audit` and runs it on every PR. A committed
+  `.cargo/audit.toml` records the one advisory we knowingly accept
+  (RUSTSEC-2024-0436, `paste 1.0.15` "no longer maintained") with
+  the rationale: `paste` is a proc-macro that runs only in the
+  compiler and does not ship in the binary; the deprecation is not
+  a CVE; the crate is upstream-pinned in `rav1e 0.8.1` (currently
+  the latest), which we need transitively for the `image` crate's
+  `avif` feature, which we use for upload format conversion. Will
+  be revisited each release; any new advisory will fail CI by
+  default.
+- **CSP hardening: nonce-based `script-src`** — `'unsafe-inline'` has been
+  removed from the default `script-src` directive. A fresh nonce is
+  generated per request, inserted into the `Content-Security-Policy`
+  header, and exposed to admin templates as `{{crap.csp_nonce}}`. Inline
+  `<script>` tags in built-in and overlay templates must now emit
+  `<script nonce="{{crap.csp_nonce}}">…</script>` to execute. Inline
+  event handlers (`onclick=`, …) are also blocked — the password
+  visibility toggle has been refactored into a proper
+  `<crap-password-toggle>` Web Component as a reference pattern.
+- **CSP hardening: `'unsafe-inline'` removed from `style-src`** — the
+  default `style_src` directive is now `'self' https://fonts.googleapis.com`
+  with no `'unsafe-inline'`. Steps required to get there:
+  - **Web Components** migrated to constructable stylesheets
+    (`new CSSStyleSheet()` + `adoptedStyleSheets`) instead of `<style>`
+    blocks injected via `shadowRoot.innerHTML`. Constructable stylesheets
+    are CSP-exempt by spec.
+  - **Dynamic page-level `<style>` injection** in
+    `<crap-relationship-search>` and `<crap-create-panel>` rewritten to
+    push onto `document.adoptedStyleSheets`.
+  - **Templates** use the `hidden` attribute / classes / data-attribute
+    selectors instead of `style="..."`. Theme-picker swatches keyed off
+    `data-theme-value` attribute selectors.
+  - **`<crap-richtext>`'s custom-node modal** applies per-field widths
+    via programmatic `element.style.width` (CSP-exempt) rather than
+    inline `style="..."` strings.
+  - **HTMX's runtime indicator-style injection** disabled via
+    `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
+    in `base.hbs` (HTMX otherwise calls
+    `head.insertAdjacentHTML('beforeend', '<style>...</style>')` at boot
+    to add `.htmx-indicator` rules — the only inline-style site in the
+    HTMX 1.9 source). The equivalent `.htmx-indicator` rules now ship in
+    `static/styles.css`.
+  Override authors who need `'unsafe-inline'` back (e.g. for a
+  third-party library that requires it) can re-add it in their
+  `[admin.csp]` config.
+- **Web Components migrated from `innerHTML` to `h()` builder** — every
+  Web Component under `static/components/` now constructs DOM via a
+  small ~45-line `h()` helper (`static/components/h.js`,
+  hyperscript-shape `h(tag, props, ...children)` matching the
+  Preact/Vue 3/Mithril convention) instead of HTML-string template
+  literals. Defense-in-depth against XSS for a CMS that, by definition,
+  handles user-contributed content: with `h()`, untrusted values can
+  only enter the DOM through `textContent` / `setAttribute`, both of
+  which the browser treats as data — there is no path that interprets
+  a string as markup. The previous `richtext.js` `_esc()` static
+  helper has been deleted: no caller remains. The two trust-boundary
+  sites that legitimately parse server-rendered HTML
+  (`create-panel.js` `DOMParser`, `richtext.js` ProseMirror init) are
+  preserved with explicit `// SAFETY: …` comment blocks naming the
+  trust assumption. Net diff: 39 `innerHTML` writes removed across 14
+  components; 1 deliberately-annotated parse site remains. JSDoc
+  generic `@template {keyof HTMLElementTagNameMap} K` propagates the
+  correct element type to tsserver, so `h('button', {})` narrows to
+  `HTMLButtonElement` in IDE hover.
+- **MFA brute-force protection — single-use codes + constant-time
+  compare** — `verify_mfa_code` previously cleared the stored code
+  only on success. An attacker holding a valid MFA-pending JWT could
+  brute-force the 6-digit code at request rate (1M codes / 5-min
+  window). The code is now single-use: clear-on-every-attempt,
+  success or failure, so a typo means re-requesting a fresh code.
+  Comparison goes through `subtle::ConstantTimeEq` so response-time
+  variance can't recover the stored code byte-by-byte. Regression
+  tests in `db/query/auth/mfa.rs::tests` cover the wrong-then-correct
+  rejection, the expired-code path, and the missing-user / no-code
+  edges.
+- **Polymorphic relationship writes enforce the `polymorphic`
+  allowlist** — fields declared as `relationship = { polymorphic =
+  ["posts", "articles"] }` previously accepted any `(collection, id)`
+  pair on the write path: `db::query::join::hydrate::save::save_join_data_inner`
+  (and the scalar-column write for non-`has_many`) trusted whatever
+  the client submitted. The stored ref then leaked at enrich time as
+  a label from a collection the field author never intended to
+  expose. New `check_polymorphic_allowlist` validation walks both the
+  array shape (`["collection/id", …]` for `has_many`) and the scalar
+  / object shape, no-ops on plain (non-polymorphic) relationships,
+  and returns a field-error with the rejected collection name. 8
+  unit tests cover the scalar / array / object shapes,
+  allowed-vs-disallowed targets, and the non-polymorphic no-op path.
+- **`upload.s3.secret_key` redacted in `Debug` and `Serialize`** — was
+  the only secret in `CrapConfig` stored as a bare `String`. The other
+  three (`auth.secret` → `JwtSecret`, `email.smtp_pass` →
+  `SmtpPassword`, `mcp.api_key` → `McpApiKey`) all wrap a redacted-
+  on-output newtype emitting `"[REDACTED]"`. New `S3SecretKey`
+  follows the same pattern (`config/s3_secret_key.rs`);
+  `tracing::debug!("{:?}", config)` and any JSON dump of `CrapConfig`
+  no longer leak the S3 credential. Also covers a Lua-hook leak
+  vector via `crap.config.get`-style serialization paths.
+- **Init-only registration APIs refuse runtime calls** — six
+  registration APIs that only make sense during init now error
+  loudly when called from a runtime hook instead of silently
+  no-op'ing or fragmenting across the Lua VM pool:
+  `crap.pages.register`, `crap.template_data.register`,
+  `crap.richtext.register_node`, `crap.collections.define`,
+  `crap.globals.define`, `crap.jobs.define`. Each checks for an
+  `InitPhase` marker in `lua.app_data` (set during def-loading and
+  `init.lua` execution, removed afterwards) and returns a runtime
+  error pointing the caller at `init.lua` if absent. Without these
+  guards a runtime registration would either land in one VM of the
+  pool and be intermittent across requests
+  (`template_data.register`, `richtext.register_node`), land in
+  `SharedRegistry` without the corresponding migration / sidebar
+  entry / scheduler enrollment and surface as confusing "no such
+  table" or 404 errors at first use (`collections.define`,
+  `globals.define`, `jobs.define`), or land in the per-VM named
+  registry only and never reach the live `CustomPageRegistry`
+  (`pages.register`). Regression test per API asserts the runtime
+  call is rejected and the registry state remains untouched.
+- **Scaffold-generated slugs revalidated** — every `crap-cms make`
+  command (`page`, `slot`, `node`, `field`, `theme`, `component`)
+  runs the slug through `validate_template_slug` (`[a-z0-9_-]+`, no
+  leading / trailing hyphens) before writing files. The `make
+  component` HTML custom-element rule (must contain a hyphen,
+  lowercase ASCII alphanumerics) is enforced separately. Closes a
+  path-traversal vector for callers who pipe untrusted strings into
+  `crap-cms make`.
+- **Version restore re-validates the snapshot** — the restore write
+  path (`service::versions::restore_with_snapshot`) now calls
+  `validate_fields` before writing the snapshot back to the table.
+  Previously a snapshot that was valid when first saved could become
+  invalid against later collection-definition changes (added required
+  fields, tightened constraints) and still land in the table on
+  restore, producing rows that fail every subsequent validation pass.
+  `WriteHooks` gained a `validate_fields` method (with `ValidateResult`
+  alias to disambiguate from the shadowed `Result`), implemented by
+  both `RunnerWriteHooks` and `LuaWriteHooks`.
+- **Richtext custom node names can't shadow built-ins** —
+  `crap.richtext.register_node("paragraph", …)` previously appeared
+  to succeed but the resolver still picked the built-in, leaving the
+  user to wonder why their custom node never ran. A new
+  `RESERVED_NODE_NAMES` const enumerates every built-in node + mark
+  and rejects matches at registration time with a clear error.
+
+### Added
+
+- **Admin UI customization architecture.** A coherent set of override
+  surfaces so config-dir overlays can add and replace pieces of the
+  admin without forking templates or patching Rust. The customization
+  motion is unchanged — drop a file at the matching path inside the
+  config dir's `static/` or `templates/` folder — but there are now
+  additive mechanisms alongside the existing whole-file replacement.
+
+  **Slot system** — new `{{slot "name"}}` Handlebars helper renders
+  every `*.hbs` file under `templates/slots/<name>/` in alphabetical
+  order. Slots are *additive*: your slot file runs alongside upstream's
+  defaults instead of replacing them. Slot templates render against
+  the same context as their host page. Built-in slot points are
+  declared in `templates/slots/<name>/.gitkeep`-style manifests; pick
+  by what you want to add (extra dashboard widget, sidebar entry,
+  metadata tag) rather than where you want to edit. See
+  `docs/src/admin-ui/guides/slots.md`.
+
+  **`{{data "name"}}` helper** — pulls a named blob registered from
+  Lua via `crap.template_data.register("<name>", function(ctx) … end)`.
+  The registered function runs against the same `ctx` the renderer
+  uses (locale, current user, request path) and returns a Lua table
+  serialized to template scope. This is the canonical way to inject
+  dynamic data into a slot or custom page without forking the host
+  template's handler.
+
+  **`[admin] site_name` config** — typed `String` field on `[admin]`
+  exposed to templates as `{{crap.site_name}}`. Used by the new
+  `templates/partials/logo.hbs` and `meta-tags.hbs` partials so the
+  brand wordmark and `<title>` follow one source of truth. Default
+  remains the literal `"Crap CMS"`.
+
+  **New partials at `templates/partials/`** — `logo.hbs` (header +
+  login wordmark), `meta-tags.hbs` (`<meta>` block in `<head>`),
+  `icon-font.hbs` (Material Symbols stylesheet link). Override any
+  one by dropping a same-named file at the matching path in the
+  config dir; the existing template-overlay mechanism resolves config
+  first, embedded second.
+
+  **`static/components/custom.js` auto-import seam** — the default
+  `static/components/index.js` now does `import('./custom.js').catch(()=>{})`
+  after loading every built-in component. To register bespoke Web
+  Components, drop `static/components/custom.js` in the config dir
+  with `import` statements for your modules. The default ships an
+  empty file (placeholder) so the import never 404s.
+
+  **`_internal/` plumbing convention** — modules that are wired into
+  the admin runtime but not part of the public override surface live
+  under `static/components/_internal/`. The 33 user-facing components
+  stay flat at `static/components/`. Hugo's `_default/` and Next.js
+  `_folder` precedent informs the underscore-prefix convention.
+
+- **Per-field render templates: `admin.template` + `admin.extra`.**
+  Two new optional keys on a field's `admin = {…}` block bind a
+  per-field render template path and a freeform configuration map.
+  Replaces the old "rename my field type" hack for one-off custom
+  widgets.
+
+  ```lua
+  fields = {
+    rating = {
+      type = "number",
+      admin = {
+        template = "fields/rating",      -- resolves under templates/
+        extra = { max = 5, allow_half = false },
+      },
+    },
+  }
+  ```
+
+  At render time, `RenderFieldHelper` reads `template` from the
+  flattened `BaseFieldData` and falls back to `fields/<field_type>`
+  when unset. The `extra` map is exposed to the template as
+  `{{extra.max}}`, `{{extra.allow_half}}`, etc. Both fields are
+  threaded through every `BaseFieldData` construction site (six
+  builders: `single`, enrich/`children`, enrich/`nested`,
+  enrich/`field_types`, collections/items/`create_form`,
+  collections/item/`edit_form`) and survive deeply nested
+  array/group composition — verified by
+  `enriched_sub_field_preserves_admin_template_and_extra_when_nested`.
+
+  **Path validation** — `validate_template_name` rejects 15
+  attack vectors: empty paths, leading/trailing `/`, `//`, `..`,
+  `.`, NULL bytes, backslashes, percent-encoding, newlines, and any
+  character outside `[a-zA-Z0-9/_-]`. No way to traverse out of the
+  templates root.
+
+  **Lua parse plumbing** — `&Lua` is now threaded through the
+  collection/field parse chain
+  (`parse_collection_definition` → `parse_fields_section` →
+  `parse_fields` → `parse_single_field` → `parse_field_admin`) so
+  `admin.template` validation and `admin.extra`'s `lua_to_json`
+  conversion happen at definition time, not render time. Sequences
+  and scalars in `extra` are rejected — must be a Lua table that
+  serializes to `serde_json::Map<String, Value>`.
+
+- **Custom admin pages.** Filesystem-routed at `/admin/p/<slug>` from
+  any `templates/pages/<slug>.hbs` file. Renders against the standard
+  admin context (`crap.*`, `user`, `nav` all available); pull
+  page-specific data via `crap.template_data.register(<slug>_data, …)`
+  and `{{data "<slug>_data"}}`. Sidebar entry registers via
+  `crap.pages.register("<slug>", { section, label, icon, access })`
+  in `init.lua` — section, icon, and access function are optional.
+  Path validation matches the `admin.template` rules. See
+  `docs/src/admin-ui/scenarios/05-custom-page.md`.
+
+- **Six new `crap-cms make` scaffolds.** Each command writes the
+  right files at the right paths and prints any registration snippet
+  to paste into `init.lua`. Slug validation rejects the same attack
+  vectors as `admin.template`; `--force` overwrites existing files.
+  - `make page <slug>` — writes `templates/pages/<slug>.hbs`, prints
+    a `crap.pages.register` snippet (sidebar entry is optional —
+    pages route either way).
+  - `make slot <name> [--file <filename>]` — writes
+    `templates/slots/<name>/<filename>.hbs`.
+  - `make node <name> [--inline]` — scaffolds a custom richtext node
+    template + `crap.richtext.register_node` Lua snippet.
+  - `make field <name> [--base-type <type>]` — generates 3
+    coordinated files: `templates/fields/<name>.hbs`,
+    `lua/plugins/<name>.lua` with `admin.template` + `admin.extra`
+    wiring, and `static/components/<name>.js` Web Component stub.
+  - `make theme <name>` — writes
+    `static/styles/themes/themes-<name>.css` with the full token
+    catalogue commented out for selective override.
+  - `make component <tag>` — writes `static/components/<tag>.js`
+    with a Web Component skeleton; validates HTML custom-element
+    tag rules (must contain a hyphen, lowercase, ASCII alphanumerics).
+
+- **`crap-cms templates` improvements: `layout`, drift detection.**
+  - New `templates layout [config_dir]` subcommand — read-only
+    migration recipe that scans the config dir for templates living
+    in legacy paths (`templates/components/*` and any layout files
+    that moved during the static-asset reshuffle) and prints exact
+    `git mv` commands. Verified path map covers `auth/`,
+    `collections/`, `dashboard/`, `errors/`, `globals/`. Reports
+    nothing when the config dir is already current.
+  - `templates status` and `templates diff -C <dir> <path>` learned
+    drift detection via an optional `{{!-- crap-cms:source X.Y.Z --}}`
+    header that `templates extract` now writes. When the embedded
+    upstream version moves past the recorded source, `status`
+    reports `behind`; `diff` shows the exact upstream change so the
+    operator can re-sync intentionally. Files without a source
+    header report as `unknown source — use git for diff` and remain
+    diffable manually.
+
+- **Customization summary in `crap-cms status`.** New line in the
+  default status output: `Customizations: N override(s), N
+  addition(s) — N need attention`. Counts come from
+  `customization_counts()` in `commands/templates.rs`: `overrides`
+  is files that shadow an embedded default, `additions` is files
+  that introduce new pages/slots/components without an upstream
+  match, `actionable` flags overrides whose recorded source has
+  drifted past the embedded version. Suppressed entirely when all
+  four counts are zero. Hint line points at `crap-cms templates
+  status` for the per-file breakdown.
+
+- **Admin UI documentation rewrite (~2,100 lines).** New structure
+  under `docs/src/admin-ui/`: 8 task-shaped scenarios
+  (`01-restyle` through `08-upgrade`), `guides/` for cross-cutting
+  concerns (themes, template overlay, slots), `reference/` for
+  flat lookup pages (CSS variables, components, template context),
+  and `upgrade/migrating-from-old-layout.md` for the static-asset
+  reshuffle. Replaces the previous "Components", "Customization",
+  "Custom Pages" essays with a four-axis decision table at
+  `docs/src/admin-ui/index.md` keyed by what kind of change you're
+  making. Custom richtext nodes (existing feature) and custom field
+  types are now first-class scenarios.
+
+- **AND + OR filter composition in the admin list drawer.** Each
+  row in the filter drawer now has a per-row connector dropdown
+  (`AND` / `OR`, default `AND`; the very first row's connector is
+  hidden via CSS — there's no previous row to connect to). Adjacent
+  `OR` rows form a single OR-clause; an `AND` row breaks the streak
+  and starts the next clause. Walking
+  `[A][AND B][OR C][AND D][OR E]` produces
+  `A AND (B OR C) AND (D OR E)` — two independent OR-clauses AND'd
+  at the top level. Mirrors the existing
+  `FilterClause::Or(Vec<Vec<Filter>>)` shape that the gRPC/Lua side
+  has accepted via JSON `or` keys all along; the admin URL grammar
+  is the new piece.
+
+  **URL grammar** — `where[field][op]=value` (unchanged) is the
+  top-level AND form. `where[or][G][N][field][op]=value` adds the
+  OR form: bucket `N` of OR-clause `G`. Multiple entries with the
+  same `(G, N)` AND together inside the bucket; different `N`
+  values inside the same `G` are OR'd; different `G` values are
+  independent OR-clauses AND'd at the top level.
+  `parse_where_params` recognises both grammars and reassembles
+  `Vec<FilterClause>` accordingly. URL-encoded brackets
+  (`where%5Bor%5D…`) work too. Existing bookmarks against the
+  flat AND form keep working.
+
+  **Same-field-same-op auto-merge** — within each AND-context
+  (top-level + each OR-bucket independently), repeated
+  `(field, Equals)` filters collapse into a single
+  `FilterOp::In(values)`; repeated `(field, NotEquals)` collapse
+  into `NotIn`. `?where[title][equals]=A&where[title][equals]=B`
+  becomes `WHERE title IN ('A','B')`, not the silently-empty
+  `WHERE title='A' AND title='B'` it produced before. Other ops
+  (`contains`, `gt`, …) stay AND'd because they're additive, not
+  redundant.
+
+  **`_status` alignment** — `extract_status_filter` returns
+  `Option<Vec<String>>`, collecting every `_status` value across
+  both URL grammars and de-duplicating. Service-layer injects
+  `_status = X` for one value, `_status IN (X, Y, …)` for many. So
+  picking both `draft` and `published` in the drawer widens to "show
+  both" instead of silently dropping one.
+
+  **Test coverage** — 31 unit tests in `parse_where_params` /
+  `extract_status_filter` (top-level AND, OR buckets, multi-clause
+  OR, in-bucket merge, system-column rejection inside buckets,
+  URL-encoded forms, mixed top + OR). Two new integration tests in
+  `tests/admin_collections.rs`: `list_items_or_clause_widens_results`
+  pins same-field IN merge + cross-field OR, and the existing
+  `list_items_url_status_filter_narrows_drafts_only` got an
+  `_status IN (draft, published)` case.
+
+  **Out of scope (v1)** — AND-inside-OR-bucket round-trip in the
+  drawer is lossy: the URL grammar parses multi-filter buckets
+  correctly, but the drawer renders them as separate OR rows; on
+  re-apply they re-bucket as singletons. Document; revisit if it
+  bites. A "match all / any" top-level toggle is achievable today
+  by setting every row to OR, so it's left out of v1 too.
+
+- **`crap-cms fmt` command — built-in Handlebars template formatter.**
+  Plays the same role for `templates/*.hbs` that `cargo fmt` plays for
+  Rust and `biome` plays for JS/CSS. Implements a project-specific rule
+  set (block helpers indent their bodies, attributes stack at 2+,
+  inline collapse for short single-attr/no-attr tags, comments
+  preserved verbatim, mustache spacing normalised to compact form,
+  void elements self-closed) that no off-the-shelf formatter
+  (djlint, prettier-plugin-glimmer) implements correctly. Idempotent
+  by property test. New flags:
+  - `crap-cms fmt` — format every `.hbs` under the given paths
+    in place. Default scope `templates/`.
+  - `crap-cms fmt --check` — exit non-zero if any file would change.
+    CI gate.
+  - `crap-cms fmt --stdio` — read from stdin, write formatted result
+    to stdout. Used by editor formatter integrations
+    (conform.nvim, etc.). Mutually exclusive with `--check`.
+
+  Wired into the pre-commit hook (`cargo run --quiet --bin crap-cms --
+  fmt --check`) and into `.github/workflows/ci.yml` as a separate step
+  alongside `cargo fmt --check` / `clippy` / `biome ci`. All 72
+  built-in templates were re-formatted with the new tool. Documentation
+  in `docs/src/admin-ui/template-formatter.md` and the CLI reference.
+
+  **Raw-content elements** — the body of `<script>`, `<style>`,
+  `<pre>`, and `<textarea>` is captured verbatim and passes through
+  the formatter without re-indentation, mustache parsing, or
+  whitespace collapse. These elements have their own grammar
+  (JS/CSS/JSON/preformatted text) that the formatter must not
+  rewrite. The matching close tag (`</script>` etc.) is found by a
+  case-insensitive linear scan, mirroring the HTML5 parser's
+  raw-text content model. Without this, a `<script
+  type="application/json">` data island with mustache
+  interpolations inside JSON string values (or any non-trivial
+  inline `<script>` body) would be reformatted into invalid output.
+
+- **`{{{admin_i18n}}}` helper** — emits the admin-JS translation
+  bundle as a single JSON object string, scoped to the current
+  `_locale`. Used by `templates/layout/base.hbs` to populate the
+  `<script id="crap-i18n">` data island that `static/components/i18n.js`
+  reads via `t(key)`. Replaces the previous hand-rolled per-key
+  `"key": "{{t \"key\"}}"` JSON construction, which couldn't survive
+  the template formatter. Overlay authors who replace the
+  `crap-i18n` data island markup must call `{{{admin_i18n}}}`
+  inside it to keep `t()` working in the admin UI; the curated key
+  list is in `src/admin/templates/helpers/admin_i18n.rs`.
+
+- **Shell completions** — `crap-cms update completions <shell>` generates
+  completions for bash, zsh, fish, elvish, and powershell. For bash,
+  zsh, and fish, completions are also auto-installed after
+  `crap-cms update use` and bare `crap-cms update`:
+  - Zsh install path is chosen by probing the user's `$fpath` (via
+    `zsh -i -c 'print -l $fpath'`). Prefers `~/.zfunc` when already
+    configured, otherwise picks the first user-owned directory on
+    `$fpath`. Falls back to `~/.zfunc` and emits an activation hint
+    on every install if nothing workable is found.
+  - Bash installs under `$XDG_DATA_HOME/bash-completion/completions/`.
+    A hint is shown if the `bash-completion` entry point isn't present
+    on the system.
+  - Fish installs under `$XDG_CONFIG_HOME/fish/completions/` (auto-loaded).
+  - `crap-cms update completions <shell> --uninstall` removes a specific
+    shell's installed file; `--uninstall` without a shell removes all.
+    `crap-cms update uninstall` of the last installed version also cleans
+    up any auto-installed completion files.
+
+- **`bench` command** — benchmark hooks, queries, and write cycles for
+  developer performance profiling:
+  - `bench hooks` — time individual Lua hooks with interactive selection
+    wizard (`MultiSelect`). Supports `--hooks`, `--exclude`, `--all` for
+    non-interactive use. Uses real documents from the DB when available,
+    falls back to synthetic data. Catches hook errors without stopping.
+  - `bench queries` — time find queries per collection with optional
+    `--where` JSON filter clause (same format as gRPC API). `--explain`
+    shows SQLite `EXPLAIN QUERY PLAN` output with real index usage.
+  - `bench create <collection>` — time a full document create cycle
+    (validation + hooks + persist) with automatic transaction rollback.
+    `--no-hooks` for pure persist timing. Confirmation prompt when hooks
+    are enabled (skip with `-y`). Unique fields auto-randomized per
+    iteration to avoid constraint violations.
+
+- **`status --check` health audit** — best-practice audit for project
+  configuration. Checks 24 rules across security, performance, config,
+  and operations:
+  - **Security**: auth secret strength/placeholder detection, brute-force
+    protection, default_deny, access rules coverage, rate limiting with
+    auth collections, CORS wildcard + credentials conflict.
+  - **Performance**: max_depth, cache disabled with relationships,
+    pool_max_size, connection_timeout, compression, pagination max_limit,
+    too many hooks/before_change hooks, too many live_mode "full" collections.
+  - **Config**: dev_mode, default_depth vs max_depth, email provider "log"
+    with verify_email enabled.
+  - **Operations**: pending migrations, auth collection without soft_delete,
+    upload collection without versioning, soft_delete without retention
+    policy, empty auth collection (0 users).
+
+### Changed
+
+- **BREAKING: static-asset layout reorganized into role-grouped subdirs.**
+  The previously-flat `static/` directory now groups files by role:
+  - `static/styles/{base,parts,layout,themes}/` — CSS split by
+    concern, composed via `static/styles/main.css` (replaces the
+    flat `static/styles.css` + per-concern siblings).
+  - `static/vendor/{codemirror,htmx,prosemirror}.js` — vendored
+    third-party bundles (replaces flat `static/codemirror.js` etc.).
+  - `static/icons/` — Material Symbols woff2 + stylesheet.
+  - `static/components/_internal/` — plumbing modules
+    (`css.js`, `global.js`, `groups.js`, `h.js`, `i18n.js`,
+    `picker-base.js`, `util/*`). The 33 user-facing components stay
+    flat at `static/components/`.
+
+  **No compat aliases.** Old static paths (`/static/styles.css`,
+  `/static/htmx.js`, `/static/components/css.js`, …) now 404 outright.
+  Config-dir overlays still living at the old paths stop applying.
+  This was a deliberate "the best part is no part" call — runtime
+  alias tables rot silently and add complexity for everyone forever
+  to save a one-time migration effort for the small group of users
+  who actually have overlays.
+
+  **Migration recipe** — run `crap-cms templates layout` for an
+  exact `git mv` script that updates any overlay files in your
+  config dir from old paths to new ones. Recipes don't run anything;
+  copy + paste only when you're ready. Background and full path map
+  at `docs/src/admin-ui/upgrade/migrating-from-old-layout.md`.
+
+- **BREAKING: htmx 2.0.9 vendored locally.** The admin layout no
+  longer pulls htmx from `https://unpkg.com`; it serves
+  `static/htmx.js` from the same origin via a new
+  `scripts/bundle-htmx.sh` (mirrors the existing
+  `bundle-prosemirror.sh` / `bundle-codemirror.sh` pattern). The
+  script downloads the upstream artifact, verifies a pinned
+  SHA-384 against tampering, and writes a banner-prefixed
+  vendored copy. Re-run when upgrading htmx; bump `VERSION` and
+  `EXPECTED_SHA384` together after independently verifying the
+  new release.
+
+  **CSP impact** — `https://unpkg.com` removed from the default
+  `script-src`; `'self'` now covers every script the built-in
+  admin loads (`/static/htmx.js`, `/static/codemirror.js`,
+  `/static/prosemirror.js`, `/static/components/index.js`). One
+  fewer third-party origin in the trust boundary; one fewer DNS
+  lookup at page load.
+
+  **htmx 2 behavioral changes that may affect overlays** —
+  - `hx-on="..."` (single attribute) replaced by per-event
+    `hx-on:event-name="..."` (kebab-case). The built-in templates
+    use neither form, but overlay templates that did need the
+    rename.
+  - `selfRequestsOnly` config defaults to `true`. Overlays that
+    issue cross-origin htmx requests must set it to `false`
+    explicitly via the `<meta name="htmx-config">` JSON.
+  - `methodsThatUseUrlParams` now includes `delete`; htmx-driven
+    DELETE requests with form fields encode them in the URL
+    instead of the body. Built-in delete forms have no user-input
+    fields so this is a no-op for us; overlays with custom
+    DELETE forms should verify their server-side parsing.
+  - Default `scrollBehavior` changed from `smooth` to `instant`.
+    Restore the old default with
+    `<meta name="htmx-config" content='{"scrollBehavior":"smooth"}'>`
+    if the new feel is unwanted.
+  - `hx-ws` and `hx-sse` attributes are gone from core htmx —
+    install the corresponding extensions if you used them.
+    (We use neither; live events go through `<crap-live-events>`.)
+  - The `htmx.config.includeIndicatorStyles=false` workaround
+    we ship to keep `style-src` free of `'unsafe-inline'` still
+    works in 2.x; nothing to change there. As an alternative,
+    htmx 2 added `inlineStyleNonce` / `inlineScriptNonce`
+    config options that accept our per-request nonce and let
+    htmx inject its own styles/scripts with the correct nonce.
+
+- **BREAKING: `templates/components/` directory removed — the four
+  partials it held (`breadcrumb`, `pagination`, `version_sidebar`,
+  `version_table`) moved to `templates/partials/` for naming
+  consistency.** The two `_`-named files were renamed to use `-` to
+  match other partials. Update overlay references:
+  - `{{> components/breadcrumb}}` → `{{> partials/breadcrumb}}`
+  - `{{> components/pagination}}` → `{{> partials/pagination}}`
+  - `{{> components/version_sidebar}}` → `{{> partials/version-sidebar}}`
+  - `{{> components/version_table}}` → `{{> partials/version-table}}`
+
+- **Six new partials cover the most common template duplications.**
+  Override authors get one place to retheme each pattern.
+  - `partials/htmx-nav-link.hbs` — the
+    `<a class="button button--…" href="…" hx-get="…" hx-target="body"
+    hx-push-url="true">…</a>` pattern that was hand-written 30× across
+    the templates. Accepts `href`, `label_key`/`label`, `variant`,
+    `size`, `icon` parameters.
+  - `partials/status-badge.hbs` — `<span class="badge badge--{status}">
+    {status}</span>` pill, repeated 5× across sidebars and table rows.
+  - `partials/error-page.hbs` — full error-page card (h1 + message +
+    optional detail + back-to-dashboard button) used by
+    `errors/404.hbs`, `errors/403.hbs`, `errors/500.hbs`. Each error
+    page collapsed to a one-liner `{{> partials/error-page code=…
+    message_key=…}}`.
+  - `partials/warning-card.hbs` — `<div class="card card--warning">`
+    container with title and slotted body. Used by `delete_confirm` and
+    both `restore_confirm` templates.
+  - `partials/loading-indicator.hbs` — `<div id="upload-loading"
+    class="loading-indicator|edit-sidebar__save-indicator">…</div>`
+    target for HTMX `hx-indicator`. `variant="sidebar"` parameter
+    selects the compact sidebar styling.
+  - `partials/form-actions.hbs` — `<div class="form__actions">` wrapper
+    + cancel link, with action buttons in a partial-block slot. Used
+    by all three confirm pages.
+
+- **`layout/auth.hbs` consolidates head + auth-card chrome.** The four
+  auth pages (`login`, `forgot_password`, `reset_password`, `mfa`) and
+  two auth-style error pages (`auth_required`, `admin_denied`) each
+  re-stated ~35 LOC of identical head boilerplate (theme-FOUC script,
+  CSRF auto-injection script, stylesheet + module-script tags) plus
+  the `<div class="auth-card">` outer wrapper and CMS-logo header. All
+  six pages now extend `{{#> layout/auth title=…}}…{{/}}`. The layout
+  accepts `header_icon_kind="material"` (with `header_icon=…`) for the
+  two error pages that prefer a Material-Symbol over the SVG logo, and
+  optional `header_title` to override the default "Crap CMS" title.
+
+- **`partials/field.hbs` accepts explicit-param overrides** in addition
+  to the inherited field-context values it already used. Calling
+  `{{#> partials/field label="My Label" error="bad"}}…{{/}}` with
+  explicit args now works as documented (it always did, but wasn't
+  spelled out — handlebars-rust merges partial-block params into the
+  parent context). Unit test
+  `field_partial_explicit_params_override_inherited_context` locks
+  this in.
+
+- **Auth pages: CSRF cookie regex normalised.** The inline auth-page
+  CSRF auto-injection script used `(?:^|; )` (single-space form) for
+  the cookie match, while `static/components/util/cookies.js` (and the
+  rest of the codebase) uses `(?:^|;\s*)`. Auth pages were the last
+  hold-out; now consistent.
+
+- **BREAKING: Web Component admin library — singleton API harmonization.**
+  The `static/components/` admin-UI library now has a single singleton
+  discovery convention and a unified `window.crap` namespace. Migration
+  of any custom overlays:
+  - Event `crap:toast` → renamed to `crap:toast-request`. The detail
+    shape is unchanged: `{ message, type?, duration? }`.
+  - Event `crap:delete-dialog` → renamed to `crap:delete-dialog-request`.
+    The new event is **discovery-only** (`detail.instance` is filled in
+    by the singleton); to open the dialog, call
+    `instance.open(opts)` after discovery, or use the convenience
+    `window.crap.deleteDialog.open(opts)`.
+  - `<crap-toast>` instance method `show(message, type, duration)`
+    (positional) → removed. Use `show({ message, type, duration })`.
+  - Global `window.CrapTheme` → moved to `window.crap.theme` (same
+    `get` / `set` / `apply` methods).
+  - Global `window.CrapDeleteDialog` → moved to
+    `window.crap.deleteDialog` (same `open(opts)` method).
+  - `<crap-confirm>` no longer renders its own dialog — it delegates
+    to the page-singleton `<crap-confirm-dialog>` via the discovery
+    pattern. Falls back to native `window.confirm()` (with
+    `console.warn`) if no `<crap-confirm-dialog>` is mounted.
+  - New `static/components/global.js` builds the `window.crap`
+    namespace at admin-page load. Properties: `toast(opts)`,
+    `confirm(message, opts?)` (returns `Promise<boolean>`),
+    `drawer.{open, close}`, `deleteDialog.{open}`,
+    `createPanel.{open, close}`, `theme.{get, set, apply}`, `csrf()`.
+    Documented as **sugar** over the canonical event-discovery + module
+    APIs.
+
+- **Field templates — shared `partials/field` wrapper with three
+  structural variants.** The label + required marker + locale badge +
+  error + help boilerplate (~250 lines, repeated across 14 templates)
+  now lives in `templates/partials/field.hbs`. The partial accepts a
+  `variant` parameter:
+  - `default` (no variant arg) — `<label for=…>` above the slot. Used
+    by `text`, `textarea`, `email`, `password`, `number`, `date`,
+    `json`, `code`, `richtext`, `select`, `relationship`, `upload`.
+  - `variant="fieldset"` — `<fieldset class="form__radio-group"><legend>…`
+    wrapping the slot. Used by `radio`.
+  - `variant="checkbox"` — `<div class="form__checkbox">` with the
+    slot then `<label for=…>` inline. Used by `checkbox`.
+  All three variants share the same required-marker, locale-badge,
+  error-paragraph, and help-paragraph logic, so overrides to the
+  contract apply uniformly. Layout fields (`array`, `blocks`, `group`,
+  `row`, `tabs`, `collapsible`, `join`) keep their custom rendering.
+  Override authors can replace the partial in their config-dir
+  `templates/partials/field.hbs` to retheme every field in one place.
+
+- **`<crap-password-toggle>` — shadow DOM, self-styling, no markup
+  contract.** The component now renders its own toggle button + icon
+  inside its shadow root and styles the slotted input via
+  `::slotted(input)`. The required template shape collapsed from:
+
+  ```html
+  <crap-password-toggle class="form__password-wrapper">
+    <input type="password" name="password" />
+    <button type="button" class="form__password-toggle"
+            aria-label="Toggle password visibility">
+      <span class="material-symbols-outlined">visibility</span>
+    </button>
+  </crap-password-toggle>
+  ```
+
+  to:
+
+  ```html
+  <crap-password-toggle>
+    <input type="password" name="password" />
+  </crap-password-toggle>
+  ```
+
+  Migrated `templates/fields/password.hbs`, `templates/auth/login.hbs`,
+  `templates/auth/reset_password.hbs`. The `.form__password-wrapper`
+  class and the `.form__password-toggle` rule set in `static/forms.css`
+  have been removed (component-owned now). Auth pages now load
+  `/static/components/index.js` like the admin pages instead of
+  cherry-picking `password-toggle.js`. New regression test
+  `browser_password_toggle::password_toggle_reveals_and_hides_value`.
+
+- **Picker base class — three pickers consolidated.** The shared
+  toggle / dropdown / outside-click logic that was duplicated across
+  `<crap-locale-picker>`, `<crap-ui-locale-picker>`, and
+  `<crap-theme-picker>` (~50 LOC apiece, ~150 LOC total of near-
+  identical code) now lives in `static/components/picker-base.js`
+  (`CrapPickerBase`). Each subclass declares the toggle/dropdown/item
+  selectors, the open-class, and the `dataset` key holding the option
+  value as static class properties; the only behaviour each provides
+  is `_onValue(value)` and an optional `_afterToggle()` hook for
+  per-toggle state refresh (the theme picker uses this to highlight
+  the active option). Per-picker tags stay distinct because templates
+  and tests reference them, only behaviour is deduplicated.
+
+- **Sidebar panels — shared `partials/sidebar-panel` wrapper.** The
+  `<div class="edit-sidebar__panel">…<panel-header><icon> <label></panel-header>…<panel-body>…</panel-body></div>`
+  shell that recurred 8 times across `collections/edit_sidebar.hbs`,
+  `globals/edit_sidebar.hbs`, and `components/version_sidebar.hbs`
+  now lives in `templates/partials/sidebar-panel.hbs`. Callers pass
+  optional `icon` and `label_key` (translation key) parameters and
+  slot the body content. Saves ~100 LOC, gives overlay authors a
+  single retheme target for sidebar panel chrome.
+
+- **Array/blocks row header — shared `partials/array-row-header` wrapper.**
+  The drag handle + toggle + title + error-badge + 4 action buttons
+  (`move-up`, `move-down`, `duplicate-row`, `remove-array-row`) that
+  recurred 4× across `array.hbs` and `blocks.hbs` (initial render +
+  `<template>` clone in each) now lives in
+  `templates/partials/array-row-header.hbs`. Callers pass `expanded`
+  (bool), `has_errors` (bool), and slot the row title content. Saves
+  ~80 LOC. Action buttons remain `data-action` attributes delegated
+  to `array-fields.js` — markup is pure HTML, so a server-rendered
+  partial fits cleanly (per the project rule: no JS logic → partial,
+  JS logic → Web Component).
+
+- **`password`, `radio`, `checkbox` field templates — alignment with
+  the standard wrapper.** Adopting `partials/field` fixes several
+  pre-existing inconsistencies:
+  - `password.hbs` — `locale_locked` badge is now rendered (was
+    silently dropped); error/description paragraphs now in the
+    canonical order (error first, then help).
+  - `checkbox.hbs` — required-marker (`*`) is now rendered when the
+    field is required (was silently dropped); the input now carries
+    the HTML `required` attribute when the field is required, so the
+    browser blocks submit instead of relying solely on server-side
+    validation feedback.
+
+- **Admin-UI util module — six near-identical helpers consolidated.**
+  Cross-cutting helpers previously inlined across 12 component files
+  now live in `static/components/util/`:
+  - `cookies.js` — `readCsrfCookie()`, `readCookie(name)`. Replaces 6
+    duplicate CSRF readers (delete-dialog, validate-form, conditions,
+    list-settings, create-panel, ui-locale-picker, session-guard).
+  - `toast.js` — `toast({ message, type, duration })`. Replaces 4
+    inline `dispatchEvent(new CustomEvent('crap:toast', ...))` blocks.
+  - `htmx.js` — `getHttpVerb(e)`. Replaces 3 sites with subtly
+    different verb-extraction / case-handling.
+  - `discover.js` — `discoverSingleton(eventName)`. Standardizes the
+    event-discovery dance for callers of `<crap-drawer>`,
+    `<crap-confirm-dialog>`, `<crap-create-panel>`,
+    `<crap-delete-dialog>`.
+  - `json.js` — `parseJsonAttribute(el, attr, fallback)`,
+    `readDataIsland(host, id, fallback)`. Replaces 3 inline JSON-attr
+    parsers (richtext × 2, list-settings) and consolidates the
+    data-island read pattern.
+  Override authors can drop a replacement file at the matching path
+  inside their config directory's `static/components/util/` folder.
+
+- **`init` scaffolds `.mcp.json`** — new projects include a Claude Code
+  MCP configuration file out of the box. Running Claude Code from the
+  config directory auto-connects to the CMS's MCP server.
+
+- **`status` command enhanced** — now displays:
+  - Server configuration (ports, compression, rate limiting).
+  - Trash count per collection (soft-deleted documents) and `soft_delete` tag.
+  - Versioning details (drafts, max versions) per versioned collection.
+  - Access rules overview (read/create/update/delete functions per
+    collection and global, with default deny/allow indicator).
+  - Hooks assignments (which lifecycle hooks are wired, with function names).
+  - Live event configuration (mode per target, or summary).
+
+- **Quieter startup logging** — per-collection field listings and runner
+  VM `crap.log.info()` messages demoted to `debug`. Only the init VM logs
+  at `info` level. HookRunner pool creation summarized as a single line
+  with VM count and elapsed time (e.g., "HookRunner ready: 22 VM(s) in
+  1236ms"). Loaded collections summary now includes hook count.
+
+- **Startup health check nudge** — after booting, the server runs the
+  `status --check` audit silently and logs a one-liner if warnings are
+  found (e.g., "6 health check warning(s) found — run `crap-cms status
+  --check` for details").
+
+- **Hook execution timing in dev_mode** — when `dev_mode = true`, each
+  hook invocation and per-event totals are logged at `debug` level with
+  elapsed milliseconds (e.g., "hooks.auto_slug: 0.31ms").
+
+### Fixed
+
+- **`_status` filter from the admin UI was silently dropped.** The
+  filter builder exposes `_status` as a filterable field for
+  collections with drafts (`build_filter_fields` adds it whenever
+  `def.has_drafts()`), producing URLs like
+  `?where[_status][equals]=draft`. But `_status` is a system column
+  (`_*` prefix), and the architecture rejects user filters on system
+  columns at two layers:
+  `admin::handlers::query::filter::parse_where_params` filters them
+  out (the field-validity check), and `validate_user_filters` would
+  reject them at the service-layer entry point in any case. Net
+  effect: the filter URL would update, but the page would render
+  unfiltered (showing both drafts and published, since the admin
+  list always passes `include_drafts = true`).
+
+  Fix: new typed param `status_filter: Option<Vec<String>>` on
+  `FindDocumentsInput` (mirrors the existing `trash: bool` pattern
+  for `_deleted_at`). The admin list handler reads every
+  `where[_status][equals]=X` value from the raw query — both
+  top-level and OR-bucket forms — via `extract_status_filter()` and
+  forwards them as a typed param, so `_status` reaches the SQL via
+  the trusted post-validation injection path in
+  `build_effective_query` (`Equals` for one value, `IN (…)` for two
+  or more). Generic-user-filter rejection of system columns is
+  unchanged. Other read surfaces (gRPC, MCP, Lua) continue to
+  control draft visibility through the typed `include_drafts` flag.
+
+  Regression test
+  `list_items_url_status_filter_narrows_drafts_only` creates one
+  published and one draft document on a `has_drafts` collection,
+  hits `?where%5B_status%5D%5Bequals%5D=draft`, and asserts the
+  rendered `tbody` has exactly one row (the draft) with the
+  published row absent. Symmetric coverage for `_status=published`,
+  for the empty-value "All" case, and for the multi-`_status` OR
+  case (both rows shown when `_status IN (draft, published)`).
+  Plus 11 unit tests for `extract_status_filter` (raw +
+  URL-encoded + missing + wrong op + non-system-column + collects
+  from OR-buckets + dedupes + mixed top-and-OR).
+
+- **Drafts hidden on page 1 of admin lists with cursor pagination.**
+  Collections with drafts and a `default_sort` whose key is NULL on
+  draft rows (e.g. the example `posts` config sets
+  `default_sort = "-published_at"`, and the
+  `set_published_at` hook only fills it on publish) sorted drafts to
+  the bottom — SQLite places NULLs last in DESC. With the default
+  `per_page = 20`, the first page of 28 mixed posts showed 20
+  published rows; the 2 drafts paginated out of sight.
+
+  Fix at the SQL builder: when `def.has_drafts()` and the user's
+  sort isn't already `_status`, `apply_order_by`
+  (`src/db/query/read/find.rs`) prepends `_status DIR` to the ORDER
+  BY (ASC normally, flipped to DESC under `using_before` so
+  `before_cursor` walks the same composite order in reverse). Effective
+  order becomes `(_status, sort_col, id)` and `'draft' < 'published'`
+  alphabetically surfaces drafts above published. When the WHERE
+  clause already pins `_status` to a single value (drafts/published
+  filter, or `include_drafts=false` injection on public reads) the
+  prepend is a no-op SQL-wise.
+
+  Cursor pagination kept symmetric across the draft↔published
+  boundary by extending the cursor encoding: `CursorData` gained a
+  `status_val: Option<String>` (`#[serde(default)]` so legacy
+  bookmark URLs decode and fall back to single-column keyset),
+  populated by `cursor_from_doc` when the row is on a drafts-enabled
+  collection. `apply_cursor_keyset` builds a composite `(_status
+  outer_op cursor_status) OR (_status = cursor_status AND <inner
+  keyset>)` so prev returns the drafts that next skipped.
+  `apply_select_filter` was extended to keep `_status` regardless of
+  caller-provided `select` so cursor encoding never falls back to a
+  bogus default. The shared gate predicate
+  `cursor::cursor_status_active(has_drafts, sort_col)` is used by
+  both `apply_order_by` and `PaginationResult::cursor` to keep the
+  SQL writer and the cursor encoder locked together.
+
+  Regression tests:
+  `drafts_sort_above_published_in_admin_list`,
+  `cursor_round_trip_preserves_drafts_on_page_1` (5 published + 2
+  drafts, page → next → prev returns the original page 1 in order),
+  `before_cursor_on_draft_walks_draft_bucket` (using_before symmetry
+  on a draft sort_val), `legacy_cursor_without_status_val_still_works_on_drafts_collection`
+  (backward compat for old cursor URLs), `apply_select_filter_keeps_status_for_cursor`,
+  `drafts_first_does_not_disturb_status_filtered_query` (no-op when
+  WHERE pins `_status`).
+
+- **`Save as draft` blocked by required-field validation.** Three
+  layers needed adjustment to make this work end-to-end on a
+  collection with `has_drafts = true` and required fields:
+
+  1. **Browser native validation** — field templates emit the HTML
+     `required` attribute when `field.required = true`, so clicking
+     any submit button on a form with empty required fields would be
+     blocked by browser constraint validation before the request
+     even left. Fixed by adding `formnovalidate` to the "Save as
+     draft" submit buttons in `templates/collections/edit_sidebar.hbs`
+     and `templates/globals/edit_sidebar.hbs`. HTML5's
+     `formnovalidate` on a submit button bypasses the form's
+     constraint validation for that submit only.
+
+  2. **Pre-submit validate endpoint** — `<crap-validate-form>`
+     intercepts `htmx:beforeRequest`, posts the form data to a
+     `/validate` JSON endpoint, and only lets the real submission
+     proceed if validation passes. The component built its
+     payload via `new FormData(form).entries()` — which silently
+     drops the *submitter button's* `name=value` pair (that's only
+     included by the browser during *native* form submission, not
+     when constructed standalone). Net effect: `_action=save_draft`
+     was missing from the validate request, so the server saw
+     `payload.draft = false`, ran non-draft validation, returned
+     `{ title: "Field is required" }`, and the JS rendered inline
+     errors on a draft save the user explicitly asked for.
+
+     Fixed in `static/components/validate-form.js` by tracking the
+     last clicked submit button on the component instance
+     (`_lastSubmitter`, captured via a capture-phase click listener)
+     and passing it as the second argument to `new FormData(form,
+     submitter)`. Browsers without that constructor signature fall
+     back to manual `fd.append(submitter.name, submitter.value)`.
+
+  3. **Server validation** — already correctly skipped required
+     checks for drafts (`src/hooks/lifecycle/validation/checks/required.rs:8-23`
+     returns early when `is_draft = true`). No change needed; the
+     existing pipeline just couldn't fire because layers 1+2 were
+     blocking the request from reaching it.
+
+  Regression tests:
+  `html_versions::save_draft_button_carries_formnovalidate` (asserts
+  the rendered HTML carries the attribute on both create and edit
+  pages) and
+  `browser_validation::save_as_draft_skips_required_via_validate_endpoint`
+  (full browser flow: open create page, leave required field empty,
+  click Save as draft, assert no inline `form__error[data-validate-error]`
+  appears). Both fail without their respective fix.
+
+- **Filter drawer auto-applied `_status=published` on empty state.**
+  `<crap-list-settings>::_buildFilterUI` previously rendered ONE
+  default row when the URL had no filters (`presets.length > 0 ?
+  presets : [null]`). That row hydrated to the first field's first
+  op + first value — typically `_status = "published"` for
+  collections with drafts, since `build_filter_fields` lists
+  `_status` first. User opens drawer, doesn't realise the row is
+  pre-configured, clicks Apply → URL gets
+  `?where[_status][equals]=published` and the list silently
+  narrows. Fix: drawer opens with zero rows when URL has no
+  filters; the "+ Add condition" button is the explicit
+  affordance. `_collectFilters` also now skips rows whose `field` /
+  `op` are empty, or whose `value` is empty (except for `exists` /
+  `not_exists` which take no value). Regression test
+  `filter_drawer_empty_when_no_url_filters` exercises the
+  open-drawer-and-apply-without-changes flow.
+
+- **Cursor pagination + filter change produced empty/wrong
+  results.** When the user paginated with `after_cursor=…` /
+  `before_cursor=…` in the URL and then changed the filter via the
+  drawer, `_buildFilterUrl` deleted only `where[…]` params,
+  preserving the stale cursor. The cursor was issued against the
+  previous result set; with a different filter, the cursor's
+  keyset comparison narrowed the WHERE clause to empty (or
+  wrong-position rows). Fix: strip `after_cursor` and
+  `before_cursor` alongside `where[…]` on every filter apply, then
+  reset to `page=1`. Regression test
+  `filter_apply_strips_stale_cursor`.
+
+- **Filter-apply navigated to nowhere with htmx 2.** After the htmx
+  1.9 → 2.0.9 migration, applying a filter from the
+  `<crap-list-settings>` filter drawer silently failed to update the
+  URL or refresh the list. Two stacked option-API renames in
+  `htmx.ajax()` between versions:
+  1. `pushUrl` (1.x) → `push` (2.x). The 1.x key is silently dropped.
+  2. `push` takes a *string* (`"true"` or a path), not a boolean.
+     Passing `push: true` got coerced to the string `"true"` and
+     pushed the literal URL `/admin/collections/true` into history —
+     visible as the wrong URL in the address bar after applying a
+     filter.
+  Fixed in `static/components/list-settings.js::navigate()` —
+  passes `push: <path>` with the actual destination path. Four
+  regression tests now pin the behaviour:
+  `filter_builder_preset_value_change_applies` (preset value swap →
+  URL reflects new value),
+  `filter_builder_apply_actually_filters_the_list` (apply → list
+  actually narrows: 2 rows → 1 row, only the matching status visible
+  in `<tbody>`), `filter_builder_multi_row_reopen_edit_persists`
+  (multi-row apply → reopen → edit → all rows survive with edited
+  values), and `filter_builder_preserves_user_edit_across_op_change`.
+  Plus the integration test
+  `list_items_url_filter_narrows_results` covers the server-side
+  pipeline directly with both raw and URL-encoded `where[…]` query
+  strings. The user's reported "additional filter rows get lost"
+  symptom was a downstream effect of the same bug — without URL
+  pushing, the post-apply page state never reflected the new filter
+  set, so reopening the drawer from the unchanged URL appeared to
+  lose rows.
+
+- **Filter-builder dropped user edits on op-change.**
+  `static/components/list-settings.js`'s `_buildFilterRow` captured
+  the URL-derived `preset` by closure. When the user changed the op
+  (which can re-render the value input — `exists` / `not_exists`
+  drop the input entirely, switching back rebuilds it), the rebuild
+  used the stale `preset.value` and silently overwrote whatever the
+  user had just selected. Symptom: open the filter drawer with a
+  preset like `?where[status][equals]=published`, switch the value
+  dropdown to `draft`, change the op — the value snaps back to
+  `published`. Pre-existing bug from the alpha.8 webcomponents
+  refactor (`34410b8`); not introduced by the recent declarative
+  htmx work, but found while investigating filter behaviour. Fix:
+  `renderOp()` and `renderValue()` now read the current DOM state
+  (`opSelect.value`, `valueWrap.querySelector('[name="filter-value"]')?.value`)
+  before the rebuild and fall back to the preset only when the input
+  doesn't yet exist or has no value. Regression test
+  `filter_builder_preserves_user_edit_across_op_change` exercises
+  the URL-preset → value-edit → op-change → value-survives flow
+  end-to-end.
+
+- **`<crap-create-panel>` form submission rewritten as declarative
+  htmx.** Removes ~110 lines of imperative submit logic
+  (`_submitForm`, `_handleSubmitResponse`, `_sendForm`,
+  `encodeFormBody`, the multipart-vs-urlencoded branch, the strip-htmx
+  pass) and the `readCsrfCookie` import. The injected form keeps its
+  server-rendered `hx-post` (or `hx-put`); the panel sets
+  `hx-target="this"`, `hx-swap="outerHTML"`, `hx-select="#edit-form"`
+  (so the server's full-edit-page validation re-render gets sliced
+  down to just the form fragment), and `hx-headers='{"X-Inline-Create":"1"}'`.
+  htmx 2 picks the request encoding from the form's native `enctype`
+  attribute (which `templates/collections/edit.hbs` already emits as
+  `multipart/form-data` only when `collection.is_upload`) — the
+  multipart-vs-urlencoded encoding bug we hit earlier in this release
+  becomes structurally impossible, since the client never inspects the
+  FormData to decide. Two `htmx:beforeSwap` / `htmx:afterRequest`
+  listeners on the panel body (which survives across form re-renders)
+  intercept the `X-Created-Id` success header to fire the `onCreated`
+  callback + close the panel; on validation error the swapped form
+  fragment shows inline field errors as before. Regression tests
+  `relationship_inline_create_selects_item` and
+  `relationship_inline_create_validation_error_rerenders` exercise
+  both happy path (with file upload — multipart) and validation
+  re-render (urlencoded) end-to-end.
+
+  **Server side**: new `htmx_inline_created(id, label)` response
+  builder in `src/admin/handlers/shared/response.rs`. Returns 200 with
+  `X-Created-Id` / `X-Created-Label` headers and an empty body — *no*
+  `HX-Redirect`, since the panel keeps the parent page. The create
+  handler reads `X-Inline-Create: 1` off the request and branches to
+  this builder; page-level creates keep the old `htmx_redirect_with_created`
+  flow.
+
+- **`<crap-list-settings>` column save rewritten as declarative
+  htmx.** Removes the manual `fetch()` POST + CSRF-header construction
+  for `/admin/api/user-settings/{slug}` (~15 lines). The column-picker
+  form now carries `hx-post`, `hx-swap="none"`; the existing
+  `htmx:configRequest` listener in `templates/layout/base.hbs`
+  threads CSRF; an `htmx:afterRequest` listener on the form fires
+  `drawer.close()` + `window.location.reload()` on success. Drops
+  the `readCsrfCookie` import. The form lives inside
+  `<crap-drawer>`'s shadow DOM, so `htmx.process(form)` is invoked
+  after `appendChild` to register it (htmx auto-discovery doesn't
+  traverse shadow roots).
+
+- **Live-search input UX cleanup.** `templates/collections/items.hbs`:
+  the search input changed from `type="text"` to `type="search"`
+  (the existing `hx-trigger="…, search"` was unreachable on a
+  `text` input — the `search` event only fires from the browser's
+  native clear-X on `type="search"`). Adds `hx-indicator="#upload-loading"`
+  so the 300ms-debounced searches show a loading state.
+
+- **`getHttpVerb()` dual-shape comment.** `static/components/util/htmx.js`
+  documents *why* the helper checks both `evt.detail.requestConfig.verb`
+  (htmx 2) and `evt.detail.verb` (htmx 1.x legacy + some 2.x events
+  that retain the flat shape). The comment guards against a future
+  drive-by cleanup deleting one of the paths.
+
+- **Textarea-style fields accreted leading whitespace on every save.**
+  `templates/fields/{textarea,json,code,richtext}.hbs` rendered
+  `{{value}}` on its own indented line between `<textarea>` and
+  `</textarea>`. Per HTML5 only the *first* LF after `<textarea>` is
+  stripped — every other byte (including the source template's 4
+  spaces of indentation and the trailing `\n  ` before
+  `</textarea>`) becomes part of the field's submitted value. On
+  save, that whitespace round-tripped to the database and the next
+  render wrapped it again, so each save grew the value by another
+  indent level. Source now uses `>{{value}}</textarea>` flush; the
+  template formatter learned to hug `</tag>` against the body when
+  the body has no trailing newline (idempotent on the new form).
+  Regression test
+  `textarea_field_value_does_not_accrete_whitespace_on_round_trip`
+  exercises all four field types through two render passes.
+
+- **Globals edit form: missing loading indicator.** `globals/edit.hbs`
+  had no `hx-indicator="#upload-loading"` attribute on the form, and
+  `globals/edit_sidebar.hbs` was missing the indicator markup, so the
+  user got zero visual feedback during a global save. Both gaps fixed;
+  regression test
+  `html_globals::global_edit_form_has_loading_indicator` covers it.
+
+- **Dead templates removed.** `templates/collections/edit_actions.hbs`
+  and `templates/globals/edit_actions.hbs` were stale duplicates of
+  the live save-panel logic that lives inside `*/edit_sidebar.hbs`.
+  Confirmed via grep that no template, helper, or handler referenced
+  them. Deleted.
+
+- **False orphan column warnings for localized fields** — the migration
+  system incorrectly warned about locale-suffixed columns (e.g.,
+  `title__en`, `title__de`) as orphans even when the field was
+  `localized = true` and the locale was configured. The expected column
+  set now correctly includes locale-suffixed variants.
+
+- **`has_many` select lost values on save and rejected edits on validate** —
+  two reinforcing bugs in the multi-select pipeline:
+  - **Save path**: `parse_form` extracted HTML form bodies as
+    `Form<HashMap<String, String>>`, which silently drops duplicate keys.
+    `<select multiple>` submits `skills=a&skills=b` as two entries with
+    the same name, so every save was truncated to the last selection.
+    Now parsed as `Vec<(String, String)>` with duplicate keys collapsed
+    into a comma-joined string (the shape `transform_select_has_many`
+    already expected). Same fix applied to the multipart path.
+  - **Validate path**: the `<crap-validate-form>` JSON endpoint sends
+    array values as JSON arrays. `values_to_string_map` serialised those
+    via `Value::to_string()` into `["a","b"]`, which
+    `transform_select_has_many` then split on the embedded commas —
+    producing garbage like `"skills has an invalid option: \"motion\"]"`
+    because each JSON-quoted element was treated as a literal option.
+    Transform now detects a canonical JSON string array and forwards it
+    unchanged; falls back to comma-splitting only for traditional form
+    input.
+
+- **Upload error responses: scrub `Transient` too** — `/api/upload/*`
+  responses for `ServiceError::Transient` echoed the inner DB / pool
+  error text (e.g. "database is locked") to the client, inconsistent
+  with the existing scrubbing for `Internal`. Now logged at `error` and
+  replaced with a generic "Service temporarily unavailable" string; the
+  503 status and retry semantics are unchanged.
+
+- **Image conversion queue stored absolute filesystem paths** — after
+  the upload path-traversal hardening, `LocalStorage` rejects keys that
+  start with `/`. The image-variant enqueue path had been recording
+  `storage.local_path(...)` (an absolute path) instead of the storage
+  key, so every queued WebP/AVIF conversion failed with "Source image
+  not found" at dequeue time. Queue entries now record the storage key
+  directly, matching what `storage.get()` / `storage.put()` expect.
+  Also works unchanged for S3 / custom backends (where `local_path`
+  returns `None`).
+
+- **Image queue could orphan entries in `processing`** — the conversion
+  finalizer ran "update collection doc URL" and "mark entry completed"
+  as two sequential statements. If the first hit `SQLITE_BUSY` after
+  the file was already written (e.g. under write contention from
+  concurrent conversions), the row stayed in `processing` forever —
+  only a server restart's `recover_stale_images` could free it. Both
+  writes are now in a single transaction; on rollback the entry is
+  marked `failed` so startup / `crap-cms images retry` can pick it
+  back up. Image-queue errors are also logged with the full anyhow
+  cause chain so the underlying SQLite / pool reason surfaces instead
+  of just the outer "execute failed: UPDATE …" wrapper.
+
+- **Inline create panel: form submission for non-upload collections** —
+  `<crap-create-panel>`'s `_submitForm` was sending its `FormData` body
+  via `fetch(body: formData)`, which the browser encodes as
+  `multipart/form-data`. Server-side, `parse_form` for non-upload
+  collections uses axum's `Form` extractor which only accepts
+  `application/x-www-form-urlencoded` — every inline-create POST hit the
+  parse-error path and got redirected to the create page (200 OK with
+  HTML body, no `X-Created-Id` header), so the panel never closed. Fixed:
+  `_submitForm` now picks the encoding based on whether the form
+  contains a non-empty `File` value — multipart for uploads, URL-encoded
+  otherwise. This was masked in development because the e2e browser
+  suite was effectively non-functional (see Internal section).
+
+- **JPEG EXIF orientation now applied before re-encode** — uploaded
+  JPEGs from phones (which rely on the EXIF `Orientation` tag rather
+  than rotating the pixel data) used to display sideways or mirrored
+  after upload. The image crate strips EXIF on re-encode but doesn't
+  auto-rotate, so the orientation hint was lost and the original
+  pixel data shipped through unchanged. New `core/upload/exif.rs`
+  reads the tag with `kamadak-exif` (new dep), applies the rotation
+  / flip via `image::imageops` (8 cases), and passes the corrected
+  image into the conversion pipeline. 8 unit tests cover every
+  orientation value plus an end-to-end JPEG round-trip.
+
+- **NaN / Infinity rejected in number fields** — number-field
+  validation previously checked `min` / `max` bounds without first
+  ensuring the value was finite. `Number::as_f64()` returns the
+  inner value verbatim, so `serde_json::Value::Number(NaN)` /
+  `Infinity` slipped through every comparison (NaN comparisons are
+  always false). The bounds check now starts with `is_finite()` and
+  emits a `validation.number_not_finite` error otherwise. Same code
+  path that gates `min` / `max`; alpha.4 introduced a sibling check
+  on a different write path.
+
+- **gRPC `ServiceError → Status` mapping aligned to gRPC spec** —
+  - `ServiceError::UniqueViolation` was mapped to `INVALID_ARGUMENT`;
+    it's now `ALREADY_EXISTS` (code 6). Client SDKs branch on this
+    code for "use existing / pick another" flows; the old mapping
+    made conflicts indistinguishable from plain validation errors.
+  - `ServiceError::InvalidToken` was mapped to `INVALID_ARGUMENT`;
+    it's now `UNAUTHENTICATED` (code 16). Client SDKs trigger
+    token-refresh on this code; the old mapping looked like a
+    malformed request and silently suppressed refresh.
+  Per-variant regression tests in
+  `api/handlers/collection/error_mapping.rs::tests` lock both new
+  codes in.
+
+- **Job claim no longer pre-bumps the attempt counter** —
+  `parse_job_row` previously added `+1` to the parsed `attempts`
+  column on the assumption that the row would be bumped server-side
+  on success; the SQLite path then ALSO bumped it, doubling the
+  increment. Postgres' `FOR UPDATE SKIP LOCKED` claim already bumps
+  and parses in one round trip, but the SQLite path separates them.
+  `parse_job_row` now reports the row's stored count verbatim; the
+  SQLite path bumps locally before returning. Net effect: retry-budget
+  calculations finally match across backends. Doc-string on the
+  function spells out the contract; regression test
+  `claim_reports_attempt_count_consistent_with_db_increment` pins
+  it.
+
+- **`S3Storage::exists()` propagates non-404 errors** — the previous
+  fall-through returned `Ok(false)` for any error, so a 403
+  AccessDenied or 503 Slow Down silently looked like a missing file
+  and let upload-then-verify orphan its DB rows on transient
+  outages. New `is_not_found_error` classifier matches `404` /
+  `NoSuchKey` / `Not Found`; everything else surfaces as `Err`
+  with the underlying message preserved. Unit tests cover both the
+  recognised forms and the non-404 (auth / transient / network /
+  signature) failures.
+
+- **S3 region parse rejects garbage strings at startup** —
+  `aws_region::Region::FromStr` is infallible: unknown strings fall
+  through to `Region::Custom { region: x, endpoint: x }`, which
+  DNS-fails at first request with no startup hint. `create_s3_storage`
+  now matches on `Ok(Region::Custom { … })` (only valid when an
+  explicit `upload.s3.endpoint` is set) and bails with a clear
+  diagnostic pointing the operator at known region codes or
+  `upload.s3.endpoint` for custom S3-compatible providers. Sanity
+  test on `eu-west-1`, custom-endpoint bypass test on `auto`.
+
+- **Unpublish on collections with localized fields no longer fails
+  silently** — `unpublish_document` (and `persist_unpublish`,
+  `unpublish_global_document`) called `find_by_id_raw(... None ...)`,
+  which fell back to bare column names from `get_column_names` —
+  e.g. `title` instead of `title__en` / `title__de`. SQLite errored
+  `no such column: title`, the catch-all error arm in `do_update`
+  redirected silently, and the user saw "unpublish button does
+  nothing." `LocaleConfig` is now threaded through `ServiceContext`
+  (new optional `locale_config` attachment + `default_locale_ctx()`
+  helper); the unpublish path builds a `LocaleMode::Default` context
+  for the raw read so the SELECT references the actual locale-
+  suffixed columns. Bug existed across every unpublish surface
+  (admin collections + globals, gRPC, MCP, Lua CRUD); all six
+  fixed. The fix uses `LocaleMode::Default` (resolved at the default
+  locale, flat keys) rather than `LocaleMode::All` (grouped
+  `{en, de}` objects) so the snapshot saved by `persist_unpublish`,
+  the BeforeChange / AfterChange hook context, and the broadcast
+  event all match the shape produced by every other write path —
+  preserving snapshot fidelity for non-default locales is the same
+  as regular draft saves and is a separate change.
+  `versioned_collection_unpublish_with_localized_field` exercises
+  the full PUT path, asserts `_status = 'draft'` post-unpublish,
+  and pins the snapshot shape (`title` is a flat string, not a
+  grouped object).
+
+- **`locale_locked` recomputed for nested fields** — sub-field
+  enrichment (`build_sub_field_base`, `build_child_base`) previously
+  inherited `locale_locked` from the parent context. With a parent
+  group that's `localized = false` containing a child that's
+  `localized = true`, the child wrongly appeared locked when editing
+  in a non-default locale. Both builders now recompute
+  `locale_locked = non_default_locale && !sf.localized` from the
+  sub-field's own definition; the `dispatch_sub_field_type` Code
+  arm threads `non_default_locale` into the new builder signature.
+
+### Internal
+
+- **Typed admin context structs.** Replaced the previous
+  `serde_json::Value` builders that produced template context for the
+  admin UI with typed page and field context structs at
+  `src/admin/context/page/*` and `src/admin/context/field/*`. Each
+  page type (auth, collections, dashboard, errors, globals, meta) has
+  a typed envelope with `#[serde(skip_serializing_if = …)]` on
+  optional fields. The 691-line `context_builder.rs` orchestrator
+  shrunk to a thin dispatcher; per-page builders are explicit.
+  `BaseFieldData` flattens admin attributes (label, placeholder,
+  template, extra, …) so the Handlebars renderer reads them at the
+  same depth regardless of field type, and the `RenderFieldHelper`
+  reads the new `template` field directly. Schema/doc generation at
+  `src/admin/context/page/schema_doc.rs` enumerates context keys per
+  page so future renames surface as compile-time errors instead of
+  silent template misses. First wave of a broader effort to retire
+  `serde_json::Value` blobs from internal interfaces — admin UI is
+  done, service layer / hook payloads / event streams still pending.
+
+- **e2e browser test suite resurrected** — the entire `browser_*` test
+  modules (139 tests across 18 components) had been silently failing for
+  the whole alpha.7 → alpha.8 development cycle, masked by the fact that
+  CI doesn't run `--features browser-tests`. Three pre-existing test
+  framework bugs and several stale per-test selectors / timings:
+  - `tests/e2e/browser.rs::spawn_server` was using `axum::serve(listener,
+    router)` instead of `into_make_service_with_connect_info::<SocketAddr>()`
+    — the login handler extracts `ConnectInfo` for client-IP rate
+    limiting and panicked on every request with `Missing request
+    extension: ConnectInfo<SocketAddr>`. Broken since the `trust_proxy`
+    work in alpha.7's hardening pass.
+  - `tests/e2e/helpers.rs` initialised the test app's `token_provider`
+    with a different secret (`"test-secret"`) than `jwt_secret`
+    (`"test-jwt-secret"`). Login signed JWTs that auth middleware then
+    rejected — every authenticated request 401'd back to `/admin/login`.
+  - Test app's session cookies were emitted with `Secure` (because
+    `dev_mode = false` by default) but the test server is HTTP — browsers
+    silently dropped them. Fixed by setting `dev_mode = true` in the test
+    config.
+  - chromiumoxide bumped 0.7 → 0.9 for chromium 147 protocol compat.
+  - Stale selectors in `browser_tags.rs` (used `.form__tags-input` but
+    component renders `.tags__input` in Shadow DOM), `browser_relationship.rs`
+    (used `.relationship-search__input` for has-many fields where the
+    actual class is `.relationship-search__tags-input`; queried `ref_id`
+    column on a join table that uses `related_id`), and `browser_focal_point.rs`
+    (queried `<img>` from light DOM but it now lives in the component's
+    Shadow DOM, plus the 1×1 PNG fixture needed explicit dimensions for
+    `getBoundingClientRect`).
+  All 139 e2e tests now pass with `cargo test --test e2e --features
+  browser-tests -- --test-threads=1`.
+
+- **CI feature matrix** — `.github/workflows/ci.yml` now runs three
+  additional jobs in parallel with the default `check` job:
+  `sqlite+postgres` (build + clippy + full test suite), `postgres-only`
+  (`--no-default-features --features postgres`, build + clippy — surfaces
+  sqlite-isms leaking through the `DbConnection` abstraction), and
+  `all-features` (build + clippy with `--all-features` to catch
+  feature-interaction compile errors across `s3-storage`, `redis`, and
+  `browser-tests` deps). Closes a longstanding gap where the postgres
+  backend, in the tree since alpha.6, had no CI coverage.
+
+- **CI: dedicated e2e browser-test job** — new `e2e` job in
+  `.github/workflows/ci.yml` installs Chrome via
+  `browser-actions/setup-chrome@v1` and runs `cargo test --test e2e
+  --features browser-tests`. The 139 resurrected browser tests now
+  gate every PR alongside the unit/integration suite; the longstanding
+  "compile-only, runs in a separate job" comment in the CI feature
+  matrix is now true.
+
+- **Typed admin URL builders** — new `src/admin/handlers/shared/paths.rs`
+  with 10 helpers (`paths::collection`, `paths::collection_item`,
+  `paths::global_versions_page`, `paths::mfa_with_collection`, etc.).
+  Replaces 43 ad-hoc `format!("/admin/...")` strings across 18 handler
+  files. Helps with grep-ability and prevents subtle path drift between
+  call sites that reference the same route.
+
+- **`FindQuery` builder is now the only construction path** —
+  `FindQuery::new()` (a wrapper around `Default::default()` that bypassed
+  the builder) has been removed. Inherently-optional fields on
+  `FindQueryBuilder` (`order_by`, `limit`, `offset`, `select`,
+  `after_cursor`, `before_cursor`, `search`) now take `Option<T>` so
+  every call site flows through one builder chain — no more
+  `let mut fq = …; if let Some(x) = opt { fq = fq.method(x); }` and
+  no more `let mut fq = …; fq.field = …;` patterns. Required fields
+  (`filters`, `include_deleted`) stay direct-value. Sweep covered
+  19 production sites (gRPC `Find`, MCP `find` tool, Lua hook
+  converter, admin items list, populate join + batch dispatch, bulk
+  delete/update hooks, admin search, enrich types, bench commands,
+  trash CLI, service layer) plus all internal and integration test
+  sites. `FindQuery::default()` remains for the truly empty-state
+  case (e.g. `&FindQuery::default()` passed to a function that just
+  needs the default query); the builder is the path whenever any
+  field is set.
+
+- **`ServiceContext` builder: `lua_infra` and `locale_config` take
+  `Option<&T>`** — both methods previously took `&T` with the
+  caller-side `if let Some(ref x) = parent_x { builder = builder.x(x); }`
+  wrapper, repeated 11× across Lua CRUD paths
+  (`collection/{create,update,delete,undelete,unpublish}`,
+  `bulk/{create_many,update_many,delete_many}`, `versions/restore`,
+  `globals/update`). Now `Option<&T>` matches the existing optional-
+  attachment shape (`cache`, `event_transport`,
+  `invalidation_transport`, `email_ctx`); every caller drops the `if
+  let` and folds the call into the builder chain. The `lua_infra`
+  body internally short-circuits on `None`. `inner_ctx` in
+  `unpublish_document_pool` likewise threads `ctx.locale_config`
+  straight through.
+
+- **`crap-cms make component` scaffold uses constructable stylesheets**
+  — the generated component skeleton now uses the `css` tagged-template
+  helper + `h()` builder pattern that matches every built-in
+  component since the CSP hardening pass. Keeps the scaffolded
+  output current with the override-template-author guidance.
+
 ## [0.1.0-alpha.7] — 2026-04-18
 
 ### Added

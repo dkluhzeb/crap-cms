@@ -1,13 +1,17 @@
 //! Parsing functions for field admin configuration.
 
-use mlua::{Result as LuaResult, Table};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
+use serde_json::Value as JsonValue;
 
-use crate::core::FieldAdmin;
+use crate::{
+    core::{FieldAdmin, validate_template_name},
+    hooks::api::lua_to_json,
+};
 
 use super::helpers::*;
 
 /// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
-pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
+pub(super) fn parse_field_admin(lua: &Lua, admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     let (labels_singular, labels_plural) = if let Ok(labels_tbl) = get_table(admin_tbl, "labels") {
         (
             get_localized_string(&labels_tbl, "singular"),
@@ -75,6 +79,16 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
         builder = builder.language(v);
     }
 
+    let languages: Vec<String> = if let Ok(tbl) = get_table(admin_tbl, "languages") {
+        tbl.sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    builder = builder.languages(languages);
+
     if let Some(v) = get_string(admin_tbl, "picker") {
         builder = builder.picker(v);
     }
@@ -103,6 +117,33 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
 
     builder = builder.nodes(nodes);
 
+    if let Some(v) = get_string(admin_tbl, "template") {
+        validate_template_name(&v)
+            .map_err(|e| RuntimeError(format!("crap.fields.*: invalid `admin.template`: {e}")))?;
+        builder = builder.template(v);
+    }
+
+    // Freeform per-field config — JSON-serializable values the field's
+    // template can read at `{{admin.extra.<key>}}`. Parsed once at
+    // field-definition time; static per field instance.
+    if let Ok(extra_tbl) = get_table(admin_tbl, "extra") {
+        let json = lua_to_json(lua, &Value::Table(extra_tbl)).map_err(|e| {
+            RuntimeError(format!(
+                "crap.fields.*: invalid `admin.extra` (must be JSON-serializable): {e}"
+            ))
+        })?;
+        match json {
+            JsonValue::Object(map) => builder = builder.extra(map),
+            _ => {
+                return Err(RuntimeError(
+                    "crap.fields.*: `admin.extra` must be a table (Lua dictionary), \
+                     not a sequence or scalar"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
     Ok(builder.build())
 }
 
@@ -129,7 +170,7 @@ mod tests {
         admin_tbl.set("format", "lexical").unwrap();
         admin_tbl.set("language", "en").unwrap();
         admin_tbl.set("rows", 5u32).unwrap();
-        let admin = parse_field_admin(&admin_tbl).unwrap();
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
         assert!(admin.labels_singular.is_some());
         assert!(admin.labels_plural.is_some());
         assert_eq!(admin.features, vec!["bold", "italic"]);
@@ -141,11 +182,115 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_field_admin_languages_array() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let langs = lua.create_table().unwrap();
+        langs.set(1, "javascript").unwrap();
+        langs.set(2, "python").unwrap();
+        langs.set(3, "html").unwrap();
+        admin_tbl.set("languages", langs).unwrap();
+
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        assert_eq!(admin.languages, vec!["javascript", "python", "html"]);
+    }
+
+    #[test]
+    fn test_parse_field_admin_languages_default_empty() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        assert!(admin.languages.is_empty());
+    }
+
+    #[test]
     fn test_parse_field_admin_resizable_false() {
         let lua = Lua::new();
         let admin_tbl = lua.create_table().unwrap();
         admin_tbl.set("resizable", false).unwrap();
-        let admin = parse_field_admin(&admin_tbl).unwrap();
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
         assert!(!admin.resizable);
+    }
+
+    #[test]
+    fn test_parse_field_admin_template_safe_path_accepted() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("template", "fields/rating").unwrap();
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        assert_eq!(admin.template.as_deref(), Some("fields/rating"));
+    }
+
+    #[test]
+    fn test_parse_field_admin_template_unsafe_path_rejected() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("template", "../../etc/passwd").unwrap();
+        let err = parse_field_admin(&lua, &admin_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid `admin.template`"),
+            "expected validation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_field_admin_extra_accepts_scalar_and_nested() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let extra = lua.create_table().unwrap();
+        extra.set("icon", "star").unwrap();
+        extra.set("max_stars", 5i64).unwrap();
+        extra.set("rounded", true).unwrap();
+        let nested = lua.create_table().unwrap();
+        nested.set("primary", "#1677ff").unwrap();
+        nested.set("secondary", "#52c41a").unwrap();
+        extra.set("colors", nested).unwrap();
+        admin_tbl.set("extra", extra).unwrap();
+
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        assert_eq!(
+            admin.extra.get("icon").and_then(|v| v.as_str()),
+            Some("star")
+        );
+        assert_eq!(
+            admin.extra.get("max_stars").and_then(|v| v.as_i64()),
+            Some(5)
+        );
+        assert_eq!(
+            admin.extra.get("rounded").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        let colors = admin.extra.get("colors").and_then(|v| v.as_object());
+        assert!(colors.is_some(), "nested object preserved");
+        assert_eq!(
+            colors.unwrap().get("primary").and_then(|v| v.as_str()),
+            Some("#1677ff")
+        );
+    }
+
+    #[test]
+    fn test_parse_field_admin_extra_rejects_array_value() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        // A sequence (1-indexed numeric keys) should be rejected — extra
+        // is meant to be a key/value config map.
+        let arr = lua.create_table().unwrap();
+        arr.set(1, "first").unwrap();
+        arr.set(2, "second").unwrap();
+        admin_tbl.set("extra", arr).unwrap();
+
+        let err = parse_field_admin(&lua, &admin_tbl).unwrap_err();
+        assert!(
+            err.to_string().contains("must be a table"),
+            "expected sequence-rejection error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_field_admin_extra_default_empty() {
+        let lua = Lua::new();
+        let admin_tbl = lua.create_table().unwrap();
+        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        assert!(admin.extra.is_empty());
     }
 }

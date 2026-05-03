@@ -12,16 +12,19 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
+        context::{
+            BasePageContext, GlobalContext, PageMeta, PageType, page::globals::GlobalFormErrorPage,
+        },
         handlers::{
             forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
-                enrich_field_contexts, forbidden, get_user_doc, html_with_toast, htmx_redirect,
-                redirect_response, split_sidebar_fields, translate_validation_errors,
+                enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
+                paths, redirect_response, split_sidebar_fields, translate_validation_errors,
             },
         },
     },
+    config::LocaleConfig,
     core::{
         Document, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
         event::SharedEventTransport, validate::ValidationError,
@@ -46,6 +49,7 @@ struct UpdateParams {
     join_data: HashMap<String, Value>,
     locale_ctx: Option<LocaleContext>,
     locale: Option<String>,
+    locale_config: LocaleConfig,
     draft: bool,
     user_doc: Option<Document>,
     ui_locale: Option<String>,
@@ -62,6 +66,7 @@ fn execute_update(
         .user(params.user_doc.as_ref())
         .event_transport(params.event_transport)
         .cache(params.cache)
+        .locale_config(Some(&params.locale_config))
         .build();
 
     if params.action == "unpublish" && params.def.has_versions() {
@@ -125,16 +130,21 @@ fn render_validation_error(
 
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 
-    let data = ContextBuilder::new(state, None)
-        .locale_from_auth(auth_user)
-        .filter_nav_by_access(state, auth_user)
-        .page(PageType::GlobalEdit, def.display_name())
-        .global_def(def)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .build();
+    let base = BasePageContext::for_handler(
+        state,
+        None,
+        auth_user,
+        PageMeta::new(PageType::GlobalEdit, def.display_name()),
+    );
 
-    html_with_toast(state, "globals/edit", &data, toast_msg)
+    let ctx = GlobalFormErrorPage {
+        base,
+        global: GlobalContext::from_def(def),
+        fields: main_fields,
+        sidebar_fields,
+    };
+
+    page_with_toast(state, "globals/edit", &ctx, toast_msg)
 }
 
 /// POST /admin/globals/{slug} — update a global
@@ -176,6 +186,7 @@ pub async fn update_action(
         join_data: join_data.clone(),
         locale_ctx,
         locale,
+        locale_config: state.config.locale.clone(),
         draft: action == "save_draft",
         user_doc: get_user_doc(&auth_user).cloned(),
         ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
@@ -185,7 +196,7 @@ pub async fn update_action(
     let result = task::spawn_blocking(move || execute_update(params)).await;
 
     match result {
-        Ok(Ok(_)) => htmx_redirect(&format!("/admin/globals/{}", slug)),
+        Ok(Ok(_)) => htmx_redirect(&paths::global(&slug)),
         Ok(Err(e)) => match e {
             ServiceError::AccessDenied(_) => {
                 forbidden(&state, "You don't have permission to update this global")
@@ -195,12 +206,12 @@ pub async fn update_action(
             }
             other => {
                 error!("Global update error: {}", other);
-                redirect_response(&format!("/admin/globals/{}", slug))
+                redirect_response(&paths::global(&slug))
             }
         },
         Err(e) => {
             error!("Global update task error: {}", e);
-            redirect_response(&format!("/admin/globals/{}", slug))
+            redirect_response(&paths::global(&slug))
         }
     }
 }

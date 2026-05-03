@@ -58,7 +58,7 @@ fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bo
     !is_empty
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::core::field::RelationshipConfig;

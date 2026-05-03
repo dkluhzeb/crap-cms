@@ -121,10 +121,140 @@ crap-cms work -d --queues heavy --concurrency 2  # heavy processing
 ### `status` — Show project status
 
 ```bash
-crap-cms status
+crap-cms status [--check]
 ```
 
-Prints collections (with row counts), globals, DB size, and migration status.
+| Flag | Description |
+|------|-------------|
+| `--check` | Run best-practice health checks on configuration and project state |
+
+Prints a comprehensive project overview:
+
+- **Server config** — ports, compression, rate limiting
+- **Database** — path, size (SQLite), or backend name (PostgreSQL)
+- **Uploads** — total size and file count
+- **Locales** — configured locales and fallback setting
+- **Collections** — row counts, trash counts (soft-deleted documents), and tags (auth, upload, versions, soft_delete)
+- **Globals** — registered global documents
+- **Versioning** — which collections have drafts enabled and max version limits
+- **Access rules** — read/create/update/delete functions per collection and global, with default deny/allow indicator
+- **Hooks** — which lifecycle hooks are wired and to which functions
+- **Live events** — event mode per target (metadata, full, disabled, or filter function)
+- **Migrations** — total, applied, pending
+- **Jobs** — defined, running, failed in last 24h
+
+#### `status --check`
+
+Runs a best-practice audit with 24 checks across four categories:
+
+**Security:**
+- Auth secret too short or placeholder value
+- Brute-force protection disabled
+- `default_deny = false` (collections publicly accessible)
+- Collections without access rules
+- gRPC rate limiting disabled with auth collections
+- CORS wildcard origin with credentials
+
+**Performance:**
+- `max_depth > 3` (N+1 query growth)
+- Cache disabled with relationship fields
+- Pool size too small or connection timeout too aggressive
+- Response compression disabled
+- `pagination.max_limit > 500`
+- Too many hooks or before_change hooks per collection
+- Too many collections with `live_mode = "full"`
+
+**Configuration:**
+- `dev_mode` enabled
+- `default_depth` exceeds `max_depth`
+- Email provider set to `"log"` with `verify_email` enabled
+
+**Operations:**
+- Pending migrations
+- Auth collection without soft_delete
+- Upload collection without versioning
+- Soft delete without retention policy
+- Empty auth collection (0 users)
+
+```bash
+crap-cms status                # project overview
+crap-cms status --check        # overview + health audit
+```
+
+### `bench` — Benchmark hooks, queries, and write cycles
+
+Developer performance profiling tool. Measures hook execution time, query latency, and end-to-end write cycle duration.
+
+#### `bench hooks`
+
+```bash
+crap-cms bench hooks [-c <COLLECTION>] [-n <ITERATIONS>] [--hooks <LIST>] [--exclude <LIST>] [--all] [-d <JSON>]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--collection` | `-c` | — | Filter to a specific collection |
+| `--iterations` | `-n` | `10` | Number of iterations per hook |
+| `--hooks` | — | — | Run only these hooks (comma-separated function refs) |
+| `--exclude` | — | — | Run all hooks except these (comma-separated) |
+| `--all` | — | — | Run all hooks (skip interactive selection) |
+| `--data` | `-d` | — | Input data as JSON object |
+
+**Safety model:** Hooks may have external side effects (webhooks, API calls). By default, an interactive `MultiSelect` wizard lets you choose which hooks to benchmark. Use `--hooks` or `--all` for non-interactive use.
+
+**Data resolution:** `--data` JSON > existing document from DB > synthetic fallback. Hook errors are caught and reported without stopping the benchmark.
+
+```bash
+crap-cms bench hooks                                    # interactive wizard
+crap-cms bench hooks --all                              # run all (with warning)
+crap-cms bench hooks --hooks hooks.auto_slug -n 20      # specific hook, 20 iterations
+crap-cms bench hooks -c posts --exclude hooks.send_webhook  # all posts hooks except one
+```
+
+#### `bench queries`
+
+```bash
+crap-cms bench queries [-c <COLLECTION>] [--explain] [-w <JSON>]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--collection` | `-c` | — | Filter to a specific collection |
+| `--explain` | — | — | Show `EXPLAIN QUERY PLAN` output (SQLite only) |
+| `--where` | `-w` | — | JSON filter clause (same format as gRPC `where` parameter) |
+
+Read-only — no side effects, no confirmation needed. The `--where` filter uses the same JSON syntax as the gRPC API (e.g., `{"slug": {"equals": "my-post"}}`). Combined with `--explain`, this shows whether queries hit indexes.
+
+```bash
+crap-cms bench queries                                           # all collections
+crap-cms bench queries -c posts --explain                        # single collection with query plan
+crap-cms bench queries -c posts --where '{"status": "published"}' --explain  # filtered + plan
+```
+
+#### `bench create`
+
+```bash
+crap-cms bench create <COLLECTION> [-n <ITERATIONS>] [-d <JSON>] [--no-hooks] [-y]
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--iterations` | `-n` | `5` | Number of iterations |
+| `--data` | `-d` | — | Input data as JSON object |
+| `--no-hooks` | — | — | Skip hooks (measure pure validation + persist) |
+| `--yes` | `-y` | — | Skip confirmation prompt |
+
+Runs the full service-layer create cycle (access check, validation, before-hooks, persist, after-hooks) inside a transaction that is rolled back after each iteration. **No data is persisted.**
+
+When hooks are enabled and `-y` is not set, a confirmation prompt is shown because hooks may call external APIs. Unique fields are automatically randomized per iteration to avoid constraint violations.
+
+```bash
+crap-cms bench create posts                  # full cycle with confirmation
+crap-cms bench create posts -y               # skip confirmation
+crap-cms bench create posts --no-hooks       # pure validation + persist
+crap-cms bench create posts -y -n 20         # 20 iterations, no prompt
+crap-cms bench create posts -d '{"title": "test", "slug": "bench-test"}'  # custom data
+```
 
 ### `user` — User management
 
@@ -238,7 +368,7 @@ The wizard prompts for:
 | Create upload collection? | Yes | Creates a `media` collection for file/image uploads |
 | Create another collection? | No | Repeat to add more collections interactively |
 
-A 64-character auth secret is auto-generated and written to `crap.toml`.
+A 64-character auth secret is auto-generated and written to `crap.toml`. A `.mcp.json` file is also created for [Claude Code](../mcp/overview.md) integration.
 
 ```bash
 crap-cms init ./my-project
@@ -587,9 +717,11 @@ crap-cms restore ./backups/backup-2026-03-07T10-00-00 -y
 crap-cms restore /tmp/backups/backup-2026-03-07T10-00-00 -i -y
 ```
 
-### `templates` — List and extract default admin templates
+### `templates` — Manage admin template / static customizations
 
-Extract the compiled-in admin templates and static files into your config directory for customization.
+Extract the compiled-in admin templates and static files into your config directory for customization, then track drift between your customizations and upstream.
+
+Each extracted file gets a `crap-cms:source <version>` header (in the file's native comment syntax) so `templates status` can report which version your customizations were extracted from.
 
 #### `templates list`
 
@@ -629,6 +761,81 @@ crap-cms templates extract --all --type templates
 
 # Extract everything, overwriting existing
 crap-cms templates extract --all --force
+```
+
+#### `templates status`
+
+```bash
+crap-cms templates status
+```
+
+Reports the relationship between every customized file in `<config_dir>/{templates,static}/` and the upstream embedded default. Each file is classified as one of:
+
+- `✓ current` — extracted from the running version
+- `⚠ behind: extracted from <ver>` — older version, may be missing upstream fixes
+- `↑ ahead: extracted from <ver>` — newer than running (downgrade scenario)
+- `= pristine (matches upstream)` — extracted but never customized
+- `? no source header` — hand-written, or header was stripped
+- `? unparseable source header` — header found but version isn't valid semver
+- `✗ orphaned` — file no longer exists in the embedded upstream
+
+#### `templates diff`
+
+```bash
+crap-cms templates diff <PATH>
+```
+
+Shows a unified diff between a customized file and its embedded default. The path is relative to the config dir (e.g. `templates/layout/base.hbs`, `static/styles.css`).
+
+```bash
+crap-cms templates diff templates/layout/base.hbs
+```
+
+### `fmt` — Format Handlebars templates
+
+Format `.hbs` files in place using the project's built-in Handlebars formatter. Same role as `cargo fmt` for Rust or `biome check --write` for JS/CSS — keeps the templates' style consistent.
+
+```bash
+crap-cms fmt [PATHS...] [--check] [--stdio]
+```
+
+| Flag | Description |
+|------|-------------|
+| (none) | Format every `.hbs` under the given paths in place. Default scope is `templates/`. |
+| `--check` | Don't write — exit non-zero if any file would change. CI gate. |
+| `--stdio` | Read from stdin, write the formatted result to stdout. Used by editor formatter integrations. Mutually exclusive with `--check`. |
+
+```bash
+crap-cms fmt                              # format all templates/
+crap-cms fmt templates/auth/              # one subtree
+crap-cms fmt templates/fields/text.hbs    # one file
+crap-cms fmt --check                      # CI: exit 1 if any file would change
+cat my.hbs | crap-cms fmt --stdio         # editor pipe
+```
+
+The formatter is idempotent (`fmt(fmt(x)) == fmt(x)`) and applies the rule set documented in the [Admin UI: Template Formatter](../admin-ui/guides/template-formatter.md) page (block-helper indentation, attribute stacking, comment preservation, etc.).
+
+**Editor integration (Neovim + conform.nvim):**
+
+```lua
+-- ~/.config/nvim/lua/plugins/conform.lua
+opts = {
+  formatters_by_ft = { handlebars = { 'crap_cms' } },
+  formatters = {
+    crap_cms = {
+      command = 'crap-cms',
+      args = { 'fmt', '--stdio' },
+      stdin = true,
+    },
+  },
+},
+```
+
+**Pre-commit hook entry:**
+
+```bash
+echo "Running crap-cms fmt..."
+cargo run --quiet --bin crap-cms -- fmt --check
 ```
 
 ### `jobs` — Manage background jobs
@@ -859,6 +1066,99 @@ crap-cms logs clear          # remove old rotated files
 ```
 
 Log files are stored in `data/logs/` (or the path configured in `[logging] path`). Old files are automatically pruned on startup based on `max_files`. See [Configuration Reference](../configuration/crap-toml.md) for all logging options.
+
+### `update` — Manage installed versions
+
+```bash
+crap-cms update [-y] [--force]
+crap-cms update <SUBCOMMAND>
+```
+
+Without a subcommand, checks for a newer release and installs + activates it (with confirmation prompt).
+
+| Flag | Description |
+|------|-------------|
+| `-y`, `--yes` | Skip confirmation prompts |
+| `--force` | Allow self-update even when the binary looks distro-managed |
+
+#### `update check`
+
+```bash
+crap-cms update check
+```
+
+Compare current version to the latest GitHub release. Exit code 0 if up-to-date, 1 if newer is available.
+
+#### `update list`
+
+```bash
+crap-cms update list
+```
+
+List available release tags, marking installed versions and the active one.
+
+#### `update install`
+
+```bash
+crap-cms update install <VERSION> [--reinstall]
+```
+
+Download, verify (SHA256), and stage a version in the local store (`~/.local/share/crap-cms/versions/`). Does not activate — use `update use` to switch.
+
+#### `update use`
+
+```bash
+crap-cms update use <VERSION>
+```
+
+Switch the `current` symlink to the given installed version. Also auto-installs shell completions for the user's login shell (bash, zsh, or fish) — see `update completions` for where files are written and how the zsh `$fpath` is probed.
+
+#### `update uninstall`
+
+```bash
+crap-cms update uninstall <VERSION>
+```
+
+Remove an installed version from the store. Refuses to uninstall the active version. If this removes the last installed version, auto-installed shell completion files are cleaned up too.
+
+#### `update where`
+
+```bash
+crap-cms update where
+```
+
+Print the resolved path of the currently active binary.
+
+#### `update completions`
+
+```bash
+crap-cms update completions <SHELL>
+crap-cms update completions <SHELL> --uninstall
+crap-cms update completions --uninstall
+```
+
+Generate shell completions (to stdout) or remove installed files. Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+For bash, zsh, and fish, completions are also auto-installed after `update use` and bare `update`:
+
+- **Zsh**: the install directory is chosen by probing `$fpath` (`zsh -i -c 'print -l $fpath'`). If `~/.zfunc` is already on `$fpath`, the file goes there; otherwise the first user-owned directory on `$fpath` is used. If neither is available, the file is written to `~/.zfunc` and an activation hint (`fpath=(~/.zfunc $fpath)` before `compinit`) is shown on every install until it's wired up.
+- **Bash**: installed under `$XDG_DATA_HOME/bash-completion/completions/crap-cms`. A hint is emitted if the `bash-completion` entry point isn't present on the system.
+- **Fish**: installed under `$XDG_CONFIG_HOME/fish/completions/crap-cms.fish` — auto-loaded by fish.
+
+`--uninstall` without a shell removes every auto-installed completion file. With a shell, it removes just that shell's file. `update uninstall` of the last installed version also runs this cleanup automatically.
+
+```bash
+crap-cms update                          # install latest + activate
+crap-cms update -y                       # non-interactive
+crap-cms update check                    # check for updates
+crap-cms update list                     # list available versions
+crap-cms update install v0.1.0-alpha.7   # download + verify
+crap-cms update use v0.1.0-alpha.7       # switch to version
+crap-cms update uninstall v0.1.0-alpha.6 # remove old version
+crap-cms update where                    # print active binary path
+crap-cms update completions bash         # print bash completions
+eval "$(crap-cms update completions bash)"  # source directly
+```
 
 ## Environment Variables
 

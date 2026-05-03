@@ -1,32 +1,37 @@
 {{#if missing_relations}}
-<div class="card card--warning">
-  <div class="card__body">
-    <p><strong>{{t "restore_has_missing_relations"}}</strong></p>
+  {{#> partials/warning-card title_key="restore_has_missing_relations"}}
     <ul>
       {{#each missing_relations}}
-      <li>
-        <strong>{{this.field_label}}</strong> — {{this.missing_count}} {{t "missing_of_total" total=this.total_ids}}
-      </li>
+        <li>
+          <strong>{{this.field_label}}</strong>
+          —
+          {{this.missing_count}}
+          {{t "missing_of_total" total=this.total_ids}}
+        </li>
       {{/each}}
     </ul>
     <p class="text--muted">{{t "restore_missing_warning"}}</p>
-  </div>
-</div>
+  {{/partials/warning-card}}
 {{/if}}
 
 <div class="card">
   <div class="card__body">
     <p>{{t "confirm_restore_version" version=version_number}}</p>
 
-    <div class="form__actions">
-      <form method="post" action="{{restore_url}}"
-        hx-post="{{restore_url}}" hx-target="body">
-        <button type="submit" class="button button--primary">{{t "restore"}}</button>
+    {{#> partials/form-actions cancel_href=back_url}}
+      <form
+        method="post"
+        action="{{restore_url}}"
+        hx-post="{{restore_url}}"
+        hx-target="body"
+      >
+        <button
+          type="submit"
+          class="button button--primary"
+        >
+          {{t "restore"}}
+        </button>
       </form>
-      <a class="button button--ghost" href="{{back_url}}"
-        hx-get="{{back_url}}" hx-target="body" hx-push-url="true">
-        {{t "cancel"}}
-      </a>
-    </div>
+    {{/partials/form-actions}}
   </div>
 </div>

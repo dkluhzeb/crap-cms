@@ -5,7 +5,7 @@ use mlua::{Error::RuntimeError, Lua, Table};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, SharedRegistry},
-    db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::lifecycle::{
         converters::{lua_table_to_find_query, lua_table_to_hashmap, lua_table_to_json_map},
         crud::{get_tx_conn, helpers::*},
@@ -38,10 +38,7 @@ fn build_update_filters(
         &mut find_query.filters,
     )?;
 
-    let mut find_all = FindQuery::new();
-    find_all.filters = find_query.filters;
-
-    Ok(find_all.filters)
+    Ok(find_query.filters)
 }
 
 /// Update multiple documents matching a query with the given data.
@@ -102,17 +99,13 @@ fn update_many_documents(
         .run_validation(run_hooks)
         .build();
 
-    let mut ctx_builder = ServiceContext::collection(collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .override_access(override_access)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let update_opts = UpdateManyOptions {
         locale_ctx: locale_ctx.as_ref(),

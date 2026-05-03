@@ -13,13 +13,16 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, GlobalContext, PageMeta, PageType, field::FieldContext,
+            page::globals::GlobalEditPage,
+        },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
-            server_error, split_sidebar_fields,
+            flatten_document_values, forbidden, is_non_default_locale, not_found, paths,
+            render_page, server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -67,7 +70,7 @@ fn prepare_edit_fields(
     doc_fields: &HashMap<String, Value>,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let values = flatten_document_values(doc_fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
@@ -91,8 +94,8 @@ fn prepare_edit_fields(
 
     // Remove read-denied fields entirely from the form
     if !denied_read_fields.is_empty() {
-        fields.retain(|f| {
-            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        fields.retain(|fc| {
+            let name = fc.base().name.as_str();
             !denied_read_fields.iter().any(|d| d == name)
         });
     }
@@ -186,35 +189,35 @@ pub async fn edit_form(
     };
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::GlobalEdit, def.display_name())
-        .breadcrumbs(vec![
-            Breadcrumb::link("dashboard", "/admin"),
-            Breadcrumb::current(def.display_name()),
-        ])
-        .global_def(&def)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .set("has_drafts", json!(has_drafts))
-        .set("has_versions", json!(has_versions))
-        .set("versions", json!(versions))
-        .set("has_more_versions", json!(total_versions > 3))
-        .set(
-            "restore_url_prefix",
-            json!(format!("/admin/globals/{}", slug)),
-        )
-        .set(
-            "versions_url",
-            json!(format!("/admin/globals/{}/versions", slug)),
-        )
-        .set("doc_status", json!(doc_status))
-        .merge(locale_data)
-        .build();
 
-    let data = state.hook_runner.run_before_render(data);
+    let breadcrumbs = vec![
+        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::current(def.display_name()),
+    ];
 
-    render_or_error(&state, "globals/edit", &data)
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::GlobalEdit, def.display_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
+
+    let ctx = GlobalEditPage {
+        base,
+        global: GlobalContext::from_def(&def),
+        fields: main_fields,
+        sidebar_fields,
+        has_drafts,
+        has_versions,
+        versions,
+        has_more_versions: total_versions > 3,
+        restore_url_prefix: paths::global(&slug),
+        versions_url: paths::global_versions(&slug),
+        doc_status,
+        locale_data,
+    };
+
+    render_page(&state, "globals/edit", &ctx)
 }

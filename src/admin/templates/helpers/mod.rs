@@ -1,13 +1,16 @@
+mod admin_i18n;
 mod and;
 mod compare;
 mod concat;
 mod contains;
+mod data;
 mod default_val;
 mod eq;
 mod json;
 mod not;
 mod or;
 mod render_field;
+mod slot;
 mod translation;
 
 use std::{cmp::Ordering, sync::Arc};
@@ -15,25 +18,42 @@ use std::{cmp::Ordering, sync::Arc};
 use handlebars::Handlebars;
 use serde_json::Value;
 
-use crate::admin::Translations;
+use crate::{admin::Translations, hooks::HookRunner};
 
+use self::admin_i18n::AdminI18nHelper;
 use self::and::AndHelper;
 use self::compare::CompareHelper;
 use self::concat::ConcatHelper;
 use self::contains::ContainsHelper;
+use self::data::DataHelper;
 use self::default_val::DefaultHelper;
 use self::eq::EqHelper;
 use self::json::JsonHelper;
 use self::not::NotHelper;
 use self::or::OrHelper;
 use self::render_field::RenderFieldHelper;
+use self::slot::SlotHelper;
 use self::translation::TranslationHelper;
 
 /// Register all Handlebars helpers.
-pub(super) fn register_helpers(hbs: &mut Handlebars, translations: Arc<Translations>) {
+///
+/// The optional `hook_runner` enables the Lua-backed `{{data "name"}}`
+/// helper. Pass `None` to skip registering it (e.g. for unit tests that
+/// don't spin up a Lua VM pool).
+pub(super) fn register_helpers(
+    hbs: &mut Handlebars,
+    translations: Arc<Translations>,
+    hook_runner: Option<Arc<HookRunner>>,
+) {
     hbs.register_helper("render_field", Box::new(RenderFieldHelper));
     hbs.register_helper("eq", Box::new(EqHelper));
-    hbs.register_helper("t", Box::new(TranslationHelper { translations }));
+    hbs.register_helper(
+        "t",
+        Box::new(TranslationHelper {
+            translations: translations.clone(),
+        }),
+    );
+    hbs.register_helper("admin_i18n", Box::new(AdminI18nHelper { translations }));
     hbs.register_helper("not", Box::new(NotHelper));
     hbs.register_helper("and", Box::new(AndHelper));
     hbs.register_helper("or", Box::new(OrHelper));
@@ -51,6 +71,11 @@ pub(super) fn register_helpers(hbs: &mut Handlebars, translations: Arc<Translati
     hbs.register_helper("json", Box::new(JsonHelper));
     hbs.register_helper("default", Box::new(DefaultHelper));
     hbs.register_helper("concat", Box::new(ConcatHelper));
+    hbs.register_helper("slot", Box::new(SlotHelper));
+
+    if let Some(runner) = hook_runner {
+        hbs.register_helper("data", Box::new(DataHelper { runner }));
+    }
 }
 
 /// Check if a JSON value is "truthy" (not null, not false, not empty string, not 0).
@@ -76,14 +101,19 @@ pub(super) fn as_f64(val: &Value) -> Option<f64> {
 
 #[cfg(test)]
 mod test_helpers {
-    use std::sync::Arc;
+    use std::{path::Path, sync::Arc};
 
     use crate::admin::{templates::create_handlebars, translations::Translations};
 
     pub fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path()));
-        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        test_hbs_with_translations(tmp.path())
+    }
+
+    pub fn test_hbs_with_translations(config_dir: &Path) -> handlebars::Handlebars<'static> {
+        let translations = Arc::new(Translations::load(config_dir));
+        let hbs =
+            create_handlebars(config_dir, false, translations, None).expect("create_handlebars");
         (*hbs).clone()
     }
 }
@@ -149,7 +179,7 @@ mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(crate::admin::translations::Translations::load(tmp.path()));
-        let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
+        let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations, None)
             .expect("create_handlebars");
         (*hbs).clone()
     }

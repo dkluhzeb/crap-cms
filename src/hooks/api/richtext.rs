@@ -1,22 +1,54 @@
 //! Registers `crap.richtext` — custom ProseMirror node registration and rendering.
 
-use mlua::{Error::RuntimeError, Function, Lua, Table, Value};
+use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use super::parse::fields::parse_fields;
-use crate::core::{
-    FieldDefinition, SharedRegistry,
-    richtext::{RichtextNodeDef, render_html_custom_nodes, render_prosemirror_to_html},
+use crate::{
+    core::{
+        FieldDefinition, SharedRegistry,
+        richtext::{RichtextNodeDef, render_html_custom_nodes, render_prosemirror_to_html},
+    },
+    hooks::lifecycle::InitPhase,
 };
 
-/// Validates that a node name is non-empty and contains only alphanumeric characters
-/// and underscores.
-fn validate_node_name(name: &str) -> mlua::Result<()> {
+/// Built-in ProseMirror node types. Registering a custom node with one
+/// of these names would silently fail at render time — the built-in
+/// match arm in `core::richtext::renderer::render_node` runs first and
+/// the custom renderer is never called. Reject the registration so the
+/// plugin author sees the conflict immediately.
+const RESERVED_NODE_NAMES: &[&str] = &[
+    "doc",
+    "paragraph",
+    "text",
+    "heading",
+    "blockquote",
+    "code_block",
+    "bullet_list",
+    "ordered_list",
+    "list_item",
+    "horizontal_rule",
+    "hard_break",
+];
+
+/// Validates that a node name is non-empty, contains only alphanumeric
+/// characters and underscores, and does not collide with a built-in
+/// ProseMirror node type (the built-in match arm in the renderer would
+/// shadow the custom render function).
+fn validate_node_name(name: &str) -> LuaResult<()> {
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(RuntimeError(format!(
             "Invalid node name '{}': must be non-empty and contain only alphanumeric characters and underscores",
             name
+        )));
+    }
+
+    if RESERVED_NODE_NAMES.contains(&name) {
+        return Err(RuntimeError(format!(
+            "Invalid node name '{}': collides with a built-in ProseMirror node type. \
+             Built-in names {:?} are reserved — pick a different name.",
+            name, RESERVED_NODE_NAMES
         )));
     }
 
@@ -25,13 +57,13 @@ fn validate_node_name(name: &str) -> mlua::Result<()> {
 
 /// Parses the `attrs` table from a node spec, validates that all types are scalar,
 /// and warns on irrelevant features.
-fn parse_node_attrs(name: &str, spec: &Table) -> mlua::Result<Vec<FieldDefinition>> {
+fn parse_node_attrs(lua: &Lua, name: &str, spec: &Table) -> LuaResult<Vec<FieldDefinition>> {
     let attrs_tbl = match spec.get::<Table>("attrs") {
         Ok(tbl) => tbl,
         Err(_) => return Ok(Vec::new()),
     };
 
-    let fields = parse_fields(&attrs_tbl)
+    let fields = parse_fields(lua, &attrs_tbl)
         .map_err(|e| RuntimeError(format!("Invalid node attrs: {:#}", e)))?;
 
     for f in &fields {
@@ -56,7 +88,7 @@ fn parse_searchable_attrs(
     name: &str,
     attrs: &[FieldDefinition],
     spec: &Table,
-) -> mlua::Result<Vec<String>> {
+) -> LuaResult<Vec<String>> {
     let searchable_attrs: Vec<String> = match spec.get::<Table>("searchable_attrs") {
         Ok(sa_tbl) => sa_tbl
             .sequence_values::<String>()
@@ -90,7 +122,7 @@ fn store_node_in_lua(
     inline: bool,
     has_render: bool,
     spec: &Table,
-) -> mlua::Result<()> {
+) -> LuaResult<()> {
     let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
 
     let node_entry = lua.create_table()?;
@@ -109,17 +141,24 @@ fn store_node_in_lua(
 
 /// Handles the `crap.richtext.register_node(name, spec)` call — validates input,
 /// parses attrs, and stores the node definition in both Lua and Rust registries.
-fn register_node(
-    lua: &Lua,
-    registry: &SharedRegistry,
-    name: String,
-    spec: Table,
-) -> mlua::Result<()> {
+fn register_node(lua: &Lua, registry: &SharedRegistry, name: String, spec: Table) -> LuaResult<()> {
+    // Custom nodes must be registered at init time so all VMs in the
+    // pool share the same node set and the per-collection field-context
+    // builder sees them consistently. A runtime call from a hook would
+    // only land in the current VM and fragment across the pool.
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(
+            "crap.richtext.register_node must be called from init.lua or a definition file \
+             — runtime registration only lands in one VM of the pool"
+                .into(),
+        ));
+    }
+
     validate_node_name(&name)?;
 
     let label: String = spec.get::<String>("label").unwrap_or_else(|_| name.clone());
     let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
-    let attrs = parse_node_attrs(&name, &spec)?;
+    let attrs = parse_node_attrs(lua, &name, &spec)?;
     let searchable_attrs = parse_searchable_attrs(&name, &attrs, &spec)?;
 
     let has_render = spec
@@ -146,7 +185,7 @@ fn register_node(
 
 /// Renders richtext content (JSON or HTML) to HTML, invoking Lua render functions
 /// for custom nodes.
-fn render(lua: &Lua, content: String) -> mlua::Result<String> {
+fn render(lua: &Lua, content: String) -> LuaResult<String> {
     let content = content.trim();
 
     if content.is_empty() {
@@ -281,6 +320,8 @@ mod tests {
         register_fields(&lua, &crap).unwrap();
         register_richtext(&lua, &crap, registry.clone()).unwrap();
         lua.globals().set("crap", crap).unwrap();
+        // Mimic init-time loading so register_node accepts the call.
+        lua.set_app_data(InitPhase);
         (lua, registry)
     }
 
@@ -660,6 +701,79 @@ mod tests {
             err_msg.contains("nonexistent"),
             "error should mention the unknown attr: {}",
             err_msg
+        );
+    }
+
+    /// Regression: registering a custom node whose name collides with a
+    /// built-in ProseMirror type (e.g. `paragraph`, `heading`) used to
+    /// succeed silently — the renderer's match arm hits the built-in
+    /// branch first and the custom render function is never called, so
+    /// the plugin author sees their custom widget mysteriously fail to
+    /// appear. Now reject at registration time.
+    #[test]
+    fn register_node_rejects_builtin_name_collision() {
+        let (lua, _registry) = setup_lua();
+        let result = lua
+            .load(r#"crap.richtext.register_node("paragraph", { label = "Custom" })"#)
+            .exec();
+        assert!(result.is_err(), "registering 'paragraph' must be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("built-in") || err.contains("reserved"),
+            "error should mention built-in collision, got: {err}"
+        );
+
+        // Also exercise a few more reserved names.
+        for reserved in ["heading", "text", "list_item", "doc"] {
+            let result = lua
+                .load(format!(
+                    r#"crap.richtext.register_node("{reserved}", {{ label = "x" }})"#
+                ))
+                .exec();
+            assert!(
+                result.is_err(),
+                "registering reserved '{reserved}' must be rejected"
+            );
+        }
+    }
+
+    /// Regression: `crap.richtext.register_node` called outside the init
+    /// phase must fail loudly. Each VM has its own
+    /// `_crap_richtext_nodes` registry, so a runtime registration would
+    /// only land in the current VM — admin renders served by other VMs
+    /// in the pool would not see the node, producing intermittent
+    /// rendering across requests.
+    #[test]
+    fn register_node_outside_init_phase_is_rejected() {
+        let lua = Lua::new();
+        let registry = Registry::shared();
+        let crap = lua.create_table().unwrap();
+        register_fields(&lua, &crap).unwrap();
+        register_richtext(&lua, &crap, registry.clone()).unwrap();
+        lua.globals().set("crap", crap).unwrap();
+        // No `set_app_data(InitPhase)` — simulating a runtime hook.
+
+        let err = lua
+            .load(
+                r#"
+            crap.richtext.register_node("widget", {
+                label = "W",
+                attrs = {},
+            })
+        "#,
+            )
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("init.lua") || err.contains("runtime"),
+            "expected init-only error message, got: {err}"
+        );
+
+        let reg = registry.read().unwrap();
+        assert!(
+            reg.get_richtext_node("widget").is_none(),
+            "node must NOT be registered when refused"
         );
     }
 }

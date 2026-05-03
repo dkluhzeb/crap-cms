@@ -24,6 +24,37 @@ fn make_tags_def() -> CollectionDefinition {
     def
 }
 
+/// Drive the `<crap-tags>` shadow input by setting `.value` and dispatching
+/// a synthetic `keydown` Enter — the component's listener mutates state from
+/// either path. We can't use `page.find_element(".tags__input")` because the
+/// element lives in Shadow DOM (closed-from-CSS-perspective for `querySelector`).
+async fn add_tag(page: &chromiumoxide::Page, value: &str) {
+    let js = format!(
+        "() => {{ \
+            const host = document.querySelector('crap-tags'); \
+            const input = host.shadowRoot.querySelector('.tags__input'); \
+            input.focus(); \
+            input.value = {value}; \
+            input.dispatchEvent(new Event('input')); \
+            input.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', bubbles: true }})); \
+            return 'ok'; \
+        }}",
+        value = serde_json::to_string(value).unwrap(),
+    );
+
+    page.evaluate(js.as_str()).await.unwrap();
+}
+
+async fn chip_count(page: &chromiumoxide::Page) -> i64 {
+    page.evaluate(
+        "() => document.querySelector('crap-tags').shadowRoot.querySelectorAll('.chip').length",
+    )
+    .await
+    .unwrap()
+    .into_value()
+    .unwrap_or(0)
+}
+
 // ── tags_add_via_enter ───────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
@@ -45,30 +76,11 @@ async fn tags_add_via_enter() {
         .await
         .unwrap();
 
-    // Find the tags text input and type a tag
-    page.find_element(".form__tags-input")
-        .await
-        .unwrap()
-        .click()
-        .await
-        .unwrap()
-        .type_str("rust")
-        .await
-        .unwrap();
-
-    // Press Enter to add the tag
-    page.find_element(".form__tags-input")
-        .await
-        .unwrap()
-        .press_key("Enter")
-        .await
-        .unwrap();
+    add_tag(&page, "rust").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // A chip should appear
-    let chips = page.find_elements(".form__tags-chip").await.unwrap();
     assert_eq!(
-        chips.len(),
+        chip_count(&page).await,
         1,
         "should have 1 tag chip after pressing Enter"
     );
@@ -97,35 +109,22 @@ async fn tags_remove_via_click() {
         .await
         .unwrap();
 
-    // Add a tag
-    page.find_element(".form__tags-input")
-        .await
-        .unwrap()
-        .click()
-        .await
-        .unwrap()
-        .type_str("removeme")
-        .await
-        .unwrap();
-    page.find_element(".form__tags-input")
-        .await
-        .unwrap()
-        .press_key("Enter")
-        .await
-        .unwrap();
+    add_tag(&page, "removeme").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Click the remove button on the chip
-    page.find_element(".form__tags-chip-remove")
-        .await
-        .unwrap()
-        .click()
-        .await
-        .unwrap();
+    // Click the chip's remove button via shadow root.
+    page.evaluate(
+        "() => document.querySelector('crap-tags').shadowRoot.querySelector('.chip__remove').click()",
+    )
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let chips = page.find_elements(".form__tags-chip").await.unwrap();
-    assert_eq!(chips.len(), 0, "chip should be removed after clicking X");
+    assert_eq!(
+        chip_count(&page).await,
+        0,
+        "chip should be removed after clicking X"
+    );
 
     server_handle.abort();
 }
@@ -151,28 +150,16 @@ async fn tags_prevent_duplicates() {
         .await
         .unwrap();
 
-    // Add "duplicate" twice
     for _ in 0..2 {
-        page.find_element(".form__tags-input")
-            .await
-            .unwrap()
-            .click()
-            .await
-            .unwrap()
-            .type_str("duplicate")
-            .await
-            .unwrap();
-        page.find_element(".form__tags-input")
-            .await
-            .unwrap()
-            .press_key("Enter")
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        add_tag(&page, "duplicate").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    let chips = page.find_elements(".form__tags-chip").await.unwrap();
-    assert_eq!(chips.len(), 1, "duplicate tags should be prevented");
+    assert_eq!(
+        chip_count(&page).await,
+        1,
+        "duplicate tags should be prevented"
+    );
 
     server_handle.abort();
 }
@@ -198,7 +185,7 @@ async fn tags_submit_persists() {
         .await
         .unwrap();
 
-    // Fill title
+    // Title is light-DOM, can use find_element directly.
     page.find_element("input[name=\"title\"]")
         .await
         .unwrap()
@@ -209,32 +196,18 @@ async fn tags_submit_persists() {
         .await
         .unwrap();
 
-    // Add tags
     for tag in &["alpha", "beta"] {
-        page.find_element(".form__tags-input")
-            .await
-            .unwrap()
-            .click()
-            .await
-            .unwrap()
-            .type_str(tag)
-            .await
-            .unwrap();
-        page.find_element(".form__tags-input")
-            .await
-            .unwrap()
-            .press_key("Enter")
-            .await
-            .unwrap();
+        add_tag(&page, tag).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // Verify the tags are serialized in the hidden input (comma-separated)
-    let result = page
+    // Hidden input is in light DOM (slotted from outside the shadow root).
+    let hidden_val: String = page
         .evaluate("() => document.querySelector('crap-tags input[type=\"hidden\"]')?.value ?? ''")
         .await
+        .unwrap()
+        .into_value()
         .unwrap();
-    let hidden_val: String = result.into_value().unwrap();
     assert!(
         hidden_val.contains("alpha"),
         "hidden input should contain 'alpha', got: {hidden_val}"

@@ -1,10 +1,1 @@
-{{#> layout/base title="Not Found"}}
-<div class="error-page">
-  <h1>404</h1>
-  <p>{{t "error_not_found"}}</p>
-  <a class="button button--primary" href="/admin"
-    hx-get="/admin" hx-target="body" hx-push-url="true">
-    {{t "go_to_dashboard"}}
-  </a>
-</div>
-{{/layout/base}}
+{{> partials/error-page code="404" message_key="error_not_found"}}

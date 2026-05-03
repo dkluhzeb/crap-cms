@@ -1,3 +1,5 @@
+#![cfg(feature = "sqlite")]
+
 //! CLI integration tests: roundtrip, typegen, migrate, backup, blueprint, jobs.
 //!
 //! Split from cli_integration.rs for faster parallel compilation.

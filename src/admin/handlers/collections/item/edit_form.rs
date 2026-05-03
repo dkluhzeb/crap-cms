@@ -6,20 +6,28 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
+
 use serde_json::{Value, json};
 use tokio::task;
 use tracing::error;
 
+use crate::admin::context::field::{
+    BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
+};
+
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, CollectionContext, DocumentRef, PageMeta, PageType,
+            page::collections::{CollectionEditPage, UploadFormContext, UploadInfo},
+        },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
             flatten_document_values, forbidden, is_non_default_locale, lookup_ref_count, not_found,
-            render_or_error, server_error, split_sidebar_fields,
+            paths, render_page, server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -67,15 +75,34 @@ fn read_document(params: ReadParams) -> Result<Option<Document>, ServiceError> {
     find_document_by_id(&ctx, &input)
 }
 
+/// Build a synthetic [`BaseFieldData`] for an auth-only injected field.
+fn auth_field_base(name: &str, label: &str, description: Option<&str>) -> BaseFieldData {
+    BaseFieldData {
+        name: name.to_string(),
+        field_name: name.to_string(),
+        label: label.to_string(),
+        required: false,
+        value: Value::String(String::new()),
+        placeholder: None,
+        description: description.map(str::to_string),
+        readonly: false,
+        localized: false,
+        locale_locked: false,
+        position: None,
+        template: None,
+        extra: serde_json::Map::new(),
+        error: None,
+        validation: ValidationAttrs::default(),
+        condition: ConditionData::default(),
+    }
+}
+
 /// Append auth-specific fields (password, locked checkbox) to the field list.
-fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &str) {
-    fields.push(json!({
-        "name": "password",
-        "field_type": "password",
-        "label": "password",
-        "required": false,
-        "value": "",
-        "description": "leave_blank_keep_password",
+fn append_auth_fields(fields: &mut Vec<FieldContext>, pool: &DbPool, slug: &str, id: &str) {
+    fields.push(FieldContext::Password(TextField {
+        base: auth_field_base("password", "password", Some("leave_blank_keep_password")),
+        has_many: None,
+        tags: None,
     }));
 
     let is_locked = pool
@@ -87,12 +114,9 @@ fn append_auth_fields(fields: &mut Vec<Value>, pool: &DbPool, slug: &str, id: &s
         })
         .unwrap_or(false);
 
-    fields.push(json!({
-        "name": "_locked",
-        "field_type": "checkbox",
-        "label": "account_locked",
-        "checked": is_locked,
-        "description": "prevent_login",
+    fields.push(FieldContext::Checkbox(CheckboxField {
+        base: auth_field_base("_locked", "account_locked", Some("prevent_login")),
+        checked: is_locked,
     }));
 }
 
@@ -104,7 +128,7 @@ fn prepare_edit_fields(
     id: &str,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let values = flatten_document_values(&document.fields, &def.fields);
     let non_default_locale = is_non_default_locale(state, editor_locale);
 
@@ -130,8 +154,8 @@ fn prepare_edit_fields(
 
     // Remove read-denied fields entirely — they shouldn't render in the form
     if !denied_read_fields.is_empty() {
-        fields.retain(|f| {
-            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        fields.retain(|fc| {
+            let name = fc.base().name.as_str();
             !denied_read_fields.iter().any(|d| d == name)
         });
     }
@@ -192,24 +216,18 @@ impl<'a> UploadMeta<'a> {
 }
 
 /// Build upload preview/info context for upload collection edit forms.
-fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Value {
-    let mut ctx = json!({});
+fn build_upload_context(def: &CollectionDefinition, document: &Document) -> UploadFormContext {
+    let mut ctx = UploadFormContext::default();
 
     if let Some(ref u) = def.upload
         && !u.mime_types.is_empty()
     {
-        ctx["accept"] = json!(u.mime_types.join(","));
+        ctx.accept = Some(u.mime_types.join(","));
     }
 
     let meta = UploadMeta::from_document(document);
-
-    if let Some(fx) = meta.focal_x {
-        ctx["focal_x"] = json!(fx);
-    }
-
-    if let Some(fy) = meta.focal_y {
-        ctx["focal_y"] = json!(fy);
-    }
+    ctx.focal_x = meta.focal_x;
+    ctx.focal_y = meta.focal_y;
 
     if let (Some(url), Some(mime)) = (meta.url, meta.mime_type)
         && mime.starts_with("image/")
@@ -229,21 +247,20 @@ fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Valu
             })
             .unwrap_or_else(|| url.to_string());
 
-        ctx["preview"] = json!(preview_url);
+        ctx.preview = Some(preview_url);
     }
 
     if let Some(fname) = meta.filename {
-        let mut info = json!({ "filename": fname });
+        let dimensions = match (meta.width, meta.height) {
+            (Some(w), Some(h)) => Some(format!("{}x{}", w, h)),
+            _ => None,
+        };
 
-        if let Some(size) = meta.filesize {
-            info["filesize_display"] = json!(upload::format_filesize(size));
-        }
-
-        if let (Some(w), Some(h)) = (meta.width, meta.height) {
-            info["dimensions"] = json!(format!("{}x{}", w, h));
-        }
-
-        ctx["info"] = info;
+        ctx.info = Some(UploadInfo {
+            filename: fname.to_string(),
+            filesize_display: meta.filesize.map(upload::format_filesize),
+            dimensions,
+        });
     }
 
     ctx
@@ -343,47 +360,44 @@ pub async fn edit_form(
     };
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let mut builder = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionEdit, "edit_name")
-        .page_title_name(def.singular_name())
-        .collection_def(&def)
-        .document_with_status(&document, &doc_status)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .set("editing", json!(true))
-        .set("has_drafts", json!(has_drafts))
-        .set("has_versions", json!(has_versions))
-        .set("versions", json!(versions))
-        .set("has_more_versions", json!(total_versions > 3))
-        .set(
-            "restore_url_prefix",
-            json!(format!("/admin/collections/{}/{}", slug, id)),
-        )
-        .set(
-            "versions_url",
-            json!(format!("/admin/collections/{}/{}/versions", slug, id)),
-        )
-        .set("document_title", json!(doc_title))
-        .set(
-            "ref_count",
-            json!(lookup_ref_count(&state.pool, &slug, &id)),
-        )
-        .breadcrumbs(vec![
-            Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::current(doc_title.clone()),
-        ])
-        .merge(locale_data);
 
-    if def.is_upload_collection() {
-        builder = builder.set("upload", build_upload_context(&def, &document));
-    }
+    let breadcrumbs = vec![
+        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::current(doc_title.clone()),
+    ];
 
-    let data = builder.build();
-    let data = state.hook_runner.run_before_render(data);
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionEdit, "edit_name").with_title_name(def.singular_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
 
-    render_or_error(&state, "collections/edit", &data)
+    let upload = def
+        .is_upload_collection()
+        .then(|| build_upload_context(&def, &document));
+
+    let ctx = CollectionEditPage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        document: DocumentRef::with_status(&document, &doc_status),
+        fields: main_fields,
+        sidebar_fields,
+        editing: true,
+        has_drafts,
+        has_versions,
+        versions,
+        has_more_versions: total_versions > 3,
+        restore_url_prefix: paths::collection_item(&slug, &id),
+        versions_url: paths::collection_item_versions(&slug, &id),
+        document_title: doc_title,
+        ref_count: lookup_ref_count(&state.pool, &slug, &id),
+        locale_data,
+        upload,
+    };
+
+    render_page(&state, "collections/edit", &ctx)
 }

@@ -47,11 +47,28 @@ pub struct ServerConfig {
     /// Browsers that don't support h2c fall back to HTTP/1.1 on the same port.
     /// Default: false.
     pub h2c: bool,
-    /// Trust X-Forwarded-For header for client IP extraction (admin HTTP server only).
+    /// Trust `X-Forwarded-For` for client IP extraction (admin HTTP only).
     /// Enable when running behind a reverse proxy (nginx, Caddy, etc.).
     /// When false (default), the TCP socket address is used — XFF is ignored.
     /// Does not affect gRPC, which always uses the TCP peer address.
+    ///
+    /// **Security:** if this is `true` but `trusted_proxies` is empty, any
+    /// client can spoof `X-Forwarded-For` and rotate per-IP rate limits
+    /// (login, password reset). Always pair `trust_proxy = true` with a
+    /// `trusted_proxies` allowlist containing the reverse proxy's IP or
+    /// CIDR range. Startup emits a warning when this pairing is missing.
     pub trust_proxy: bool,
+    /// IP addresses or CIDR ranges allowed to set `X-Forwarded-For`. When
+    /// non-empty and `trust_proxy = true`, the XFF header is honored only
+    /// if the request's direct peer address is in this list; otherwise
+    /// the TCP socket address is used. Accepts both IPv4 and IPv6 in
+    /// either bare (`10.0.0.1`) or CIDR (`10.0.0.0/8`, `::1/128`) form.
+    ///
+    /// Empty (default) preserves the pre-hardening behaviour: when
+    /// `trust_proxy` is `true`, XFF is trusted unconditionally. A warning
+    /// is logged at startup for this combination.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
     /// Public-facing base URL (e.g. "https://cms.example.com"). Used for password reset
     /// emails and other external links. When not set, falls back to http://{host}:{admin_port}.
     pub public_url: Option<String>,
@@ -93,6 +110,7 @@ impl Default for ServerConfig {
             grpc_rate_limit_window: 60,
             h2c: false,
             trust_proxy: false,
+            trusted_proxies: Vec::new(),
             public_url: None,
             request_timeout: None,
             grpc_timeout: None,
@@ -227,16 +245,30 @@ impl Default for CspConfig {
         Self {
             enabled: true,
             default_src: vec!["'self'".into()],
-            script_src: vec![
-                "'self'".into(),
-                "'unsafe-inline'".into(),
-                "https://unpkg.com".into(),
-            ],
-            style_src: vec![
-                "'self'".into(),
-                "'unsafe-inline'".into(),
-                "https://fonts.googleapis.com".into(),
-            ],
+            // `'unsafe-inline'` is intentionally absent — inline `<script>` tags
+            // are allowed only via the per-request nonce (see `build_header_value`).
+            // Built-in and overlay templates must mark inline scripts with
+            // `nonce="{{crap.csp_nonce}}"`. Only `'self'` is allowed because
+            // every script the built-in admin loads is served from the same
+            // origin: `/static/vendor/htmx.js` (vendored — see
+            // `scripts/bundle-htmx.sh`), `/static/vendor/codemirror.js`,
+            // `/static/vendor/prosemirror.js`, and the ES-module entry
+            // `/static/components/index.js`.
+            script_src: vec!["'self'".into()],
+            // `'unsafe-inline'` is intentionally absent. The built-in admin
+            // is fully nonce/CSP-friendly:
+            //   - Web Components use constructable stylesheets
+            //     (`new CSSStyleSheet()` + `adoptedStyleSheets`) which are
+            //     CSP-exempt by spec.
+            //   - Templates use the `hidden` attribute / classes / data-attr
+            //     selectors instead of `style="..."`.
+            //   - HTMX's only inline style is the indicator-styles injection,
+            //     disabled via `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
+            //     in `base.hbs`; the equivalent CSS rules ship in
+            //     `static/styles/base/reset.css`.
+            //   - Programmatic `element.style.foo = ...` is exempt from CSP
+            //     and remains available for runtime layout.
+            style_src: vec!["'self'".into(), "https://fonts.googleapis.com".into()],
             font_src: vec!["'self'".into(), "https://fonts.gstatic.com".into()],
             img_src: vec!["'self'".into(), "data:".into()],
             connect_src: vec!["'self'".into()],
@@ -249,17 +281,40 @@ impl Default for CspConfig {
 
 impl CspConfig {
     /// Build the CSP header value string from configured directives.
-    /// Returns `None` if CSP is disabled.
-    pub fn build_header_value(&self) -> Option<String> {
+    ///
+    /// When `nonce` is `Some`, `'nonce-XYZ'` is appended to `script-src` so
+    /// inline `<script nonce="XYZ">` tags are allowed. The same nonce must be
+    /// embedded in the rendered HTML (see `crap.csp_nonce` in the template
+    /// context). When `nonce` is `None`, no nonce directive is added — any
+    /// inline script in the response will be blocked unless the user has
+    /// explicitly configured `'unsafe-inline'` in their overrides.
+    ///
+    /// Returns `None` if CSP is disabled entirely (`enabled = false`).
+    pub fn build_header_value(&self, nonce: Option<&str>) -> Option<String> {
         if !self.enabled {
             return None;
         }
+
+        let script_src_with_nonce: Vec<String>;
+        let script_src: &[String] = match nonce {
+            Some(n) => {
+                script_src_with_nonce = self
+                    .script_src
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(format!("'nonce-{}'", n)))
+                    .collect();
+
+                &script_src_with_nonce
+            }
+            None => &self.script_src,
+        };
 
         let mut directives = Vec::new();
 
         let pairs: &[(&str, &[String])] = &[
             ("default-src", &self.default_src),
-            ("script-src", &self.script_src),
+            ("script-src", script_src),
             ("style-src", &self.style_src),
             ("font-src", &self.font_src),
             ("img-src", &self.img_src),
@@ -292,6 +347,11 @@ pub struct AdminConfig {
     /// When true (default), block admin panel if no auth collection exists.
     /// Set to false for open dev mode with no authentication.
     pub require_auth: bool,
+    /// Display name shown in the admin header wordmark and `<title>`
+    /// tags. Defaults to `"Crap CMS"`. Override in `crap.toml` to
+    /// rebrand without touching templates.
+    #[serde(default = "default_site_name")]
+    pub site_name: String,
     /// Optional Lua function ref that gates admin panel access.
     /// Checked after successful authentication. None = any authenticated user.
     pub access: Option<String>,
@@ -301,6 +361,22 @@ pub struct AdminConfig {
     /// specify their own `default_timezone`. Empty string means no pre-selection.
     #[serde(default)]
     pub default_timezone: String,
+    /// CSRF double-submit cookie lifetime in seconds. Default: 86400 (24h).
+    /// Accepts integer seconds or human strings ("4h", "30m").
+    ///
+    /// The cookie is tied to a `SameSite=Strict` session so longer windows
+    /// carry limited replay risk; shorten if you want to reduce the window
+    /// in which a stolen double-submit token can be used.
+    #[serde(default = "default_csrf_cookie_lifetime", with = "serde_duration")]
+    pub csrf_cookie_lifetime: u64,
+}
+
+fn default_csrf_cookie_lifetime() -> u64 {
+    86400
+}
+
+fn default_site_name() -> String {
+    "Crap CMS".to_string()
 }
 
 impl Default for AdminConfig {
@@ -308,9 +384,11 @@ impl Default for AdminConfig {
         Self {
             dev_mode: false,
             require_auth: true,
+            site_name: default_site_name(),
             access: None,
             csp: CspConfig::default(),
             default_timezone: String::new(),
+            csrf_cookie_lifetime: default_csrf_cookie_lifetime(),
         }
     }
 }
@@ -389,14 +467,18 @@ mod tests {
 
     #[test]
     fn server_config_trust_proxy_from_toml() {
+        // `trust_proxy = true` must be paired with `trusted_proxies` — the
+        // allowlist is now required at startup. Use a real-looking CIDR
+        // here so validation passes.
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(
             tmp.path().join("crap.toml"),
-            "[server]\ntrust_proxy = true\n",
+            "[server]\ntrust_proxy = true\ntrusted_proxies = [\"10.0.0.0/8\"]\n",
         )
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.server.trust_proxy);
+        assert_eq!(config.server.trusted_proxies, vec!["10.0.0.0/8"]);
     }
 
     #[test]
@@ -473,15 +555,59 @@ mod tests {
         assert_eq!(config.server.grpc_max_message_size, 8 * 1024 * 1024);
     }
 
+    // ── CSRF cookie lifetime (audit finding M-3) ────────────────────────
+
+    #[test]
+    fn csrf_cookie_lifetime_defaults_to_24h() {
+        let admin = AdminConfig::default();
+        assert_eq!(admin.csrf_cookie_lifetime, 86400);
+    }
+
+    #[test]
+    fn csrf_cookie_lifetime_from_toml_integer_seconds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[admin]\ncsrf_cookie_lifetime = 3600\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.admin.csrf_cookie_lifetime, 3600);
+    }
+
+    #[test]
+    fn csrf_cookie_lifetime_from_toml_human_string() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join("crap.toml"),
+            "[admin]\ncsrf_cookie_lifetime = \"4h\"\n",
+        )
+        .unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.admin.csrf_cookie_lifetime, 4 * 3600);
+    }
+
     #[test]
     fn csp_config_defaults_produce_valid_header() {
         let csp = CspConfig::default();
-        let header = csp.build_header_value();
+        let header = csp.build_header_value(None);
         assert!(header.is_some());
         let h = header.unwrap();
         assert!(h.contains("default-src 'self'"));
-        assert!(h.contains("script-src 'self' 'unsafe-inline' https://unpkg.com"));
-        assert!(h.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"));
+        // Defaults no longer permit `'unsafe-inline'` for scripts — the nonce
+        // mechanism replaces it.
+        assert!(h.contains("script-src 'self'"));
+        assert!(
+            !h.contains("https://unpkg.com"),
+            "no third-party CDN; htmx is now vendored at /static/vendor/htmx.js"
+        );
+        assert!(!h.contains("script-src 'self' 'unsafe-inline'"));
+        // `style-src` is also free of `'unsafe-inline'` — HTMX's runtime style
+        // injection is disabled via `htmx.config.includeIndicatorStyles=false`
+        // (set in the layout meta tag), and the indicator CSS ships in
+        // `static/styles.css` instead.
+        assert!(h.contains("style-src 'self' https://fonts.googleapis.com"));
+        assert!(!h.contains("style-src 'self' 'unsafe-inline'"));
         assert!(h.contains("font-src 'self' https://fonts.gstatic.com"));
         assert!(h.contains("img-src 'self' data:"));
         assert!(h.contains("connect-src 'self'"));
@@ -491,12 +617,29 @@ mod tests {
     }
 
     #[test]
+    fn csp_config_with_nonce_appends_nonce_to_script_src() {
+        let csp = CspConfig::default();
+        let header = csp.build_header_value(Some("abc123")).unwrap();
+        assert!(header.contains("script-src 'self' 'nonce-abc123'"));
+        // Nonce is scoped to scripts only — style-src does not get a nonce.
+        assert!(!header.contains("style-src 'self' https://fonts.googleapis.com 'nonce-"));
+    }
+
+    #[test]
+    fn csp_config_without_nonce_omits_nonce_directive() {
+        let csp = CspConfig::default();
+        let header = csp.build_header_value(None).unwrap();
+        assert!(!header.contains("'nonce-"));
+    }
+
+    #[test]
     fn csp_config_disabled_returns_none() {
         let csp = CspConfig {
             enabled: false,
             ..CspConfig::default()
         };
-        assert!(csp.build_header_value().is_none());
+        assert!(csp.build_header_value(None).is_none());
+        assert!(csp.build_header_value(Some("abc")).is_none());
     }
 
     #[test]
@@ -527,7 +670,7 @@ mod tests {
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(!config.admin.csp.enabled);
-        assert!(config.admin.csp.build_header_value().is_none());
+        assert!(config.admin.csp.build_header_value(None).is_none());
     }
 
     #[test]
@@ -544,7 +687,7 @@ mod tests {
             form_action: vec![],
             base_uri: vec![],
         };
-        let header = csp.build_header_value().unwrap();
+        let header = csp.build_header_value(None).unwrap();
         assert_eq!(header, "default-src 'self'");
         assert!(!header.contains("script-src"));
     }

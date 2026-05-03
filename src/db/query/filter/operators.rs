@@ -200,7 +200,7 @@ pub fn build_filter_condition(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::db::sqlite::InMemoryConn;

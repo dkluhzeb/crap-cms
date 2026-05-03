@@ -107,6 +107,7 @@ fn validate_scalar_field(
         errors,
     );
     checks::check_row_bounds(field, &data_key, value, ctx.is_draft, errors);
+    checks::check_polymorphic_allowlist(field, &data_key, value, errors);
 
     // Validate sub-fields within Array/Blocks rows.
     // Draft mode still validates sub-fields (format, bounds, etc.) — only `required`
@@ -234,7 +235,7 @@ fn validate_scalar_field(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::config::LocaleConfig;
     use crate::core::field::{FieldAdmin, FieldDefinition, FieldTab, FieldType, JoinConfig};

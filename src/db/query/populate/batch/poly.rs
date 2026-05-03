@@ -170,7 +170,7 @@ pub(super) fn batch_fetch_with_cache(
     Ok(fetched_map)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

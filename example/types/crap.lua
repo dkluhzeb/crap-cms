@@ -70,7 +70,8 @@ crap = {}
 --- @field labels?      crap.FieldAdminLabels  Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
 --- @field step?        string   Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
 --- @field rows?        integer  Number of rows for textarea fields (default: 8).
---- @field language?    string   Language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain".
+--- @field language?    string   Default language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain".
+--- @field languages?   string[] Allow-list of languages the editor can pick from at edit time for code fields. When set, the form renders a `<select>` next to the editor and persists the choice in a `<name>_lang` companion column. When empty/absent, the language is fixed to `language`.
 --- @field features?    string[] Enabled toolbar features for richtext fields. When absent, all features are enabled. Options: "bold", "italic", "code", "link", "heading", "blockquote", "orderedList", "bulletList", "codeBlock", "horizontalRule".
 --- @field format?      string   Storage format for richtext fields: "html" (default) or "json" (ProseMirror JSON). FTS extracts plain text from JSON automatically.
 --- @field nodes?       string[] Custom ProseMirror node types for richtext fields. Names must match nodes registered via `crap.richtext.register_node()`.

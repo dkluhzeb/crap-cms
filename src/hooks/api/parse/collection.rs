@@ -63,7 +63,7 @@ fn inject_auth_email_field(auth: &Option<Auth>, fields: &mut Vec<FieldDefinition
 
 /// Parse a Lua table into a `CollectionDefinition`, extracting fields, hooks, auth, upload, etc.
 pub fn parse_collection_definition(
-    _lua: &Lua,
+    lua: &Lua,
     slug: &str,
     config: &Table,
 ) -> Result<CollectionDefinition> {
@@ -72,7 +72,7 @@ pub fn parse_collection_definition(
     let labels = parse_labels(config);
     let timestamps = get_bool(config, "timestamps", true)?;
     let admin = parse_admin_config(config)?;
-    let mut fields = parse_fields_section(config)?;
+    let mut fields = parse_fields_section(lua, config)?;
     let hooks = parse_hooks_section(config)?;
     let auth = parse_collection_auth(config)?;
     let upload = parse_collection_upload(config)?;

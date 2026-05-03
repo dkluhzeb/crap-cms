@@ -1,65 +1,67 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
-{{#if (eq picker_appearance "dayAndTime")}}
-<input
-  type="datetime-local"
-  id="field-{{name}}"
-  name="{{name}}"
-  value="{{datetime_local_value}}"
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if min_date}}min="{{min_date}}T00:00"{{/if}}
-  {{#if max_date}}max="{{max_date}}T23:59"{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-/>
-{{else if (eq picker_appearance "timeOnly")}}
-<input
-  type="time"
-  id="field-{{name}}"
-  name="{{name}}"
-  value="{{value}}"
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-/>
-{{else if (eq picker_appearance "monthOnly")}}
-<input
-  type="month"
-  id="field-{{name}}"
-  name="{{name}}"
-  value="{{value}}"
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-/>
-{{else}}
-<input
-  type="date"
-  id="field-{{name}}"
-  name="{{name}}"
-  value="{{date_only_value}}"
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if min_date}}min="{{min_date}}"{{/if}}
-  {{#if max_date}}max="{{max_date}}"{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-/>
-{{/if}}
-{{#if timezone_enabled}}
-<div class="form__timezone">
-  <select name="{{name}}_tz" id="field-{{name}}-tz" class="form__select form__timezone-select"
-    {{#if locale_locked}}disabled{{/if}}>
-    <option value="">—</option>
-    {{#each timezone_options}}
-    <option value="{{this.value}}" {{#if (eq this.value ../timezone_value)}}selected{{/if}}>
-      {{this.label}}
-    </option>
-    {{/each}}
-  </select>
-</div>
-{{/if}}
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{#> partials/field}}
+  {{#if (eq picker_appearance "dayAndTime")}}
+    <input
+      type="datetime-local"
+      id="field-{{name}}"
+      name="{{name}}"
+      value="{{datetime_local_value}}"
+      {{#if required}}required{{/if}}
+      {{#if readonly}}readonly{{/if}}
+      {{#if min_date}}min="{{min_date}}T00:00"{{/if}}
+      {{#if max_date}}max="{{max_date}}T23:59"{{/if}}
+      {{#if error}}class="form__input--error"{{/if}}
+    />
+  {{else if (eq picker_appearance "timeOnly")}}
+    <input
+      type="time"
+      id="field-{{name}}"
+      name="{{name}}"
+      value="{{value}}"
+      {{#if required}}required{{/if}}
+      {{#if readonly}}readonly{{/if}}
+      {{#if error}}class="form__input--error"{{/if}}
+    />
+  {{else if (eq picker_appearance "monthOnly")}}
+    <input
+      type="month"
+      id="field-{{name}}"
+      name="{{name}}"
+      value="{{value}}"
+      {{#if required}}required{{/if}}
+      {{#if readonly}}readonly{{/if}}
+      {{#if error}}class="form__input--error"{{/if}}
+    />
+  {{else}}
+    <input
+      type="date"
+      id="field-{{name}}"
+      name="{{name}}"
+      value="{{date_only_value}}"
+      {{#if required}}required{{/if}}
+      {{#if readonly}}readonly{{/if}}
+      {{#if min_date}}min="{{min_date}}"{{/if}}
+      {{#if max_date}}max="{{max_date}}"{{/if}}
+      {{#if error}}class="form__input--error"{{/if}}
+    />
+  {{/if}}
+  {{#if timezone_enabled}}
+    <div class="form__timezone">
+      <select
+        name="{{name}}_tz"
+        id="field-{{name}}-tz"
+        class="form__select form__timezone-select"
+        {{#if locale_locked}}disabled{{/if}}
+      >
+        <option value="">—</option>
+        {{#each timezone_options}}
+          <option
+            value="{{this.value}}"
+            {{#if (eq this.value ../timezone_value)}}selected{{/if}}
+          >
+            {{this.label}}
+          </option>
+        {{/each}}
+      </select>
+    </div>
+  {{/if}}
+{{/partials/field}}

@@ -1,52 +1,149 @@
 /**
  * List settings — `<crap-list-settings>`.
  *
- * Column picker and filter builder for collection list views.
- * Reads options from JSON data islands and renders UI in the drawer.
+ * Toolbar component for collection list views. Provides:
+ *   - **Column picker** drawer — pick which columns the list table shows.
+ *   - **Filter builder** drawer — compose `where[field][op]=value` URL
+ *     filters using per-type operator menus and value inputs.
+ *
+ * Both drawers borrow the page-singleton `<crap-drawer>` via
+ * [`EV_DRAWER_REQUEST`](./events.js). The toolbar mounts a freshly
+ * constructed `<crap-column-picker>` or `<crap-filter-builder>`
+ * element into the drawer body and listens for the element's
+ * completion event (`crap:column-picker-saved` /
+ * `crap:filter-builder-applied`) to close the drawer.
+ *
+ * Field metadata + saved selections come from JSON data islands the
+ * server renders into the page (`crap-column-options`,
+ * `crap-filter-fields`).
+ *
+ * Light DOM — operates on the server-rendered list page and uses
+ * HTMX-aware navigation for filter application.
  *
  * @module list-settings
+ * @stability experimental
  */
 
-import { t } from './i18n.js';
+import { clear } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { discoverSingleton } from './_internal/util/discover.js';
+import { readDataIsland } from './_internal/util/json.js';
+import { EV_DRAWER_REQUEST } from './events.js';
 
 /**
- * Operator options per field type.
- * Labels are translation keys resolved at call time via `t()`.
+ * @typedef {{
+ *   open: (opts: { title: string }) => void,
+ *   close: () => void,
+ *   body: HTMLElement,
+ * }} DrawerInstance
  */
-const OPS_BY_TYPE = {
-  text:     [['equals', 'op_is'], ['not_equals', 'op_is_not'], ['contains', 'op_contains']],
-  email:    [['equals', 'op_is'], ['not_equals', 'op_is_not'], ['contains', 'op_contains']],
-  textarea: [['equals', 'op_is'], ['contains', 'op_contains']],
-  number:   [['equals', 'op_equals'], ['gt', 'op_gt'], ['lt', 'op_lt'], ['gte', 'op_gte'], ['lte', 'op_lte']],
-  select:   [['equals', 'op_is'], ['not_equals', 'op_is_not']],
-  radio:    [['equals', 'op_is'], ['not_equals', 'op_is_not']],
-  checkbox: [['equals', 'op_is']],
-  date:     [['equals', 'op_is'], ['gt', 'op_after'], ['lt', 'op_before'], ['gte', 'op_on_or_after'], ['lte', 'op_on_or_before']],
-  relationship: [['equals', 'op_is'], ['not_equals', 'op_is_not'], ['exists', 'op_exists'], ['not_exists', 'op_not_exists']],
-  upload:   [['exists', 'op_exists'], ['not_exists', 'op_not_exists']],
-};
 
 class CrapListSettings extends HTMLElement {
+  constructor() {
+    super();
+    /** @type {boolean} */
+    this._connected = false;
+    /** @type {boolean} */
+    this._searchWasActive = false;
+    /** @type {((e: Event) => void)|null} */
+    this._onBeforeRequest = null;
+    /** @type {(() => void)|null} */
+    this._onAfterSettle = null;
+  }
+
   connectedCallback() {
     if (this._connected) return;
     this._connected = true;
+    this.addEventListener('click', (e) => this._onToolbarClick(e));
+    this._setupSearchFocusPreservation();
+  }
 
-    /** @type {boolean} */
-    this._searchWasActive = false;
+  disconnectedCallback() {
+    if (!this._connected) return;
+    this._connected = false;
+    if (this._onBeforeRequest)
+      document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+    if (this._onAfterSettle) document.removeEventListener('htmx:afterSettle', this._onAfterSettle);
+  }
 
-    // Click delegation for toolbar actions
-    this.addEventListener('click', (e) => {
-      const btn = /** @type {HTMLElement} */ (e.target).closest('[data-action]');
-      if (!btn) return;
-      switch (/** @type {HTMLElement} */ (btn).dataset.action) {
-        case 'open-column-picker': this._openColumnPicker(); break;
-        case 'open-filter-builder': this._openFilterBuilder(); break;
-      }
-    });
+  /** Collection slug from the current URL, or `null` if not on a list page. */
+  get _slug() {
+    const m = window.location.pathname.match(/^\/admin\/collections\/([^/]+)\/?$/);
+    return m ? m[1] : null;
+  }
 
-    // Search focus preservation across HTMX swaps
+  /** @param {Event} e */
+  _onToolbarClick(e) {
+    if (!(e.target instanceof Element)) return;
+    const btn = /** @type {HTMLElement|null} */ (e.target.closest('[data-action]'));
+    if (!btn) return;
+    const slug = this._slug;
+    if (!slug) return;
+    switch (btn.dataset.action) {
+      case 'open-column-picker':
+        this._openColumnPicker(slug);
+        break;
+      case 'open-filter-builder':
+        this._openFilterBuilder(slug);
+        break;
+    }
+  }
+
+  /**
+   * Mount a freshly constructed `<crap-column-picker>` into the drawer.
+   * The element's connectedCallback builds the form; we listen for its
+   * `crap:column-picker-saved` event to close the drawer.
+   *
+   * @param {string} slug
+   */
+  _openColumnPicker(slug) {
+    const drawer = /** @type {DrawerInstance|null} */ (discoverSingleton(EV_DRAWER_REQUEST));
+    if (!drawer) return;
+    const options = readDataIsland(this, 'crap-column-options', []);
+
+    const picker = document.createElement('crap-column-picker');
+    picker.dataset.collection = slug;
+    picker.dataset.options = JSON.stringify(options);
+    picker.addEventListener('crap:column-picker-saved', () => drawer.close(), { once: true });
+
+    drawer.open({ title: t('columns') });
+    clear(drawer.body);
+    drawer.body.appendChild(picker);
+  }
+
+  /**
+   * Mount a freshly constructed `<crap-filter-builder>` into the
+   * drawer. Listens for its `crap:filter-builder-applied` event to
+   * close the drawer (the builder itself triggers the htmx-aware
+   * navigation).
+   *
+   * @param {string} slug
+   */
+  _openFilterBuilder(slug) {
+    const drawer = /** @type {DrawerInstance|null} */ (discoverSingleton(EV_DRAWER_REQUEST));
+    if (!drawer) return;
+    const fieldMetas = readDataIsland(this, 'crap-filter-fields', []);
+    if (!fieldMetas.length) return;
+
+    const builder = document.createElement('crap-filter-builder');
+    builder.dataset.collection = slug;
+    builder.dataset.fields = JSON.stringify(fieldMetas);
+    builder.addEventListener('crap:filter-builder-applied', () => drawer.close(), { once: true });
+
+    drawer.open({ title: t('filters') });
+    clear(drawer.body);
+    drawer.body.appendChild(builder);
+  }
+
+  /**
+   * Restore focus + caret position to the list-view search input across
+   * HTMX list swaps. Without this, the input loses focus on every
+   * keystroke that triggers a server-side search refresh.
+   */
+  _setupSearchFocusPreservation() {
     this._onBeforeRequest = (e) => {
-      if (e.detail.elt?.id === 'list-search-input') this._searchWasActive = true;
+      const detail = /** @type {CustomEvent} */ (e).detail;
+      if (detail.elt?.id === 'list-search-input') this._searchWasActive = true;
     };
     this._onAfterSettle = () => {
       if (!this._searchWasActive) return;
@@ -54,353 +151,12 @@ class CrapListSettings extends HTMLElement {
       const input = /** @type {HTMLInputElement|null} */ (
         document.getElementById('list-search-input')
       );
-      if (input) {
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
-      }
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
     };
     document.addEventListener('htmx:beforeRequest', this._onBeforeRequest);
     document.addEventListener('htmx:afterSettle', this._onAfterSettle);
-  }
-
-  disconnectedCallback() {
-    this._connected = false;
-    document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
-    document.removeEventListener('htmx:afterSettle', this._onAfterSettle);
-  }
-
-
-  /** @returns {string|null} */
-  get _slug() {
-    const match = window.location.pathname.match(/^\/admin\/collections\/([^/]+)\/?$/);
-    return match ? match[1] : null;
-  }
-
-  /* ── Column Picker ──────────────────────────────────────────── */
-
-  _openColumnPicker() {
-    const island = this.querySelector('#crap-column-options') || document.getElementById('crap-column-options');
-    const slug = this._slug;
-    if (!island || !slug) return;
-
-    /** @type {Array<{key: string, label: string, selected: boolean}>} */
-    const options = JSON.parse(island.textContent || '[]');
-
-    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
-    document.dispatchEvent(drawerEvt);
-    const drawer = drawerEvt.detail.instance;
-    drawer.open({ title: t('columns') });
-
-    const body = drawer.body;
-    body.innerHTML = '';
-
-    const form = document.createElement('form');
-    form.className = 'column-picker';
-
-    const list = document.createElement('div');
-    list.className = 'column-picker__list';
-
-    for (const opt of options) {
-      const label = document.createElement('label');
-      label.className = 'column-picker__item';
-
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.name = 'column';
-      checkbox.value = opt.key;
-      checkbox.checked = opt.selected;
-
-      const text = document.createElement('span');
-      text.textContent = t(opt.label);
-
-      label.appendChild(checkbox);
-      label.appendChild(text);
-      list.appendChild(label);
-    }
-    form.appendChild(list);
-
-    const footer = document.createElement('div');
-    footer.className = 'column-picker__footer';
-
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'submit';
-    saveBtn.className = 'button button--primary button--small';
-    saveBtn.textContent = t('save');
-    footer.appendChild(saveBtn);
-
-    form.appendChild(footer);
-    body.appendChild(form);
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const checked = /** @type {NodeListOf<HTMLInputElement>} */ (
-        form.querySelectorAll('input[name="column"]:checked')
-      );
-      const columns = Array.from(checked).map((cb) => cb.value).join(',');
-
-      const csrfMatch = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-      let csrf = '';
-      if (csrfMatch) {
-        try { csrf = decodeURIComponent(csrfMatch[1]); } catch { csrf = csrfMatch[1]; }
-      }
-
-      try {
-        const resp = await fetch(`/admin/api/user-settings/${slug}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-CSRF-Token': csrf,
-          },
-          body: `columns=${encodeURIComponent(columns)}`,
-        });
-        if (resp.ok) {
-          drawer.close();
-          window.location.reload();
-        }
-      } catch {
-        // Silently fail — user can retry
-      }
-    });
-  }
-
-  /* ── Filter Builder ─────────────────────────────────────────── */
-
-  _openFilterBuilder() {
-    const island = this.querySelector('#crap-filter-fields') || document.getElementById('crap-filter-fields');
-    const slug = this._slug;
-    if (!island || !slug) return;
-
-    /** @type {Array<{key: string, label: string, field_type: string, options?: Array<{label: string, value: string}>}>} */
-    const fieldMetas = JSON.parse(island.textContent || '[]');
-    if (!fieldMetas.length) return;
-
-    const existing = this._parseCurrentFilters();
-
-    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
-    document.dispatchEvent(drawerEvt);
-    const drawer = drawerEvt.detail.instance;
-    drawer.open({ title: t('filters') });
-
-    const body = drawer.body;
-    body.innerHTML = '';
-
-    const container = document.createElement('div');
-    container.className = 'filter-builder';
-
-    const rows = document.createElement('div');
-    rows.className = 'filter-builder__rows';
-
-    /** @param {{field: string, op: string, value: string}|null} preset */
-    const addRow = (preset = null) => {
-      const row = document.createElement('div');
-      row.className = 'filter-builder__row';
-
-      // Field select
-      const fieldSelect = document.createElement('select');
-      fieldSelect.className = 'filter-builder__field';
-      fieldSelect.name = 'filter-field';
-      for (const fm of fieldMetas) {
-        const opt = document.createElement('option');
-        opt.value = fm.key;
-        opt.textContent = t(fm.label);
-        if (preset && fm.key === preset.field) opt.selected = true;
-        fieldSelect.appendChild(opt);
-      }
-
-      // Op select
-      const opSelect = document.createElement('select');
-      opSelect.className = 'filter-builder__op';
-      opSelect.name = 'filter-op';
-
-      /** @param {string} fieldKey */
-      const updateOps = (fieldKey) => {
-        const fm = fieldMetas.find((f) => f.key === fieldKey);
-        const ft = fm ? fm.field_type : 'text';
-        const ops = OPS_BY_TYPE[ft] || OPS_BY_TYPE.text;
-        opSelect.innerHTML = '';
-        for (const [val, label] of ops) {
-          const opt = document.createElement('option');
-          opt.value = val;
-          opt.textContent = t(label);
-          if (preset && val === preset.op) opt.selected = true;
-          opSelect.appendChild(opt);
-        }
-      };
-
-      updateOps(fieldSelect.value);
-      fieldSelect.addEventListener('change', () => {
-        updateOps(fieldSelect.value);
-        updateValue();
-      });
-
-      // Value input
-      const valueWrap = document.createElement('div');
-      valueWrap.className = 'filter-builder__value-wrap';
-
-      const updateValue = () => {
-        const fm = fieldMetas.find((f) => f.key === fieldSelect.value);
-        if (!fm) return;
-        valueWrap.innerHTML = '';
-        valueWrap.appendChild(this._buildValueInput(fm, opSelect.value, preset ? preset.value : ''));
-      };
-
-      updateValue();
-      opSelect.addEventListener('change', updateValue);
-
-      // Remove button
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'button button--ghost button--small filter-builder__remove';
-      removeBtn.innerHTML = '<span class="material-symbols-outlined">close</span>';
-      removeBtn.addEventListener('click', () => row.remove());
-
-      row.appendChild(fieldSelect);
-      row.appendChild(opSelect);
-      row.appendChild(valueWrap);
-      row.appendChild(removeBtn);
-      rows.appendChild(row);
-    };
-
-    if (existing.length > 0) {
-      for (const f of existing) addRow(f);
-    } else {
-      addRow();
-    }
-
-    container.appendChild(rows);
-
-    // Add filter button
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'button button--ghost button--small';
-    const addIcon = document.createElement('span');
-    addIcon.className = 'material-symbols-outlined';
-    addIcon.textContent = 'add';
-    addBtn.appendChild(addIcon);
-    addBtn.appendChild(document.createTextNode(' ' + t('add_condition')));
-    addBtn.addEventListener('click', () => addRow());
-    container.appendChild(addBtn);
-
-    // Footer
-    const footer = document.createElement('div');
-    footer.className = 'filter-builder__footer';
-
-    const clearBtn = document.createElement('a');
-    clearBtn.className = 'button button--ghost button--small';
-    clearBtn.textContent = t('clear_all');
-    clearBtn.href = `/admin/collections/${slug}`;
-    footer.appendChild(clearBtn);
-
-    const applyBtn = document.createElement('button');
-    applyBtn.type = 'button';
-    applyBtn.className = 'button button--primary button--small';
-    applyBtn.textContent = t('apply');
-    applyBtn.addEventListener('click', () => {
-      const url = new URL(window.location.href);
-      // Remove existing where params
-      const keysToRemove = [];
-      for (const key of url.searchParams.keys()) {
-        if (key.startsWith('where[')) keysToRemove.push(key);
-      }
-      for (const key of keysToRemove) url.searchParams.delete(key);
-
-      // Reset to page 1
-      url.searchParams.set('page', '1');
-
-      // Add new filters
-      const filterRows = rows.querySelectorAll('.filter-builder__row');
-      for (const row of filterRows) {
-        const fieldEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__field'));
-        const opEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__op'));
-        if (!fieldEl || !opEl) continue;
-        const field = fieldEl.value;
-        const op = opEl.value;
-        const valueEl = row.querySelector('[name="filter-value"]');
-        const value = valueEl ? /** @type {HTMLInputElement} */ (valueEl).value : '';
-        url.searchParams.append(`where[${field}][${op}]`, value);
-      }
-
-      drawer.close();
-      if (window.htmx) {
-        htmx.ajax('GET', url.pathname + url.search, { target: 'body', pushUrl: true });
-      } else {
-        window.location.href = url.toString();
-      }
-    });
-    footer.appendChild(applyBtn);
-
-    container.appendChild(footer);
-    body.appendChild(container);
-  }
-
-  /**
-   * @returns {Array<{field: string, op: string, value: string}>}
-   */
-  _parseCurrentFilters() {
-    const params = new URLSearchParams(window.location.search);
-    /** @type {Array<{field: string, op: string, value: string}>} */
-    const filters = [];
-    for (const [key, value] of params) {
-      const match = key.match(/^where\[([^\]]+)\]\[([^\]]+)\]$/);
-      if (match) {
-        filters.push({ field: match[1], op: match[2], value });
-      }
-    }
-    return filters;
-  }
-
-  /**
-   * @param {{key: string, label: string, field_type: string, options?: Array<{label: string, value: string}>}} fieldMeta
-   * @param {string} op
-   * @param {string} [currentValue]
-   * @returns {HTMLElement}
-   */
-  _buildValueInput(fieldMeta, op, currentValue = '') {
-    if (op === 'exists' || op === 'not_exists') {
-      return document.createElement('span');
-    }
-
-    if (fieldMeta.options && (fieldMeta.field_type === 'select' || fieldMeta.field_type === 'radio')) {
-      const select = document.createElement('select');
-      select.name = 'filter-value';
-      for (const opt of fieldMeta.options) {
-        const option = document.createElement('option');
-        option.value = opt.value;
-        option.textContent = t(opt.label);
-        if (opt.value === currentValue) option.selected = true;
-        select.appendChild(option);
-      }
-      return select;
-    }
-
-    if (fieldMeta.field_type === 'checkbox') {
-      const select = document.createElement('select');
-      select.name = 'filter-value';
-      for (const [val, label] of [['1', t('yes')], ['0', t('no')]]) {
-        const option = document.createElement('option');
-        option.value = val;
-        option.textContent = label;
-        if (val === currentValue) option.selected = true;
-        select.appendChild(option);
-      }
-      return select;
-    }
-
-    const input = document.createElement('input');
-    input.name = 'filter-value';
-    input.value = currentValue;
-
-    if (fieldMeta.field_type === 'number') {
-      input.type = 'number';
-      input.step = 'any';
-    } else if (fieldMeta.field_type === 'date') {
-      input.type = 'date';
-    } else {
-      input.type = 'text';
-      input.placeholder = t('value_placeholder');
-    }
-
-    return input;
   }
 }
 

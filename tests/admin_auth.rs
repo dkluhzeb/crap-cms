@@ -111,7 +111,7 @@ fn setup_app_with_config(
     let translations = Arc::new(crap_cms::admin::translations::Translations::load(
         tmp.path(),
     ));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -147,7 +147,6 @@ fn setup_app_with_config(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
@@ -163,6 +162,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     let router = build_router(state);
@@ -261,6 +261,108 @@ async fn login_page_returns_200() {
     assert!(
         body.to_lowercase().contains("login"),
         "Login page should contain 'login'"
+    );
+}
+
+/// Regression test for audit finding M-3 — the `crap_csrf` cookie's
+/// `Max-Age` must reflect `admin.csrf_cookie_lifetime` (default 86400),
+/// not a hardcoded literal. Future refactors that drop the config read
+/// would still set the same value by coincidence, but TOML-parse tests
+/// in `config::server::tests` cover the non-default path.
+#[tokio::test]
+async fn csrf_cookie_max_age_matches_configured_default() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let resp = app
+        .router
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    let cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|s| s.starts_with("crap_csrf="))
+        .expect("admin/login response must set crap_csrf cookie");
+
+    assert!(
+        cookie.contains("Max-Age=86400"),
+        "crap_csrf cookie must carry configured Max-Age, got: {cookie}",
+    );
+    assert!(
+        cookie.contains("SameSite=Strict"),
+        "crap_csrf cookie must be SameSite=Strict, got: {cookie}",
+    );
+}
+
+/// Regression test for CSP hardening — the rendered page must carry a
+/// per-request nonce in both the `Content-Security-Policy` header and
+/// every inline `<script>`, and must not fall back to `'unsafe-inline'`
+/// for scripts. Protects against future refactors that silently relax CSP.
+#[tokio::test]
+async fn login_page_csp_nonce_matches_inline_scripts() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let resp = app
+        .router
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .expect("CSP header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Both `script-src` and `style-src` are free of `'unsafe-inline'`:
+    //   - scripts use a per-request nonce
+    //   - styles use constructable stylesheets in components, classes/`hidden`
+    //     in templates, and HTMX's indicator-style injection is disabled via
+    //     `htmx.config.includeIndicatorStyles=false` (the indicator CSS rules
+    //     ship in `static/styles/base/reset.css` instead).
+    let script_src = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("script-src "))
+        .expect("script-src directive present");
+
+    assert!(
+        !script_src.contains("'unsafe-inline'"),
+        "script-src must not include 'unsafe-inline' — got {:?}",
+        script_src,
+    );
+
+    let style_src = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("style-src "))
+        .expect("style-src directive present");
+
+    assert!(
+        !style_src.contains("'unsafe-inline'"),
+        "style-src must not include 'unsafe-inline' — got {:?}",
+        style_src,
+    );
+
+    let nonce_prefix = "'nonce-";
+    let start = script_src
+        .find(nonce_prefix)
+        .expect("script-src carries a nonce directive");
+    let after = &script_src[start + nonce_prefix.len()..];
+    let end = after.find('\'').expect("nonce directive is closed");
+    let nonce = &after[..end];
+    assert!(!nonce.is_empty(), "nonce must not be empty");
+
+    let body = body_string(resp.into_body()).await;
+    let expected_attr = format!("nonce=\"{}\"", nonce);
+    assert!(
+        body.contains(&expected_attr),
+        "rendered HTML must carry matching nonce attribute {:?}",
+        expected_attr,
     );
 }
 
@@ -1194,7 +1296,7 @@ end"#,
     let translations = Arc::new(crap_cms::admin::translations::Translations::load(
         tmp.path(),
     ));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -1226,7 +1328,6 @@ end"#,
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
@@ -1242,6 +1343,7 @@ end"#,
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     let router = build_router(state);

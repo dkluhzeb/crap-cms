@@ -1570,7 +1570,7 @@ async fn group_array_crud_roundtrip() {
         &conn,
         "candidates",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -1674,7 +1674,7 @@ async fn group_collapsible_array_crud_roundtrip() {
         &conn,
         "products",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -1824,7 +1824,7 @@ async fn group_array_blocks_crud_roundtrip() {
         &conn,
         "projects",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -1984,7 +1984,7 @@ async fn group_layout_array_blocks_crud_roundtrip() {
         &conn,
         "dashboards",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -2623,7 +2623,7 @@ async fn deep_blocks_nesting_crud_roundtrip() {
         &conn,
         "layouts",
         &def,
-        &crap_cms::db::FindQuery::new(),
+        &crap_cms::db::FindQuery::default(),
         None,
     )
     .unwrap();
@@ -2807,4 +2807,87 @@ async fn double_nested_group_array_crud_roundtrip() {
     assert_eq!(items_arr[0]["qty"], 10.0);
     assert_eq!(items_arr[1]["name"], "Item2");
     assert_eq!(items_arr[1]["qty"], 20.0);
+}
+
+// ── code_field_inside_blocks_renders_language_picker ──────────────────────
+//
+// Regression: matches the projects example — a code field inside a
+// `code_block` block-definition with `admin.languages` set should render
+// `<crap-code data-language="javascript" data-languages='["javascript",...]'>`
+// inside the `<template>` element AND a hidden `<input name="..._lang">`
+// next to it. Without this, the editor shows no language picker.
+
+fn make_code_blocks_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("snippets");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Snippet".to_string())),
+        plural: Some(LocalizedString::Plain("Snippets".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition {
+                block_type: "code_block".to_string(),
+                fields: vec![
+                    FieldDefinition::builder("code", FieldType::Code)
+                        .admin(
+                            FieldAdmin::builder()
+                                .language("javascript")
+                                .languages(vec![
+                                    "javascript".to_string(),
+                                    "python".to_string(),
+                                    "html".to_string(),
+                                ])
+                                .build(),
+                        )
+                        .build(),
+                ],
+                label: Some(LocalizedString::Plain("Code".to_string())),
+                ..Default::default()
+            }])
+            .build(),
+    ];
+    def
+}
+
+#[tokio::test]
+async fn code_field_inside_blocks_renders_language_picker() {
+    let app = setup_app(vec![make_code_blocks_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "blockcode@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "blockcode@test.com");
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/snippets/create")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+
+    assert!(
+        body.contains("data-language=\"javascript\""),
+        "block-template <crap-code> must carry data-language"
+    );
+    assert!(
+        body.contains("data-languages='"),
+        "block-template <crap-code> must carry data-languages='…' to render the picker"
+    );
+    assert!(
+        body.contains("&quot;javascript&quot;")
+            || (body.contains("\"javascript\"") && body.contains("\"python\"")),
+        "data-languages JSON must include all configured languages"
+    );
+    assert!(
+        body.contains("name=\"content[__INDEX__][code]_lang\""),
+        "block-template must include the hidden _lang input that round-trips the picker choice"
+    );
 }

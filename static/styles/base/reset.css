@@ -1,0 +1,133 @@
+/**
+ * Global resets, utilities, and Web Components plumbing.
+ *
+ * Five concerns kept together because each is a small handful of
+ * lines and they all want to load early in the cascade. In order:
+ *
+ *   1. Light-DOM Web Component wrappers (`display: contents`).
+ *   2. FOUC prevention for Shadow-DOM components.
+ *   3. Global resets — box-sizing, html font + color.
+ *   4. Cross-cutting utility classes (icon size/colour, text muted/sm,
+ *      sr-only, htmx-indicator).
+ *   5. `prefers-reduced-motion` override.
+ */
+
+/* 1. Light-DOM Web Component wrappers — layout-invisible. */
+crap-sidebar,
+crap-collapsible,
+crap-array-field,
+crap-conditions,
+crap-dirty-form,
+crap-scroll-restore,
+crap-list-settings {
+  display: contents;
+}
+
+/* 2. Prevent FOUC for Shadow-DOM components that replace their content. */
+crap-tags:not(:defined),
+crap-block-picker:not(:defined),
+crap-relationship-search:not(:defined),
+crap-focal-point:not(:defined) {
+  visibility: hidden;
+}
+
+/* 3. Global resets. */
+html {
+  font-family: "Geist", system-ui, -apple-system, sans-serif;
+  color: var(--text-primary);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* 4. Utilities. */
+
+/* Inline icon utility — for icons placed inline with text. */
+.icon--inline {
+  font-size: 1em;
+  vertical-align: middle;
+}
+
+/* Text utilities */
+.text--muted {
+  color: var(--text-tertiary);
+}
+.text--sm {
+  font-size: var(--text-sm);
+}
+
+/* Screen-reader-only utility — visually hidden but accessible to assistive tech. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Icon size modifiers for Material Symbols. */
+.icon--xs {
+  font-size: var(--icon-xs);
+}
+.icon--sm {
+  font-size: var(--icon-sm);
+}
+.icon--md {
+  font-size: var(--icon-md);
+}
+.icon--lg {
+  font-size: var(--icon-lg);
+}
+.icon--xl {
+  font-size: var(--icon-xl);
+}
+
+/* Icon colour modifiers. */
+.icon--success {
+  color: var(--color-success);
+}
+.icon--muted {
+  color: var(--text-tertiary);
+}
+
+/* HTMX request indicators.
+ * Replaces the inline `<style>` block HTMX would otherwise inject at
+ * boot (see `htmx.config.includeIndicatorStyles=false` set in
+ * base.hbs), so the page CSP can run with `style-src 'self'` — no
+ * `'unsafe-inline'` needed. */
+.htmx-indicator {
+  opacity: 0;
+  visibility: hidden;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 200ms ease-in;
+}
+
+/* 5. Respect user motion preferences. The `!important` here is
+   load-bearing: the override must outrank every animation/transition
+   rule set elsewhere. This is the documented MDN pattern for
+   prefers-reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: a11y override must win */
+    scroll-behavior: auto !important;
+  }
+}

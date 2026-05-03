@@ -13,6 +13,7 @@ const STATIC_INIT_LUA: &str = include_str!("templates/init.lua.tpl");
 const STATIC_LUARC: &str = include_str!("templates/luarc.json.tpl");
 const STATIC_GITIGNORE: &str = include_str!("templates/gitignore.tpl");
 const STATIC_STYLUA: &str = include_str!("templates/stylua.toml.tpl");
+const STATIC_MCP_JSON: &str = include_str!("templates/mcp.json.tpl");
 
 /// Embedded Lua API type definitions — compiled into the binary.
 pub(crate) const LUA_API_TYPES: &str = include_str!("../../../types/crap.lua");
@@ -103,6 +104,7 @@ fn write_scaffolded_files(target: &std::path::Path, opts: &InitOptions) -> Resul
     fs::write(target.join(".luarc.json"), STATIC_LUARC).context("Failed to write .luarc.json")?;
     fs::write(target.join(".gitignore"), STATIC_GITIGNORE).context("Failed to write .gitignore")?;
     fs::write(target.join("stylua.toml"), STATIC_STYLUA).context("Failed to write stylua.toml")?;
+    fs::write(target.join(".mcp.json"), STATIC_MCP_JSON).context("Failed to write .mcp.json")?;
 
     Ok(())
 }
@@ -145,6 +147,7 @@ mod tests {
         assert!(target.join(".luarc.json").exists());
         assert!(target.join(".gitignore").exists());
         assert!(target.join("stylua.toml").exists());
+        assert!(target.join(".mcp.json").exists());
         assert!(target.join("types/crap.lua").exists());
 
         for subdir in SUBDIRS {

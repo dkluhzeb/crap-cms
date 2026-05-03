@@ -1,93 +1,127 @@
 /**
- * Upload field preview — `<crap-upload-preview>`.
+ * Upload-field preview — `<crap-upload-preview>`.
  *
- * Updates preview image and file info when the user selects a different
- * upload via the search widget or dropdown.
+ * Refreshes the thumbnail + filename row when the user picks a
+ * different upload. Two source shapes are supported:
+ *
+ *  - **Search widget** — the picked item lives on the hidden input
+ *    inside a slotted `<crap-relationship-search>`. We listen for
+ *    `crap:change` (bubbles from that component) and read the upload
+ *    metadata from the hidden input's data attributes.
+ *  - **Legacy `<select>`** — only used for locale-locked fields. The
+ *    picked option carries the metadata directly.
  *
  * @module uploads
+ * @stability stable
  */
 
-import { t } from './i18n.js';
+import { h } from './_internal/h.js';
+import { t } from './_internal/i18n.js';
+import { EV_CHANGE } from './events.js';
+
+/**
+ * @typedef {{
+ *   thumbnailUrl: string|null,
+ *   filename: string|null,
+ *   isImage: boolean,
+ * }} UploadMeta
+ */
+
+const EMPTY_META = { thumbnailUrl: null, filename: null, isImage: false };
+
+/**
+ * Read upload metadata off any element that carries it as data
+ * attributes (`<option>`, hidden `<input>`, etc.).
+ *
+ * @param {Element|null} el
+ * @returns {UploadMeta}
+ */
+function readUploadMeta(el) {
+  if (!el) return EMPTY_META;
+  return {
+    thumbnailUrl: el.getAttribute('data-thumbnail'),
+    filename: el.getAttribute('data-filename'),
+    isImage: el.getAttribute('data-is-image') === 'true',
+  };
+}
 
 class CrapUploadPreview extends HTMLElement {
+  constructor() {
+    super();
+    /** @type {boolean} */
+    this._connected = false;
+  }
+
   connectedCallback() {
     if (this._connected) return;
     this._connected = true;
 
-    // Legacy: <select> for locale_locked fields
-    const select = /** @type {HTMLSelectElement|null} */ (this.querySelector('[data-upload-select]'));
+    // Legacy `<select>` path used for locale-locked fields. If present,
+    // it owns the picker and the search-widget path doesn't apply.
+    const select = /** @type {HTMLSelectElement|null} */ (
+      this.querySelector('[data-upload-select]')
+    );
     if (select) {
-      select.addEventListener('change', () => {
-        const option = select.options[select.selectedIndex];
-        if (!option || !option.value) {
-          this._updatePreview(null, null, false);
-          return;
-        }
-        this._updatePreview(
-          option.getAttribute('data-thumbnail'),
-          option.getAttribute('data-filename'),
-          option.getAttribute('data-is-image') === 'true',
-        );
-      });
+      this._setupSelect(select);
       return;
     }
+    this._setupSearch();
+  }
 
-    // Search widget: listen for crap:change events (bubbles from relationship-search)
-    this.addEventListener('crap:change', () => {
-      const hidden = /** @type {HTMLInputElement|null} */ (
-        this.querySelector('crap-relationship-search input[type="hidden"]')
-      );
-      if (!hidden || !hidden.value) {
-        this._updatePreview(null, null, false);
-        return;
-      }
-      this._updatePreview(
-        hidden.getAttribute('data-thumbnail'),
-        hidden.getAttribute('data-filename'),
-        hidden.getAttribute('data-is-image') === 'true',
-      );
+  /** @param {HTMLSelectElement} select */
+  _setupSelect(select) {
+    select.addEventListener('change', () => {
+      const option = select.selectedOptions[0];
+      this._updatePreview(option?.value ? readUploadMeta(option) : EMPTY_META);
     });
   }
 
+  _setupSearch() {
+    this.addEventListener(EV_CHANGE, () => {
+      /** @type {HTMLInputElement|null} */
+      const hidden = this.querySelector('crap-relationship-search input[type="hidden"]');
+      this._updatePreview(hidden?.value ? readUploadMeta(hidden) : EMPTY_META);
+    });
+  }
+
+  /** @param {UploadMeta} meta */
+  _updatePreview(meta) {
+    this._renderPreview(meta);
+    this._renderInfo(meta);
+  }
+
   /**
-   * @param {string|null} thumbnailUrl
-   * @param {string|null} filename
-   * @param {boolean} isImage
+   * Render (or hide) the thumbnail image.
+   * @param {UploadMeta} meta
    */
-  _updatePreview(thumbnailUrl, filename, isImage) {
+  _renderPreview(meta) {
     const preview = /** @type {HTMLElement|null} */ (this.querySelector('.upload-field__preview'));
-    const info = /** @type {HTMLElement|null} */ (this.querySelector('.upload-field__info'));
-
-    if (preview) {
-      if (thumbnailUrl && isImage) {
-        preview.textContent = '';
-        const img = document.createElement('img');
-        img.src = thumbnailUrl;
-        img.alt = t('preview');
-        preview.appendChild(img);
-        preview.style.display = '';
-      } else {
-        preview.textContent = '';
-        preview.style.display = 'none';
-      }
+    if (!preview) return;
+    if (meta.thumbnailUrl && meta.isImage) {
+      preview.replaceChildren(h('img', { src: meta.thumbnailUrl, alt: t('preview') }));
+      preview.hidden = false;
+    } else {
+      preview.replaceChildren();
+      preview.hidden = true;
     }
+  }
 
-    if (info) {
-      if (filename) {
-        info.textContent = '';
-        const icon = document.createElement('span');
-        icon.className = 'material-symbols-outlined icon--sm';
-        icon.textContent = 'description';
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'upload-field__filename';
-        nameSpan.textContent = filename;
-        info.appendChild(icon);
-        info.appendChild(nameSpan);
-        info.style.display = '';
-      } else {
-        info.textContent = '';
-        info.style.display = 'none';
-      }
+  /**
+   * Render (or hide) the icon + filename row.
+   * @param {UploadMeta} meta
+   */
+  _renderInfo(meta) {
+    const info = /** @type {HTMLElement|null} */ (this.querySelector('.upload-field__info'));
+    if (!info) return;
+    if (meta.filename) {
+      info.replaceChildren(
+        h('span', { class: ['material-symbols-outlined', 'icon--sm'], text: 'description' }),
+        h('span', { class: 'upload-field__filename', text: meta.filename }),
+      );
+      info.hidden = false;
+    } else {
+      info.replaceChildren();
+      info.hidden = true;
     }
   }
 }

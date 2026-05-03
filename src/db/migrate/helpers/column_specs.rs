@@ -8,7 +8,7 @@ use crate::{
     core::{FieldDefinition, FieldType},
     db::{
         DbConnection,
-        query::helpers::{prefixed_name, tz_column, walk_leaf_fields},
+        query::helpers::{lang_column, prefixed_name, tz_column, walk_leaf_fields},
     },
 };
 
@@ -66,6 +66,18 @@ pub(in crate::db::migrate) fn collect_column_specs<'a>(
             if field.field_type == FieldType::Date && field.timezone {
                 specs.push(ColumnSpec {
                     col_name: tz_column(&col_name),
+                    field,
+                    is_localized,
+                    companion_text: true,
+                });
+            }
+
+            // Code fields with a non-empty `admin.languages` allow-list get a
+            // companion `<name>_lang` column that stores the editor's per-
+            // document language pick. Mirrors the date/timezone pattern above.
+            if field.field_type == FieldType::Code && !field.admin.languages.is_empty() {
+                specs.push(ColumnSpec {
+                    col_name: lang_column(&col_name),
                     field,
                     is_localized,
                     companion_text: true,
@@ -225,6 +237,63 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].col_name, "meta__starts_at");
         assert_eq!(specs[1].col_name, "meta__starts_at_tz");
+        assert!(specs[1].companion_text);
+    }
+
+    #[test]
+    fn code_with_languages_produces_companion_lang_column() {
+        let fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    crate::core::field::FieldAdmin::builder()
+                        .languages(vec!["javascript".to_string(), "python".to_string()])
+                        .build(),
+                )
+                .build(),
+        ];
+        let specs = collect_column_specs(&fields, &no_locale());
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].col_name, "snippet");
+        assert!(!specs[0].companion_text);
+        assert_eq!(specs[1].col_name, "snippet_lang");
+        assert!(specs[1].companion_text);
+    }
+
+    #[test]
+    fn code_without_languages_produces_one_spec() {
+        let fields = vec![
+            FieldDefinition::builder("snippet", FieldType::Code)
+                .admin(
+                    crate::core::field::FieldAdmin::builder()
+                        .language("javascript")
+                        .build(),
+                )
+                .build(),
+        ];
+        let specs = collect_column_specs(&fields, &no_locale());
+        assert_eq!(specs.len(), 1, "no companion column without an allow-list");
+        assert_eq!(specs[0].col_name, "snippet");
+    }
+
+    #[test]
+    fn code_languages_in_group_produces_prefixed_lang_column() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("example", FieldType::Code)
+                        .admin(
+                            crate::core::field::FieldAdmin::builder()
+                                .languages(vec!["javascript".to_string()])
+                                .build(),
+                        )
+                        .build(),
+                ])
+                .build(),
+        ];
+        let specs = collect_column_specs(&fields, &no_locale());
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].col_name, "meta__example");
+        assert_eq!(specs[1].col_name, "meta__example_lang");
         assert!(specs[1].companion_text);
     }
 

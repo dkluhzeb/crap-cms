@@ -1,43 +1,94 @@
 {{#> layout/base}}
-<h1>{{t "dashboard"}}</h1>
+  <h1>{{t "dashboard"}}</h1>
 
-<div class="cards">
-  {{#each collection_cards}}
-  <a class="card" href="/admin/collections/{{this.slug}}"
-    hx-get="/admin/collections/{{this.slug}}" hx-target="body" hx-push-url="true">
-    <div class="card__header">
-      <span class="material-symbols-outlined">{{#if this.is_upload}}image{{else if this.is_auth}}person{{else}}folder{{/if}}</span>
-      <h3>{{this.display_name}}</h3>
-      {{#if this.is_auth}}<span class="card__badge">{{t "badge_auth"}}</span>{{/if}}
-      {{#if this.is_upload}}<span class="card__badge">{{t "badge_media"}}</span>{{/if}}
-      {{#if this.has_versions}}<span class="card__badge">{{t "badge_versions"}}</span>{{/if}}
-    </div>
-    <div class="card__body">
-      <p class="card__stat">{{this.count}} {{#if (eq this.count 1)}}{{this.singular_name}}{{else}}{{this.display_name}}{{/if}}</p>
-      {{#if this.last_updated}}<p class="card__meta">{{t "last_updated"}} <crap-time datetime="{{this.last_updated}}">{{this.last_updated}}</crap-time></p>{{/if}}
-    </div>
-  </a>
-  {{/each}}
-</div>
+  {{slot "dashboard_widgets"}}
 
-{{#if global_cards}}
-<h2 class="dashboard__section-title">{{t "globals"}}</h2>
-<div class="cards">
-  {{#each global_cards}}
-  <a class="card" href="/admin/globals/{{this.slug}}"
-    hx-get="/admin/globals/{{this.slug}}" hx-target="body" hx-push-url="true">
-    <div class="card__header">
-      <span class="material-symbols-outlined">settings</span>
-      <h3>{{this.display_name}}</h3>
-      {{#if this.has_versions}}<span class="card__badge">{{t "badge_versions"}}</span>{{/if}}
+  <div class="cards">
+    {{#each collection_cards}}
+      <a
+        class="card"
+        href="/admin/collections/{{this.slug}}"
+        hx-get="/admin/collections/{{this.slug}}"
+        hx-target="body"
+        hx-push-url="true"
+      >
+        <div class="card__header">
+          <span class="material-symbols-outlined">
+            {{#if this.is_upload}}
+              image
+            {{else if this.is_auth}}
+              person
+            {{else}}
+              folder
+            {{/if}}
+          </span>
+
+          <h3>{{this.display_name}}</h3>
+
+          {{#if this.is_auth}}
+            <span class="card__badge">{{t "badge_auth"}}</span>
+          {{/if}}
+
+          {{#if this.is_upload}}
+            <span class="card__badge">{{t "badge_media"}}</span>
+          {{/if}}
+
+          {{#if this.has_versions}}
+            <span class="card__badge">{{t "badge_versions"}}</span>
+          {{/if}}
+        </div>
+
+        <div class="card__body">
+          <p class="card__stat">
+            {{this.count}}
+            {{#if (eq this.count 1)}}
+              {{this.singular_name}}
+            {{else}}
+              {{this.display_name}}
+            {{/if}}
+          </p>
+
+          {{#if this.last_updated}}
+            <p class="card__meta">
+              {{t "last_updated"}}
+              <crap-time datetime="{{this.last_updated}}">{{this.last_updated}}</crap-time>
+            </p>
+          {{/if}}
+        </div>
+      </a>
+    {{/each}}
+  </div>
+
+  {{#if global_cards}}
+    <h2 class="dashboard__section-title">{{t "globals"}}</h2>
+
+    <div class="cards">
+      {{#each global_cards}}
+        <a
+          class="card"
+          href="/admin/globals/{{this.slug}}"
+          hx-get="/admin/globals/{{this.slug}}"
+          hx-target="body"
+          hx-push-url="true"
+        >
+          <div class="card__header">
+            <span class="material-symbols-outlined">settings</span>
+            <h3>{{this.display_name}}</h3>
+            {{#if this.has_versions}}
+              <span class="card__badge">{{t "badge_versions"}}</span>
+            {{/if}}
+          </div>
+
+          {{#if this.last_updated}}
+            <div class="card__body">
+              <p class="card__meta">
+                {{t "last_updated"}}
+                <crap-time datetime="{{this.last_updated}}">{{this.last_updated}}</crap-time>
+              </p>
+            </div>
+          {{/if}}
+        </a>
+      {{/each}}
     </div>
-    {{#if this.last_updated}}
-    <div class="card__body">
-      <p class="card__meta">{{t "last_updated"}} <crap-time datetime="{{this.last_updated}}">{{this.last_updated}}</crap-time></p>
-    </div>
-    {{/if}}
-  </a>
-  {{/each}}
-</div>
-{{/if}}
+  {{/if}}
 {{/layout/base}}

@@ -4,15 +4,20 @@ use std::{
 };
 
 use r2d2_sqlite::SqliteConnectionManager;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::*;
+use super::{
+    EnrichOptions, SubFieldOpts, build_enriched_sub_field_context as build_enriched_typed,
+    enrich_nested_fields as enrich_nested_typed, enrich_types,
+    enrichment::enrich_field_contexts as enrich_typed,
+};
 
 use crate::{
     admin::{
         AdminState, Translations,
-        handlers::field_context::{MAX_FIELD_DEPTH, builder::build_field_contexts},
+        context::field::FieldContext,
+        handlers::field_context::{MAX_FIELD_DEPTH, builder::build_field_contexts as build_typed},
     },
     config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
@@ -28,6 +33,75 @@ use crate::{
     db::DbPool,
     hooks::HookRunner,
 };
+
+/// Test-only wrapper that converts the typed build output to `Vec<Value>` for
+/// the JSON-style assertions used throughout this file.
+fn build_field_contexts(
+    fields: &[FieldDefinition],
+    values: &HashMap<String, String>,
+    errors: &HashMap<String, String>,
+    filter_hidden: bool,
+    non_default_locale: bool,
+) -> Vec<Value> {
+    build_typed(fields, values, errors, filter_hidden, non_default_locale)
+        .into_iter()
+        .map(|fc| fc.to_value())
+        .collect()
+}
+
+/// Test-only wrapper for [`build_enriched_sub_field_context`] returning Value
+/// so existing assertions can keep using JSON indexing.
+fn build_enriched_sub_field_context(
+    sf: &FieldDefinition,
+    raw_value: Option<&Value>,
+    parent_name: &str,
+    idx: usize,
+    opts: &SubFieldOpts,
+) -> Value {
+    build_enriched_typed(sf, raw_value, parent_name, idx, opts).to_value()
+}
+
+/// Test-only wrapper for the typed enrichment entry point. Tests construct
+/// `Vec<Value>`; we deserialize at entry and reserialize at exit.
+fn enrich_field_contexts(
+    fields: &mut Vec<Value>,
+    field_defs: &[FieldDefinition],
+    doc_fields: &HashMap<String, Value>,
+    state: &AdminState,
+    opts: &EnrichOptions,
+) {
+    let mut typed: Vec<FieldContext> = fields
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).expect("test field-context must deserialize"))
+        .collect();
+    enrich_typed(&mut typed, field_defs, doc_fields, state, opts);
+    *fields = typed.into_iter().map(|fc| fc.to_value()).collect();
+}
+
+/// Test-only wrapper for `enrich_nested_fields` accepting `Vec<Value>`.
+#[allow(dead_code)]
+fn enrich_nested_fields(
+    sub_fields: &mut Vec<Value>,
+    field_defs: &[FieldDefinition],
+    conn: &dyn crate::db::DbConnection,
+    reg: &Registry,
+    rel_locale_ctx: Option<&crate::db::query::LocaleContext>,
+) {
+    let mut typed: Vec<FieldContext> = sub_fields
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).expect("test sub-field must deserialize"))
+        .collect();
+    enrich_nested_typed(&mut typed, field_defs, conn, reg, rel_locale_ctx);
+    *sub_fields = typed.into_iter().map(|fc| fc.to_value()).collect();
+}
+
+/// Test-only wrapper for `enrich_types::enrich_richtext` accepting `&mut Value`.
+fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
+    let mut typed: crate::admin::context::field::RichtextField =
+        serde_json::from_value(ctx.clone()).expect("test richtext ctx must deserialize");
+    enrich_types::enrich_richtext(&mut typed, reg);
+    *ctx = serde_json::to_value(typed).expect("RichtextField serializes infallibly");
+}
 
 fn make_test_state() -> AdminState {
     let tmp = tempfile::tempdir().unwrap();
@@ -67,7 +141,6 @@ fn make_test_state() -> AdminState {
         sse_connections: Arc::new(AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: CancellationToken::new(),
-        csp_header: None,
         storage: create_storage(tmp.path(), &UploadConfig::default()).unwrap(),
         token_provider: Arc::new(JwtTokenProvider::new("test-secret")),
         password_provider: Arc::new(Argon2PasswordProvider),
@@ -77,6 +150,7 @@ fn make_test_state() -> AdminState {
         ),
         populate_singleflight: Arc::new(crate::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     }
 }
 
@@ -134,6 +208,83 @@ fn enriched_sub_field_nested_array_populates_rows() {
     );
 }
 
+/// Regression: a Code field directly inside an Array row must inherit
+/// `admin.language` from its definition. Previously `dispatch_sub_field_type`
+/// had no `Code` arm, so the language stayed empty and CodeMirror fell back
+/// to the default mode for code fields nested in array rows. The same field
+/// inside a Row/Tabs/Collapsible wrapper inside the array was handled
+/// correctly by `children.rs`, producing inconsistent rendering for the
+/// same field config based on nesting position.
+#[test]
+fn enriched_sub_field_code_in_array_row_inherits_admin_language() {
+    use crate::core::field::FieldAdminBuilder;
+
+    let mut array = make_field("snippets", FieldType::Array);
+    let mut code = make_field("body", FieldType::Code);
+    code.admin = FieldAdminBuilder::new()
+        .language("javascript".to_string())
+        .build();
+    array.fields = vec![code];
+
+    let raw_value = json!([{"body": "console.log(1);"}]);
+
+    let ctx = build_enriched_sub_field_context(
+        &array,
+        Some(&raw_value),
+        "doc",
+        0,
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+    );
+
+    let rows = ctx["rows"].as_array().unwrap();
+    let sub_fields = rows[0]["sub_fields"].as_array().unwrap();
+    assert_eq!(sub_fields[0]["field_type"], "code");
+    assert_eq!(sub_fields[0]["language"], "javascript");
+}
+
+/// Regression: a localized field inside a layout wrapper (Row/Tabs/Collapsible)
+/// inside a non-localized Array must remain editable in non-default locales.
+/// The top-level array enrichment computes `locale_locked = non_default_locale
+/// && !array.localized = true` and passes it down. Previously the wrapper's
+/// `build_sub_field_base` and the wrapper-children's `build_child_base` both
+/// inherited that flag verbatim instead of recomputing
+/// `non_default_locale && !child.localized` per field, so a localized field
+/// inside a Row inside an Array went read-only in non-default locales — users
+/// couldn't translate it.
+#[test]
+fn localized_field_in_layout_wrapper_in_array_is_editable_in_non_default_locale() {
+    let mut row = make_field("layout", FieldType::Row);
+    let mut title = make_field("title", FieldType::Text);
+    title.localized = true;
+    row.fields = vec![title];
+
+    // Simulate the state after the top-level `enrich_array` ran on a
+    // non-localized array in a non-default locale: `locale_locked = true`
+    // is propagated into the per-row sub-field opts.
+    let errors = HashMap::new();
+    let opts = SubFieldOpts::builder(&errors)
+        .locale_locked(true)
+        .non_default_locale(true)
+        .depth(1)
+        .build();
+
+    let row_value = json!({"title": "Hello"});
+    let ctx = build_enriched_sub_field_context(&row, Some(&row_value), "items[0]", 0, &opts);
+
+    assert_eq!(ctx["field_type"], "row");
+    // Row is non-localized → locale_locked stays true on the wrapper itself.
+    assert_eq!(ctx["locale_locked"], true);
+
+    let title_ctx = &ctx["sub_fields"][0];
+    assert_eq!(title_ctx["field_name"], "title");
+    assert_eq!(title_ctx["localized"], true);
+    assert_eq!(
+        title_ctx["locale_locked"], false,
+        "localized field inside layout wrapper must be unlocked in non-default locale"
+    );
+    assert_eq!(title_ctx["readonly"], false);
+}
+
 #[test]
 fn enriched_sub_field_nested_blocks_populates_rows() {
     let mut inner_blocks = make_field("sections", FieldType::Blocks);
@@ -169,6 +320,68 @@ fn enriched_sub_field_nested_blocks_populates_rows() {
     // Block definitions for templates
     let block_defs = ctx["block_definitions"].as_array().unwrap();
     assert_eq!(block_defs.len(), 1);
+}
+
+/// Per-field `admin.template` + `admin.extra` survive the nested-field
+/// enrichment path. Builds a deeply-nested rating field — group → array
+/// → number with `admin.template = "fields/rating"` — and verifies the
+/// enriched sub-field context still carries `template` and `extra` at
+/// the top level so `RenderFieldHelper` can route it.
+#[test]
+fn enriched_sub_field_preserves_admin_template_and_extra_when_nested() {
+    use crate::core::field::FieldAdminBuilder;
+
+    // The actual rating field: a number with admin.template + admin.extra.
+    let mut rating = make_field("rating", FieldType::Number);
+    rating.admin = FieldAdminBuilder::new()
+        .template("fields/rating")
+        .extra_insert("color", "amber")
+        .extra_insert("max_stars", 5_i64)
+        .build();
+
+    // Wrap it in an array (so it's a nested sub-field), then in a group
+    // (so we hit the deepest enrichment path).
+    let mut reviews_array = make_field("reviews", FieldType::Array);
+    reviews_array.fields = vec![rating];
+    let mut outer_group = make_field("section", FieldType::Group);
+    outer_group.fields = vec![reviews_array];
+
+    let raw_value = json!({
+        "reviews": [
+            { "rating": "4" },
+            { "rating": "5" },
+        ],
+    });
+
+    let ctx = build_enriched_sub_field_context(
+        &outer_group,
+        Some(&raw_value),
+        "items",
+        0,
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+    );
+
+    // group → array → row[0] → rating
+    let group_subs = ctx["sub_fields"].as_array().unwrap();
+    let arr = &group_subs[0];
+    assert_eq!(arr["field_type"], "array");
+    let rows = arr["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "two array rows from raw_value");
+
+    for (i, row) in rows.iter().enumerate() {
+        let row_fields = row["sub_fields"].as_array().unwrap();
+        let rating_ctx = &row_fields[0];
+        assert_eq!(rating_ctx["field_name"], "rating", "row {i}");
+        assert_eq!(
+            rating_ctx["template"], "fields/rating",
+            "row {i}: template must survive nested enrichment so RenderFieldHelper picks it up",
+        );
+        assert_eq!(
+            rating_ctx["extra"]["color"], "amber",
+            "row {i}: extra.color must survive nested enrichment",
+        );
+        assert_eq!(rating_ctx["extra"]["max_stars"], 5, "row {i}");
+    }
 }
 
 #[test]
@@ -297,9 +510,17 @@ fn enriched_sub_field_max_depth_returns_early() {
             .depth(MAX_FIELD_DEPTH)
             .build(),
     );
-    // At max depth, array-specific fields should not be added
+    // At max depth, array-specific recursive content should not be expanded.
+    // (`sub_fields` may serialize as an empty array under the typed model;
+    // the contract is that no rows/template content is present.)
     assert!(ctx.get("rows").is_none());
-    assert!(ctx.get("sub_fields").is_none());
+    assert_eq!(
+        ctx.get("sub_fields")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
+        0
+    );
 }
 
 // --- enriched_sub_field: date field ---
@@ -988,7 +1209,6 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crate::core::upload::create_storage(
             tmp.path(),
             &crate::config::UploadConfig::default(),
@@ -1004,6 +1224,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         ),
         populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1101,7 +1322,6 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crate::core::upload::create_storage(
             tmp.path(),
             &crate::config::UploadConfig::default(),
@@ -1117,6 +1337,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         ),
         populate_singleflight: std::sync::Arc::new(crate::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     enrich_field_contexts(
@@ -1389,7 +1610,7 @@ fn enrich_richtext_basic_node_defs() {
         "_node_names": ["cta"],
     });
 
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     // _node_names should be removed
     assert!(ctx.get("_node_names").is_none());
@@ -1452,7 +1673,7 @@ fn enrich_richtext_admin_display_hints() {
     );
 
     let mut ctx = json!({ "_node_names": ["widget"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
     assert_eq!(attrs[0]["hidden"], true);
@@ -1487,7 +1708,7 @@ fn enrich_richtext_validation_bounds() {
     );
 
     let mut ctx = json!({ "_node_names": ["form"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
 
@@ -1507,7 +1728,7 @@ fn enrich_richtext_missing_node_skipped() {
     let reg = Registry::new(); // empty — no nodes registered
     let mut ctx = json!({ "_node_names": ["nonexistent"] });
 
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     // _node_names removed, but no custom_nodes set (all were missing)
     assert!(ctx.get("_node_names").is_none());
@@ -1519,7 +1740,7 @@ fn enrich_richtext_no_node_names_key() {
     let reg = Registry::new();
     let mut ctx = json!({ "value": "hello" });
 
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     // nothing changed, no crash
     assert_eq!(ctx["value"], "hello");
@@ -1544,7 +1765,7 @@ fn enrich_richtext_default_value_forwarded() {
     );
 
     let mut ctx = json!({ "_node_names": ["note"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attrs = ctx["custom_nodes"][0]["attrs"].as_array().unwrap();
     assert_eq!(attrs[0]["default"], "low");
@@ -1562,7 +1783,7 @@ fn enrich_richtext_hints_absent_when_not_set() {
     );
 
     let mut ctx = json!({ "_node_names": ["plain"] });
-    enrich_types::enrich_richtext(&mut ctx, &reg);
+    enrich_richtext_value(&mut ctx, &reg);
 
     let attr = &ctx["custom_nodes"][0]["attrs"][0];
     // These should NOT be present when not explicitly set

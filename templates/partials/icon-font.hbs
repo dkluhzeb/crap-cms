@@ -1,0 +1,21 @@
+{{!--
+  Icon font stylesheet — Material Symbols (Outlined).
+
+  Default loads from Google Fonts CDN. For privacy-conscious,
+  air-gapped, or GDPR-sensitive deployments, override at
+  <config_dir>/templates/partials/icon-font.hbs to:
+
+    - Self-host: vendor the font and load via /static/.
+    - Skip entirely: leave the file empty (icons render as raw
+      glyph names; the admin remains functional).
+    - Swap families: replace with a different icon font.
+
+  Used by both `<crap-*>` components and `.material-symbols-outlined`
+  spans throughout the templates. Icon size + colour are CSS
+  utilities (`.icon--sm`, `.icon--muted`) defined in
+  `styles/base/reset.css`.
+--}}
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+/>

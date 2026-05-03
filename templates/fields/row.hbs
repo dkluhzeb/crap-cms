@@ -1,12 +1,18 @@
 <div class="form__row">
   {{#each sub_fields}}
-  <div class="form__field form__field--row-item{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
-    {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
-    {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
-    data-field-name="{{name}}">
-    {{{render_field this}}}
-  </div>
+    <div
+      class="form__field form__field--row-item{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
+      {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}
+      {{#if condition_ref}}data-condition-ref="{{condition_ref}}"{{/if}}
+      data-field-name="{{name}}"
+    >
+      {{{render_field this}}}
+    </div>
   {{/each}}
-  {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-  {{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+  {{#if error}}
+    <p class="form__error">{{error}}</p>
+  {{/if}}
+  {{#if description}}
+    <p class="form__help">{{t description}}</p>
+  {{/if}}
 </div>

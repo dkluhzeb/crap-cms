@@ -53,7 +53,7 @@ pub fn is_valid_email_format(value: &str) -> bool {
         && !domain.contains("..")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};

@@ -9,7 +9,7 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::shared::{get_user_doc, htmx_redirect, redirect_response},
+        handlers::shared::{get_user_doc, htmx_redirect, paths, redirect_response},
     },
     core::auth::AuthUser,
     service::{ServiceContext, restore_global_version},
@@ -27,10 +27,10 @@ pub async fn restore_version(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/globals/{}", slug));
+        return redirect_response(&paths::global(&slug));
     }
 
-    let redirect = format!("/admin/globals/{}", slug);
+    let redirect = paths::global(&slug);
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
     let locale_config = state.config.locale.clone();

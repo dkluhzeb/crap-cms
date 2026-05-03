@@ -1,0 +1,29 @@
+{{!-- partials/htmx-nav-link
+     Standard HTMX-boosted nav link: progressive-enhancement href + the
+     boost attributes that swap the page body and update the URL.
+
+     Params:
+       href            — link target (required)
+       label_key       — translation key for label
+       label           — literal label (used if label_key not provided)
+       variant         — button variant ("primary" | "secondary" | "ghost"
+                         | "danger"); default "ghost"
+       size            — optional size suffix ("small" | "sm")
+       icon            — optional Material-Symbols glyph rendered before
+                         the label (icon--sm sized) --}}
+<a
+  class="button button--{{#if variant}}{{variant}}{{else}}ghost{{/if}}{{#if size}} button--{{size}}{{/if}}"
+  href="{{href}}"
+  hx-get="{{href}}"
+  hx-target="body"
+  hx-push-url="true"
+>
+  {{#if icon}}
+    <span class="material-symbols-outlined{{#if size}} icon--sm{{/if}}">{{icon}}</span>
+  {{/if}}
+  {{#if label_key}}
+    {{t label_key}}
+  {{else}}
+    {{label}}
+  {{/if}}
+</a>

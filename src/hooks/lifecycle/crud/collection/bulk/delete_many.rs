@@ -6,7 +6,7 @@ use mlua::{Error::RuntimeError, Lua, Table};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, SharedRegistry, upload},
-    db::{FilterClause, FindQuery, LocaleContext, query::filter::normalize_filter_fields},
+    db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::lifecycle::{
         LuaStorage,
         converters::lua_table_to_find_query,
@@ -59,10 +59,7 @@ fn build_delete_filters(
         &mut find_query.filters,
     )?;
 
-    let mut find_all = FindQuery::new();
-    find_all.filters = find_query.filters;
-
-    Ok((find_all.filters, locale_ctx))
+    Ok((find_query.filters, locale_ctx))
 }
 
 /// Delete multiple documents matching a query.
@@ -123,18 +120,14 @@ fn delete_many_documents(
 
     let invalidation_transport = hook_invalidation_transport(lua);
 
-    let mut ctx_builder = ServiceContext::collection(collection, &service_def)
+    let ctx = ServiceContext::collection(collection, &service_def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
         .override_access(override_access)
-        .invalidation_transport(invalidation_transport);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .invalidation_transport(invalidation_transport)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let delete_opts = DeleteManyOptions {
         run_hooks: hooks_enabled,

@@ -37,17 +37,13 @@ fn restore_version_inner(
         .override_access(override_access)
         .build();
 
-    let mut ctx_builder = ServiceContext::collection(&collection, &def)
+    let ctx = ServiceContext::collection(&collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .override_access(override_access)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let doc = restore_collection_version(&ctx, &id, &version_id, lc)
         .map_err(|e| RuntimeError(format!("{e}")))?;

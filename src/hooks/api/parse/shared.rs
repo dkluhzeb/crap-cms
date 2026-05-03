@@ -1,12 +1,14 @@
 //! Shared parsing helpers used by both collection and global definition parsers.
 
 use anyhow::Result;
-use mlua::{Result as LuaResult, Table, Value};
+use mlua::{Lua, Result as LuaResult, Table, Value};
 use tracing::warn;
 
 use crate::core::{
     FieldDefinition,
-    collection::{Access, Hooks, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig},
+    collection::{
+        Access, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting, McpConfig, VersionsConfig,
+    },
 };
 
 use super::{fields::parse_fields, helpers::*};
@@ -60,11 +62,11 @@ pub(super) fn parse_labels(config: &Table) -> Labels {
 }
 
 /// Parse the `fields` subtable from a Lua config table.
-pub(super) fn parse_fields_section(config: &Table) -> Result<Vec<FieldDefinition>> {
+pub(super) fn parse_fields_section(lua: &Lua, config: &Table) -> Result<Vec<FieldDefinition>> {
     let Ok(fields_tbl) = get_table(config, "fields") else {
         return Ok(Vec::new());
     };
-    parse_fields(&fields_tbl)
+    parse_fields(lua, &fields_tbl)
 }
 
 /// Parse the `hooks` subtable from a Lua config table.
@@ -178,11 +180,7 @@ pub(super) fn parse_versions_config(config: &Table) -> LuaResult<Option<Versions
 }
 
 /// Parse `indexes` from a collection Lua table.
-pub(super) fn parse_indexes(
-    config: &Table,
-) -> LuaResult<Vec<crate::core::collection::IndexDefinition>> {
-    use crate::core::collection::IndexDefinition;
-
+pub(super) fn parse_indexes(config: &Table) -> LuaResult<Vec<IndexDefinition>> {
     let Ok(tbl) = get_table(config, "indexes") else {
         return Ok(Vec::new());
     };

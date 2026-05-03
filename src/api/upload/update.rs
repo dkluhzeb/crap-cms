@@ -1,5 +1,7 @@
 //! PATCH /api/upload/{slug}/{id} — replace file on an existing document.
 
+use tracing::error;
+
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -65,10 +67,9 @@ pub(super) async fn update_upload(
     let (form_data, file) = match parse_multipart_form(request, &state).await {
         Ok(result) => result,
         Err(e) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                &format!("Multipart parse error: {}", e),
-            );
+            error!("Upload multipart parse failed: {}", e);
+
+            return json_error(StatusCode::BAD_REQUEST, "Invalid multipart request");
         }
     };
 
@@ -119,9 +120,10 @@ pub(super) async fn update_upload(
             json_ok(StatusCode::OK, &json!({ "document": doc }))
         }
         Ok(Err(e)) => service_error_to_response(e),
-        Err(e) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Task error: {}", e),
-        ),
+        Err(e) => {
+            error!("Upload update task join failed: {}", e);
+
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+        }
     }
 }

@@ -5,7 +5,85 @@
  * index rewriting, live row label watchers, empty state, and max_rows.
  *
  * @module array-fields
+ * @stability experimental
  */
+
+import { EV_REQUEST_ADD_BLOCK } from './events.js';
+
+/**
+ * Kinds of reference sites a row contains. Each call to {@link rewriteRefs}
+ * dispatches the rewriter with one of these tags so callers can apply
+ * different rules per attribute kind without duplicating the DOM walk.
+ *
+ * @typedef {'rowTitle'|'name'|'fieldName'|'id'|'labelFor'|'tplId'|'fieldNameAttr'} RefKind
+ */
+
+/**
+ * @callback RefRewriter
+ * @param {string} value Current attribute value.
+ * @param {RefKind} kind Which kind of reference site this is. Return `value`
+ *   unchanged to skip a kind.
+ * @returns {string}
+ */
+
+/** @param {string} str */
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Mirror of Rust `safe_template_id`: `[` → `-`, `]` removed.
+ * @param {string} name
+ */
+const safeName = (name) => name.replace(/\[/g, '-').replace(/\]/g, '');
+
+/**
+ * Walk a subtree applying `rewriter` to every site that may carry a row
+ * index reference. Optionally recurses into nested `<template>` content.
+ *
+ * Centralises the DOM walk shared by initial row materialisation and
+ * post-reorder reindexing — both rewrite the same attribute set, only
+ * the regex/string substitution differs.
+ *
+ * @param {Element|DocumentFragment} root
+ * @param {RefRewriter} rewriter
+ * @param {boolean} [recurseTemplates=true]
+ */
+function rewriteRefs(root, rewriter, recurseTemplates = true) {
+  for (const el of root.querySelectorAll('.form__array-row-title')) {
+    if (el.textContent) el.textContent = rewriter(el.textContent, 'rowTitle');
+  }
+  for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (
+    root.querySelectorAll('input, select, textarea')
+  )) {
+    if (input.name) input.name = rewriter(input.name, 'name');
+  }
+  for (const el of root.querySelectorAll('[data-field-name]')) {
+    const v = el.getAttribute('data-field-name');
+    if (v) el.setAttribute('data-field-name', rewriter(v, 'fieldName'));
+  }
+  for (const el of root.querySelectorAll('[id]')) {
+    if (el.id) el.id = rewriter(el.id, 'id');
+  }
+  for (const el of root.querySelectorAll('label[for]')) {
+    const v = el.getAttribute('for');
+    if (v) el.setAttribute('for', rewriter(v, 'labelFor'));
+  }
+  for (const el of root.querySelectorAll('[data-template-id]')) {
+    const v = el.getAttribute('data-template-id');
+    if (v) el.setAttribute('data-template-id', rewriter(v, 'tplId'));
+  }
+  for (const el of root.querySelectorAll('[field-name]')) {
+    const v = el.getAttribute('field-name');
+    if (v) el.setAttribute('field-name', rewriter(v, 'fieldNameAttr'));
+  }
+
+  if (recurseTemplates) {
+    for (const tmpl of /** @type {NodeListOf<HTMLTemplateElement>} */ (
+      root.querySelectorAll('template')
+    )) {
+      rewriteRefs(tmpl.content, rewriter, true);
+    }
+  }
+}
 
 class CrapArrayField extends HTMLElement {
   constructor() {
@@ -24,11 +102,17 @@ class CrapArrayField extends HTMLElement {
     this.addEventListener('dragend', this._onDragEnd.bind(this));
     this.addEventListener('dragover', this._onDragOver.bind(this));
     this.addEventListener('drop', this._onDrop.bind(this));
-    this.addEventListener('crap:request-add-block', /** @param {CustomEvent} e */ (e) => {
-      if (/** @type {HTMLElement} */ (e.target).closest('crap-array-field') !== this) return;
-      this._addBlockRow(e.detail.templateId);
-    });
-    this._initLabelWatchers();
+    this.addEventListener(
+      EV_REQUEST_ADD_BLOCK,
+      /** @param {Event} e */ (e) => {
+        const ce = /** @type {CustomEvent} */ (e);
+        if (/** @type {HTMLElement} */ (ce.target).closest('crap-array-field') !== this) return;
+        this._addBlockRow(ce.detail.templateId);
+      },
+    );
+    // Row-label watching now lives on `<crap-array-row>`'s own
+    // connectedCallback — no per-row wiring needed here. (See the
+    // `array-row` module.)
   }
 
   disconnectedCallback() {
@@ -45,210 +129,58 @@ class CrapArrayField extends HTMLElement {
 
   /** @param {MouseEvent} e */
   _onClick(e) {
-    const el = /** @type {HTMLElement} */ (e.target).closest('[data-action]');
+    const el = /** @type {HTMLElement|null} */ (
+      /** @type {HTMLElement} */ (e.target).closest('[data-action]')
+    );
     if (!el || !this.contains(el)) return;
     if (el.closest('crap-array-field') !== this) return;
 
-    switch (/** @type {HTMLElement} */ (el).dataset.action) {
-      case 'toggle-array-row': this._toggleRow(el); break;
-      case 'toggle-all-rows': this._toggleAllRows(el); break;
-      case 'move-row-up': this._moveRowUp(el); break;
-      case 'move-row-down': this._moveRowDown(el); break;
-      case 'duplicate-row': this._duplicateRow(el); break;
-      case 'remove-array-row': this._removeRow(el); break;
-      case 'add-array-row': this._addArrayRow(/** @type {HTMLElement} */ (el).dataset.templateId); break;
-      case 'noop': break;
-    }
-  }
-
-  /* ── Row label watchers ────────────────────────────────────── */
-
-  _initLabelWatchers() {
-    const fs = this._fieldset;
-    if (!fs) return;
-    const labelField = fs.getAttribute('data-label-field');
-    if (!labelField) return;
-    fs.querySelectorAll(':scope > .form__array-rows > .form__array-row').forEach(
-      /** @param {HTMLElement} row */ (row) => this._setupRowLabelWatcher(row, labelField)
-    );
-  }
-
-  /**
-   * @param {HTMLElement} row
-   * @param {string} labelFieldName
-   */
-  _setupRowLabelWatcher(row, labelFieldName) {
-    if (row.dataset.labelInit) return;
-    row.dataset.labelInit = '1';
-    const titleEl = row.querySelector('.form__array-row-title');
-    if (!titleEl) return;
-    for (const input of row.querySelectorAll('input, select, textarea')) {
-      if (/** @type {HTMLInputElement} */ (input).name?.endsWith('[' + labelFieldName + ']')) {
-        input.addEventListener('input', () => {
-          const val = /** @type {HTMLInputElement} */ (input).value;
-          if (val) titleEl.textContent = val;
-        });
+    switch (el.dataset.action) {
+      case 'toggle-array-row':
+        this._toggleRow(el);
         break;
-      }
+      case 'toggle-all-rows':
+        this._toggleAllRows(el);
+        break;
+      case 'move-row-up':
+        this._moveRowUp(el);
+        break;
+      case 'move-row-down':
+        this._moveRowDown(el);
+        break;
+      case 'duplicate-row':
+        this._duplicateRow(el);
+        break;
+      case 'remove-array-row':
+        this._removeRow(el);
+        break;
+      case 'add-array-row':
+        this._addArrayRow(el.dataset.templateId || '');
+        break;
+      case 'noop':
+        break;
     }
   }
 
-  /* ── Helpers ────────────────────────────────────────────────── */
+  /* ── State helpers ─────────────────────────────────────────── */
 
   get _fieldset() {
-    return this.querySelector('.form__array');
-  }
-
-  /** @param {string} str @returns {string} */
-  _escapeRegex(str) {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return /** @type {HTMLElement|null} */ (this.querySelector('.form__array'));
   }
 
   /**
-   * Convert a field name to a safe template ID (mirrors Rust safe_template_id).
-   * Replaces `[` with `-` and removes `]`.
-   *
-   * @param {string} name
-   * @returns {string}
+   * Whether this fieldset is at its `data-max-rows` cap. Returns `false`
+   * when no cap is set, the cap is non-numeric, or required nodes are missing.
    */
-  _safeName(name) {
-    return name.replace(/\[/g, '-').replace(/\]/g, '');
-  }
-
-  /**
-   * @param {Element|DocumentFragment} root
-   * @param {number} index
-   */
-  _replaceIndexInSubtree(root, index) {
-    root.querySelectorAll('.form__array-row-title').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        if (el.textContent?.includes('__INDEX__')) {
-          el.textContent = el.textContent.replaceAll('__INDEX__', String(index));
-        }
-      }
-    );
-    root.querySelectorAll('input, select, textarea').forEach(
-      /** @param {HTMLInputElement} input */ (input) => {
-        if (input.name) input.name = input.name.replaceAll('__INDEX__', String(index));
-      }
-    );
-    root.querySelectorAll('[data-field-name*="__INDEX__"]').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        const fn = el.getAttribute('data-field-name');
-        if (fn) el.setAttribute('data-field-name', fn.replaceAll('__INDEX__', String(index)));
-      }
-    );
-    root.querySelectorAll('[id*="__INDEX__"]').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        el.id = el.id.replaceAll('__INDEX__', String(index));
-      }
-    );
-    root.querySelectorAll('label[for*="__INDEX__"]').forEach(
-      /** @param {HTMLLabelElement} el */ (el) => {
-        el.setAttribute('for', el.getAttribute('for').replaceAll('__INDEX__', String(index)));
-      }
-    );
-    root.querySelectorAll('[data-template-id*="__INDEX__"]').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        const tid = el.getAttribute('data-template-id');
-        if (tid) el.setAttribute('data-template-id', tid.replaceAll('__INDEX__', String(index)));
-      }
-    );
-    // Custom element attributes (e.g. <crap-relationship-search field-name="...">)
-    root.querySelectorAll('[field-name*="__INDEX__"]').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        const fn = el.getAttribute('field-name');
-        if (fn) el.setAttribute('field-name', fn.replaceAll('__INDEX__', String(index)));
-      }
-    );
-  }
-
-  /**
-   * Replace parent-level __INDEX__ in nested <template> elements using targeted patterns.
-   * Only replaces occurrences that match the parent field name, preserving child-level placeholders.
-   *
-   * @param {Element|DocumentFragment} root
-   * @param {number} index
-   */
-  _replaceIndexInNestedTemplates(root, index) {
+  _isAtMax() {
     const fs = this._fieldset;
-    if (!fs) return;
-    const fieldName = fs.getAttribute('data-field-name') || '';
-    if (!fieldName) return;
-
-    const bracketSearch = fieldName + '[__INDEX__]';
-    const bracketReplace = fieldName + '[' + index + ']';
-    const safeName = this._safeName(fieldName);
-    const dashSearch = safeName + '-__INDEX__';
-    const dashReplace = safeName + '-' + index;
-
-    this._replaceTargetedInTemplates(root, bracketSearch, bracketReplace, dashSearch, dashReplace);
-  }
-
-  /**
-   * Recursively apply targeted parent-level index replacement inside nested <template> elements.
-   *
-   * @param {Element|DocumentFragment} root
-   * @param {string} bracketSearch  — e.g. "main_nav[__INDEX__]"
-   * @param {string} bracketReplace — e.g. "main_nav[0]"
-   * @param {string} dashSearch     — e.g. "main_nav-__INDEX__"
-   * @param {string} dashReplace    — e.g. "main_nav-0"
-   */
-  _replaceTargetedInTemplates(root, bracketSearch, bracketReplace, dashSearch, dashReplace) {
-    root.querySelectorAll('template').forEach(
-      /** @param {HTMLTemplateElement} tmpl */ (tmpl) => {
-        const c = tmpl.content;
-
-        c.querySelectorAll('input, select, textarea').forEach(
-          /** @param {HTMLInputElement} input */ (input) => {
-            if (input.name) input.name = input.name.replaceAll(bracketSearch, bracketReplace);
-          }
-        );
-
-        c.querySelectorAll('[data-field-name]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            const fn = el.getAttribute('data-field-name');
-            if (fn) el.setAttribute('data-field-name', fn.replaceAll(bracketSearch, bracketReplace));
-          }
-        );
-
-        c.querySelectorAll('[id]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            el.id = el.id
-              .replaceAll(bracketSearch, bracketReplace)
-              .replaceAll(dashSearch, dashReplace);
-          }
-        );
-
-        c.querySelectorAll('label[for]').forEach(
-          /** @param {HTMLLabelElement} el */ (el) => {
-            const f = el.getAttribute('for');
-            if (f) el.setAttribute('for', f
-              .replaceAll(bracketSearch, bracketReplace)
-              .replaceAll(dashSearch, dashReplace));
-          }
-        );
-
-        c.querySelectorAll('[data-template-id]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            const tid = el.getAttribute('data-template-id');
-            if (tid) el.setAttribute('data-template-id', tid.replaceAll(dashSearch, dashReplace));
-          }
-        );
-
-        this._replaceTargetedInTemplates(c, bracketSearch, bracketReplace, dashSearch, dashReplace);
-      }
-    );
-  }
-
-  /**
-   * @param {HTMLElement} html
-   * @param {number} index
-   */
-  _replaceTemplateIndex(html, index) {
-    html.setAttribute('data-row-index', String(index));
-    this._replaceIndexInSubtree(html, index);
-    this._replaceIndexInNestedTemplates(html, index);
+    if (!fs) return false;
+    const addBtn = /** @type {HTMLElement|null} */ (fs.querySelector('[data-max-rows]'));
+    if (!addBtn?.dataset.maxRows) return false;
+    const max = parseInt(addBtn.dataset.maxRows, 10);
+    if (!Number.isFinite(max)) return false;
+    const container = fs.querySelector('.form__array-rows');
+    return !!container && container.children.length >= max;
   }
 
   _updateRowCount() {
@@ -258,7 +190,7 @@ class CrapArrayField extends HTMLElement {
     const rowsEl = fs.querySelector('[id^="array-rows-"]');
     const templateId = rowsEl?.id?.replace('array-rows-', '');
     if (!templateId || !container) return;
-    const badge = this.querySelector('#array-count-' + templateId);
+    const badge = this.querySelector(`#array-count-${templateId}`);
     if (badge) badge.textContent = String(container.children.length);
   }
 
@@ -268,132 +200,14 @@ class CrapArrayField extends HTMLElement {
     const container = fs.querySelector('.form__array-rows');
     const empty = /** @type {HTMLElement|null} */ (fs.querySelector('.form__array-empty'));
     if (!container || !empty) return;
-    empty.style.display = container.children.length === 0 ? '' : 'none';
+    empty.hidden = container.children.length > 0;
   }
 
   _enforceMaxRows() {
     const fs = this._fieldset;
     if (!fs) return;
     const addBtn = /** @type {HTMLButtonElement|null} */ (fs.querySelector('[data-max-rows]'));
-    if (!addBtn) return;
-    const max = parseInt(/** @type {HTMLElement} */ (addBtn).dataset.maxRows, 10);
-    const container = fs.querySelector('.form__array-rows');
-    if (container) addBtn.disabled = container.children.length >= max;
-  }
-
-  _reindexRows() {
-    const fs = this._fieldset;
-    if (!fs) return;
-    const fieldName = fs.getAttribute('data-field-name') || '';
-    const container = fs.querySelector('.form__array-rows');
-    if (!container || !fieldName) return;
-
-    const bracketPattern = new RegExp('(' + this._escapeRegex(fieldName) + '\\[)\\d+(\\])');
-    const idBracketPattern = new RegExp('(field-' + this._escapeRegex(fieldName) + '\\[)\\d+(\\])');
-    const safeName = this._safeName(fieldName);
-    const dashPattern = new RegExp('(' + this._escapeRegex(safeName) + '-)\\d+');
-
-    Array.from(container.children).forEach(
-      /** @param {Element} child @param {number} idx */
-      (child, idx) => {
-        child.setAttribute('data-row-index', String(idx));
-
-        child.querySelectorAll('input, select, textarea').forEach(
-          /** @param {HTMLInputElement} input */ (input) => {
-            if (input.name) input.name = input.name.replace(bracketPattern, `$1${idx}$2`);
-          }
-        );
-
-        child.querySelectorAll('[data-field-name]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            const fn = el.getAttribute('data-field-name');
-            if (fn) el.setAttribute('data-field-name', fn.replace(bracketPattern, `$1${idx}$2`));
-          }
-        );
-
-        child.querySelectorAll('[id]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            el.id = el.id
-              .replace(idBracketPattern, `$1${idx}$2`)
-              .replace(dashPattern, `$1${idx}`);
-          }
-        );
-
-        child.querySelectorAll('label[for]').forEach(
-          /** @param {HTMLLabelElement} el */ (el) => {
-            const f = el.getAttribute('for');
-            if (f) el.setAttribute('for', f
-              .replace(idBracketPattern, `$1${idx}$2`)
-              .replace(dashPattern, `$1${idx}`));
-          }
-        );
-
-        child.querySelectorAll('[data-template-id]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            const tid = el.getAttribute('data-template-id');
-            if (tid) el.setAttribute('data-template-id', tid.replace(dashPattern, `$1${idx}`));
-          }
-        );
-
-        this._reindexNestedTemplates(child, bracketPattern, idBracketPattern, dashPattern, idx);
-      }
-    );
-  }
-
-  /**
-   * Reindex nested <template> content after parent row reorder.
-   *
-   * @param {Element|DocumentFragment} root
-   * @param {RegExp} bracketPattern
-   * @param {RegExp} idBracketPattern
-   * @param {RegExp} dashPattern
-   * @param {number} idx
-   */
-  _reindexNestedTemplates(root, bracketPattern, idBracketPattern, dashPattern, idx) {
-    root.querySelectorAll('template').forEach(
-      /** @param {HTMLTemplateElement} tmpl */ (tmpl) => {
-        const c = tmpl.content;
-
-        c.querySelectorAll('input, select, textarea').forEach(
-          /** @param {HTMLInputElement} input */ (input) => {
-            if (input.name) input.name = input.name.replace(bracketPattern, `$1${idx}$2`);
-          }
-        );
-
-        c.querySelectorAll('[data-field-name]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            const fn = el.getAttribute('data-field-name');
-            if (fn) el.setAttribute('data-field-name', fn.replace(bracketPattern, `$1${idx}$2`));
-          }
-        );
-
-        c.querySelectorAll('[id]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            el.id = el.id
-              .replace(idBracketPattern, `$1${idx}$2`)
-              .replace(dashPattern, `$1${idx}`);
-          }
-        );
-
-        c.querySelectorAll('label[for]').forEach(
-          /** @param {HTMLLabelElement} el */ (el) => {
-            const f = el.getAttribute('for');
-            if (f) el.setAttribute('for', f
-              .replace(idBracketPattern, `$1${idx}$2`)
-              .replace(dashPattern, `$1${idx}`));
-          }
-        );
-
-        c.querySelectorAll('[data-template-id]').forEach(
-          /** @param {HTMLElement} el */ (el) => {
-            const tid = el.getAttribute('data-template-id');
-            if (tid) el.setAttribute('data-template-id', tid.replace(dashPattern, `$1${idx}`));
-          }
-        );
-
-        this._reindexNestedTemplates(c, bracketPattern, idBracketPattern, dashPattern, idx);
-      }
-    );
+    if (addBtn) addBtn.disabled = this._isAtMax();
   }
 
   _afterRowChange() {
@@ -401,6 +215,95 @@ class CrapArrayField extends HTMLElement {
     this._updateRowCount();
     this._toggleEmptyState();
     this._enforceMaxRows();
+  }
+
+  /* ── Index rewriting ───────────────────────────────────────── */
+
+  /**
+   * Materialise a freshly cloned template row at `index`:
+   *  - replace `__INDEX__` literally everywhere in the outer row, and
+   *  - inside nested `<template>` content, replace only the *parent* field's
+   *    `__INDEX__` so child-level placeholders survive for when child rows
+   *    are added later.
+   *
+   * @param {HTMLElement} html
+   * @param {number} index
+   */
+  _replaceTemplateIndex(html, index) {
+    html.setAttribute('data-row-index', String(index));
+
+    const replaceIdx = /** @type {RefRewriter} */ ((s) => s.replaceAll('__INDEX__', String(index)));
+    rewriteRefs(html, replaceIdx, false);
+
+    const fieldName = this._fieldset?.getAttribute('data-field-name') || '';
+    if (!fieldName) return;
+
+    const bracket = `${fieldName}[__INDEX__]`;
+    const bracketRepl = `${fieldName}[${index}]`;
+    const dash = `${safeName(fieldName)}-__INDEX__`;
+    const dashRepl = `${safeName(fieldName)}-${index}`;
+
+    /** @type {RefRewriter} */
+    const parentReplacer = (s, kind) => {
+      switch (kind) {
+        case 'name':
+        case 'fieldName':
+          return s.replaceAll(bracket, bracketRepl);
+        case 'tplId':
+          return s.replaceAll(dash, dashRepl);
+        case 'id':
+        case 'labelFor':
+          return s.replaceAll(bracket, bracketRepl).replaceAll(dash, dashRepl);
+        default:
+          return s;
+      }
+    };
+
+    for (const tmpl of /** @type {NodeListOf<HTMLTemplateElement>} */ (
+      html.querySelectorAll('template')
+    )) {
+      rewriteRefs(tmpl.content, parentReplacer, true);
+    }
+  }
+
+  /**
+   * Re-number rows after add/remove/reorder. Walks each row's outer DOM
+   * and any nested template content, swapping the existing numeric index
+   * for the row's new position.
+   */
+  _reindexRows() {
+    const fs = this._fieldset;
+    if (!fs) return;
+    const fieldName = fs.getAttribute('data-field-name') || '';
+    const container = fs.querySelector('.form__array-rows');
+    if (!container || !fieldName) return;
+
+    const safe = safeName(fieldName);
+    const bracketPat = new RegExp(`(${escapeRegex(fieldName)}\\[)\\d+(\\])`);
+    const idBracketPat = new RegExp(`(field-${escapeRegex(fieldName)}\\[)\\d+(\\])`);
+    const dashPat = new RegExp(`(${escapeRegex(safe)}-)\\d+`);
+
+    [...container.children].forEach((child, idx) => {
+      child.setAttribute('data-row-index', String(idx));
+
+      /** @type {RefRewriter} */
+      const replacer = (s, kind) => {
+        switch (kind) {
+          case 'name':
+          case 'fieldName':
+            return s.replace(bracketPat, `$1${idx}$2`);
+          case 'tplId':
+            return s.replace(dashPat, `$1${idx}`);
+          case 'id':
+          case 'labelFor':
+            return s.replace(idBracketPat, `$1${idx}$2`).replace(dashPat, `$1${idx}`);
+          default:
+            return s;
+        }
+      };
+
+      rewriteRefs(child, replacer, true);
+    });
   }
 
   /* ── Row actions ────────────────────────────────────────────── */
@@ -421,11 +324,11 @@ class CrapArrayField extends HTMLElement {
     if (!fs) return;
     const rows = fs.querySelectorAll(':scope > .form__array-rows > .form__array-row');
     const anyExpanded = [...rows].some((r) => !r.classList.contains('form__array-row--collapsed'));
-    rows.forEach(/** @param {HTMLElement} row */ (row) => {
+    for (const row of rows) {
       row.classList.toggle('form__array-row--collapsed', anyExpanded);
       const toggleBtn = row.querySelector('.form__array-row-toggle');
       if (toggleBtn) toggleBtn.setAttribute('aria-expanded', anyExpanded ? 'false' : 'true');
-    });
+    }
     const icon = btn.querySelector('.material-symbols-outlined');
     if (icon) icon.textContent = anyExpanded ? 'unfold_more' : 'unfold_less';
   }
@@ -433,7 +336,7 @@ class CrapArrayField extends HTMLElement {
   /** @param {HTMLElement} btn */
   _moveRowUp(btn) {
     const row = btn.closest('.form__array-row');
-    if (!row?.previousElementSibling) return;
+    if (!row?.previousElementSibling || !row.parentElement) return;
     row.parentElement.insertBefore(row, row.previousElementSibling);
     this._reindexRows();
   }
@@ -441,7 +344,7 @@ class CrapArrayField extends HTMLElement {
   /** @param {HTMLElement} btn */
   _moveRowDown(btn) {
     const row = btn.closest('.form__array-row');
-    if (!row?.nextElementSibling) return;
+    if (!row?.nextElementSibling || !row.parentElement) return;
     row.parentElement.insertBefore(row.nextElementSibling, row);
     this._reindexRows();
   }
@@ -450,32 +353,12 @@ class CrapArrayField extends HTMLElement {
   _duplicateRow(btn) {
     const row = btn.closest('.form__array-row');
     if (!row) return;
-    const fs = this._fieldset;
-
-    if (fs) {
-      const addBtn = /** @type {HTMLElement|null} */ (fs.querySelector('[data-max-rows]'));
-      if (addBtn) {
-        const max = parseInt(addBtn.dataset.maxRows, 10);
-        const container = fs.querySelector('.form__array-rows');
-        if (container && container.children.length >= max) return;
-      }
-    }
+    if (this._isAtMax()) return;
 
     const clone = /** @type {HTMLElement} */ (row.cloneNode(true));
     delete clone.dataset.labelInit;
     row.after(clone);
-
-    clone.querySelectorAll('crap-richtext').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        if (el.connectedCallback) el.connectedCallback();
-      }
-    );
-
-    if (fs) {
-      const labelField = fs.getAttribute('data-label-field');
-      if (labelField) this._setupRowLabelWatcher(clone, labelField);
-    }
-
+    this._initClonedSubtree(clone);
     this._afterRowChange();
   }
 
@@ -492,36 +375,7 @@ class CrapArrayField extends HTMLElement {
     const template = /** @type {HTMLTemplateElement|null} */ (
       this.querySelector(`#array-template-${templateId}`)
     );
-    const container = this.querySelector(`#array-rows-${templateId}`);
-    if (!template || !container) return;
-
-    const fs = this._fieldset;
-    if (fs) {
-      const addBtn = /** @type {HTMLElement|null} */ (fs.querySelector('[data-max-rows]'));
-      if (addBtn) {
-        const max = parseInt(addBtn.dataset.maxRows, 10);
-        if (container.children.length >= max) return;
-      }
-    }
-
-    const nextIndex = container.children.length;
-    const clone = template.content.cloneNode(true);
-    const html = /** @type {HTMLElement} */ (clone.firstElementChild);
-    if (html) this._replaceTemplateIndex(html, nextIndex);
-
-    container.appendChild(clone);
-    if (html) {
-      html.querySelectorAll('crap-richtext').forEach(
-        /** @param {HTMLElement} el */ (el) => {
-          if (el.connectedCallback) el.connectedCallback();
-        }
-      );
-      if (fs) {
-        const labelField = fs.getAttribute('data-label-field');
-        if (labelField) this._setupRowLabelWatcher(html, labelField);
-      }
-    }
-    this._afterRowChange();
+    if (template) this._addRow(template);
   }
 
   /** @param {string} templateId */
@@ -530,56 +384,89 @@ class CrapArrayField extends HTMLElement {
       this.querySelector(`#block-type-${templateId}`)
     );
     if (!typeSelect) return;
-    const blockType = typeSelect.value;
     const template = /** @type {HTMLTemplateElement|null} */ (
-      this.querySelector(`#block-template-${templateId}-${blockType}`)
+      this.querySelector(`#block-template-${templateId}-${typeSelect.value}`)
     );
-    const container = this.querySelector(`#array-rows-${templateId}`);
-    if (!template || !container) return;
+    if (!template) return;
+    this._addRow(template, template.getAttribute('data-label-field') || undefined);
+  }
 
+  /**
+   * Append a clone of `template` to the rows container at the next index,
+   * then wire up richtext / label watchers.
+   *
+   * @param {HTMLTemplateElement} template
+   * @param {string} [labelOverride] block-specific label field, falling back
+   *   to the fieldset-level `data-label-field`.
+   */
+  _addRow(template, labelOverride) {
     const fs = this._fieldset;
-    if (fs) {
-      const addBtn = /** @type {HTMLElement|null} */ (fs.querySelector('[data-max-rows]'));
-      if (addBtn) {
-        const max = parseInt(addBtn.dataset.maxRows, 10);
-        if (container.children.length >= max) return;
-      }
-    }
+    if (!fs) return;
+    if (this._isAtMax()) return;
+    const container = fs.querySelector('.form__array-rows');
+    if (!container) return;
 
     const nextIndex = container.children.length;
     const clone = template.content.cloneNode(true);
-    const html = /** @type {HTMLElement} */ (clone.firstElementChild);
+    const html = /** @type {HTMLElement|null} */ (
+      /** @type {DocumentFragment} */ (clone).firstElementChild
+    );
     if (html) this._replaceTemplateIndex(html, nextIndex);
 
     container.appendChild(clone);
-    if (html) {
-      html.querySelectorAll('crap-richtext').forEach(
-        /** @param {HTMLElement} el */ (el) => {
-          if (el.connectedCallback) el.connectedCallback();
-        }
-      );
-      if (fs) {
-        const blockLabelField = template.getAttribute('data-label-field');
-        if (blockLabelField) {
-          this._setupRowLabelWatcher(html, blockLabelField);
-        } else {
-          const labelField = fs.getAttribute('data-label-field');
-          if (labelField) this._setupRowLabelWatcher(html, labelField);
-        }
-      }
-    }
+    if (html) this._initClonedSubtree(html, labelOverride);
     this._afterRowChange();
+  }
+
+  /**
+   * Initialise a freshly inserted row clone:
+   *
+   *  - Re-fires `connectedCallback` on `<crap-richtext>` descendants
+   *    (in-tree cloneNode doesn't always trigger custom-element
+   *    upgrades reliably; the explicit call is defensive).
+   *  - For block rows: stamps the row element with the block-specific
+   *    `data-label-field` so the row's own label watcher (registered
+   *    by `<crap-array-row>`'s connectedCallback) picks it up.
+   *
+   * @param {HTMLElement} html The freshly cloned outer row element.
+   * @param {string} [labelOverride] Block-specific label field name,
+   *   from the block-template's `data-label-field`.
+   */
+  _initClonedSubtree(html, labelOverride) {
+    if (labelOverride && html.tagName === 'CRAP-ARRAY-ROW') {
+      html.setAttribute('data-label-field', labelOverride);
+    }
+    for (const el of /** @type {NodeListOf<HTMLElement & {connectedCallback?: () => void}>} */ (
+      html.querySelectorAll('crap-richtext')
+    )) {
+      el.connectedCallback?.();
+    }
   }
 
   /* ── Drag-and-drop ─────────────────────────────────────────── */
 
+  /**
+   * Resolve the rows container an event targets, scoped to *this* fieldset
+   * (drag events from a nested `<crap-array-field>` are ignored).
+   *
+   * @param {EventTarget|null} target
+   * @returns {HTMLElement|null}
+   */
+  _findRowsContainer(target) {
+    if (!(target instanceof Element)) return null;
+    const container = /** @type {HTMLElement|null} */ (target.closest('.form__array-rows'));
+    if (!container || container.closest('.form__array') !== this._fieldset) return null;
+    return container;
+  }
+
   /** @param {DragEvent} e */
   _onDragStart(e) {
-    const el = /** @type {HTMLElement} */ (e.target).closest('[draggable][data-drag]');
-    if (!el) return;
-    if (el.closest('crap-array-field') !== this) return;
-    this._draggedRow = el.closest('.form__array-row');
-    if (!this._draggedRow) return;
+    const handle = /** @type {HTMLElement|null} */ (
+      e.target instanceof Element ? e.target.closest('[draggable][data-drag]') : null
+    );
+    if (!handle || handle.closest('crap-array-field') !== this) return;
+    this._draggedRow = handle.closest('.form__array-row');
+    if (!this._draggedRow || !e.dataTransfer) return;
     this._draggedRow.classList.add('form__array-row--dragging');
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', '');
@@ -590,29 +477,25 @@ class CrapArrayField extends HTMLElement {
       this._draggedRow.classList.remove('form__array-row--dragging');
       this._draggedRow = null;
     }
-    this.querySelectorAll('.form__array-row--drag-over').forEach(
-      (el) => el.classList.remove('form__array-row--drag-over')
-    );
+    this._clearDragOver(this);
   }
 
   /** @param {DragEvent} e */
   _onDragOver(e) {
-    const container = /** @type {HTMLElement} */ (e.target).closest('.form__array-rows');
-    if (!container || container.closest('.form__array') !== this._fieldset) return;
+    const container = this._findRowsContainer(e.target);
+    if (!container) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
     if (!this._draggedRow) return;
     const afterEl = this._getDragAfterElement(container, e.clientY);
-    container.querySelectorAll('.form__array-row--drag-over').forEach(
-      (el) => el.classList.remove('form__array-row--drag-over')
-    );
+    this._clearDragOver(container);
     if (afterEl) afterEl.classList.add('form__array-row--drag-over');
   }
 
   /** @param {DragEvent} e */
   _onDrop(e) {
-    const container = /** @type {HTMLElement} */ (e.target).closest('.form__array-rows');
-    if (!container || container.closest('.form__array') !== this._fieldset) return;
+    const container = this._findRowsContainer(e.target);
+    if (!container) return;
     e.preventDefault();
     if (!this._draggedRow) return;
     const afterEl = this._getDragAfterElement(container, e.clientY);
@@ -621,27 +504,41 @@ class CrapArrayField extends HTMLElement {
     } else {
       container.appendChild(this._draggedRow);
     }
-    container.querySelectorAll('.form__array-row--drag-over').forEach(
-      (el) => el.classList.remove('form__array-row--drag-over')
-    );
+    this._clearDragOver(container);
     this._reindexRows();
   }
 
+  /** @param {Element} root */
+  _clearDragOver(root) {
+    for (const el of root.querySelectorAll('.form__array-row--drag-over')) {
+      el.classList.remove('form__array-row--drag-over');
+    }
+  }
+
   /**
+   * Find the row immediately below the cursor — the one a drop would
+   * insert *before*. Returns `null` to mean "append to end".
+   *
    * @param {HTMLElement} container
    * @param {number} y
    * @returns {HTMLElement|null}
    */
   _getDragAfterElement(container, y) {
-    const rows = [...container.querySelectorAll(':scope > .form__array-row:not(.form__array-row--dragging)')];
-    return rows.reduce((closest, child) => {
-      const box = child.getBoundingClientRect();
+    const rows = /** @type {HTMLElement[]} */ ([
+      ...container.querySelectorAll(':scope > .form__array-row:not(.form__array-row--dragging)'),
+    ]);
+    let closestOffset = Number.NEGATIVE_INFINITY;
+    /** @type {HTMLElement|null} */
+    let closestEl = null;
+    for (const row of rows) {
+      const box = row.getBoundingClientRect();
       const offset = y - box.top - box.height / 2;
-      if (offset < 0 && offset > closest.offset) {
-        return { offset, element: child };
+      if (offset < 0 && offset > closestOffset) {
+        closestOffset = offset;
+        closestEl = row;
       }
-      return closest;
-    }, { offset: Number.NEGATIVE_INFINITY }).element || null;
+    }
+    return closestEl;
   }
 }
 

@@ -1,3 +1,5 @@
+#![cfg(feature = "sqlite")]
+
 use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};

@@ -149,10 +149,12 @@ impl ContentService {
             .to_string();
 
         let expiry = def.auth.as_ref().map(|a| a.token_expiry).unwrap_or(7200);
+        let now = Utc::now().timestamp().max(0) as u64;
 
         let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)
-            .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
+            .exp(now.saturating_add(expiry))
+            .auth_time(now)
             .session_version(session_version)
             .build()
             .map_err(|e| {

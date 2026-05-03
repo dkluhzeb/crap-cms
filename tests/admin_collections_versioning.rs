@@ -19,7 +19,7 @@ use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use serde_json::json;
 
@@ -107,7 +107,7 @@ fn setup_app_with_config(
         .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone(), None)
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -147,7 +147,6 @@ fn setup_app_with_config(
         sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
-        csp_header: None,
         storage: crap_cms::core::upload::create_storage(
             tmp.path(),
             &crap_cms::config::UploadConfig::default(),
@@ -163,6 +162,7 @@ fn setup_app_with_config(
         ),
         populate_singleflight: std::sync::Arc::new(crap_cms::db::query::Singleflight::new()),
         cache: None,
+        custom_pages: Default::default(),
     };
 
     let router = build_router(state);
@@ -550,6 +550,135 @@ async fn versioned_collection_update_unpublish() {
         "Unpublish should succeed, got {}",
         status
     );
+}
+
+/// Regression: unpublish on a versioned collection whose `title` field is
+/// `localized = true` and locales are enabled (`["en", "de"]`) used to fail
+/// silently. The handler called `service::unpublish_document(&ctx, id)`,
+/// which routed through `find_by_id_raw(... locale_ctx: None ...)`. With
+/// `None`, the SELECT generator falls back to bare column names (`title`)
+/// instead of locale-suffixed ones (`title__en`, `title__de`) — but the
+/// table only has the suffixed columns, so SQLite returned `no such
+/// column: title`. The error was caught by the catch-all match arm in
+/// `do_update`, logged, and the user redirected to the same edit page —
+/// "unpublish button does nothing" from the user's perspective.
+///
+/// Fix: thread the locale config through `ServiceContext` so the unpublish
+/// path can build a default `LocaleContext` (`Mode::All`) for the raw read.
+#[tokio::test]
+async fn versioned_collection_unpublish_with_localized_field() {
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".into();
+    config.admin.require_auth = false;
+    config.locale = crap_cms::config::LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    };
+
+    let mut def = CollectionDefinition::new("articles");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Article".to_string())),
+        plural: Some(LocalizedString::Plain("Articles".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .localized(true)
+            .build(),
+    ];
+    def.admin = AdminConfig {
+        use_as_title: Some("title".to_string()),
+        ..AdminConfig::default()
+    };
+    def.versions = Some(VersionsConfig::new(true, 10));
+
+    let app = setup_app_with_config(vec![def, make_users_def()], vec![], config);
+    let user_id = create_test_user(&app, "loc-unpub@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "loc-unpub@test.com");
+
+    // Seed a published row directly. Localized columns store per-locale
+    // values (`title__en`, `title__de`); we set both so the row is valid.
+    let conn = app.pool.get().unwrap();
+    let id = "loc-doc-1";
+    conn.execute(
+        "INSERT INTO articles (id, title__en, title__de, _status, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 'published', '2026-01-01', '2026-01-01')",
+        &[
+            crap_cms::db::DbValue::Text(id.into()),
+            crap_cms::db::DbValue::Text("Hello".into()),
+            crap_cms::db::DbValue::Text("Hallo".into()),
+        ],
+    )
+    .unwrap();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post(format!("/admin/collections/articles/{id}"))
+                .header("cookie", auth_and_csrf(&cookie))
+                .header("X-CSRF-Token", TEST_CSRF)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("title=Hello&_action=unpublish&_locale=en"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SEE_OTHER,
+        "Localized unpublish should succeed, got {}",
+        status
+    );
+
+    // Confirm the document was actually flipped to draft, not just that the
+    // request returned 303 (the buggy path also returned 303 — silently —
+    // because the catch-all error arm redirected without doing the update).
+    let conn = app.pool.get().unwrap();
+    let row = conn
+        .query_one(
+            "SELECT _status FROM articles WHERE id = ?1",
+            &[crap_cms::db::DbValue::Text(id.into())],
+        )
+        .unwrap()
+        .expect("row exists");
+    let status_value = match row.get_value(0) {
+        Some(crap_cms::db::DbValue::Text(s)) => s.clone(),
+        other => panic!("expected text _status, got {other:?}"),
+    };
+    assert_eq!(
+        status_value, "draft",
+        "unpublish must flip _status to 'draft' when fields are localized"
+    );
+
+    // Regression: the version snapshot saved by `persist_unpublish` must use
+    // the same flat-key shape as every other write path. An earlier fix
+    // attempt used `LocaleMode::All`, which triggered `group_locale_fields`
+    // and produced `title: {"en": "Hello", "de": "Hallo"}` — a shape that
+    // diverged from `persist_draft_version` snapshots, broke user hooks
+    // expecting flat keys, and surfaced as malformed data in broadcast
+    // events and the version sidebar.
+    let snapshot_row = conn
+        .query_one(
+            "SELECT snapshot FROM _versions_articles WHERE _parent = ?1 ORDER BY _version DESC LIMIT 1",
+            &[crap_cms::db::DbValue::Text(id.into())],
+        )
+        .unwrap()
+        .expect("unpublish snapshot exists");
+    let snapshot_text = match snapshot_row.get_value(0) {
+        Some(crap_cms::db::DbValue::Text(s)) => s.clone(),
+        other => panic!("expected text snapshot, got {other:?}"),
+    };
+    let snapshot: serde_json::Value = serde_json::from_str(&snapshot_text).unwrap();
+    let title = snapshot.get("title").expect("snapshot has title");
+    assert!(
+        title.is_string(),
+        "snapshot title must be a flat string (resolved at default locale), \
+         not a grouped object — got {title:?}",
+    );
+    assert_eq!(title.as_str(), Some("Hello"));
 }
 
 #[tokio::test]

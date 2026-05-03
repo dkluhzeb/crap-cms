@@ -262,10 +262,29 @@ fn collect_expected_column_names(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> HashSet<String> {
-    collect_column_specs(&def.fields, locale_config)
-        .into_iter()
-        .map(|spec| spec.col_name)
-        .collect()
+    let mut names = HashSet::new();
+
+    for spec in collect_column_specs(&def.fields, locale_config) {
+        names.insert(spec.col_name.clone());
+
+        if spec.is_localized {
+            for locale in &locale_config.locales {
+                match locale_column(&spec.col_name, locale) {
+                    Ok(col) => {
+                        names.insert(col);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to build locale column name for {}.{}: {e}",
+                            spec.col_name, locale
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    names
 }
 
 /// System columns that are always valid (not flagged as orphans).
@@ -879,5 +898,25 @@ mod tests {
             )
             .unwrap();
         assert!(temp_exists.is_none(), "temp table should be dropped");
+    }
+
+    /// Regression: locale-suffixed columns (e.g., title__en) must be recognized
+    /// as expected when the field is localized. Previously they were falsely
+    /// reported as orphans.
+    #[test]
+    fn localized_columns_not_flagged_as_orphans() {
+        let locale = locale_en_de();
+        let def = simple_collection("posts", vec![localized_field("title"), text_field("body")]);
+
+        let expected = collect_expected_column_names(&def, &locale);
+
+        assert!(expected.contains("title"), "base column");
+        assert!(expected.contains("title__en"), "en locale column");
+        assert!(expected.contains("title__de"), "de locale column");
+        assert!(expected.contains("body"), "non-localized column");
+        assert!(
+            !expected.contains("body__en"),
+            "non-localized should not have locale suffix"
+        );
     }
 }

@@ -1,110 +1,94 @@
 /**
- * Theme switching — `<crap-theme-picker>`.
+ * Theme switcher — `<crap-theme-picker>` + theme state API.
  *
- * Provides theme persistence (localStorage), application (data-theme on <html>),
- * and a dropdown picker UI. Uses CSS custom properties from `:root` for theming.
+ * Persists the selected theme to localStorage and applies it as
+ * `<html data-theme="…">`. The picker is a dropdown that toggles open
+ * on the slotted `[data-theme-toggle]` and selects via
+ * `[data-theme-value]` items inside `[data-theme-dropdown]`.
  *
- * @namespace window.CrapTheme
+ * The state API (`get` / `set` / `apply`) is exposed via the
+ * `window.crap.theme` namespace (see `global.js`). Other code should
+ * import from this module directly, or use `window.crap.theme`.
+ *
+ * NOTE: `templates/layout/base.hbs` has an inline FOUC-prevention
+ * script that reads `localStorage.getItem('crap-theme')` directly. If
+ * the storage key changes here, change it there too.
+ *
  * @module theme
+ * @stability stable
  */
 
-window.CrapTheme = {
-  /** @type {string} */
-  _key: 'crap-theme',
+import { CrapPickerBase } from './_internal/picker-base.js';
 
-  /**
-   * @returns {string} Theme name or '' for default light.
-   */
-  get() {
-    try {
-      return localStorage.getItem(this._key) || '';
-    } catch {
-      return '';
-    }
-  },
+const STORAGE_KEY = 'crap-theme';
 
-  /**
-   * @param {string} theme
-   */
-  apply(theme) {
+/** @returns {string} Theme name or `''` for default light. */
+export function getTheme() {
+  try {
+    return localStorage.getItem(STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Apply `theme` to `<html data-theme>`. Empty string clears the attribute.
+ * @param {string} theme
+ */
+export function applyTheme(theme) {
+  if (theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+
+/**
+ * Persist + apply.
+ * @param {string} theme
+ */
+export function setTheme(theme) {
+  try {
     if (theme) {
-      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem(STORAGE_KEY, theme);
     } else {
-      document.documentElement.removeAttribute('data-theme');
+      localStorage.removeItem(STORAGE_KEY);
     }
-  },
+  } catch {
+    /* storage unavailable */
+  }
+  applyTheme(theme);
+}
 
-  /**
-   * @param {string} theme
-   */
-  set(theme) {
-    try {
-      if (theme) {
-        localStorage.setItem(this._key, theme);
-      } else {
-        localStorage.removeItem(this._key);
-      }
-    } catch { /* storage unavailable */ }
-    this.apply(theme);
-  },
-};
+// Apply saved theme. Also done via the FOUC-prevention inline script in
+// base.hbs — the JS-driven path keeps the apply current after HTMX swaps.
+applyTheme(getTheme());
 
-// Apply saved theme (also done via inline script in base.hbs for FOUC prevention)
-window.CrapTheme.apply(window.CrapTheme.get());
+class CrapThemePicker extends CrapPickerBase {
+  static toggleSelector = '[data-theme-toggle]';
+  static dropdownSelector = '[data-theme-dropdown]';
+  static itemSelector = '[data-theme-value]';
+  static openClass = 'theme-picker__dropdown--open';
+  static valueDatasetKey = 'themeValue';
 
-class CrapThemePicker extends HTMLElement {
-  connectedCallback() {
-    if (this._connected) return;
-    this._connected = true;
-
-    const toggle = this.querySelector('[data-theme-toggle]');
-    const dropdown = this.querySelector('[data-theme-dropdown]');
-    if (!toggle || !dropdown) return;
-
-    const updateActive = () => {
-      const current = window.CrapTheme.get();
-      dropdown.querySelectorAll('[data-theme-value]').forEach((btn) => {
-        const val = /** @type {HTMLElement} */ (btn).dataset.themeValue;
-        btn.classList.toggle('theme-picker__option--active', val === current);
-      });
-    };
-
-    this._onToggle = (e) => {
-      e.stopPropagation();
-      dropdown.classList.toggle('theme-picker__dropdown--open');
-      updateActive();
-    };
-
-    this._onSelect = (e) => {
-      const btn = /** @type {HTMLElement} */ (e.target).closest('[data-theme-value]');
-      if (!btn) return;
-      window.CrapTheme.set(/** @type {HTMLElement} */ (btn).dataset.themeValue || '');
-      dropdown.classList.remove('theme-picker__dropdown--open');
-      updateActive();
-    };
-
-    this._onOutsideClick = (e) => {
-      if (!this.contains(/** @type {Node} */ (e.target))) {
-        dropdown.classList.remove('theme-picker__dropdown--open');
-      }
-    };
-
-    toggle.addEventListener('click', this._onToggle);
-    dropdown.addEventListener('click', this._onSelect);
-    document.addEventListener('click', this._onOutsideClick);
+  /** @param {string} theme */
+  _onValue(theme) {
+    setTheme(theme || '');
+    this._refreshActive();
   }
 
-  disconnectedCallback() {
-    const toggle = this.querySelector('[data-theme-toggle]');
-    const dropdown = this.querySelector('[data-theme-dropdown]');
-    if (toggle && this._onToggle) {
-      toggle.removeEventListener('click', this._onToggle);
-    }
-    if (dropdown && this._onSelect) {
-      dropdown.removeEventListener('click', this._onSelect);
-    }
-    if (this._onOutsideClick) {
-      document.removeEventListener('click', this._onOutsideClick);
+  _afterToggle() {
+    this._refreshActive();
+  }
+
+  /** Mark the option matching the active theme. */
+  _refreshActive() {
+    if (!this._dropdown) return;
+    const current = getTheme();
+    for (const btn of /** @type {NodeListOf<HTMLElement>} */ (
+      this._dropdown.querySelectorAll('[data-theme-value]')
+    )) {
+      btn.classList.toggle('theme-picker__option--active', btn.dataset.themeValue === current);
     }
   }
 }

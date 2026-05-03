@@ -45,7 +45,7 @@ pub fn row_to_document(conn: &dyn DbConnection, row: &DbRow) -> Result<Document>
         .build())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

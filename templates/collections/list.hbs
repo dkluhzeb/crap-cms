@@ -1,18 +1,23 @@
 {{#> layout/base title="Collections"}}
-<h1>{{t "collections"}}</h1>
+  <h1>{{t "collections"}}</h1>
 
-<div class="cards">
-  {{#each collections}}
-  <a class="card" href="/admin/collections/{{this.slug}}"
-    hx-get="/admin/collections/{{this.slug}}" hx-target="body" hx-push-url="true">
-    <div class="card__header">
-      <span class="material-symbols-outlined">folder</span>
-      <h3>{{this.display_name}}</h3>
-    </div>
-    <div class="card__body">
-      <p>{{t "fields_count" count=this.field_count}}</p>
-    </div>
-  </a>
-  {{/each}}
-</div>
+  <div class="cards">
+    {{#each collections}}
+      <a
+        class="card"
+        href="/admin/collections/{{this.slug}}"
+        hx-get="/admin/collections/{{this.slug}}"
+        hx-target="body"
+        hx-push-url="true"
+      >
+        <div class="card__header">
+          <span class="material-symbols-outlined">folder</span>
+          <h3>{{this.display_name}}</h3>
+        </div>
+        <div class="card__body">
+          <p>{{t "fields_count" count=this.field_count}}</p>
+        </div>
+      </a>
+    {{/each}}
+  </div>
 {{/layout/base}}

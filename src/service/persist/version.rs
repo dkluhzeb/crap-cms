@@ -48,7 +48,15 @@ pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let def = ctx.collection_def();
     let slug = ctx.slug;
 
-    let doc = query::find_by_id_raw(conn, slug, def, id, None, false)?
+    // Same reasoning as `unpublish_document_core`: when the def has localized
+    // fields and locales are enabled, the bare-column fallback in
+    // `find_by_id_raw` references columns that don't exist (`title` instead
+    // of `title__en` / `title__de`). Build a default LocaleContext from the
+    // attached locale config so the snapshot read fetches every locale's
+    // value (the version snapshot must preserve all locales, not just one).
+    let locale_ctx = ctx.default_locale_ctx();
+
+    let doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx.as_ref(), false)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     versions::unpublish_with_snapshot(conn, slug, id, &def.fields, def.versions.as_ref(), &doc)?;

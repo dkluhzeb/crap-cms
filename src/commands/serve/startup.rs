@@ -179,6 +179,28 @@ fn log_update_notice(cfg: &CrapConfig) {
     }
 }
 
+/// Log a nudge if health checks find issues.
+fn log_health_check_nudge(
+    cfg: &CrapConfig,
+    registry: &SharedRegistry,
+    pool: &DbPool,
+    config_dir: &Path,
+) {
+    let Ok(reg) = registry.read() else {
+        return;
+    };
+
+    let Ok(conn) = pool.get() else {
+        return;
+    };
+
+    let n = crate::commands::status::check::count_warnings(cfg, &reg, &conn, pool, config_dir);
+
+    if n > 0 {
+        warn!("{n} health check warning(s) found — run `crap-cms status --check` for details.");
+    }
+}
+
 /// Log security warnings for common misconfigurations.
 fn log_security_warnings(cfg: &CrapConfig) {
     if cfg.server.grpc_rate_limit_requests == 0 {
@@ -210,14 +232,30 @@ fn init_lua_and_typegen(config_dir: &Path, cfg: &CrapConfig) -> Result<SharedReg
             .read()
             .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
+        let n_hooks: usize = reg
+            .collections
+            .values()
+            .map(|c| {
+                c.hooks.before_validate.len()
+                    + c.hooks.before_change.len()
+                    + c.hooks.after_change.len()
+                    + c.hooks.before_read.len()
+                    + c.hooks.after_read.len()
+                    + c.hooks.before_delete.len()
+                    + c.hooks.after_delete.len()
+                    + c.hooks.before_broadcast.len()
+            })
+            .sum();
+
         info!(
-            "Loaded {} collection(s), {} global(s)",
+            "Loaded {} collection(s), {} global(s), {} hook(s)",
             reg.collections.len(),
-            reg.globals.len()
+            reg.globals.len(),
+            n_hooks,
         );
 
         for (slug, col) in &reg.collections {
-            info!("  Collection '{}': {} field(s)", slug, col.fields.len());
+            debug!("  Collection '{}': {} field(s)", slug, col.fields.len());
         }
     }
 
@@ -419,6 +457,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     log_startup_info(&registry, &cfg)?;
     log_security_warnings(&cfg);
     log_update_notice(&cfg);
+    log_health_check_nudge(&cfg, &registry, &pool, &config_dir);
 
     let registry_snapshot = Registry::snapshot(&registry);
     let storage = create_storage(&config_dir, &cfg.upload)?;

@@ -1,84 +1,164 @@
 <header class="header">
-  <button class="header__toggle" data-action="toggle-sidebar" type="button" aria-label="Toggle menu">
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-      <line x1="3" y1="5" x2="17" y2="5"/>
-      <line x1="3" y1="10" x2="17" y2="10"/>
-      <line x1="3" y1="15" x2="17" y2="15"/>
+  <button
+    class="header__toggle"
+    data-action="toggle-sidebar"
+    type="button"
+    aria-label="Toggle menu"
+  >
+    <svg
+      width="20"
+      height="20"
+      viewbox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+    >
+      <line
+        x1="3"
+        y1="5"
+        x2="17"
+        y2="5"
+      />
+      <line
+        x1="3"
+        y1="10"
+        x2="17"
+        y2="10"
+      />
+      <line
+        x1="3"
+        y1="15"
+        x2="17"
+        y2="15"
+      />
     </svg>
   </button>
-  <div class="header__logo">
-    <svg class="header__logo-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-      <path fill="currentColor" d="M4.5 10 L12 4.8 L19.5 10 L17.8 10 L12 6.6 L6.2 10 Z"/>
-      <path fill="currentColor" d="M7.8 10 L16.2 10 L15 20 L9 20 Z M10 11.2 H14 V19 H10 Z" fill-rule="evenodd"/>
-      <mask id="heart-mask">
-        <rect width="24" height="24" fill="white"/>
-        <path d="M12 13.5 C12 13.1 11.5 12.8 11.2 13.2 C10.9 13.6 11.3 14.1 12 14.9 C12.7 14.1 13.1 13.6 12.8 13.2 C12.5 12.8 12 13.1 12 13.5 Z" fill="black"/>
-      </mask>
-      <path fill="currentColor" d="M10.3 11.5 H13.7 V18.7 H10.3 Z" mask="url(#heart-mask)"/>
-    </svg>
-    Crap CMS
-  </div>
+  <div class="header__logo">{{> partials/logo class="header__logo-icon"}}{{crap.site_name}}</div>
   <div class="header__actions">
+    {{slot "page_header_actions"}}
+
     {{#if has_editor_locales}}
-    <crap-locale-picker class="locale-picker">
-      <button type="button" class="locale-picker__toggle" aria-label="Change content language" data-locale-toggle>
-        <span class="locale-picker__badge">{{editor_locale}}</span>
-      </button>
-      <div class="locale-picker__dropdown" data-locale-dropdown>
-        {{#each editor_locales}}
-        <button type="button" class="locale-picker__option{{#if selected}} locale-picker__option--active{{/if}}" data-locale-value="{{value}}">
-          {{label}}
+      <crap-locale-picker class="locale-picker">
+        <button
+          type="button"
+          class="locale-picker__toggle"
+          aria-label="Change content language"
+          data-locale-toggle
+        >
+          <span class="locale-picker__badge">{{editor_locale}}</span>
         </button>
-        {{/each}}
-      </div>
-    </crap-locale-picker>
+        <div
+          class="locale-picker__dropdown"
+          data-locale-dropdown
+        >
+          {{#each editor_locales}}
+            <button
+              type="button"
+              class="locale-picker__option{{#if selected}} locale-picker__option--active{{/if}}"
+              data-locale-value="{{value}}"
+            >
+              {{label}}
+            </button>
+          {{/each}}
+        </div>
+      </crap-locale-picker>
     {{/if}}
     {{#if available_locales}}
-    <crap-ui-locale-picker class="locale-picker">
-      <button type="button" class="locale-picker__toggle" aria-label="Change UI language" data-ui-locale-toggle>
-        <span class="material-symbols-outlined icon--md">translate</span>
-      </button>
-      <div class="locale-picker__dropdown" data-ui-locale-dropdown>
-        {{#each available_locales}}
-        <button type="button" class="locale-picker__option{{#if (eq this ../_locale)}} locale-picker__option--active{{/if}}" data-ui-locale-value="{{this}}">
-          {{this}}
+      <crap-ui-locale-picker class="locale-picker">
+        <button
+          type="button"
+          class="locale-picker__toggle"
+          aria-label="Change UI language"
+          data-ui-locale-toggle
+        >
+          <span class="material-symbols-outlined icon--md">translate</span>
         </button>
-        {{/each}}
-      </div>
-    </crap-ui-locale-picker>
+        <div
+          class="locale-picker__dropdown"
+          data-ui-locale-dropdown
+        >
+          {{#each available_locales}}
+            <button
+              type="button"
+              class="locale-picker__option{{#if (eq this ../_locale)}} locale-picker__option--active{{/if}}"
+              data-ui-locale-value="{{this}}"
+            >
+              {{this}}
+            </button>
+          {{/each}}
+        </div>
+      </crap-ui-locale-picker>
     {{/if}}
     <crap-theme-picker class="theme-picker">
-      <button type="button" class="theme-picker__toggle" aria-label="Change theme" data-theme-toggle>
+      <button
+        type="button"
+        class="theme-picker__toggle"
+        aria-label="Change theme"
+        data-theme-toggle
+      >
         <span class="material-symbols-outlined icon--md">palette</span>
       </button>
-      <div class="theme-picker__dropdown" data-theme-dropdown>
-        <button type="button" class="theme-picker__option" data-theme-value="">
-          <span class="theme-picker__swatch" style="background:#f4f7fc"></span>
+      <div
+        class="theme-picker__dropdown"
+        data-theme-dropdown
+      >
+        <button
+          type="button"
+          class="theme-picker__option"
+          data-theme-value=""
+        >
+          <span class="theme-picker__swatch"></span>
           {{t "light"}}
         </button>
-        <button type="button" class="theme-picker__option" data-theme-value="rose-pine-dawn">
-          <span class="theme-picker__swatch" style="background:#faf4ed"></span>
+        <button
+          type="button"
+          class="theme-picker__option"
+          data-theme-value="rose-pine-dawn"
+        >
+          <span class="theme-picker__swatch"></span>
           Rosé Pine Dawn
         </button>
-        <button type="button" class="theme-picker__option" data-theme-value="tokyo-night">
-          <span class="theme-picker__swatch" style="background:#1a1b26"></span>
+        <button
+          type="button"
+          class="theme-picker__option"
+          data-theme-value="tokyo-night"
+        >
+          <span class="theme-picker__swatch"></span>
           Tokyo Night
         </button>
-        <button type="button" class="theme-picker__option" data-theme-value="catppuccin">
-          <span class="theme-picker__swatch" style="background:#1e1e2e"></span>
+        <button
+          type="button"
+          class="theme-picker__option"
+          data-theme-value="catppuccin"
+        >
+          <span class="theme-picker__swatch"></span>
           Catppuccin Mocha
         </button>
-        <button type="button" class="theme-picker__option" data-theme-value="gruvbox">
-          <span class="theme-picker__swatch" style="background:#282828"></span>
+        <button
+          type="button"
+          class="theme-picker__option"
+          data-theme-value="gruvbox"
+        >
+          <span class="theme-picker__swatch"></span>
           Gruvbox Dark
         </button>
       </div>
     </crap-theme-picker>
     {{#if user}}
-    <span class="header__email">{{user.email}}</span>
-    <form method="POST" action="/admin/logout" class="header__logout-form">
-      <button type="submit" class="button button--ghost">{{t "logout"}}</button>
-    </form>
+      <span class="header__email">{{user.email}}</span>
+      <form
+        method="POST"
+        action="/admin/logout"
+        class="header__logout-form"
+      >
+        <button
+          type="submit"
+          class="button button--ghost"
+        >
+          {{t "logout"}}
+        </button>
+      </form>
     {{/if}}
   </div>
 </header>

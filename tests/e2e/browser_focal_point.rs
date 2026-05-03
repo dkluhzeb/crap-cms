@@ -45,16 +45,15 @@ async fn focal_point_click_updates_inputs() {
         .await
         .unwrap();
 
-    // Inject a mock focal-point component into the page for testing
+    // Inject a mock focal-point component. The img and hidden inputs are
+    // slotted (light DOM) — the component composes them through a <slot>
+    // in its shadow root, alongside the marker overlay.
     page.evaluate(
         "() => { \
             document.body.innerHTML += `\
                 <crap-focal-point data-focal-x=\"0.5\" data-focal-y=\"0.5\">\
-                    <div class=\"focal-point\" style=\"position:relative;width:400px;height:300px;\">\
-                        <img src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\" \
-                             style=\"width:400px;height:300px;display:block;\" />\
-                        <div class=\"focal-point__marker\" style=\"position:absolute;\"></div>\
-                    </div>\
+                    <img src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\" \
+                         style=\"width:400px;height:300px;display:block;\" />\
                     <input type=\"hidden\" name=\"focal_x\" value=\"0.5000\" />\
                     <input type=\"hidden\" name=\"focal_y\" value=\"0.5000\" />\
                 </crap-focal-point>`; \
@@ -64,11 +63,29 @@ async fn focal_point_click_updates_inputs() {
     .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Simulate a click at a specific position (top-left quadrant)
+    // The page's CSP `style-src` blocks the inline `style=...` attribute
+    // we wrote into the HTML — it's stored on the element but not applied
+    // to the CSSOM. Set the dimensions via JS (CSSOM mutation) instead,
+    // which CSP allows. Also override the component's `::slotted(img)`
+    // max-width/max-height clamp so the 400×300 stays.
     page.evaluate(
         "() => { \
-            const fp = document.querySelector('crap-focal-point'); \
-            const img = fp.querySelector('img'); \
+            const img = document.querySelector('crap-focal-point img'); \
+            img.style.width = '400px'; \
+            img.style.height = '300px'; \
+            img.style.display = 'block'; \
+            img.style.maxWidth = 'none'; \
+            img.style.maxHeight = 'none'; \
+        }",
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Simulate a click in the top-left quadrant on the slotted img.
+    page.evaluate(
+        "() => { \
+            const img = document.querySelector('crap-focal-point img'); \
             const rect = img.getBoundingClientRect(); \
             const clickX = rect.left + rect.width * 0.25; \
             const clickY = rect.top + rect.height * 0.25; \

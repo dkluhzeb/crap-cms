@@ -2,6 +2,8 @@
 
 pub mod auth;
 pub mod collections;
+/// Filesystem-routed custom admin page handler.
+pub mod custom_page;
 /// Dashboard overview handlers.
 pub mod dashboard;
 /// Event-related handlers for the admin UI.

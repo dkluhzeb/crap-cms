@@ -304,8 +304,9 @@ fn constrained_find_filters_results() {
         op: query::FilterOp::Equals("published".to_string()),
     })];
 
-    let mut find_query = query::FindQuery::new();
-    find_query.filters = constraint_filters;
+    let find_query = query::FindQuery::builder()
+        .filters(constraint_filters)
+        .build();
 
     let docs = ops::find_documents(&pool, "posts", &posts, &find_query, None).unwrap();
 
@@ -1004,6 +1005,72 @@ fn access_hook_filter_table_on_restore_version_enforces_parent_match() {
         .expect("user_b should restore their own version");
 }
 
+/// Regression: a version snapshot whose data violates current schema
+/// constraints (e.g. a `required` field is empty) must be rejected at
+/// restore time. Previously `query::restore_version` wrote the snapshot
+/// directly via raw `update` without running schema validation, so an old
+/// snapshot from before a `required = true` tightening would restore into
+/// an invalid state. The restore path now runs `validate_fields` before
+/// the write, surfacing the violation as a `ValidationError`.
+#[test]
+fn restore_collection_version_rejects_snapshot_violating_required_field() {
+    let (_tmp, pool, registry, runner) = row_setup();
+
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("versioned_articles").unwrap().clone();
+    drop(reg);
+
+    // Seed a valid live row so restore has a target.
+    let mut data = HashMap::new();
+    data.insert("title".to_string(), "Original".to_string());
+    data.insert("author_id".to_string(), "user_b".to_string());
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let doc = query::create(&tx, "versioned_articles", &def, &data, None).unwrap();
+
+    // Hand-craft a version snapshot with empty title — violates `required`.
+    let bad_snapshot = json!({
+        "title": "",
+        "author_id": "user_b",
+    });
+    let version =
+        query::create_version(&tx, "versioned_articles", &doc.id, "draft", &bad_snapshot).unwrap();
+    tx.commit().unwrap();
+
+    let user_b = make_user_doc("user_b", "editor");
+    let lc = LocaleConfig::default();
+    let ctx = ServiceContext::collection("versioned_articles", &def)
+        .pool(&pool)
+        .user(Some(&user_b))
+        .runner(&runner)
+        .build();
+
+    let err = restore_collection_version(&ctx, &doc.id, &version.id, &lc)
+        .expect_err("restore must reject snapshot with empty required field");
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("title")
+            || msg.to_lowercase().contains("required")
+            || msg.to_lowercase().contains("validation"),
+        "expected validation error mentioning title/required, got: {msg}"
+    );
+
+    // Live row must still hold the original (untouched) value.
+    let live = query::find_by_id(
+        &pool.get().unwrap(),
+        "versioned_articles",
+        &def,
+        &doc.id,
+        None,
+    )
+    .unwrap()
+    .expect("live row still present");
+    assert_eq!(
+        live.fields.get("title").and_then(|v| v.as_str()),
+        Some("Original")
+    );
+}
+
 #[test]
 fn access_hook_filter_table_on_job_trigger_is_rejected() {
     let (_tmp, pool, registry, runner) = row_setup();
@@ -1094,7 +1161,7 @@ fn search_documents_excludes_drafts_by_default() {
         .user(Some(&user_a))
         .build();
 
-    let fq = FindQuery::new();
+    let fq = FindQuery::default();
     let input = SearchDocumentsInput {
         query: &fq,
         locale_ctx: None,
@@ -1138,7 +1205,7 @@ fn search_documents_includes_drafts_when_opted_in() {
         .user(Some(&user_a))
         .build();
 
-    let fq = FindQuery::new();
+    let fq = FindQuery::default();
     let input = SearchDocumentsInput {
         query: &fq,
         locale_ctx: None,

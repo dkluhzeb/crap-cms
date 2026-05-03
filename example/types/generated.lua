@@ -1311,3 +1311,67 @@ function crap.collections.find(collection, query) end
 ---@return crap.Document?
 function crap.collections.find_by_id(collection, id, opts) end
 
+-- ─── Template data context (for `crap.template_data.register`) ───
+
+---@class crap.template.crap_meta
+---@field version string
+---@field build_hash string
+---@field dev_mode boolean
+---@field auth_enabled boolean
+---@field csp_nonce string
+
+---@class crap.template.user
+---@field id string
+---@field email string
+---@field collection string
+
+---@class crap.template.page
+---@field type "dashboard" | "collection_list" | "collection_items" | "collection_edit" | "collection_create" | "collection_delete" | "collection_versions" | "global_edit" | "global_versions" | "auth_login" | "auth_forgot" | "auth_reset" | "auth_mfa" | "error_403" | "error_404" | "error_500" | "auth_required" | "admin_denied"
+---@field title string
+---@field title_name? string
+---@field breadcrumbs? table
+
+---@class crap.template.nav
+---@field collections table[]
+---@field globals table[]
+
+---@class crap.template.collection
+---@field slug string
+---@field display_name string
+---@field singular_name string
+---@field has_drafts boolean
+---@field has_versions boolean
+---@field is_auth boolean
+---@field is_upload boolean
+
+---@class crap.template.global
+---@field slug string
+---@field display_name string
+---@field has_drafts boolean
+---@field has_versions boolean
+
+---@class crap.template.document
+---@field id string
+---@field created_at? string
+---@field updated_at? string
+---@field status? string
+---@field data? table
+
+---@class crap.template_ctx
+---@field crap crap.template.crap_meta
+---@field _locale string
+---@field available_locales string[]
+---@field title string
+---@field page crap.template.page
+---@field user? crap.template.user
+---@field nav? crap.template.nav
+---@field collection? crap.template.collection
+---@field global? crap.template.global
+---@field document? crap.template.document
+---@field has_editor_locales? boolean
+---@field editor_locale? string
+-- For page-specific fields beyond the bases (e.g. `collection_cards`, `versions`),
+-- see docs/src/admin-ui/template-context.md or the generated reference.
+
+---@alias crap.template_data_fn fun(ctx: crap.template_ctx): any
+

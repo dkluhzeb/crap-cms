@@ -4,19 +4,25 @@ use std::collections::HashMap;
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    extract::State,
+    http::{Request, StatusCode, header::COOKIE},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{Value, to_value};
+use tokio::task::spawn_blocking;
 use tracing::{debug, error, warn};
 
 use crate::{
-    admin::{AdminState, context::ContextBuilder, server::extract_cookie},
+    admin::{
+        AdminState,
+        context::{AuthBasePageContext, PageMeta, PageType},
+        server::extract_cookie,
+    },
     config::LocaleConfig,
     core::{
-        AuthUser, Registry, Slug,
+        AuthUser, Document, Registry, Slug,
         auth::{self, ClaimsBuilder},
         collection::Auth as CollectionAuth,
     },
@@ -24,9 +30,6 @@ use crate::{
     hooks::HookRunner,
     service::{self, ServiceContext},
 };
-
-use axum::extract::State;
-use axum::http::header::COOKIE;
 
 /// Validate JWT from `crap_session` cookie and optionally load the full user document.
 #[cfg(not(tarpaulin_include))]
@@ -93,9 +96,12 @@ fn try_strategy_auth(
                         .to_string();
                     let expiry = auth_config.token_expiry;
 
+                    let now = Utc::now().timestamp().max(0) as u64;
+
                     let claims = match ClaimsBuilder::new(user.id.clone(), slug.clone())
                         .email(user_email)
-                        .exp((Utc::now().timestamp().max(0) as u64).saturating_add(expiry))
+                        .exp(now.saturating_add(expiry))
+                        .auth_time(now)
                         .build()
                     {
                         Ok(c) => c,
@@ -228,10 +234,9 @@ pub(super) async fn auth_middleware(
         let pool = state.pool.clone();
         let hook_runner = state.hook_runner.clone();
 
-        let strategy_result = tokio::task::spawn_blocking(move || {
-            try_strategy_auth(&auth_defs, &headers, &pool, &hook_runner)
-        })
-        .await;
+        let strategy_result =
+            spawn_blocking(move || try_strategy_auth(&auth_defs, &headers, &pool, &hook_runner))
+                .await;
 
         if let Ok(Some(claims)) = strategy_result {
             let auth_user =
@@ -262,7 +267,7 @@ async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<Re
 #[cfg(not(tarpaulin_include))]
 pub(crate) async fn check_admin_gate_for_doc(
     state: &AdminState,
-    user_doc: &crate::core::Document,
+    user_doc: &Document,
 ) -> Option<Response> {
     let access_ref = state.config.admin.access.as_deref()?;
     let pool = state.pool.clone();
@@ -270,7 +275,7 @@ pub(crate) async fn check_admin_gate_for_doc(
     let user_doc = user_doc.clone();
     let access_ref = access_ref.to_string();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = spawn_blocking(move || {
         let conn = pool.get().ok()?;
         Some(hook_runner.check_access(Some(&access_ref), Some(&user_doc), None, None, &conn))
     })
@@ -286,9 +291,20 @@ pub(crate) async fn check_admin_gate_for_doc(
     }
 }
 
+/// Serialize a typed [`AuthBasePageContext`] for rendering. Avoids the
+/// `before_render` hook (these are last-resort error pages where the hook
+/// would just add noise).
+fn serialize_auth_base(state: &AdminState, page: PageMeta) -> Value {
+    to_value(AuthBasePageContext::for_state(state, page))
+        .expect("AuthBasePageContext serializes infallibly")
+}
+
 /// Render the "setup required" page (no auth collection exists, require_auth is on).
 fn auth_required_response(state: &AdminState) -> Response {
-    let data = ContextBuilder::auth(state).build();
+    let data = serialize_auth_base(
+        state,
+        PageMeta::new(PageType::AuthRequired, "error_auth_required_title"),
+    );
 
     match state.render("errors/auth_required", &data) {
         Ok(html) => (StatusCode::SERVICE_UNAVAILABLE, Html(html)).into_response(),
@@ -302,7 +318,10 @@ fn auth_required_response(state: &AdminState) -> Response {
 
 /// Render the "access denied" page (user authenticated but not authorized for admin).
 fn admin_denied_response(state: &AdminState) -> Response {
-    let data = ContextBuilder::auth(state).build();
+    let data = serialize_auth_base(
+        state,
+        PageMeta::new(PageType::AdminDenied, "error_admin_access_denied_title"),
+    );
 
     match state.render("errors/admin_denied", &data) {
         Ok(html) => (StatusCode::FORBIDDEN, Html(html)).into_response(),

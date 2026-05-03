@@ -1,0 +1,81 @@
+{{!-- partials/field
+     Wraps a form field with label + required marker + locale badge +
+     error + help text. Three structural variants share the same
+     error/help/required logic.
+
+     Params (all optional — if omitted, the partial reads the same key
+     from the inherited context, so field-rendering callers don't need
+     to pass anything explicitly):
+
+       name           — used as the `for=` target on the label
+                        (label points at `field-{{name}}`)
+       label          — translation key (resolved via `{{t}}`) used as
+                        the visible label text
+       required       — bool; renders the red `*` marker
+       locale_locked  — bool; renders the "Shared field" badge
+       error          — string; rendered as a `form__error` paragraph
+                        below the input
+       description    — translation key; rendered as a `form__help`
+                        paragraph below the input
+       variant        — "default" (label above slot, default)
+                        "fieldset" (fieldset/legend wrapping slot — for
+                          radio groups)
+                        "checkbox" (slot then label, inline — for single
+                          checkbox)
+
+     Explicit-param overrides also work; passed args extend the
+     inherited context, so
+
+       {{#> partials/field label="My Custom Label" error="bad value"}}
+         <input type="text" name="…" />
+       {{/partials/field}}
+
+     uses the explicit `label` / `error` even if the surrounding context
+     also has `label` / `error` keys.
+
+     Slot: the form input(s). --}}
+{{#if (eq variant "fieldset")}}
+  <fieldset class="form__radio-group">
+    <legend>
+      {{t label}}
+      {{#if required}}
+        <span class="required">*</span>
+      {{/if}}
+      {{#if locale_locked}}
+        <span class="form__locale-badge">{{t "shared_field"}}</span>
+      {{/if}}
+    </legend>
+    {{> @partial-block}}
+  </fieldset>
+{{else if (eq variant "checkbox")}}
+  <div class="form__checkbox">
+    {{> @partial-block}}
+    <label for="field-{{name}}">
+      {{t label}}
+      {{#if required}}
+        <span class="required">*</span>
+      {{/if}}
+      {{#if locale_locked}}
+        <span class="form__locale-badge">{{t "shared_field"}}</span>
+      {{/if}}
+    </label>
+  </div>
+{{else}}
+  <label for="field-{{name}}">
+    {{t label}}
+    {{#if required}}
+      <span class="required">*</span>
+    {{/if}}
+    {{#if locale_locked}}
+      <span class="form__locale-badge">{{t "shared_field"}}</span>
+    {{/if}}
+  </label>
+  {{> @partial-block}}
+{{/if}}
+{{#if error}}
+  <p class="form__error">{{error}}</p>
+{{/if}}
+{{#if description}}
+  <p class="form__help">{{t description}}</p>
+{{/if}}
+{{slot "field_help" name=name kind=field_type label=label}}

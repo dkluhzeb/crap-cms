@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
+    core::{Document, FieldDefinition, FieldType, collection::Hooks},
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
@@ -66,8 +66,6 @@ pub(crate) fn collect_api_hidden_field_names(
     fields: &[FieldDefinition],
     prefix: &str,
 ) -> Vec<String> {
-    use crate::core::FieldType;
-
     let mut hidden = Vec::new();
 
     for field in fields {
@@ -159,33 +157,44 @@ pub(crate) fn enforce_access_constraints(
     Ok(())
 }
 
+/// Inputs for [`build_pagination`]. Grouped into a struct per
+/// CLAUDE.md's "more than 4 parameters" rule; constructed at the two
+/// call sites in the read service (`find_documents`,
+/// `search_documents`).
+pub(crate) struct PaginationInputs<'a> {
+    pub docs: &'a [Document],
+    pub total: i64,
+    pub fq: &'a FindQuery,
+    pub cursor_enabled: bool,
+    pub has_timestamps: bool,
+    /// Whether the collection has drafts enabled — controls cursor
+    /// `status_val` encoding for the composite ordering surfaced by
+    /// `apply_order_by`.
+    pub has_drafts: bool,
+    pub had_cursor: bool,
+    pub cursor_has_more: Option<bool>,
+}
+
 /// Build a `PaginationResult` from query state, supporting both cursor and page modes.
 ///
 /// Shared by `find_documents` and `search_documents` to avoid duplicating the
 /// cursor/page branching logic.
-pub(crate) fn build_pagination(
-    docs: &[Document],
-    total: i64,
-    fq: &FindQuery,
-    cursor_enabled: bool,
-    has_timestamps: bool,
-    had_cursor: bool,
-    cursor_has_more: Option<bool>,
-) -> query::PaginationResult {
-    let limit = fq.limit.unwrap_or(total);
+pub(crate) fn build_pagination(inputs: PaginationInputs<'_>) -> query::PaginationResult {
+    let limit = inputs.fq.limit.unwrap_or(inputs.total);
 
-    if cursor_enabled {
-        query::PaginationResult::builder(docs, total, limit).cursor(
-            fq.order_by.as_deref(),
-            has_timestamps,
-            fq.before_cursor.is_some(),
-            had_cursor,
-            cursor_has_more,
+    if inputs.cursor_enabled {
+        query::PaginationResult::builder(inputs.docs, inputs.total, limit).cursor(
+            inputs.fq.order_by.as_deref(),
+            inputs.has_timestamps,
+            inputs.has_drafts,
+            inputs.fq.before_cursor.is_some(),
+            inputs.had_cursor,
+            inputs.cursor_has_more,
         )
     } else {
-        let offset = fq.offset.unwrap_or(0);
+        let offset = inputs.fq.offset.unwrap_or(0);
         let page = if limit > 0 { offset / limit + 1 } else { 1 };
-        query::PaginationResult::builder(docs, total, limit).page(page, offset)
+        query::PaginationResult::builder(inputs.docs, inputs.total, limit).page(page, offset)
     }
 }
 

@@ -65,17 +65,13 @@ fn globals_update_inner(
         .ui_locale(ui_locale.clone())
         .build();
 
-    let mut ctx_builder = ServiceContext::global(&slug, &def)
+    let ctx = ServiceContext::global(&slug, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .override_access(override_access)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let (doc, _) = update_global_document(&ctx, write_input)
         .map_err(|e| RuntimeError(format!("update_global error: {e:#}")))?;

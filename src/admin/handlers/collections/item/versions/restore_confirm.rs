@@ -9,10 +9,13 @@ use serde_json::json;
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, CollectionContext, DocumentRef, PageMeta, PageType,
+            page::collections::CollectionRestoreConfirmPage,
+        },
         handlers::shared::{
             check_access_or_forbid, extract_editor_locale, forbidden,
-            load_version_with_missing_relations, not_found, redirect_response, render_or_error,
+            load_version_with_missing_relations, not_found, paths, redirect_response, render_page,
             server_error,
         },
     },
@@ -37,7 +40,7 @@ pub async fn restore_confirm(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+        return redirect_response(&paths::collection_item(&slug, &id));
     }
 
     match check_access_or_forbid(
@@ -78,30 +81,36 @@ pub async fn restore_confirm(
         "/admin/collections/{}/{}/versions/{}/restore",
         slug, id, version_id
     );
-    let back_url = format!("/admin/collections/{}/{}", slug, id);
+    let back_url = paths::collection_item(&slug, &id);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionVersions, "restore_version")
-        .collection_def(&def)
-        .document_stub(&id)
-        .set("version_number", json!(version.version))
-        .set("missing_relations", json!(missing))
-        .set("restore_url", json!(restore_url))
-        .set("back_url", json!(back_url))
-        .breadcrumbs(vec![
-            Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::link(&id, format!("/admin/collections/{}/{}", slug, id)),
-            Breadcrumb::current("restore_version"),
-        ])
-        .build();
 
-    let data = state.hook_runner.run_before_render(data);
+    let breadcrumbs = vec![
+        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::link(&id, paths::collection_item(&slug, &id)),
+        Breadcrumb::current("restore_version"),
+    ];
 
-    render_or_error(&state, "collections/restore", &data)
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionVersions, "restore_version"),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
+
+    let ctx = CollectionRestoreConfirmPage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        document: DocumentRef::stub(&id),
+        version_number: json!(version.version),
+        missing_relations: missing.into_iter().map(|m| json!(m)).collect(),
+        restore_url,
+        back_url,
+    };
+
+    render_page(&state, "collections/restore", &ctx)
 }

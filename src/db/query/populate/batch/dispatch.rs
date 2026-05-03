@@ -260,12 +260,12 @@ fn populate_join_fields(
             }
         }
 
-        let mut fq = FindQuery::new();
-        fq.filters = shared_filters;
-        fq.filters.push(FilterClause::Single(Filter {
+        let mut filters = shared_filters;
+        filters.push(FilterClause::Single(Filter {
             field: jc.on.clone(),
             op: FilterOp::In(parent_ids),
         }));
+        let fq = FindQuery::builder().filters(filters).build();
 
         let matched_docs =
             match read::find(ctx.conn, &jc.collection, &target_def, &fq, opts.locale_ctx) {
@@ -346,7 +346,7 @@ fn populate_join_fields(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use serde_json::json;
 

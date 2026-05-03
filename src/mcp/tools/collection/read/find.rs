@@ -57,35 +57,25 @@ pub(in crate::mcp::tools) fn exec_find(
     let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let depth = depth.min(config.depth.max_depth);
 
-    let mut fq = FindQuery::builder()
-        .filters(parse_where_filters(args))
-        .limit(pagination.limit);
-
-    if let Some(ref ob) = order_by {
-        fq = fq.order_by(ob.as_str());
-    }
-    if !pagination.has_cursor() {
-        fq = fq.offset(pagination.offset);
-    }
-    if let Some(ref c) = pagination.after_cursor {
-        fq = fq.after_cursor(c.clone());
-    }
-    if let Some(ref c) = pagination.before_cursor {
-        fq = fq.before_cursor(c.clone());
-    }
-    if let Some(ref s) = search {
-        fq = fq.search(s.as_str());
-    }
-
     let is_trash = args.get("trash").and_then(|v| v.as_bool()).unwrap_or(false) && def.soft_delete;
     let include_drafts = args.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // Default sort for trash listings is a presentation concern — keep here.
-    if is_trash && order_by.is_none() {
-        fq = fq.order_by("-_deleted_at");
-    }
+    // Default sort for trash listings is a presentation concern.
+    let order_by = order_by
+        .clone()
+        .or_else(|| is_trash.then(|| "-_deleted_at".to_string()));
 
-    let fq = fq.build();
+    let offset = (!pagination.has_cursor()).then_some(pagination.offset);
+
+    let fq = FindQuery::builder()
+        .filters(parse_where_filters(args))
+        .order_by(order_by)
+        .limit(Some(pagination.limit))
+        .offset(offset)
+        .after_cursor(pagination.after_cursor.clone())
+        .before_cursor(pagination.before_cursor.clone())
+        .search(search.clone())
+        .build();
 
     let hooks = RunnerReadHooks::new(runner, &conn);
     let ctx = ServiceContext::collection(slug, def)

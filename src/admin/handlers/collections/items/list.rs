@@ -10,16 +10,19 @@ use tracing::{error, warn};
 use crate::{
     admin::{
         AdminState,
-        context::{ContextBuilder, PageType},
+        context::{
+            BasePageContext, CollectionContext, PageMeta, PageType, PaginationContext,
+            page::collections::CollectionItemsListPage,
+        },
         handlers::{
             collections::shared::{
                 build_column_options, build_filter_fields, build_filter_pills, compute_cells,
                 resolve_columns, thumbnail_url,
             },
             shared::{
-                ListUrlContext, PaginationParams, extract_editor_locale, extract_where_params,
-                forbidden, not_found, parse_where_params, render_or_error, server_error,
-                validate_sort,
+                ListUrlContext, PaginationParams, extract_editor_locale, extract_status_filter,
+                extract_where_params, forbidden, not_found, parse_where_params, paths, render_page,
+                server_error, validate_sort,
             },
         },
     },
@@ -52,6 +55,7 @@ struct FetchListArgs<'a> {
     auth_user: &'a Option<Extension<AuthUser>>,
     cursor_enabled: bool,
     is_trash: bool,
+    status_filter: Option<Vec<String>>,
 }
 
 fn fetch_list_documents(
@@ -77,6 +81,7 @@ fn fetch_list_documents(
         .cursor_enabled(args.cursor_enabled)
         .trash(args.is_trash)
         .include_drafts(true)
+        .status_filter(args.status_filter)
         .build();
 
     find_documents(&ctx, &input)
@@ -168,22 +173,17 @@ fn build_find_query(
     order_by: Option<String>,
     search: Option<&str>,
 ) -> FindQuery {
-    let has_cursor = pagination.has_cursor();
+    let offset = (!pagination.has_cursor()).then_some(pagination.offset);
 
-    let mut fq = FindQuery::new();
-    fq.filters = url_filters.to_vec();
-    fq.order_by = order_by;
-    fq.limit = Some(pagination.limit);
-    fq.offset = if has_cursor {
-        None
-    } else {
-        Some(pagination.offset)
-    };
-    fq.after_cursor = pagination.after_cursor.clone();
-    fq.before_cursor = pagination.before_cursor.clone();
-    fq.search = search.map(|s| s.to_string());
-
-    fq
+    FindQuery::builder()
+        .filters(url_filters.to_vec())
+        .order_by(order_by)
+        .limit(Some(pagination.limit))
+        .offset(offset)
+        .after_cursor(pagination.after_cursor.clone())
+        .before_cursor(pagination.before_cursor.clone())
+        .search(search.map(str::to_string))
+        .build()
 }
 
 /// Load the user's saved column preferences for a collection.
@@ -249,6 +249,28 @@ pub async fn list_items(
 
     let sort = params.sort.as_deref().and_then(|s| validate_sort(s, &def));
     let url_filters = parse_where_params(raw_query, &def);
+    // The filter UI exposes `_status` for collections with drafts (see
+    // `build_filter_fields`); the URL it produces (`where[_status][equals]=X`,
+    // including OR-bucket forms) is handled here as a typed param rather
+    // than a generic where clause, because system columns (`_*`) are
+    // off-limits to user filters at the service layer
+    // (`validate_user_filters`). See `extract_status_filter` for the
+    // parsing rule. Multiple values widen to `_status IN (...)` at
+    // injection time.
+    let status_filter = extract_status_filter(raw_query).and_then(|values| {
+        if !def.has_drafts() {
+            return None;
+        }
+        let filtered: Vec<String> = values
+            .into_iter()
+            .filter(|s| s == "draft" || s == "published")
+            .collect();
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(filtered)
+        }
+    });
 
     let order_by = if is_trash {
         Some("-_deleted_at".to_string())
@@ -273,6 +295,7 @@ pub async fn list_items(
     let def_owned = def.clone();
     let auth_user_clone = auth_user.clone();
 
+    let status_filter_clone = status_filter.clone();
     let read_result = tokio::task::spawn_blocking(move || {
         fetch_list_documents(FetchListArgs {
             state: &state_clone,
@@ -283,6 +306,7 @@ pub async fn list_items(
             auth_user: &auth_user_clone,
             cursor_enabled,
             is_trash,
+            status_filter: status_filter_clone,
         })
     })
     .await;
@@ -316,7 +340,7 @@ pub async fn list_items(
 
     let user_columns = load_user_columns(&state, &auth_user, &slug);
 
-    let base_url = format!("/admin/collections/{}", slug);
+    let base_url = paths::collection(&slug);
     let mut where_params = extract_where_params(raw_query);
 
     if is_trash {
@@ -352,37 +376,39 @@ pub async fn list_items(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let ctx = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionItems, def.display_name())
-        .collection_def(&def)
-        .docs(items);
-
     let lp = build_list_pagination(&pagination_result, &pagination, cursor_enabled, &url_ctx);
 
-    let ctx = ctx.with_pagination(&lp.result, lp.prev_url, lp.next_url);
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionItems, def.display_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state);
 
-    let data = ctx
-        .set("has_drafts", json!(def.has_drafts()))
-        .set("has_soft_delete", json!(def.soft_delete))
-        .set("is_trash", json!(is_trash))
-        .set("search", json!(search))
-        .set("sort", json!(sort))
-        .set("table_columns", json!(table_columns))
-        .set("column_options", json!(column_options))
-        .set("filter_fields", json!(filter_fields))
-        .set("active_filters", json!(filter_pills))
-        .set("active_filter_count", json!(filter_pills.len()))
-        .set("title_sort_url", json!(title_sort_url))
-        .set("title_sorted_asc", json!(title_sorted_asc))
-        .set("title_sorted_desc", json!(title_sorted_desc))
-        .build();
+    let active_filter_count = filter_pills.len();
 
-    let data = state.hook_runner.run_before_render(data);
+    let ctx = CollectionItemsListPage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        docs: items,
+        pagination: PaginationContext::from_result(&lp.result, lp.prev_url, lp.next_url),
+        has_drafts: def.has_drafts(),
+        has_soft_delete: def.soft_delete,
+        is_trash,
+        search,
+        sort,
+        table_columns,
+        column_options,
+        filter_fields,
+        active_filters: filter_pills,
+        active_filter_count,
+        title_sort_url,
+        title_sorted_asc,
+        title_sorted_desc,
+    };
 
-    render_or_error(&state, "collections/items", &data)
+    render_page(&state, "collections/items", &ctx)
 }
 
 /// Build a single item row for the collection list table.

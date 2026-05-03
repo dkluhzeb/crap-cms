@@ -1,10 +1,9 @@
 //! Locale helpers — editor locale extraction and template data building.
 
 use axum::http::{HeaderMap, header};
-use serde_json::{Value, json};
 
 use crate::{
-    admin::{AdminState, server::extract_cookie},
+    admin::{AdminState, context::LocaleTemplateData, server::extract_cookie},
     config::LocaleConfig,
     db::LocaleContext,
 };
@@ -33,40 +32,25 @@ pub fn extract_editor_locale(headers: &HeaderMap, config: &LocaleConfig) -> Opti
 }
 
 /// Build locale template context (selector data) from config + current locale.
-/// Returns `(locale_ctx_for_db, template_json)` where template_json has
-/// `has_locales`, `current_locale`, `locales` (array with value/label/selected).
+/// Returns `(locale_ctx_for_db, locale_template_data)` — the second element
+/// is `None` when locale support is disabled, otherwise carries the typed
+/// picker data the page contexts flatten into themselves.
 pub fn build_locale_template_data(
     state: &AdminState,
     requested_locale: Option<&str>,
-) -> (Option<LocaleContext>, Value) {
+) -> (Option<LocaleContext>, Option<LocaleTemplateData>) {
     let config = &state.config.locale;
 
-    if !config.is_enabled() {
-        return (None, json!({}));
-    }
+    let locale_ctx = if config.is_enabled() {
+        let current = requested_locale.unwrap_or(&config.default_locale);
+        LocaleContext::from_locale_string(Some(current), config).unwrap_or(None)
+    } else {
+        None
+    };
 
-    let current = requested_locale.unwrap_or(&config.default_locale);
-    let locale_ctx = LocaleContext::from_locale_string(Some(current), config).unwrap_or(None);
+    let template_data = LocaleTemplateData::for_locale(config, requested_locale);
 
-    let locales: Vec<Value> = config
-        .locales
-        .iter()
-        .map(|l| {
-            json!({
-                "value": l,
-                "label": l.to_uppercase(),
-                "selected": l == current,
-            })
-        })
-        .collect();
-
-    let data = json!({
-        "has_locales": true,
-        "current_locale": current,
-        "locales": locales,
-    });
-
-    (locale_ctx, data)
+    (locale_ctx, template_data)
 }
 
 /// Check if the current locale is a non-default locale (fields should be locked).

@@ -1,17 +1,12 @@
-<label for="field-{{name}}">
-  {{t label}}
-  {{#if required}}<span class="required">*</span>{{/if}}
-  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
-</label>
-<input
-  type="email"
-  id="field-{{name}}"
-  name="{{name}}"
-  value="{{value}}"
-  {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
-/>
-{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
+{{#> partials/field}}
+  <input
+    type="email"
+    id="field-{{name}}"
+    name="{{name}}"
+    value="{{value}}"
+    {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
+    {{#if required}}required{{/if}}
+    {{#if readonly}}readonly{{/if}}
+    {{#if error}}class="form__input--error"{{/if}}
+  />
+{{/partials/field}}

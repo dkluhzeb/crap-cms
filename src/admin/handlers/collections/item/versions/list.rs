@@ -4,16 +4,19 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::error;
 
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, CollectionContext, DocumentRef, PageMeta, PageType,
+            PaginationContext, page::collections::CollectionVersionsListPage,
+        },
         handlers::shared::{
-            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found,
-            redirect_response, render_or_error, server_error, version_to_json,
+            Pagination, PaginationParams, extract_editor_locale, get_user_doc, not_found, paths,
+            redirect_response, render_page, server_error, version_to_json,
         },
     },
     core::{
@@ -96,7 +99,7 @@ pub async fn list_versions_page(
     };
 
     if !def.has_versions() {
-        return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+        return redirect_response(&paths::collection_item(&slug, &id));
     }
 
     let pg = params.resolve(&state.config.pagination);
@@ -110,47 +113,46 @@ pub async fn list_versions_page(
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
-    let data = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionVersions, "version_history_for")
-        .page_title_name(doc_title.clone())
-        .collection_def(&def)
-        .document_stub(&id)
-        .set("doc_title", json!(doc_title))
-        .set("versions", json!(versions))
-        .set(
-            "restore_url_prefix",
-            json!(format!("/admin/collections/{}/{}", slug, id)),
-        )
-        .with_pagination(
-            &pagination,
-            format!(
-                "/admin/collections/{}/{}/versions?page={}",
-                slug,
-                id,
-                pg.page.saturating_sub(1).max(1)
-            ),
-            format!(
-                "/admin/collections/{}/{}/versions?page={}",
-                slug,
-                id,
-                pg.page + 1
-            ),
-        )
-        .breadcrumbs(vec![
-            Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::link(
-                doc_title.clone(),
-                format!("/admin/collections/{}/{}", slug, id),
-            ),
-            Breadcrumb::current("version_history"),
-        ])
-        .build();
 
-    let data = state.hook_runner.run_before_render(data);
+    let prev_url = format!(
+        "/admin/collections/{}/{}/versions?page={}",
+        slug,
+        id,
+        pg.page.saturating_sub(1).max(1)
+    );
+    let next_url = format!(
+        "/admin/collections/{}/{}/versions?page={}",
+        slug,
+        id,
+        pg.page + 1
+    );
 
-    render_or_error(&state, "collections/versions", &data)
+    let breadcrumbs = vec![
+        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::link(doc_title.clone(), paths::collection_item(&slug, &id)),
+        Breadcrumb::current("version_history"),
+    ];
+
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionVersions, "version_history_for")
+            .with_title_name(doc_title.clone()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
+
+    let ctx = CollectionVersionsListPage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        document: DocumentRef::stub(&id),
+        pagination: PaginationContext::from_result(&pagination, prev_url, next_url),
+        doc_title,
+        versions,
+        restore_url_prefix: paths::collection_item(&slug, &id),
+    };
+
+    render_page(&state, "collections/versions", &ctx)
 }

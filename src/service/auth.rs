@@ -270,7 +270,7 @@ pub fn verify_mfa_code(ctx: &ServiceContext, id: &str, code: &str) -> Result<boo
     Ok(query::verify_mfa_code(conn.as_ref(), ctx.slug, id, code)?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use std::sync::Arc;
 

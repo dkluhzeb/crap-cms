@@ -1,31 +1,25 @@
-use axum::{extract::State, response::Html};
-use serde_json::json;
-use tracing::error;
+use axum::{extract::State, response::Response};
 
 use crate::admin::{
     AdminState,
-    context::{ContextBuilder, PageType},
-    handlers::auth::get_auth_collections,
+    context::{AuthBasePageContext, PageMeta, PageType, page::auth::ForgotPasswordPage},
+    handlers::{auth::get_auth_collections, shared::render_page},
 };
 
 /// GET /admin/forgot-password — render the forgot password form.
-pub async fn forgot_password_page(State(state): State<AdminState>) -> Html<String> {
+pub async fn forgot_password_page(State(state): State<AdminState>) -> Response {
     let auth_collections = get_auth_collections(&state);
+    let show_collection_picker = auth_collections.len() > 1;
 
-    let data = ContextBuilder::auth(&state)
-        .page(PageType::AuthForgot, "forgot_password_page_title")
-        .set("collections", json!(auth_collections))
-        .set("show_collection_picker", json!(auth_collections.len() > 1))
-        .build();
+    let ctx = ForgotPasswordPage {
+        base: AuthBasePageContext::for_state(
+            &state,
+            PageMeta::new(PageType::AuthForgot, "forgot_password_page_title"),
+        ),
+        success: false,
+        collections: auth_collections,
+        show_collection_picker,
+    };
 
-    let data = state.hook_runner.run_before_render(data);
-
-    match state.render("auth/forgot_password", &data) {
-        Ok(html) => Html(html),
-        Err(e) => {
-            error!("Template render error: {}", e);
-
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-        }
-    }
+    render_page(&state, "auth/forgot_password", &ctx)
 }

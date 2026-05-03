@@ -712,7 +712,7 @@ fn cmd_status_with_fixture() {
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let result = commands::status::run(&config_dir);
+    let result = commands::status::run(&config_dir, false);
     assert!(result.is_ok(), "status should succeed: {:?}", result.err());
 }
 
@@ -722,7 +722,7 @@ fn cmd_status_empty_project() {
     let config_dir = tmp.path().join("empty");
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
 
-    let result = commands::status::run(&config_dir);
+    let result = commands::status::run(&config_dir, false);
     assert!(
         result.is_ok(),
         "status on empty project should succeed: {:?}",
@@ -747,7 +747,7 @@ fn cmd_status_with_data() {
         tx.commit().unwrap();
     }
 
-    let result = commands::status::run(&config_dir);
+    let result = commands::status::run(&config_dir, false);
     assert!(
         result.is_ok(),
         "status with data should succeed: {:?}",
@@ -762,7 +762,7 @@ fn cmd_status_with_globals() {
     copy_dir(&fixture_dir(), &config_dir);
 
     // The fixture has a globals/settings.lua — status should show it
-    let result = commands::status::run(&config_dir);
+    let result = commands::status::run(&config_dir, false);
     assert!(
         result.is_ok(),
         "status with globals should succeed: {:?}",
@@ -779,7 +779,7 @@ fn cmd_status_with_migrations() {
     // Create a migration file
     scaffold::make_migration(&config_dir, "test_status_migration").unwrap();
 
-    let result = commands::status::run(&config_dir);
+    let result = commands::status::run(&config_dir, false);
     assert!(
         result.is_ok(),
         "status with migrations should succeed: {:?}",
@@ -789,7 +789,7 @@ fn cmd_status_with_migrations() {
 
 #[test]
 fn cmd_status_bad_dir() {
-    let result = commands::status::run(Path::new("/nonexistent/config"));
+    let result = commands::status::run(Path::new("/nonexistent/config"), false);
     assert!(result.is_err(), "status with nonexistent dir should fail");
 }
 
@@ -890,7 +890,7 @@ fn cmd_templates_extract_all_static() {
         "templates extract all static should succeed: {:?}",
         result.err()
     );
-    assert!(tmp.path().join("static/styles.css").exists());
+    assert!(tmp.path().join("static/styles/main.css").exists());
 }
 
 #[test]

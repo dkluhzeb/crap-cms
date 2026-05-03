@@ -11,11 +11,15 @@ use serde_json::{Value, json};
 use crate::{
     admin::{
         AdminState,
-        context::{Breadcrumb, ContextBuilder, PageType},
+        context::{
+            BasePageContext, Breadcrumb, CollectionContext, PageMeta, PageType,
+            field::{BaseFieldData, ConditionData, FieldContext, TextField, ValidationAttrs},
+            page::collections::{CollectionCreatePage, UploadFormContext},
+        },
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, forbidden, is_non_default_locale, not_found, render_or_error,
+            extract_editor_locale, forbidden, is_non_default_locale, not_found, paths, render_page,
             split_sidebar_fields,
         },
     },
@@ -28,7 +32,7 @@ fn prepare_create_fields(
     state: &AdminState,
     def: &CollectionDefinition,
     editor_locale: Option<&str>,
-) -> (Vec<Value>, Vec<Value>) {
+) -> (Vec<FieldContext>, Vec<FieldContext>) {
     let non_default_locale = is_non_default_locale(state, editor_locale);
     let empty: HashMap<String, String> = HashMap::new();
 
@@ -60,13 +64,27 @@ fn prepare_create_fields(
     );
 
     if def.is_auth_collection() {
-        fields.push(json!({
-            "name": "password",
-            "field_type": "password",
-            "label": "password",
-            "required": true,
-            "value": "",
-            "description": "set_password_description",
+        fields.push(FieldContext::Password(TextField {
+            base: BaseFieldData {
+                name: "password".to_string(),
+                field_name: "password".to_string(),
+                label: "password".to_string(),
+                required: true,
+                value: Value::String(String::new()),
+                placeholder: None,
+                description: Some("set_password_description".to_string()),
+                readonly: false,
+                localized: false,
+                locale_locked: false,
+                position: None,
+                template: None,
+                extra: serde_json::Map::new(),
+                error: None,
+                validation: ValidationAttrs::default(),
+                condition: ConditionData::default(),
+            },
+            has_many: None,
+            tags: None,
         }));
     }
 
@@ -74,16 +92,15 @@ fn prepare_create_fields(
 }
 
 /// Build the upload accept context for upload collection create forms.
-fn upload_accept_context(def: &CollectionDefinition) -> Value {
-    let mut ctx = json!({});
-
-    if let Some(ref u) = def.upload
-        && !u.mime_types.is_empty()
-    {
-        ctx["accept"] = json!(u.mime_types.join(","));
+fn upload_accept_context(def: &CollectionDefinition) -> UploadFormContext {
+    UploadFormContext {
+        accept: def
+            .upload
+            .as_ref()
+            .filter(|u| !u.mime_types.is_empty())
+            .map(|u| u.mime_types.join(",")),
+        ..UploadFormContext::default()
     }
-
-    ctx
 }
 
 /// GET /admin/collections/{slug}/create — show create form
@@ -119,30 +136,36 @@ pub async fn create_form(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let mut builder = ContextBuilder::new(&state, claims_ref)
-        .locale_from_auth(&auth_user)
-        .filter_nav_by_access(&state, &auth_user)
-        .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionCreate, "create_name")
-        .page_title_name(def.singular_name())
-        .collection_def(&def)
-        .fields(main_fields)
-        .set("sidebar_fields", json!(sidebar_fields))
-        .set("editing", json!(false))
-        .set("has_drafts", json!(def.has_drafts()))
-        .breadcrumbs(vec![
-            Breadcrumb::link("collections", "/admin/collections"),
-            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::current("create_name").with_name(def.singular_name()),
-        ])
-        .merge(locale_data);
+    let breadcrumbs = vec![
+        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link(def.display_name(), paths::collection(&slug)),
+        Breadcrumb::current("create_name").with_name(def.singular_name()),
+    ];
 
-    if def.is_upload_collection() {
-        builder = builder.set("upload", upload_accept_context(&def));
-    }
+    let base = BasePageContext::for_handler(
+        &state,
+        claims_ref,
+        &auth_user,
+        PageMeta::new(PageType::CollectionCreate, "create_name")
+            .with_title_name(def.singular_name()),
+    )
+    .with_editor_locale(editor_locale.as_deref(), &state)
+    .with_breadcrumbs(breadcrumbs);
 
-    let data = builder.build();
-    let data = state.hook_runner.run_before_render(data);
+    let upload = def
+        .is_upload_collection()
+        .then(|| upload_accept_context(&def));
 
-    render_or_error(&state, "collections/edit", &data)
+    let ctx = CollectionCreatePage {
+        base,
+        collection: CollectionContext::from_def(&def),
+        fields: main_fields,
+        sidebar_fields,
+        editing: false,
+        has_drafts: def.has_drafts(),
+        locale_data,
+        upload,
+    };
+
+    render_page(&state, "collections/edit", &ctx)
 }

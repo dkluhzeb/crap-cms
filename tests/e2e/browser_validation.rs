@@ -204,3 +204,88 @@ async fn validation_expands_collapsed_array_row() {
 
     server_handle.abort();
 }
+
+// ── save_as_draft_skips_required_via_validate_endpoint ────────────────────
+//
+// Regression: clicking "Save as draft" with empty required fields used
+// to fail because `<crap-validate-form>::_collectFormData` built its
+// FormData via `new FormData(form).entries()`, which silently drops
+// the *submitter* button's `name=value`. The result: `_action` was
+// missing from the validate request → server's `validate_create`
+// computed `is_draft = false` → required-field check fired →
+// inline `Field is required` errors shown on a draft save the user
+// explicitly asked for. Fix: track the last clicked submit button
+// on the component (`_lastSubmitter`) and pass it as the second arg
+// to `new FormData(form, submitter)` (or fall back to manual
+// append on browsers without that constructor signature).
+
+fn make_versioned_required_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.versions = Some(VersionsConfig::new(true, 10));
+    def.admin = AdminConfig {
+        use_as_title: Some("title".to_string()),
+        ..AdminConfig::default()
+    };
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("body", FieldType::Textarea).build(),
+    ];
+    def
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn save_as_draft_skips_required_via_validate_endpoint() {
+    let (base_url, server_handle, app) = browser::spawn_server(
+        vec![make_versioned_required_def(), make_users_def()],
+        vec![],
+    )
+    .await;
+    let user_id = create_test_user(&app, "vdraft@test.com", "pass123");
+    let _ = make_auth_cookie(&app, &user_id, "vdraft@test.com");
+
+    let (browser, _browser_handle) = browser::launch_browser().await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    browser::browser_login(&page, &base_url, "vdraft@test.com", "pass123").await;
+
+    page.goto(format!("{base_url}/admin/collections/posts/create"))
+        .await
+        .unwrap()
+        .wait_for_navigation()
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Leave `title` (required) empty. Click "Save as draft" — the
+    // button with `name="_action" value="save_draft"`.
+    page.evaluate("() => document.querySelector('button[value=\"save_draft\"]')?.click()")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    // No inline `form__error` with `data-validate-error` should be
+    // present. Pre-fix, the validate endpoint would return
+    // `{title: "Field is required"}` and the JS would render an
+    // inline error message next to the title input.
+    let inline_errors = page
+        .evaluate(
+            "() => Array.from(document.querySelectorAll('.form__error[data-validate-error]')).map(e => e.textContent).join(' | ')",
+        )
+        .await
+        .unwrap()
+        .into_value::<String>()
+        .unwrap_or_default();
+    assert!(
+        inline_errors.is_empty(),
+        "save_draft must not produce inline required-field errors (got: {inline_errors:?})"
+    );
+
+    server_handle.abort();
+}

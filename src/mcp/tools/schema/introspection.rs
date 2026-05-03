@@ -141,7 +141,13 @@ pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> 
                     { "name": "templates", "description": "List and extract default admin templates and static files" },
                     { "name": "jobs", "description": "Manage background jobs (list, trigger, status, purge, healthcheck)" },
                     { "name": "images", "description": "Manage image processing queue (list, stats, retry, purge)" },
+                    { "name": "trash", "description": "Manage soft-deleted documents (list, restore, purge, empty)" },
                     { "name": "mcp", "description": "Start the MCP (Model Context Protocol) server (stdio transport)" },
+                    { "name": "logs", "description": "View and manage log files" },
+                    { "name": "work", "description": "Run a standalone job worker (without HTTP/gRPC servers)" },
+                    { "name": "bench", "description": "Benchmark hooks, queries, and write cycles" },
+                    { "name": "update", "description": "Manage installed versions of crap-cms (install, use, check, completions)" },
+                    { "name": "restore", "description": "Restore database (and optionally uploads) from a backup" },
                 ]
             });
             Ok(to_string_pretty(&overview)?)
@@ -160,9 +166,12 @@ pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> 
                     ]
                 }),
                 "status" => json!({
-                    "command": "crap-cms status",
-                    "description": "Show project status (collections, globals, migrations)",
-                    "examples": ["crap-cms status"]
+                    "command": "crap-cms status [--check]",
+                    "description": "Show project status (server config, collections with row/trash counts, globals, versioning, access rules, hooks, live events, migrations, jobs). With --check, runs a 24-rule best-practice audit.",
+                    "flags": [
+                        { "flag": "--check", "description": "Run best-practice health checks on configuration and project state" }
+                    ],
+                    "examples": ["crap-cms status", "crap-cms status --check"]
                 }),
                 "init" => json!({
                     "command": "crap-cms init [DIR]",
@@ -480,10 +489,143 @@ pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> 
                         ]
                     })
                 }
+                "trash" | "trash list" | "trash restore" | "trash purge" | "trash empty" => json!({
+                    "command": "crap-cms trash <SUBCOMMAND>",
+                    "description": "Manage soft-deleted documents",
+                    "subcommands": [
+                        { "name": "list", "usage": "crap-cms trash list [-c <COLLECTION>]", "description": "List trashed documents" },
+                        { "name": "restore", "usage": "crap-cms trash restore <COLLECTION> <ID>", "description": "Restore a trashed document" },
+                        {
+                            "name": "purge",
+                            "usage": "crap-cms trash purge [OPTIONS]",
+                            "description": "Permanently delete trashed documents",
+                            "flags": [
+                                { "flag": "-c, --collection <SLUG>", "description": "Filter by collection" },
+                                { "flag": "--older-than <DURATION>", "description": "Delete docs older than this (e.g., '30d'). Default: all" },
+                                { "flag": "--dry-run", "description": "Print what would be deleted without deleting" }
+                            ]
+                        },
+                        { "name": "empty", "usage": "crap-cms trash empty <COLLECTION> -y", "description": "Permanently delete all trash in a collection (requires -y)" }
+                    ]
+                }),
                 "mcp" => json!({
                     "command": "crap-cms mcp",
                     "description": "Start the MCP (Model Context Protocol) server using stdio transport",
                     "examples": ["crap-cms mcp"]
+                }),
+                "logs" | "logs clear" => json!({
+                    "command": "crap-cms logs [OPTIONS]",
+                    "description": "View and manage log files",
+                    "flags": [
+                        { "flag": "-f, --follow", "description": "Follow log output in real time" },
+                        { "flag": "-n, --lines <N>", "description": "Number of lines to show (default: 100)" }
+                    ],
+                    "subcommands": [
+                        { "name": "clear", "usage": "crap-cms logs clear", "description": "Remove old rotated log files" }
+                    ],
+                    "examples": ["crap-cms logs", "crap-cms logs -f", "crap-cms logs clear"]
+                }),
+                "work" => json!({
+                    "command": "crap-cms work [OPTIONS]",
+                    "description": "Run a standalone job worker (processes queues without HTTP/gRPC servers)",
+                    "flags": [
+                        { "flag": "-d, --detach", "description": "Run in the background" },
+                        { "flag": "--stop", "description": "Stop a running detached worker" },
+                        { "flag": "--restart", "description": "Restart a running detached worker" },
+                        { "flag": "--status", "description": "Show whether a detached worker is running" },
+                        { "flag": "--queues <LIST>", "description": "Comma-separated queue names (default: all)" },
+                        { "flag": "--concurrency <N>", "description": "Override max concurrent jobs" },
+                        { "flag": "--no-cron", "description": "Skip cron scheduling" }
+                    ],
+                    "examples": [
+                        "crap-cms work",
+                        "crap-cms work --queues email",
+                        "crap-cms work -d --queues heavy --concurrency 2"
+                    ]
+                }),
+                "restore" => json!({
+                    "command": "crap-cms restore <BACKUP> [OPTIONS]",
+                    "description": "Restore database (and optionally uploads) from a backup directory",
+                    "flags": [
+                        { "flag": "-i, --include-uploads", "description": "Also restore uploads from uploads.tar.gz" },
+                        { "flag": "-y, --confirm", "description": "Required — confirms the destructive operation" }
+                    ],
+                    "examples": [
+                        "crap-cms restore ./backups/backup-2026-03-07T10-00-00 -y",
+                        "crap-cms restore /tmp/backup -i -y"
+                    ]
+                }),
+                "bench" | "bench hooks" | "bench queries" | "bench create" => json!({
+                    "command": "crap-cms bench <SUBCOMMAND>",
+                    "description": "Benchmark hooks, queries, and write cycles",
+                    "subcommands": [
+                        {
+                            "name": "hooks",
+                            "usage": "crap-cms bench hooks [OPTIONS]",
+                            "description": "Time individual Lua hooks (interactive selection by default)",
+                            "flags": [
+                                { "flag": "-c, --collection <SLUG>", "description": "Filter to a specific collection" },
+                                { "flag": "-n, --iterations <N>", "description": "Iterations per hook (default: 10)" },
+                                { "flag": "--hooks <LIST>", "description": "Comma-separated hook refs to run" },
+                                { "flag": "--exclude <LIST>", "description": "Comma-separated hook refs to skip" },
+                                { "flag": "--all", "description": "Run all hooks (skip wizard)" },
+                                { "flag": "-d, --data <JSON>", "description": "Input data as JSON object" }
+                            ]
+                        },
+                        {
+                            "name": "queries",
+                            "usage": "crap-cms bench queries [OPTIONS]",
+                            "description": "Time find queries on each collection",
+                            "flags": [
+                                { "flag": "-c, --collection <SLUG>", "description": "Filter to a specific collection" },
+                                { "flag": "--explain", "description": "Show EXPLAIN QUERY PLAN (SQLite)" },
+                                { "flag": "-w, --where <JSON>", "description": "JSON filter clause (same format as gRPC where)" }
+                            ]
+                        },
+                        {
+                            "name": "create",
+                            "usage": "crap-cms bench create <COLLECTION> [OPTIONS]",
+                            "description": "Time a full create cycle (transaction rolled back)",
+                            "flags": [
+                                { "flag": "-n, --iterations <N>", "description": "Iterations (default: 5)" },
+                                { "flag": "-d, --data <JSON>", "description": "Input data as JSON object" },
+                                { "flag": "--no-hooks", "description": "Skip hooks (pure validation + persist)" },
+                                { "flag": "-y, --yes", "description": "Skip confirmation prompt" }
+                            ]
+                        }
+                    ],
+                    "examples": [
+                        "crap-cms bench hooks --all",
+                        "crap-cms bench queries --explain",
+                        "crap-cms bench queries -c posts --where '{\"status\": \"published\"}' --explain",
+                        "crap-cms bench create posts -y -n 20"
+                    ]
+                }),
+                "update" | "update check" | "update list" | "update install" | "update use"
+                | "update uninstall" | "update where" | "update completions" => json!({
+                    "command": "crap-cms update [SUBCOMMAND]",
+                    "description": "Manage installed versions of crap-cms. Without a subcommand, installs latest + activates it.",
+                    "flags": [
+                        { "flag": "-y, --yes", "description": "Skip confirmation prompts" },
+                        { "flag": "--force", "description": "Allow self-update when binary looks distro-managed" }
+                    ],
+                    "subcommands": [
+                        { "name": "check", "usage": "crap-cms update check", "description": "Compare current version to latest release" },
+                        { "name": "list", "usage": "crap-cms update list", "description": "List available release tags" },
+                        { "name": "install", "usage": "crap-cms update install <VERSION>", "description": "Download + verify + stage a version" },
+                        { "name": "use", "usage": "crap-cms update use <VERSION>", "description": "Switch to an installed version" },
+                        { "name": "uninstall", "usage": "crap-cms update uninstall <VERSION>", "description": "Remove an installed version" },
+                        { "name": "where", "usage": "crap-cms update where", "description": "Print path of active binary" },
+                        { "name": "completions", "usage": "crap-cms update completions <SHELL> [--uninstall]", "description": "Print shell completions to stdout; --uninstall removes installed file(s). Auto-installed after `update use` and bare `update` (bash/zsh/fish)." }
+                    ],
+                    "examples": [
+                        "crap-cms update",
+                        "crap-cms update check",
+                        "crap-cms update install v0.1.0-alpha.7",
+                        "crap-cms update use v0.1.0-alpha.7",
+                        "crap-cms update completions bash",
+                        "crap-cms update completions --uninstall"
+                    ]
                 }),
                 _ => {
                     json!({ "error": format!("Unknown command: '{}'. Call cli_reference without a command argument to see all available commands.", cmd) })

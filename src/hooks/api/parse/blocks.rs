@@ -1,13 +1,16 @@
 //! Parsing functions for block and tab definitions.
 
 use anyhow::{Result, anyhow};
-use mlua::Table;
+use mlua::{Lua, Table};
 
 use crate::core::{BlockDefinition, FieldTab};
 
 use super::{fields::parse_fields, helpers::*};
 
-pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<BlockDefinition>> {
+pub(super) fn parse_block_definitions(
+    lua: &Lua,
+    blocks_tbl: &Table,
+) -> Result<Vec<BlockDefinition>> {
     let mut blocks = Vec::new();
 
     for entry in blocks_tbl.clone().sequence_values::<Table>() {
@@ -19,7 +22,7 @@ pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<BlockDef
         let group = get_string(&block_tbl, "group");
         let image_url = get_string(&block_tbl, "image_url");
         let fields = if let Ok(fields_tbl) = get_table(&block_tbl, "fields") {
-            parse_fields(&fields_tbl)?
+            parse_fields(lua, &fields_tbl)?
         } else {
             Vec::new()
         };
@@ -35,7 +38,7 @@ pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<BlockDef
     Ok(blocks)
 }
 
-pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<FieldTab>> {
+pub(super) fn parse_tab_definitions(lua: &Lua, tabs_tbl: &Table) -> Result<Vec<FieldTab>> {
     let mut tabs = Vec::new();
 
     for entry in tabs_tbl.clone().sequence_values::<Table>() {
@@ -43,7 +46,7 @@ pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<FieldTab>> {
         let label = get_string(&tab_tbl, "label").unwrap_or_default();
         let description = get_string(&tab_tbl, "description");
         let fields = if let Ok(fields_tbl) = get_table(&tab_tbl, "fields") {
-            parse_fields(&fields_tbl)?
+            parse_fields(lua, &fields_tbl)?
         } else {
             Vec::new()
         };
@@ -80,7 +83,7 @@ mod tests {
         blocks.set(1, block).unwrap();
         field.set("blocks", blocks).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].blocks.len(), 1);
         assert_eq!(fields[0].blocks[0].block_type, "paragraph");
         assert_eq!(fields[0].blocks[0].fields.len(), 1);
@@ -99,7 +102,7 @@ mod tests {
             .set("image_url", "https://example.com/hero.png")
             .unwrap();
         blocks_tbl.set(1, block).unwrap();
-        let blocks = parse_block_definitions(&blocks_tbl).unwrap();
+        let blocks = parse_block_definitions(&lua, &blocks_tbl).unwrap();
         assert_eq!(blocks[0].label_field.as_deref(), Some("headline"));
         assert_eq!(blocks[0].group.as_deref(), Some("Layout"));
         assert_eq!(
@@ -114,7 +117,7 @@ mod tests {
         let blocks_tbl = lua.create_table().unwrap();
         let block = lua.create_table().unwrap();
         blocks_tbl.set(1, block).unwrap();
-        let result = parse_block_definitions(&blocks_tbl);
+        let result = parse_block_definitions(&lua, &blocks_tbl);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing 'type'"));
     }
@@ -139,7 +142,7 @@ mod tests {
         tabs.set(1, tab).unwrap();
         field.set("tabs", tabs).unwrap();
         fields_tbl.set(1, field).unwrap();
-        let fields = parse_fields(&fields_tbl).unwrap();
+        let fields = parse_fields(&lua, &fields_tbl).unwrap();
         assert_eq!(fields[0].tabs.len(), 1);
         assert_eq!(fields[0].tabs[0].label, "General");
         assert_eq!(

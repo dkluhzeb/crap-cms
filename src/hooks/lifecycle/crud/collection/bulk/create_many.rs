@@ -90,17 +90,13 @@ fn create_many_documents(
         .run_validation(run_hooks)
         .build();
 
-    let mut ctx_builder = ServiceContext::collection(collection, &def)
+    let ctx = ServiceContext::collection(collection, &def)
         .conn(conn)
         .write_hooks(&write_hooks)
         .user(user.as_ref())
-        .override_access(override_access);
-
-    if let Some(ref infra) = lua_infra {
-        ctx_builder = ctx_builder.lua_infra(infra);
-    }
-
-    let ctx = ctx_builder.build();
+        .override_access(override_access)
+        .lua_infra(lua_infra.as_ref())
+        .build();
 
     let create_opts = CreateManyOptions {
         run_hooks: hooks_enabled,

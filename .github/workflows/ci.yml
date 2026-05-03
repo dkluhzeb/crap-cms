@@ -7,6 +7,13 @@ on:
   pull_request:
     branches: [main]
 
+# Default to read-only on the GITHUB_TOKEN. CI doesn't push, comment, or
+# release; any step that needs more must elevate explicitly. Without this
+# block the token defaults to write-all on `push` events, so a compromised
+# third-party action could publish releases or push commits.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -25,7 +32,9 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin third-party actions by full commit SHA — tag/branch refs are
+      # mutable. Comment tracks the human-readable ref for bumps.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
         with:
           components: rustfmt, clippy
 
@@ -40,8 +49,142 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Install Biome
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Biome 2.x tags as `@biomejs/biome@X.Y.Z`; the legacy `cli/vX.Y.Z`
+          # scheme that 1.x used has no 2.x assets, so the old URL 404s.
+          # Pin the version to the one in biome.json's `$schema` URL —
+          # which tracks Arch's `extra` repo so contributors lint locally
+          # with the same version CI uses. Bump CI + schema together when
+          # Arch picks up a newer release.
+          #
+          # `gh attestation verify` checks the artifact's sigstore-based
+          # GitHub attestation (cryptographic provenance proving the bytes
+          # were produced by biome's release workflow under the
+          # `biomejs/biome` repo). Stronger than a SHA-pin: also catches
+          # an unauthorized publish under a different workflow identity,
+          # and bumps don't require re-pinning a hash.
+          BIOME_VERSION="2.3.15"
+          curl -fsSL "https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%40${BIOME_VERSION}/biome-linux-x64" \
+            -o /tmp/biome
+          gh attestation verify /tmp/biome --repo biomejs/biome
+          sudo install -m 755 /tmp/biome /usr/local/bin/biome
+          biome --version
+
+      - name: Biome (JS + CSS format + lint)
+        run: biome ci
+
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Handlebars template formatting (crap-cms fmt)
+        run: cargo run --quiet --bin crap-cms -- fmt --check
+
+      - name: Security audit (cargo audit)
+        run: |
+          # Pin to exact version — caret ranges let crates.io serve
+          # arbitrary newer patches between CI runs without review.
+          # cargo-audit is itself the supply-chain checker; tightening
+          # its trust boundary matters more than for most tools.
+          cargo install --locked cargo-audit --version "=0.22.1"
+          cargo audit
+
       - name: Run tests
         run: cargo test --workspace
+
+  features:
+    name: feature matrix (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # sqlite + postgres — the most common multi-backend deployment.
+          - label: sqlite+postgres
+            flags: --features postgres
+            test: true
+          # postgres only — surfaces accidental sqlite-isms leaking through
+          # the DbConnection abstraction.
+          - label: postgres-only
+            flags: --no-default-features --features postgres
+            test: false
+          # all features — catches feature-interaction compile errors across
+          # s3-storage, redis, browser-tests, and both backends. Compile-only;
+          # browser-tests needs Chrome at runtime and runs in the dedicated
+          # `e2e` job below.
+          - label: all-features
+            flags: --all-features
+            test: false
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
+
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-registry-
+
+      - name: Build
+        run: cargo build ${{ matrix.flags }}
+
+      - name: Clippy
+        run: cargo clippy ${{ matrix.flags }} --all-targets -- -D warnings
+
+      - name: Test
+        if: matrix.test
+        run: cargo test ${{ matrix.flags }} --workspace
+
+  e2e:
+    name: e2e (browser tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
+
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-registry-
+
+      # chromiumoxide finds Chrome via PATH; setup-chrome puts the
+      # `chrome` binary on PATH and prints its path for debug output.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@c785b87e244131f27c9f19c1a33e2ead956ab7ce # v1, 2025-01-25
+        with:
+          chrome-version: stable
+
+      - name: Run browser e2e tests
+        # `--test-threads=1` is required: chromiumoxide reuses
+        # /tmp/chromiumoxide-runner as the profile dir, and parallel
+        # Chrome instances race for the same SingletonLock — all but one
+        # exit with "Failed to create a ProcessSingleton for your profile
+        # directory" and the test panics on `Browser::launch().unwrap()`.
+        run: cargo test --test e2e --features browser-tests -- --test-threads=1

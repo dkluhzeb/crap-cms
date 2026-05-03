@@ -60,7 +60,7 @@ pub use write::{
     update_document_core, update_many_single_core, validate_document,
 };
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::core::collection::*;

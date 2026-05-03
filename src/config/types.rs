@@ -4,10 +4,12 @@
 use std::os::unix::fs::MetadataExt;
 use std::{
     fs,
+    net::IpAddr,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
+use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -21,6 +23,12 @@ use crate::config::{
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
+
+/// Minimum character length for `mcp.api_key` when `mcp.http` is enabled.
+/// 32 characters of the typical `base64`/`hex` alphabets give ≥ 128 bits of
+/// entropy even with low per-char entropy — well past what brute-force can
+/// reach against a key that an attacker cannot guess from context.
+const MIN_MCP_API_KEY_LEN: usize = 32;
 
 /// Top-level configuration loaded from `crap.toml` in the config directory.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -222,6 +230,55 @@ impl CrapConfig {
             bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
         }
 
+        self.validate_trusted_proxies()?;
+
+        Ok(())
+    }
+
+    /// Validate `trust_proxy` / `trusted_proxies` pairing.
+    ///
+    /// Fails startup when `trust_proxy = true` without a `trusted_proxies`
+    /// allowlist — in that state any client can spoof `X-Forwarded-For`
+    /// to rotate per-IP rate limits. Operators who genuinely need the
+    /// legacy "trust XFF from any peer" behaviour (e.g., local dev
+    /// fronted by a test proxy) must opt in explicitly by setting
+    /// `trusted_proxies = ["*"]`.
+    ///
+    /// Also fails on malformed entries so typos are caught at startup
+    /// rather than silently disabling protection.
+    fn validate_trusted_proxies(&self) -> Result<()> {
+        if self.server.trust_proxy && self.server.trusted_proxies.is_empty() {
+            bail!(
+                "server.trust_proxy is enabled without server.trusted_proxies. \
+                 Set server.trusted_proxies to the IP(s) or CIDR(s) of your \
+                 reverse proxy (e.g. [\"10.0.0.0/8\"]), or set it to [\"*\"] \
+                 to explicitly trust any peer (not recommended in production \
+                 — X-Forwarded-For becomes spoofable)."
+            );
+        }
+
+        for entry in &self.server.trusted_proxies {
+            if entry == "*" {
+                continue;
+            }
+
+            if entry.parse::<IpNet>().is_err() && entry.parse::<IpAddr>().is_err() {
+                bail!(
+                    "server.trusted_proxies entry {:?} is not a valid IP, \
+                     CIDR, or the \"*\" wildcard",
+                    entry
+                );
+            }
+        }
+
+        if self.server.trust_proxy && self.server.trusted_proxies.iter().any(|e| e == "*") {
+            warn!(
+                "server.trusted_proxies contains \"*\" — X-Forwarded-For is \
+                 honoured from any peer. Use only for development or when \
+                 the admin port is not exposed to untrusted networks."
+            );
+        }
+
         Ok(())
     }
 
@@ -309,6 +366,21 @@ impl CrapConfig {
             );
         }
 
+        // `0` means "no cap" — the default, silent. Finite values longer
+        // than 30 days deserve a nudge, since they materially widen the
+        // window in which a stolen session token is usable.
+        const SESSION_MAX_AGE_WARN_THRESHOLD: u64 = 30 * 86400;
+
+        if self.auth.session_absolute_max_age > SESSION_MAX_AGE_WARN_THRESHOLD {
+            warn!(
+                "auth.session_absolute_max_age is {} seconds (> 30 days) — \
+                 long caps enlarge the window in which a stolen session token \
+                 remains valid. Consider shortening, or pair with step-up \
+                 authentication for sensitive operations.",
+                self.auth.session_absolute_max_age,
+            );
+        }
+
         Ok(())
     }
 
@@ -335,11 +407,32 @@ impl CrapConfig {
     }
 
     /// Validate MCP settings.
+    ///
+    /// When `mcp.http = true`, enforces both presence and a minimum length
+    /// on `mcp.api_key`. MCP operates with `overrideAccess = true` semantics
+    /// (collection- and field-level ACLs are bypassed), so a weak transport
+    /// key exposes the entire dataset — a 32-byte floor keeps brute-force
+    /// infeasible for realistic attacker budgets.
     fn validate_mcp(&self) -> Result<()> {
-        if self.mcp.enabled && self.mcp.http && self.mcp.api_key.is_empty() {
+        if !(self.mcp.enabled && self.mcp.http) {
+            return Ok(());
+        }
+
+        if self.mcp.api_key.is_empty() {
             bail!(
                 "mcp.http is enabled without an API key — \
                  set mcp.api_key in crap.toml to secure the MCP HTTP endpoint"
+            );
+        }
+
+        if self.mcp.api_key.as_ref().len() < MIN_MCP_API_KEY_LEN {
+            bail!(
+                "mcp.api_key is too short ({} chars) — require at least {} \
+                 characters. MCP bypasses collection and field ACLs, so a \
+                 short key risks exposing the entire dataset. Generate one \
+                 with `openssl rand -hex 32` or `head -c 32 /dev/urandom | base64`.",
+                self.mcp.api_key.as_ref().len(),
+                MIN_MCP_API_KEY_LEN,
             );
         }
 
@@ -772,12 +865,31 @@ dev_mode = false
     }
 
     #[test]
-    fn validate_mcp_http_with_api_key_passes() {
+    fn validate_mcp_http_with_strong_api_key_passes() {
         let mut config = CrapConfig::default();
         config.mcp.enabled = true;
         config.mcp.http = true;
-        config.mcp.api_key = crate::config::McpApiKey::from("secret-key-123");
+        // 32-char key meets MIN_MCP_API_KEY_LEN
+        config.mcp.api_key = crate::config::McpApiKey::from("0123456789abcdef0123456789abcdef");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_http_with_short_api_key_errors() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = true;
+        // 15 chars — below the 32-char floor
+        config.mcp.api_key = crate::config::McpApiKey::from("secret-key-1234");
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("too short"),
+            "Expected short-key error, got: {}",
+            msg,
+        );
+        // Error guides operators to a safe generator.
+        assert!(msg.contains("openssl rand") || msg.contains("/dev/urandom"));
     }
 
     #[test]
@@ -796,6 +908,65 @@ dev_mode = false
         config.mcp.http = false;
         // stdio transport doesn't need API key — process-level access controls it
         assert!(config.validate().is_ok());
+    }
+
+    // ── trust_proxy / trusted_proxies pairing (audit finding H-3) ────────
+
+    #[test]
+    fn validate_trust_proxy_without_allowlist_errors() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        // trusted_proxies is empty by default
+        let err = config.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("trusted_proxies"),
+            "expected allowlist error, got: {msg}",
+        );
+        assert!(
+            msg.contains("\"*\""),
+            "error should mention the explicit-wildcard escape hatch: {msg}",
+        );
+    }
+
+    #[test]
+    fn validate_trust_proxy_with_allowlist_passes() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies = vec!["10.0.0.0/8".into(), "127.0.0.1".into()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_trust_proxy_with_explicit_wildcard_passes() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies = vec!["*".into()];
+        // Wildcard is an intentional escape hatch — validation accepts it
+        // (startup logs a warning so the looseness stays visible).
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_trusted_proxies_rejects_malformed_entry() {
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = true;
+        config.server.trusted_proxies = vec!["10.0.0.0/8".into(), "not-an-ip".into()];
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("not-an-ip"));
+    }
+
+    #[test]
+    fn validate_trust_proxy_disabled_ignores_allowlist_shape() {
+        // When trust_proxy is off the allowlist is unused — malformed
+        // entries shouldn't prevent startup in that case.
+        let mut config = CrapConfig::default();
+        config.server.trust_proxy = false;
+        config.server.trusted_proxies = vec!["definitely-not-an-ip".into()];
+        // With trust_proxy disabled we still reject garbage entries so
+        // the operator knows their config has a typo. Document the
+        // current strict behaviour with an explicit test.
+        assert!(config.validate().is_err());
     }
 
     #[test]

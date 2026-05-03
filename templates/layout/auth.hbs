@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    {{> partials/meta-tags}}
+    <script nonce="{{crap.csp_nonce}}">
+      (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
+    </script>
+    <link
+      href="/static/styles/main.css"
+      rel="stylesheet"
+    />
+    {{> partials/icon-font}}
+    <title>{{title}}-{{crap.site_name}}</title>
+    <script nonce="{{crap.csp_nonce}}">
+      (function(){
+      function gc(n){var m=document.cookie.match(new RegExp('(?:^|;\\s*)'+n+'=([^;]*)'));return m?m[1]:null}
+      document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM')return;var t=gc('crap_csrf');if(t&&!f.querySelector('input[name="_csrf"]')){var i=document.createElement('input');i.type='hidden';i.name='_csrf';i.value=t;f.appendChild(i)}},true);
+      })();
+    </script>
+    <script
+      type="module"
+      src="/static/components/index.js"
+    >
+    </script>
+  </head>
+  <body class="auth-page">
+    <div class="auth-card">
+      <div class="auth-card__header">
+        {{#if (eq header_icon_kind "material")}}
+          <span class="material-symbols-outlined auth-card__icon">{{header_icon}}</span>
+        {{else}}
+          {{> partials/logo class="auth-card__icon"}}
+        {{/if}}
+        <h1 class="auth-card__title">
+          {{#if header_title}}
+            {{header_title}}
+          {{else}}
+            {{crap.site_name}}
+          {{/if}}
+        </h1>
+      </div>
+      {{> @partial-block}}
+    </div>
+  </body>
+</html>

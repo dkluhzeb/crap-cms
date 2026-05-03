@@ -14,10 +14,10 @@ use crate::{
         self, HookRunner,
         api::{self, VmLabel},
         lifecycle::{
-            LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
+            InitPhase, LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
             crud::register_crud_functions,
             execution::scan_registered_events,
-            types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
+            types::{DefaultDeny, HookDepth, LuaLocaleConfig, MaxHookDepth, MaxInstructions},
         },
     },
 };
@@ -87,8 +87,9 @@ impl<'a> HookRunnerBuilder<'a> {
 
         let pool_size = config.hooks.vm_pool_size.max(1);
 
-        info!("HookRunner: creating pool of {} Lua VMs", pool_size);
+        debug!("HookRunner: creating pool of {} Lua VMs", pool_size);
 
+        let start = std::time::Instant::now();
         let mut vms = Vec::with_capacity(pool_size);
 
         for i in 0..pool_size {
@@ -102,13 +103,22 @@ impl<'a> HookRunnerBuilder<'a> {
             )?);
         }
 
+        let elapsed = start.elapsed();
+
         // Cache which events have globally-registered hooks (from init.lua).
         // All VMs execute the same init.lua, so checking any VM suffices.
         let registered_events = scan_registered_events(&vms[0]);
 
-        if !registered_events.is_empty() {
-            info!("HookRunner: registered events: {:?}", registered_events);
-        }
+        info!(
+            "HookRunner ready: {} VM(s) in {:.0}ms{}",
+            pool_size,
+            elapsed.as_secs_f64() * 1000.0,
+            if registered_events.is_empty() {
+                String::new()
+            } else {
+                format!(", global events: {:?}", registered_events)
+            }
+        );
 
         let registry_snapshot = Registry::snapshot(&registry);
 
@@ -152,11 +162,19 @@ fn create_lua_vm(
         populate_singleflight,
     )?;
 
+    // Mark the init phase so register-only APIs (`crap.pages.register`,
+    // `crap.template_data.register`, ...) accept calls. The marker is
+    // removed at the end so any later runtime hook that calls those APIs
+    // gets a clear error instead of a silent no-op or per-VM fragmentation.
+    lua.set_app_data(InitPhase);
+
     load_def_dir(&lua, config_dir, "collection")?;
     load_def_dir(&lua, config_dir, "global")?;
     load_def_dir(&lua, config_dir, "job")?;
 
     execute_init_lua(&lua, config_dir, vm_index)?;
+
+    lua.remove_app_data::<InitPhase>();
 
     Ok(lua)
 }
@@ -195,6 +213,7 @@ fn init_app_data(
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
+    lua.set_app_data(LuaLocaleConfig(config.locale.clone()));
 
     let storage = upload::create_storage(config_dir, &config.upload)
         .context("Failed to create storage backend for Lua VM")?;

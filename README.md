@@ -168,6 +168,18 @@ Default templates and static files are compiled into the binary via `include_dir
 
 Dev mode (`admin.dev_mode = true` in `crap.toml`) reloads templates from disk on every request instead of caching them.
 
+#### CSP and inline `<script>` in custom templates
+
+The admin UI ships a strict, nonce-based Content-Security-Policy: inline scripts are only allowed when they carry a per-request nonce. If your overlay template emits an inline `<script>`, it **must** use:
+
+```html
+<script nonce="{{crap.csp_nonce}}">
+  /* your code */
+</script>
+```
+
+The nonce is regenerated on every request and exposed to all admin templates as `crap.csp_nonce` (alongside `crap.version`, `crap.build_hash`, etc.). Inline event handler attributes (`onclick="..."`, `onchange="..."`, …) are **blocked** under the default policy — replace them with delegated listeners (see `static/components/password-toggle.js` for a minimal pattern) or with a small inline `<script nonce="...">` block. Inline `style="..."` attributes are still permitted (`style-src` keeps `'unsafe-inline'` for now). CSP can be tuned or disabled via `[admin.csp]` in `crap.toml`.
+
 ### API Testing
 
 Requires [grpcurl](https://github.com/fullstorydev/grpcurl) and a running server:

@@ -1,54 +1,111 @@
 <tr>
   <td>
-    <a class="items-row__link" href="/admin/collections/{{collection.slug}}/{{this.id}}"
-      hx-get="/admin/collections/{{collection.slug}}/{{this.id}}" hx-target="body" hx-push-url="true">
+    <a
+      class="items-row__link"
+      href="/admin/collections/{{collection.slug}}/{{this.id}}"
+      hx-get="/admin/collections/{{collection.slug}}/{{this.id}}"
+      hx-target="body"
+      hx-push-url="true"
+    >
       {{#if this.thumbnail_url}}
-      <img class="items-row__thumbnail" src="{{this.thumbnail_url}}" alt="" loading="lazy" />
+        <img
+          class="items-row__thumbnail"
+          src="{{this.thumbnail_url}}"
+          alt=""
+          loading="lazy"
+        />
       {{/if}}
-      {{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}
+      {{#if this.title_value}}
+        {{this.title_value}}
+      {{else}}
+        {{this.id}}
+      {{/if}}
     </a>
   </td>
   {{#each this.cells}}
-  <td>
-    {{#if this.is_badge}}<span class="badge badge--{{this.value}}">{{this.value}}</span>{{/if}}
-    {{#if this.is_date}}<crap-time datetime="{{this.value}}">{{this.value}}</crap-time>{{/if}}
-    {{#if this.is_bool}}
-      {{#if this.value}}<span class="material-symbols-outlined icon--success">check</span>{{else}}<span class="material-symbols-outlined icon--muted">remove</span>{{/if}}
-    {{/if}}
-    {{#unless this.is_badge}}{{#unless this.is_date}}{{#unless this.is_bool}}{{this.value}}{{/unless}}{{/unless}}{{/unless}}
-  </td>
+    <td>
+      {{#if this.is_badge}}
+        {{> partials/status-badge status=this.value}}
+      {{/if}}
+      {{#if this.is_date}}
+        <crap-time datetime="{{this.value}}">{{this.value}}</crap-time>
+      {{/if}}
+      {{#if this.is_bool}}
+        {{#if this.value}}
+          <span class="material-symbols-outlined icon--success">check</span>
+        {{else}}
+          <span class="material-symbols-outlined icon--muted">remove</span>
+        {{/if}}
+      {{/if}}
+      {{#unless this.is_badge}}
+        {{#unless this.is_date}}
+          {{#unless this.is_bool}}
+            {{this.value}}
+          {{/unless}}
+        {{/unless}}
+      {{/unless}}
+    </td>
   {{/each}}
   <td>
     {{#if is_trash}}
-    <div class="items-row__actions">
-      <form method="POST" action="/admin/collections/{{collection.slug}}/{{this.id}}/undelete"
-        hx-post="/admin/collections/{{collection.slug}}/{{this.id}}/undelete" hx-target="body">
-        <button type="submit" class="button button--ghost button--small" aria-label="{{t "restore"}}">
-          <span class="material-symbols-outlined" aria-hidden="true">restore_from_trash</span>
-        </button>
-      </form>
-      {{#if collection.can_permanently_delete}}
-      <button type="button" class="button button--ghost button--small"
+      <div class="items-row__actions">
+        <form
+          method="POST"
+          action="/admin/collections/{{collection.slug}}/{{this.id}}/undelete"
+          hx-post="/admin/collections/{{collection.slug}}/{{this.id}}/undelete"
+          hx-target="body"
+        >
+          <button
+            type="submit"
+            class="button button--ghost button--small"
+            aria-label='{{t "restore"}}'
+          >
+            <span
+              class="material-symbols-outlined"
+              aria-hidden="true"
+            >
+              restore_from_trash
+            </span>
+          </button>
+        </form>
+        {{#if collection.can_permanently_delete}}
+          <button
+            type="button"
+            class="button button--ghost button--small"
+            data-delete-id="{{this.id}}"
+            data-delete-title="{{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}"
+            data-delete-slug="{{collection.slug}}"
+            data-delete-soft="false"
+            data-delete-can-perm="true"
+            aria-label='{{t "delete_permanently"}}'
+          >
+            <span
+              class="material-symbols-outlined"
+              aria-hidden="true"
+            >
+              delete_forever
+            </span>
+          </button>
+        {{/if}}
+      </div>
+    {{else}}
+      <button
+        type="button"
+        class="button button--ghost button--small"
         data-delete-id="{{this.id}}"
         data-delete-title="{{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}"
         data-delete-slug="{{collection.slug}}"
-        data-delete-soft="false"
-        data-delete-can-perm="true"
-        aria-label="{{t "delete_permanently"}}">
-        <span class="material-symbols-outlined" aria-hidden="true">delete_forever</span>
+        data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
+        data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}"
+        aria-label='{{t "delete"}}'
+      >
+        <span
+          class="material-symbols-outlined"
+          aria-hidden="true"
+        >
+          delete
+        </span>
       </button>
-      {{/if}}
-    </div>
-    {{else}}
-    <button type="button" class="button button--ghost button--small"
-      data-delete-id="{{this.id}}"
-      data-delete-title="{{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}"
-      data-delete-slug="{{collection.slug}}"
-      data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
-      data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}"
-      aria-label="{{t "delete"}}">
-      <span class="material-symbols-outlined" aria-hidden="true">delete</span>
-    </button>
     {{/if}}
   </td>
 </tr>

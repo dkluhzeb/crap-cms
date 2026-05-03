@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, Registry, collection::Hooks},
+    core::{Document, FieldDefinition, Registry, collection::Hooks, validate::ValidationError},
     db::{AccessResult, DbConnection},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
@@ -21,6 +21,9 @@ use crate::{
         },
     },
 };
+
+/// Local alias to disambiguate from the file-wide `anyhow::Result`.
+type ValidateResult = std::result::Result<(), ValidationError>;
 
 use super::richtext::apply_richtext_before_validate;
 
@@ -79,6 +82,18 @@ pub trait WriteHooks {
         user: Option<&Document>,
         operation: &str,
     ) -> Vec<String>;
+
+    /// Run schema-level field validation (required, unique, regex, type checks,
+    /// richtext node attrs, …) without firing any user-defined hooks. Used by
+    /// the version restore path so a snapshot whose data violates the current
+    /// schema (e.g. an old version from before a `required = true` tightening)
+    /// is rejected rather than silently overwriting valid live data.
+    fn validate_fields(
+        &self,
+        fields: &[FieldDefinition],
+        data: &HashMap<String, Value>,
+        ctx: &ValidationCtx,
+    ) -> ValidateResult;
 }
 
 /// Pool-based write hook execution for admin, gRPC, and MCP surfaces.
@@ -230,6 +245,15 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         };
         self.runner
             .check_field_write_access(fields, user, operation, conn)
+    }
+
+    fn validate_fields(
+        &self,
+        fields: &[FieldDefinition],
+        data: &HashMap<String, Value>,
+        ctx: &ValidationCtx,
+    ) -> ValidateResult {
+        self.runner.validate_fields(fields, data, ctx)
     }
 }
 
@@ -444,5 +468,14 @@ impl WriteHooks for LuaWriteHooks<'_> {
             return Vec::new();
         }
         check_field_write_access_with_lua(self.lua, fields, user, operation)
+    }
+
+    fn validate_fields(
+        &self,
+        fields: &[FieldDefinition],
+        data: &HashMap<String, Value>,
+        ctx: &ValidationCtx,
+    ) -> ValidateResult {
+        validate_fields_inner(self.lua, fields, data, ctx)
     }
 }

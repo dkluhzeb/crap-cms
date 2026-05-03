@@ -1,11 +1,17 @@
 //! `make` command — scaffold collections, globals, hooks, and jobs.
 
 mod collection;
+mod component;
 mod dispatch;
+mod field;
 mod global;
 mod helpers;
 mod hook;
 mod job;
+mod node;
+mod page;
+mod slot;
+mod theme;
 
 pub(crate) use collection::make_collection_command;
 pub use dispatch::run;

@@ -237,6 +237,16 @@ pub(super) fn build_column_options(
 }
 
 /// Build filter field metadata for the filter builder UI.
+///
+/// `_status` is exposed as a filterable field for collections with
+/// drafts, with `published` / `draft` as the value choices. To see
+/// "all", the user removes the `_status` filter row entirely (or
+/// clicks Clear all) — drafts surface to the top of the unfiltered
+/// list via `apply_order_by`'s `_status ASC` prepend, so there's no
+/// separate "All" affordance to maintain. The list handler reads
+/// `?where[_status][equals]=X` via the dedicated
+/// `extract_status_filter` path because system columns (`_*`) are
+/// off-limits to the generic user-filter pipeline.
 pub(super) fn build_filter_fields(def: &CollectionDefinition) -> Vec<Value> {
     let mut fields = Vec::new();
 
@@ -571,6 +581,29 @@ mod tests {
         let opts = status_field["options"].as_array().unwrap();
         assert_eq!(opts.len(), 2);
         assert_eq!(opts[0]["value"], "draft");
+    }
+
+    #[test]
+    fn build_filter_fields_omits_status_without_drafts() {
+        let def = test_collection();
+        let fields = build_filter_fields(&def);
+        let keys: Vec<&str> = fields.iter().filter_map(|f| f["key"].as_str()).collect();
+        assert!(!keys.contains(&"_status"));
+    }
+
+    #[test]
+    fn build_filter_fields_includes_status_with_drafts() {
+        use crate::core::collection::VersionsConfig;
+
+        let mut def = test_collection();
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        let fields = build_filter_fields(&def);
+        let status_field = fields.iter().find(|f| f["key"] == "_status").unwrap();
+        let opts = status_field["options"].as_array().unwrap();
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["value"], "published");
+        assert_eq!(opts[1]["value"], "draft");
     }
 
     #[test]

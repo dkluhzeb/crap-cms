@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context as _, Result};
 
 use super::{
+    exif::apply_exif_orientation,
     resize::process_image_sizes,
     validate::{check_image_dimensions, sanitize_filename, validate_upload},
 };
@@ -111,6 +112,14 @@ pub fn process_upload(
         check_image_dimensions(&file.data)?;
 
         let img = image::load_from_memory(&file.data).context("Failed to decode image")?;
+        // Phones and cameras commonly record images sideways with an EXIF
+        // `Orientation` tag instructing the renderer to rotate. The `image`
+        // crate ignores the tag, so without this step every portrait photo
+        // would ship sideways through the resize and format-conversion
+        // pipeline. Re-encoding into PNG/WebP/AVIF below also strips the
+        // remaining EXIF metadata (GPS coords, camera identifiers) — a
+        // privacy win for any uploads served publicly.
+        let img = apply_exif_orientation(&file.data, img);
 
         width = Some(img.width());
         height = Some(img.height());
@@ -635,6 +644,65 @@ mod tests {
             );
             assert!(!q.url_value.is_empty());
             assert!(!q.url_column.is_empty());
+        }
+    }
+
+    /// Regression: queued conversions must record the storage *key*
+    /// (`media/foo_small.png`), not an absolute filesystem path. The scheduler
+    /// passes these straight to `storage.get()` / `storage.put()`, which reject
+    /// absolute paths post-hardening. Using `local_path(...)` here used to
+    /// produce a filesystem-absolute `source_path` that the queue runner could
+    /// no longer read, failing every queued conversion with
+    /// "Source image not found".
+    #[test]
+    fn process_upload_queue_stores_storage_keys_not_absolute_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage = test_storage(&tmp);
+        let png_data = create_test_png(80, 80);
+        let file = UploadedFileBuilder::new("photo.png", "image/png")
+            .data(png_data)
+            .build();
+        let config = CollectionUpload {
+            enabled: true,
+            image_sizes: vec![
+                ImageSizeBuilder::new("small")
+                    .width(30)
+                    .height(30)
+                    .fit(ImageFit::Cover)
+                    .build(),
+            ],
+            format_options: FormatOptions {
+                webp: Some(FormatQuality::new(80, true)),
+                avif: None,
+            },
+            ..Default::default()
+        };
+        let (result, _guard) = process_upload(file, &config, storage.clone(), "media", DEFAULT_MAX)
+            .expect("should succeed");
+
+        assert!(!result.queued_conversions.is_empty());
+
+        for q in &result.queued_conversions {
+            assert!(
+                !q.source_path.starts_with('/') && !q.source_path.starts_with('\\'),
+                "source_path must be a relative storage key, got: {}",
+                q.source_path,
+            );
+            assert!(
+                !q.target_path.starts_with('/') && !q.target_path.starts_with('\\'),
+                "target_path must be a relative storage key, got: {}",
+                q.target_path,
+            );
+            assert!(
+                q.source_path.starts_with("media/"),
+                "source_path must be prefixed with the collection slug, got: {}",
+                q.source_path,
+            );
+            assert!(
+                q.target_path.starts_with("media/"),
+                "target_path must be prefixed with the collection slug, got: {}",
+                q.target_path,
+            );
         }
     }
 
