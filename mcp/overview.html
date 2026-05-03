@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -200,7 +200,24 @@ exclude_collections = []    # Blacklist (takes precedence over include)
 <p>Or from outside the config directory:</p>
 <pre><code class="language-bash">crap-cms mcp -C /path/to/config
 </code></pre>
-<p>For Claude Desktop, add to your <code>claude_desktop_config.json</code>:</p>
+<p>For <strong>Claude Code</strong> (CLI / IDE extensions), add via the CLI:</p>
+<pre><code class="language-bash">claude mcp add-json my-cms '{"type":"stdio","command":"crap-cms","args":["-C","/path/to/config","mcp"]}' --scope local
+</code></pre>
+<p>Or create a <code>.mcp.json</code> in your project root (shared with team via version control):</p>
+<pre><code class="language-json">{
+  "mcpServers": {
+    "my-cms": {
+      "type": "stdio",
+      "command": "crap-cms",
+      "args": ["-C", "/path/to/config", "mcp"]
+    }
+  }
+}
+</code></pre>
+<p>The <code>-C</code> path must point to a directory containing <code>crap.toml</code>. Use an absolute path or a path relative to where Claude Code is launched from.</p>
+<p><code>crap-cms init</code> automatically generates a <code>.mcp.json</code> in the config directory, so new projects work with Claude Code out of the box.</p>
+<p>Verify with <code>claude mcp list</code>.</p>
+<p>For <strong>Claude Desktop</strong>, add to your <code>claude_desktop_config.json</code>:</p>
 <pre><code class="language-json">{
   "mcpServers": {
     "my-cms": {

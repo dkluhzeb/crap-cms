@@ -1,0 +1,514 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Atom Inventory - Crap CMS</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for Crap CMS — a headless CMS in Rust with Lua hooks">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-094f01c0.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Crap CMS</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="atom-inventory"><a class="header" href="#atom-inventory">Atom Inventory</a></h1>
+<blockquote>
+<p><strong>Spec doc, not yet enforced.</strong> This page enumerates every web
+component in <code>static/components/</code> and proposes what its stable public
+surface should be — the version we’d commit to <em>not</em> break. It’s the
+reference for the eventual Phase 3 refactor (atomization, versioned
+APIs, narrow stable surface). Today’s components mostly already obey
+the proposed contracts; the discrepancies are flagged.</p>
+</blockquote>
+<h2 id="method"><a class="header" href="#method">Method</a></h2>
+<p>For each component we record:</p>
+<ul>
+<li><strong>Tag</strong> — the <code>&lt;crap-*&gt;</code> element name.</li>
+<li><strong>Role</strong> — <code>atom</code> (single concern, well-bounded), <code>composition</code>
+(multi-piece, internally orchestrates other elements; candidates for
+breakdown), or <code>singleton</code> (one instance per page, accessed via
+request-event discovery).</li>
+<li><strong>Stable surface</strong> — the public API that overlay authors and custom
+widget authors program against.
+<ul>
+<li><strong>Attributes</strong> — host-element attributes that affect behaviour.</li>
+<li><strong>Events</strong> — fired or listened to. References the named exports in
+<a href="../../../static/components/events.js"><code>static/components/events.js</code></a>.</li>
+<li><strong>Slots / parts</strong> — for shadow-DOM atoms only.</li>
+</ul>
+</li>
+<li><strong>Internal</strong> — anything explicitly <em>not</em> part of the contract.
+Inner DOM structure, internal classes, internal event names — all
+free to change.</li>
+</ul>
+<p>Atoms &lt; 200 LOC are listed first within each category.</p>
+<h2 id="singletons"><a class="header" href="#singletons">Singletons</a></h2>
+<p>One instance per page, mounted by the layout. Discoverable via the
+events in <a href="../../../static/components/events.js"><code>events.js</code></a>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>Discovery event</th><th>Methods (stable)</th><th>LOC</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;crap-toast&gt;</code></td><td><code>EV_TOAST_REQUEST</code></td><td><code>show({ message, type, duration })</code></td><td>172</td></tr>
+<tr><td><code>&lt;crap-drawer&gt;</code></td><td><code>EV_DRAWER_REQUEST</code></td><td><code>open({ title })</code> → mount into <code>.body</code>; <code>close()</code></td><td>379</td></tr>
+<tr><td><code>&lt;crap-confirm-dialog&gt;</code></td><td><code>EV_CONFIRM_DIALOG_REQUEST</code></td><td><code>prompt(message, opts) → Promise&lt;boolean&gt;</code></td><td>183</td></tr>
+<tr><td><code>&lt;crap-delete-dialog&gt;</code></td><td><code>EV_DELETE_DIALOG_REQUEST</code></td><td><code>open({ slug, id, title })</code></td><td>377</td></tr>
+<tr><td><code>&lt;crap-create-panel&gt;</code></td><td><code>EV_CREATE_PANEL_REQUEST</code></td><td><code>open({ collection, onCreated })</code>; <code>close()</code></td><td>433</td></tr>
+<tr><td><code>&lt;crap-session-dialog&gt;</code></td><td>(auto-mounted, no API)</td><td>—</td><td>352</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Stable contract per singleton</strong>:</p>
+<ul>
+<li>The discovery event name (constant in <code>events.js</code>).</li>
+<li>The methods listed above; their argument shapes.</li>
+<li>The <code>detail.instance</code> discovery-write protocol.</li>
+</ul>
+<p><strong>Internal</strong>: shadow DOM contents, CSS, internal state, internal class
+names. The current implementations all use Shadow DOM with adopted
+stylesheets — overlay authors restyle via CSS custom properties (which
+pierce shadow boundaries) or <code>::part(...)</code> selectors where exposed.</p>
+<h2 id="atoms-form-shaped"><a class="header" href="#atoms-form-shaped">Atoms (form-shaped)</a></h2>
+<p>Wrap a slotted form input and add behaviour. Form-associated where
+appropriate; emit <code>EV_CHANGE</code> (bubbling) when value changes so
+<code>&lt;crap-dirty-form&gt;</code> can mark the form dirty.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>Slot</th><th>Public attributes</th><th>Events fired</th><th>LOC</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;crap-password-toggle&gt;</code></td><td><code>&lt;input type="password"&gt;</code></td><td>—</td><td>—</td><td>104</td></tr>
+<tr><td><code>&lt;crap-tags&gt;</code></td><td>hidden <code>&lt;input&gt;</code></td><td><code>data-min-length</code>, <code>data-max-length</code>, <code>data-min</code>, <code>data-max</code>, <code>data-placeholder</code>, <code>data-readonly</code>, <code>data-error</code>, <code>data-field-type</code></td><td><code>EV_CHANGE</code></td><td>286</td></tr>
+<tr><td><code>&lt;crap-code&gt;</code></td><td>hidden <code>&lt;input&gt;</code> + <code>&lt;textarea&gt;</code></td><td><code>data-language</code>, <code>data-languages</code>, <code>data-readonly</code></td><td><code>EV_CHANGE</code></td><td>408</td></tr>
+<tr><td><code>&lt;crap-focal-point&gt;</code></td><td><code>&lt;img&gt;</code> + hidden <code>&lt;input&gt;</code></td><td>—</td><td>—</td><td>142</td></tr>
+<tr><td><code>&lt;crap-richtext&gt;</code></td><td>hidden <code>&lt;input&gt;</code> + <code>&lt;textarea&gt;</code></td><td><code>data-features</code>, <code>data-format</code>, <code>data-nodes</code></td><td><code>EV_CHANGE</code></td><td>487</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Stable contract</strong>:</p>
+<ul>
+<li>The host attributes listed.</li>
+<li><code>EV_CHANGE</code> fires (bubbling) on value change.</li>
+<li>The slotted input remains light-DOM and form-participating
+(browser submits it natively; htmx serializes it normally).</li>
+</ul>
+<p><strong>Internal</strong>: shadow DOM, internal CSS classes, internal event names.</p>
+<h2 id="atoms-page-enhancement"><a class="header" href="#atoms-page-enhancement">Atoms (page-enhancement)</a></h2>
+<p>Light-DOM components that decorate server-rendered markup or are
+mounted dynamically by an orchestrator. Some inject their own
+stylesheet via <code>document.adoptedStyleSheets</code> on first connect (noted).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>Role</th><th>LOC</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;crap-confirm&gt;</code></td><td>Wrap a child form, prompt before submit</td><td>89</td></tr>
+<tr><td><code>&lt;crap-dirty-form&gt;</code></td><td>Mark form dirty on <code>EV_CHANGE</code>, prompt on navigate-away</td><td>187</td></tr>
+<tr><td><code>&lt;crap-sticky-header&gt;</code></td><td>Pin a header on scroll</td><td>50</td></tr>
+<tr><td><code>&lt;crap-sidebar&gt;</code></td><td>Sidebar toggle behaviour</td><td>83</td></tr>
+<tr><td><code>&lt;crap-time&gt;</code></td><td>Format ISO timestamps in user’s locale</td><td>57</td></tr>
+<tr><td><code>&lt;crap-collapsible&gt;</code></td><td>Group/collapsible toggle</td><td>51</td></tr>
+<tr><td><code>&lt;crap-locale-picker&gt;</code></td><td>Editor locale switcher</td><td>35</td></tr>
+<tr><td><code>&lt;crap-ui-locale-picker&gt;</code></td><td>Admin UI locale switcher</td><td>49</td></tr>
+<tr><td><code>&lt;crap-theme-picker&gt;</code></td><td>Theme switcher (light/dark/auto + tokyo-night etc.)</td><td>95</td></tr>
+<tr><td><code>&lt;crap-tabs&gt;</code></td><td>Tab keyboard nav + URL-hash sync</td><td>107</td></tr>
+<tr><td><code>&lt;crap-block-picker&gt;</code></td><td>Wraps a <code>&lt;select&gt;</code> of block types; emits <code>EV_REQUEST_ADD_BLOCK</code></td><td>222</td></tr>
+<tr><td><code>&lt;crap-uploads&gt;</code></td><td>Drag-drop upload handler</td><td>128</td></tr>
+<tr><td><code>&lt;crap-back-refs&gt;</code></td><td>Lazy-loaded back-references panel</td><td>134</td></tr>
+<tr><td><code>&lt;crap-conditions&gt;</code></td><td>Display-conditions evaluator</td><td>276</td></tr>
+<tr><td><code>&lt;crap-scroll-restore&gt;</code></td><td>Scroll position preservation across htmx swaps</td><td>241</td></tr>
+<tr><td><code>&lt;crap-validate-form&gt;</code></td><td>Native HTML5 form-validation surfacing</td><td>451</td></tr>
+<tr><td><code>&lt;crap-live-events&gt;</code></td><td>SSE subscriber for live document updates</td><td>315</td></tr>
+<tr><td><code>&lt;crap-array-row&gt;</code></td><td>Array/blocks row wrapper; owns row label-watcher logic</td><td>105</td></tr>
+<tr><td><code>&lt;crap-pill-list&gt;</code></td><td>Chip cluster; <code>data-items</code> JSON; emits <code>crap:pill-removed</code>. <em>Self-styled</em></td><td>197</td></tr>
+<tr><td><code>&lt;crap-column-picker&gt;</code></td><td>Drawer body for picking visible columns; htmx-submits</td><td>189</td></tr>
+<tr><td><code>&lt;crap-filter-builder&gt;</code></td><td>Drawer body for <code>where[…]</code> filter composition. Exports <code>OPS_BY_TYPE</code></td><td>593</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Stable contract</strong> (page-enhancement common):</p>
+<ul>
+<li>The host-element tag itself (presence on the page = behaviour active).</li>
+<li>Documented <code>data-*</code> attributes.</li>
+<li>Events listened to (the contract with surrounding components).</li>
+</ul>
+<p><strong>Internal</strong>: how the component reads/writes the DOM; CSS classes it
+adds; htmx-event piggybacking.</p>
+<h2 id="compositions--refactor-candidates"><a class="header" href="#compositions--refactor-candidates">Compositions — refactor candidates</a></h2>
+<p>These render and orchestrate multiple internal pieces. They’re the
+primary atomization targets for Phase 3.</p>
+<h3 id="crap-array-field--array--blocks-repeater-545-loc-orchestrator--105-loc-atom"><a class="header" href="#crap-array-field--array--blocks-repeater-545-loc-orchestrator--105-loc-atom"><code>&lt;crap-array-field&gt;</code> — array + blocks repeater (545 LOC orchestrator + 105 LOC atom)</a></h3>
+<p>Status: <strong>partially atomized (Phase 3.2).</strong> Extracted <code>&lt;crap-array-row&gt;</code>
+(stable atom, 105 LOC) which owns the row label-watcher concern. The
+remaining orchestrator handles add/remove/reorder/duplicate via event
+delegation, drag-and-drop sorting, index rewriting on the cloned
+template subtree, and max-rows enforcement.</p>
+<p>A further split into <code>&lt;crap-array-controls&gt;</code> (the +/-/duplicate/move
+buttons) was scoped <em>out</em> of Phase 3.2 — the buttons today are inline
+<code>&lt;button data-action="..."&gt;</code> rendered by Handlebars and dispatched
+via the orchestrator’s click delegation. Splitting them would require
+rebuilding the action wiring as inter-component events; there’s no
+demonstrated demand for swapping just the buttons today, so we
+stopped at the row.</p>
+<h3 id="crap-list-settings--list-page-toolbar-atomized-in-33"><a class="header" href="#crap-list-settings--list-page-toolbar-atomized-in-33"><code>&lt;crap-list-settings&gt;</code> — list-page toolbar (atomized in 3.3)</a></h3>
+<p>Status: <strong>fully atomized.</strong> The toolbar’s two drawer bodies are
+standalone web components mounted by the orchestrator:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>LOC</th><th>Stable surface</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;crap-list-settings&gt;</code></td><td>163</td><td>Orchestrator: <code>data-action="open-column-picker"</code> / <code>data-action="open-filter-builder"</code> buttons; htmx-search focus preservation.</td></tr>
+<tr><td><code>&lt;crap-column-picker&gt;</code></td><td>189</td><td><code>data-collection</code> (slug) + <code>data-options</code> (JSON <code>ColumnOption[]</code>); fires <code>crap:column-picker-saved</code> on htmx success.</td></tr>
+<tr><td><code>&lt;crap-filter-builder&gt;</code></td><td>593</td><td><code>data-collection</code> (slug) + <code>data-fields</code> (JSON <code>FieldMeta[]</code>); fires <code>crap:filter-builder-applied</code> on apply. Exports <code>OPS_BY_TYPE</code> for subclass extension.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Orchestration</strong>: the toolbar listens for <code>data-action</code> clicks,
+discovers the page’s <code>&lt;crap-drawer&gt;</code> singleton via <code>EV_DRAWER_REQUEST</code>,
+and mounts a freshly constructed picker/builder element (with data
+already attached on its dataset) into the drawer body. The element’s
+<code>connectedCallback</code> builds the UI; the orchestrator listens for the
+element’s completion event to close the drawer.</p>
+<p><strong>Override patterns</strong> for users:</p>
+<ul>
+<li><strong>Full replace</strong>: drop a replacement at
+<code>&lt;config_dir&gt;/static/components/list-settings/{column-picker,filter-builder}.js</code>.</li>
+<li><strong>Subclass</strong>: import <code>CrapColumnPicker</code> / <code>CrapFilterBuilder</code> from
+the modules and extend; redefine the tag in your override file.
+Both classes expose protected hooks (<code>_buildValueInput</code>,
+<code>_renderOpsInto</code>, <code>_onSuccess</code>) for incremental customization.</li>
+</ul>
+<p><strong>Standalone usability</strong>: a <code>&lt;crap-column-picker&gt;</code> or
+<code>&lt;crap-filter-builder&gt;</code> can be dropped anywhere with the right
+dataset attributes — they don’t depend on <code>&lt;crap-list-settings&gt;</code>
+specifically, only on the data being attached to their own host.</p>
+<h3 id="crap-relationship-search--relationship--upload-picker-1075-loc-orchestrator--197-loc-atom"><a class="header" href="#crap-relationship-search--relationship--upload-picker-1075-loc-orchestrator--197-loc-atom"><code>&lt;crap-relationship-search&gt;</code> — relationship + upload picker (1075 LOC orchestrator + 197 LOC atom)</a></h3>
+<p>Status: <strong>partially atomized (Phase 3.4).</strong> The chip cluster
+extracted as <code>&lt;crap-pill-list&gt;</code>. The rest stays as a composition.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tag</th><th>LOC</th><th>Stable surface</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;crap-relationship-search&gt;</code></td><td>1075</td><td>Host-element <code>data-*</code> attrs (collection, field-name, has-many, polymorphic, picker, etc.). Treat as a black box.</td></tr>
+<tr><td><code>&lt;crap-pill-list&gt;</code></td><td>197</td><td><code>data-items</code> (JSON <code>Item[]</code>), <code>data-readonly</code>, <code>data-polymorphic</code>. Fires <code>crap:pill-removed</code> with <code>{ id }</code> detail. Self-styled (injects its own stylesheet). <strong>Reusable</strong> — drop into any has-many UI.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Honest about why we stopped at the pill list.</strong> The earlier spec
+proposed <code>&lt;crap-search-input&gt;</code> and <code>&lt;crap-search-results&gt;</code> as further
+sub-atoms. Reading the actual code makes it clear those wouldn’t be
+genuine atoms — they’d share <code>this._selected</code>, <code>this._results</code>,
+<code>this._collection</code> with the orchestrator and need every piece of state
+threaded through attributes. The split would create more interfaces
+without more independence. The whole search → fetch → render → select
+loop is inherently one state machine; pretending otherwise costs more
+in coordination than it saves in modularity.</p>
+<p>The pill-list, in contrast, is naturally reusable: input is items,
+output is “user wants this id removed.” It works standalone, and
+future has-many UIs (custom field types with chip-shaped selection,
+new tag-style inputs) can use it directly.</p>
+<p><strong>Stable contract today</strong>: the host-element tag + the <code>data-*</code>
+attributes used to bootstrap state. Internal HTML and classes are
+private. Field-template overlays should target the component as a
+black box. Inside the orchestrator, <code>&lt;crap-pill-list&gt;</code> is the one
+piece overlay authors can swap independently — drop a replacement at
+<code>&lt;config_dir&gt;/static/components/pill-list.js</code> to customize chip
+rendering globally (affects every <code>&lt;crap-relationship-search&gt;</code> plus
+any other component that adopts the atom).</p>
+<h2 id="helpers-not-custom-elements"><a class="header" href="#helpers-not-custom-elements">Helpers (not custom elements)</a></h2>
+<p>Imported by other modules; not registered with <code>customElements.define()</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Module</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>css.js</code></td><td><code>css\</code>…`<code>tagged-template returns a</code>CSSStyleSheet`.</td></tr>
+<tr><td><code>h.js</code></td><td><code>h(tag, props, ...children)</code> hyperscript helper.</td></tr>
+<tr><td><code>i18n.js</code></td><td><code>t(key)</code> translation lookup; HTMX-swap cache invalidation.</td></tr>
+<tr><td><code>events.js</code></td><td>Named event-string constants (this doc’s source of truth).</td></tr>
+<tr><td><code>theme.js</code></td><td><code>getTheme()</code>, <code>setTheme()</code>, <code>applyTheme()</code>.</td></tr>
+<tr><td><code>groups.js</code></td><td>Field group/collapsible toggle handler (legacy; shared logic).</td></tr>
+<tr><td><code>picker-base.js</code></td><td>Common base for <code>block-picker</code> and similar option-picker UI.</td></tr>
+<tr><td><code>util/cookies.js</code></td><td><code>readCsrfCookie()</code>.</td></tr>
+<tr><td><code>util/discover.js</code></td><td><code>discoverSingleton(eventName)</code> for singleton-component discovery.</td></tr>
+<tr><td><code>util/htmx.js</code></td><td><code>getHttpVerb(form)</code>.</td></tr>
+<tr><td><code>util/json.js</code></td><td><code>readDataIsland(id)</code>.</td></tr>
+<tr><td><code>util/toast.js</code></td><td><code>toast({ message, type, duration })</code> sugar over <code>EV_TOAST_REQUEST</code>.</td></tr>
+<tr><td><code>global.js</code></td><td><code>window.crap.*</code> console / inline-template namespace.</td></tr>
+<tr><td><code>index.js</code></td><td>Module manifest; imports every component for side effects.</td></tr>
+</tbody>
+</table>
+</div>
+<p>These don’t have a tag-shaped public API — their stability comes from
+the export shape (function signatures, returned types).</p>
+<h2 id="stability-tiers"><a class="header" href="#stability-tiers">Stability tiers</a></h2>
+<p>Every component module’s JSDoc declares one of three tiers via a
+<code>@stability</code> tag at the bottom of the module-level block. Tier dictates
+breaking-change policy:</p>
+<ul>
+<li><strong><code>stable</code></strong> — public API listed above; breaking changes need a
+deprecation cycle, never inside a minor release.</li>
+<li><strong><code>experimental</code></strong> — usable, but the API may change between minors.</li>
+<li><strong><code>internal</code></strong> — anything not listed in this doc. Free to change.</li>
+</ul>
+<p>The current distribution (post-Phase-3.4):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Tier</th><th>Count</th><th>Components</th><th>Policy</th></tr>
+</thead>
+<tbody>
+<tr><td>stable</td><td>32</td><td>6 singletons + 5 form atoms + 17 page-enhancement atoms + 4 newly-extracted atoms (<code>&lt;crap-array-row&gt;</code>, <code>&lt;crap-pill-list&gt;</code>, <code>&lt;crap-column-picker&gt;</code>, <code>&lt;crap-filter-builder&gt;</code>) + <code>events.js</code></td><td>Back-compat enforced; breaking changes get a deprecation cycle.</td></tr>
+<tr><td>experimental</td><td>3</td><td><code>array-fields</code>, <code>relationship-search</code>, <code>list-settings</code> (the three composition orchestrators)</td><td>Internal HTML / orchestration shape can change. The host-element tag + documented <code>data-*</code> attributes stay stable so field templates that emit them keep working.</td></tr>
+<tr><td>internal</td><td>20</td><td>Helpers (<code>css</code>, <code>h</code>, <code>i18n</code>, <code>groups</code>, <code>picker-base</code>), <code>util/</code> subtree, <code>global.js</code>, <code>index.js</code>, seven <code>richtext/*</code> ProseMirror submodules</td><td>Free to change without notice; not part of the public surface.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Lookup with <code>grep -l "@stability stable" static/components/*.js</code> to
+list every public-API file. The <code>@stability</code> tag is the single
+machine-readable source of truth for tooling that wants to enforce
+tier policy (lint rules, codemods, doc-extractor scripts).</p>
+<h2 id="out-of-scope"><a class="header" href="#out-of-scope">Out of scope</a></h2>
+<ul>
+<li>The richtext editor’s ProseMirror integration. ProseMirror has its
+own plugin/schema API; treat <code>&lt;crap-richtext&gt;</code> as a thin adapter and
+document <code>data-format</code>, <code>data-features</code>, <code>data-nodes</code> as the public
+surface. The schema-extension story is documented separately.</li>
+<li>The CodeMirror integration in <code>&lt;crap-code&gt;</code> similarly.</li>
+</ul>
+<p>These wrap third-party editors with their own contracts; we keep our
+adapter narrow and stable, and direct users to the upstream docs for
+deep customization.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../admin-ui/reference/components.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../admin-ui/reference/template-context.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../admin-ui/reference/components.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../admin-ui/reference/template-context.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

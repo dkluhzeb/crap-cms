@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Display Conditions - Crap CMS</title>
+        <title>Partials - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">Crap CMS</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
@@ -177,131 +177,169 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="display-conditions"><a class="header" href="#display-conditions">Display Conditions</a></h1>
-<p>Display conditions let you show or hide fields in the admin UI based on the values of other fields. This is useful for context-dependent forms — for example, showing a URL field only when the post type is “link”.</p>
-<h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
-<p>Add <code>admin.condition</code> to a field definition, referencing a Lua function:</p>
-<pre><code class="language-lua">crap.fields.text({
-    name = "external_url",
-    admin = {
-        condition = "hooks.posts.show_external_url",
-    },
-}),
+                        <h1 id="partials"><a class="header" href="#partials">Partials</a></h1>
+<p>Partials are <strong>named, reusable chunks of HBS markup</strong> included from
+other templates via the <code>{{&gt; name}}</code> syntax. They form one of the
+admin UI’s three customization mechanisms — use a partial when you
+want to <strong>replace a markup chunk</strong> that’s reused in multiple places
+(logo, breadcrumb, status badge), without touching every template
+that includes it.</p>
+<pre><code class="language-hbs">{{!-- A built-in template includes a partial --}}
+&lt;div class="header__logo"&gt;
+  {{&gt; partials/logo class="header__logo-icon"}}
+  {{crap.site_name}}
+&lt;/div&gt;
 </code></pre>
-<p>The condition references a Lua function using the standard hook ref format (<code>hooks.&lt;collection&gt;.&lt;name&gt;</code>). The function receives the current form data and returns <strong>either</strong> a condition table (client-side) or a boolean (server-side).</p>
-<p>The <code>data</code> parameter is typed per-collection (<code>crap.data.Posts</code>, <code>crap.global_data.SiteSettings</code>) for IDE autocomplete. The type generator emits these types automatically.</p>
-<p>Use <code>crap-cms make hook</code> with <code>--type condition</code> to scaffold condition hooks:</p>
-<pre><code class="language-bash">crap-cms -C ./config make hook show_external_url \
-    -t condition -c posts -l table -F post_type
+<pre><code class="language-hbs">{{!-- You override the partial by dropping the same path in your config dir --}}
+{{!-- &lt;config_dir&gt;/templates/partials/logo.hbs --}}
+&lt;svg class="{{class}}" viewBox="0 0 24 24"&gt;
+  &lt;path d="M ... your brand mark ..." /&gt;
+&lt;/svg&gt;
 </code></pre>
-<h2 id="condition-functions"><a class="header" href="#condition-functions">Condition Functions</a></h2>
-<h3 id="client-side-condition-table"><a class="header" href="#client-side-condition-table">Client-Side (Condition Table)</a></h3>
-<p>When the function returns a <strong>table</strong>, it is serialized to JSON and embedded in the HTML. JavaScript evaluates it instantly on field changes — no server round-trip.</p>
-<pre><code class="language-lua">-- hooks/posts/show_external_url.lua
----@param data crap.data.Posts
----@return table
-return function(data)
-    return { field = "post_type", equals = "link" }
-end
+<p>That’s it — the override applies to every template that includes the
+partial.</p>
+<h2 id="how-partial-overrides-work"><a class="header" href="#how-partial-overrides-work">How partial overrides work</a></h2>
+<p>Partials register under a name derived from their relative path in
+<code>templates/</code>. So <code>templates/partials/logo.hbs</code> registers as
+<code>partials/logo</code>. When the loader walks your config dir, files at the
+same path register under the same name and <strong>win</strong> over the embedded
+default.</p>
+<p><code>{{&gt; partials/logo class="..."}}</code> then resolves to your file
+everywhere it’s invoked. No need to override the surrounding pages
+(<code>header.hbs</code>, <code>auth.hbs</code>, etc.) — the include is the seam.</p>
+<h2 id="partial-parameters"><a class="header" href="#partial-parameters">Partial parameters</a></h2>
+<p>Partials take parameters via the <code>{{&gt; name key=value}}</code> syntax. Inside
+the partial, parameters are available at the root context:</p>
+<pre><code class="language-hbs">{{!-- caller --}}
+{{&gt; partials/htmx-nav-link href="/admin/users" label_key="users" variant="primary" icon="people"}}
 </code></pre>
-<h3 id="server-side-boolean"><a class="header" href="#server-side-boolean">Server-Side (Boolean)</a></h3>
-<p>When the function returns a <strong>boolean</strong>, the field visibility is re-evaluated on the server via a debounced fetch (300ms delay after the last input change). Use this for complex logic that can’t be expressed as a simple condition table.</p>
-<pre><code class="language-lua">-- hooks/posts/show_premium_options.lua
----@param data crap.data.Posts
----@return boolean
-return function(data)
-    -- Complex logic that needs server-side evaluation
-    local tags = data.tags or {}
-    for _, tag in ipairs(tags) do
-        if tag == "premium" then return true end
-    end
-    return false
-end
+<pre><code class="language-hbs">{{!-- partials/htmx-nav-link.hbs --}}
+&lt;a
+  class="button button--{{variant}}"
+  href="{{href}}"
+  hx-get="{{href}}"
+  hx-target="body"
+  hx-push-url="true"
+&gt;
+  {{#if icon}}&lt;span class="material-symbols-outlined"&gt;{{icon}}&lt;/span&gt;{{/if}}
+  {{t label_key}}
+&lt;/a&gt;
 </code></pre>
-<blockquote>
-<p><strong>Performance tip:</strong> Prefer condition tables over booleans whenever possible. Tables evaluate instantly in the browser; booleans require a server round-trip on every field change.</p>
-</blockquote>
-<h2 id="condition-table-operators"><a class="header" href="#condition-table-operators">Condition Table Operators</a></h2>
+<p>Keep parameters narrow and well-named. The partial’s parameter
+contract is what overlay authors will code against — changing a
+parameter name breaks every overlay that depends on it.</p>
+<h2 id="block-form-partials"><a class="header" href="#block-form-partials">Block-form partials</a></h2>
+<p>Partials can accept a body via the <code>{{#&gt; name}}body content{{/name}}</code>
+syntax. Useful when the partial is a <strong>wrapper</strong> around content the
+caller provides:</p>
+<pre><code class="language-hbs">{{!-- caller --}}
+{{#&gt; partials/warning-card title_key="delete_has_references"}}
+  &lt;p&gt;3 incoming references prevent deletion.&lt;/p&gt;
+  &lt;a href="{{back_refs_url}}"&gt;View references&lt;/a&gt;
+{{/partials/warning-card}}
+</code></pre>
+<pre><code class="language-hbs">{{!-- partials/warning-card.hbs --}}
+&lt;div class="card card--warning"&gt;
+  &lt;strong&gt;{{t title_key}}&lt;/strong&gt;
+  {{&gt; @partial-block}}      {{!-- caller's body renders here --}}
+&lt;/div&gt;
+</code></pre>
+<p>Block-form partials are how the admin’s <code>partials/field.hbs</code> wrapper
+adds the label/error/help chrome around every field-type’s input
+markup.</p>
+<h2 id="built-in-partials"><a class="header" href="#built-in-partials">Built-in partials</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Operator</th><th>Example</th><th>Description</th></tr>
+<tr><th>Partial</th><th>Used for</th></tr>
 </thead>
 <tbody>
-<tr><td><code>equals</code></td><td><code>{ field = "type", equals = "link" }</code></td><td>Exact match</td></tr>
-<tr><td><code>not_equals</code></td><td><code>{ field = "type", not_equals = "draft" }</code></td><td>Not equal</td></tr>
-<tr><td><code>in</code></td><td><code>{ field = "type", ["in"] = {"link", "video"} }</code></td><td>Value in list</td></tr>
-<tr><td><code>not_in</code></td><td><code>{ field = "type", not_in = {"a", "b"} }</code></td><td>Value not in list</td></tr>
-<tr><td><code>is_truthy</code></td><td><code>{ field = "has_image", is_truthy = true }</code></td><td>Non-empty, non-nil, non-false</td></tr>
-<tr><td><code>is_falsy</code></td><td><code>{ field = "has_image", is_falsy = true }</code></td><td>Empty, nil, or false</td></tr>
+<tr><td><code>partials/logo.hbs</code></td><td>Brand SVG. Caller passes <code>class</code>.</td></tr>
+<tr><td><code>partials/meta-tags.hbs</code></td><td><code>&lt;head&gt;</code> metadata: charset, viewport, theme-color, favicon link.</td></tr>
+<tr><td><code>partials/icon-font.hbs</code></td><td>Material Symbols stylesheet <code>&lt;link&gt;</code>. Override for self-hosting / privacy.</td></tr>
+<tr><td><code>partials/field.hbs</code></td><td>Block-form wrapper around field inputs (label, required indicator, error, help).</td></tr>
+<tr><td><code>partials/breadcrumb.hbs</code></td><td>Page breadcrumb trail.</td></tr>
+<tr><td><code>partials/pagination.hbs</code></td><td>List-view next/previous controls.</td></tr>
+<tr><td><code>partials/status-badge.hbs</code></td><td>Document status pill (<code>published</code>, <code>draft</code>, etc.). Caller passes <code>status</code>.</td></tr>
+<tr><td><code>partials/loading-indicator.hbs</code></td><td>HTMX request indicator. Caller passes <code>variant</code> (<code>inline</code> or <code>sidebar</code>).</td></tr>
+<tr><td><code>partials/array-row-header.hbs</code></td><td>Drag-handle / move / duplicate / remove buttons for array-field rows. Caller passes <code>expanded</code>, <code>has_errors</code>.</td></tr>
+<tr><td><code>partials/error-page.hbs</code></td><td>Error-page chrome (used by <code>errors/404.hbs</code>, etc.).</td></tr>
+<tr><td><code>partials/form-actions.hbs</code></td><td>Save/Publish/Cancel button row at the bottom of edit forms.</td></tr>
+<tr><td><code>partials/htmx-nav-link.hbs</code></td><td>Anchor with <code>hx-*</code> attributes for client-side nav.</td></tr>
+<tr><td><code>partials/sidebar-panel.hbs</code></td><td>Collapsible sidebar panel wrapper (used by version history, back-refs).</td></tr>
+<tr><td><code>partials/version-sidebar.hbs</code></td><td>Version-history sidebar contents.</td></tr>
+<tr><td><code>partials/version-table.hbs</code></td><td>Version-history table on the standalone versions page.</td></tr>
+<tr><td><code>partials/warning-card.hbs</code></td><td>Block-form <code>&lt;div class="card card--warning"&gt;</code> wrapper.</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="multiple-conditions-and"><a class="header" href="#multiple-conditions-and">Multiple Conditions (AND)</a></h2>
-<p>Return an array of condition tables to require all conditions to be true:</p>
-<pre><code class="language-lua">-- hooks/posts/show_advanced.lua
----@param data crap.data.Posts
----@return table
-return function(data)
-    return {
-        { field = "post_type", not_equals = "link" },
-        { field = "excerpt", is_truthy = true },
-    }
-end
+<h2 id="worked-example--swap-the-brand-logo"><a class="header" href="#worked-example--swap-the-brand-logo">Worked example — swap the brand logo</a></h2>
+<p>Goal: replace the heart-in-house mark with your company’s wordmark.</p>
+<p><strong>Step 1</strong>: drop your SVG into the config dir at the partial’s path:</p>
+<pre><code class="language-hbs">{{!-- &lt;config_dir&gt;/templates/partials/logo.hbs --}}
+&lt;svg
+  class="{{class}}"
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 100 24"
+  fill="currentColor"
+&gt;
+  &lt;text x="0" y="18" font-size="20" font-weight="700"&gt;ACME&lt;/text&gt;
+&lt;/svg&gt;
 </code></pre>
-<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
-<h3 id="page-load"><a class="header" href="#page-load">Page Load</a></h3>
-<ol>
-<li>The server calls the Lua condition function with the current document data</li>
-<li>Based on the return type:
+<p><strong>Step 2</strong>: that’s it. The wordmark renders in both the header
+(<code>header.hbs</code> includes it via <code>{{&gt; partials/logo class="header__logo-icon"}}</code>)
+and the auth-card icon (<code>auth.hbs</code> includes it via
+<code>{{&gt; partials/logo class="auth-card__icon"}}</code>).</p>
+<p>The <code>{{class}}</code> parameter is preserved so the SVG inherits the right
+size / colour from the calling template’s CSS.</p>
+<h2 id="worked-example--self-host-material-symbols-for-privacy"><a class="header" href="#worked-example--self-host-material-symbols-for-privacy">Worked example — self-host Material Symbols for privacy</a></h2>
+<p>Goal: don’t load the icon font from Google Fonts (privacy / GDPR
+compliance / air-gapped deployments).</p>
+<p><strong>Step 1</strong>: vendor the woff2 file (download from
+<a href="https://fonts.gstatic.com">https://fonts.gstatic.com</a>) and a CSS file that points at it:</p>
+<pre><code>&lt;config_dir&gt;/static/vendor/material-symbols.css
+&lt;config_dir&gt;/static/vendor/material-symbols.woff2
+</code></pre>
+<p><strong>Step 2</strong>: override the <code>icon-font</code> partial to load your local copy:</p>
+<pre><code class="language-hbs">{{!-- &lt;config_dir&gt;/templates/partials/icon-font.hbs --}}
+&lt;link
+  rel="stylesheet"
+  href="/static/vendor/material-symbols.css"
+/&gt;
+</code></pre>
+<p><strong>Step 3</strong>: that’s it. Both layouts (<code>base.hbs</code> and <code>auth.hbs</code>) load
+your local stylesheet instead of Google’s CDN.</p>
+<h2 id="when-not-to-use-a-partial"><a class="header" href="#when-not-to-use-a-partial">When NOT to use a partial</a></h2>
 <ul>
-<li><strong>Table:</strong> serialized as a <code>data-condition</code> JSON attribute on the field wrapper; initial visibility computed server-side</li>
-<li><strong>Boolean:</strong> result sets initial visibility; function reference stored as <code>data-condition-ref</code></li>
+<li><strong>Adding content</strong> at a defined extension point — use a
+<a href="slots.html">slot</a>. Slots are additive; partials are replacement.</li>
+<li><strong>Replacing a single value</strong> — use a config field. <code>{{crap.site_name}}</code>
+is a config field, not a partial.</li>
+<li><strong>Replacing a whole page template</strong> — just drop the page file at
+<code>templates/&lt;page&gt;.hbs</code>. No partial wrapper needed.</li>
 </ul>
-</li>
-<li>Fields with <code>false</code> conditions render with <code>display: none</code> (no flash of content)</li>
-</ol>
-<h3 id="client-side-reactivity-condition-tables"><a class="header" href="#client-side-reactivity-condition-tables">Client-Side Reactivity (Condition Tables)</a></h3>
-<p>When the user changes a form field:</p>
-<ol>
-<li>JavaScript reads the <code>data-condition</code> JSON from each conditional field</li>
-<li>Evaluates the condition against current form values</li>
-<li>Shows or hides the field instantly</li>
-</ol>
-<h3 id="server-side-reactivity-boolean-functions"><a class="header" href="#server-side-reactivity-boolean-functions">Server-Side Reactivity (Boolean Functions)</a></h3>
-<p>When the user changes a form field:</p>
-<ol>
-<li>JavaScript debounces for 300ms</li>
-<li>POSTs current form data to <code>/admin/collections/{slug}/evaluate-conditions</code></li>
-<li>Server calls each boolean condition function</li>
-<li>Response updates field visibility</li>
-</ol>
-<h2 id="sidebar-fields"><a class="header" href="#sidebar-fields">Sidebar Fields</a></h2>
-<p>Display conditions work on fields in any position, including sidebar fields (<code>admin.position = "sidebar"</code>).</p>
-<h2 id="safe-defaults"><a class="header" href="#safe-defaults">Safe Defaults</a></h2>
-<ul>
-<li>If a condition function throws an error, the field remains <strong>visible</strong> (safe default)</li>
-<li>If the condition returns <code>nil</code>, the field remains <strong>visible</strong></li>
-<li>On page load, fields are hidden server-side before rendering (no flash)</li>
-</ul>
-<h2 id="complexity-limits"><a class="header" href="#complexity-limits">Complexity Limits</a></h2>
-<p>There are <strong>no built-in depth, length, or array-size limits</strong> on condition tables returned from Lua. The evaluator (<code>evaluate_condition_table</code>) recurses through arrays of conditions until it bottoms out, and each leaf object is a single AND clause.</p>
-<p>In practice, keep condition tables small and flat:</p>
-<ul>
-<li>A single object (one operator, one field), or</li>
-<li>An array of objects (AND-combined).</li>
-</ul>
-<p>Deeply nested or runaway-large tables will be evaluated in full both server-side (initial render) and client-side (on every form change) — so keeping them simple is a performance and readability choice, not a hard requirement. Conditions that need richer logic (loops, lookups, multi-field reasoning) are better expressed as boolean condition functions.</p>
+<p>Partials are specifically for <strong>structured markup chunks reused in
+multiple places</strong>. Reaching for one when you really want additive
+content (slot) or a single value (config) leads to over-coupling.
+See the <a href="../index.html#when-to-use-what">admin UI overview</a> for the
+full mechanism matrix.</p>
+<h2 id="drift-detection"><a class="header" href="#drift-detection">Drift detection</a></h2>
+<p>Partials are part of the overlay drift surface. After overriding,
+<code>crap-cms templates status</code> will show your file with a source-version
+header (if extracted via <code>templates extract</code>) or a <code>no source header</code>
+note (if hand-written). When upstream renames or restructures a
+partial in a future release, <code>templates status</code> flags it so you can
+re-port. See <a href="../upgrade/drift-tooling.html">Drift tooling</a>.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../admin-ui/static-files.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../admin-ui/guides/slots.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../admin-ui/themes.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../admin-ui/guides/template-overlay.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -311,11 +349,11 @@ end
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../admin-ui/static-files.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../admin-ui/guides/slots.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../admin-ui/themes.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../admin-ui/guides/template-overlay.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -335,13 +373,13 @@ end
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

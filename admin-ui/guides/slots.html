@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Template Overlay - Crap CMS</title>
+        <title>Slots - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">Crap CMS</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
@@ -177,87 +177,181 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="template-overlay"><a class="header" href="#template-overlay">Template Overlay</a></h1>
-<p>The admin UI uses a template overlay system: templates in your config directory override the compiled defaults.</p>
-<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
-<p>When rendering a template, Crap CMS checks:</p>
+                        <h1 id="slots"><a class="header" href="#slots">Slots</a></h1>
+<p>Slots are <strong>named extension points</strong> in built-in templates where you
+can drop your own content without overriding the surrounding
+template. Where partials let you <em>replace</em> a markup chunk, slots let
+you <em>add to</em> one.</p>
+<pre><code class="language-hbs">{{!-- Built-in template declares a slot --}}
+{{slot "dashboard_widgets"}}
+</code></pre>
+<pre><code class="language-hbs">{{!-- You drop a file at the matching path --}}
+{{!-- &lt;config_dir&gt;/templates/slots/dashboard_widgets/weather.hbs --}}
+&lt;crap-card&gt;
+  &lt;h3&gt;Weather&lt;/h3&gt;
+  &lt;p&gt;{{temp}}°C&lt;/p&gt;
+&lt;/crap-card&gt;
+</code></pre>
+<p>That’s the entire mechanism. Drop a file under
+<code>templates/slots/&lt;slot_name&gt;/&lt;anything&gt;.hbs</code>; it renders at the
+matching <code>{{slot "..."}}</code> site in the upstream template, alongside
+any other contributions to the same slot.</p>
+<h2 id="how-slot-rendering-works"><a class="header" href="#how-slot-rendering-works">How slot rendering works</a></h2>
+<p>When a built-in template hits <code>{{slot "name"}}</code>, the helper:</p>
 <ol>
-<li><strong>Config directory</strong> — <code>&lt;config_dir&gt;/templates/&lt;name&gt;.hbs</code></li>
-<li><strong>Compiled defaults</strong> — built into the binary at compile time</li>
+<li>Enumerates every registered template name starting with
+<code>slots/name/</code> (both upstream defaults and your overlay files).</li>
+<li>Sorts them alphabetically.</li>
+<li>Renders each against the current page context.</li>
+<li>Concatenates the output and writes it at the slot site.</li>
 </ol>
-<p>If a file exists in the config directory, it’s used. Otherwise, the compiled default is used.</p>
-<h2 id="dev-mode"><a class="header" href="#dev-mode">Dev Mode</a></h2>
-<p>When <code>admin.dev_mode = true</code> in <code>crap.toml</code>, templates are reloaded from disk on every request. This enables live editing without restarting.</p>
-<p>When <code>dev_mode = false</code>, templates are cached after first load (production mode).</p>
-<h3 id="template-errors-in-dev-mode"><a class="header" href="#template-errors-in-dev-mode">Template Errors in Dev Mode</a></h3>
-<p>If an operator-provided template in <code>&lt;config_dir&gt;/templates/</code> has a Handlebars syntax error while <code>admin.dev_mode = true</code>, the request returns a <strong>500 Internal Server Error</strong>. Crap CMS does <strong>not</strong> automatically fall back to the compiled default template — once a file shadows a default, the override is authoritative.</p>
-<p>To recover:</p>
-<ul>
-<li>Fix the syntax error in your overlay template, or</li>
-<li>Delete (or rename) the file from <code>&lt;config_dir&gt;/templates/</code> to fall back to the compiled default.</li>
-</ul>
-<p>For deployments, prefer <code>dev_mode = false</code> so the overlay is registered and cached on startup rather than re-parsed (and potentially 500-ing) on every request.</p>
-<h2 id="template-inheritance"><a class="header" href="#template-inheritance">Template Inheritance</a></h2>
-<p>Templates use Handlebars partial inheritance:</p>
-<pre><code class="language-handlebars">{{#&gt; layout/base}}
-    &lt;h1&gt;My Custom Page&lt;/h1&gt;
-    &lt;p&gt;Content here&lt;/p&gt;
-{{/layout/base}}
+<p>If no slot files exist for that name, the helper renders <strong>nothing</strong>
+— or, if the slot was declared in block form, the inline fallback.</p>
+<h2 id="file-naming"><a class="header" href="#file-naming">File naming</a></h2>
+<p>The filename inside <code>slots/&lt;slot_name&gt;/</code> doesn’t matter for routing
+— <strong>anything</strong> with a <code>.hbs</code> extension renders. The filename only
+controls <strong>render order</strong> (alphabetical).</p>
+<p>Use the filename to namespace your contributions and control order:</p>
+<pre><code>templates/slots/dashboard_widgets/
+  10-weather.hbs           # renders first
+  20-recent-activity.hbs   # renders second
+  90-system-status.hbs     # renders last
 </code></pre>
-<p>The <code>layout/base</code> partial provides the HTML shell (head, sidebar, header).</p>
-<h2 id="field-partials"><a class="header" href="#field-partials">Field Partials</a></h2>
-<p>Each field type has a partial in <code>templates/fields/</code>:</p>
-<ul>
-<li><code>fields/text.hbs</code></li>
-<li><code>fields/number.hbs</code></li>
-<li><code>fields/textarea.hbs</code></li>
-<li><code>fields/richtext.hbs</code></li>
-<li><code>fields/select.hbs</code></li>
-<li><code>fields/checkbox.hbs</code></li>
-<li><code>fields/date.hbs</code></li>
-<li><code>fields/email.hbs</code></li>
-<li><code>fields/json.hbs</code></li>
-<li><code>fields/relationship.hbs</code></li>
-<li><code>fields/array.hbs</code></li>
-<li><code>fields/blocks.hbs</code></li>
-<li><code>fields/password.hbs</code></li>
-<li><code>fields/radio.hbs</code></li>
-<li><code>fields/code.hbs</code></li>
-<li><code>fields/upload.hbs</code></li>
-<li><code>fields/join.hbs</code></li>
-<li><code>fields/group.hbs</code></li>
-<li><code>fields/collapsible.hbs</code></li>
-<li><code>fields/tabs.hbs</code></li>
-<li><code>fields/row.hbs</code></li>
-</ul>
-<p>The edit form iterates field definitions and renders the matching partial.</p>
-<h2 id="overriding-templates"><a class="header" href="#overriding-templates">Overriding Templates</a></h2>
-<p>To customize a template, create the same file path under your config directory’s <code>templates/</code> folder:</p>
-<pre><code>my-project/
-└── templates/
-    └── fields/
-        └── richtext.hbs   # overrides the default richtext field template
+<p>A common convention is <code>NN-&lt;purpose&gt;.hbs</code> where <code>NN</code> is a two-digit
+ordinal — leaves room for inserting future slots without renaming.</p>
+<h2 id="page-context"><a class="header" href="#page-context">Page context</a></h2>
+<p>Slot files render with the <strong>same template context as the page they
+appear in</strong>. If you drop a file at
+<code>slots/page_header_actions/admin-status.hbs</code>, it has access to
+everything the surrounding <code>header.hbs</code> sees: <code>{{user.email}}</code>,
+<code>{{nav.collections}}</code>, <code>{{crap.site_name}}</code>, and so on.</p>
+<p>Reach past any hash-param overlay (see below) via <code>{{@root.x}}</code>:</p>
+<pre><code class="language-hbs">{{!-- slot file with hash params merged on top --}}
+{{name}}                  {{!-- hash param --}}
+{{@root.user.email}}      {{!-- always the page-level data --}}
 </code></pre>
-<h2 id="available-template-variables"><a class="header" href="#available-template-variables">Available Template Variables</a></h2>
-<p>Templates receive context data from the Axum handlers. Common variables include:</p>
+<h2 id="hash-params-per-invocation-data"><a class="header" href="#hash-params-per-invocation-data">Hash params (per-invocation data)</a></h2>
+<p>Slots can pass per-invocation data the slot file sees at the root:</p>
+<pre><code class="language-hbs">{{!-- Built-in template invokes the slot with hash params --}}
+{{slot "field_help" name=field.name kind=field.field_type}}
+</code></pre>
+<pre><code class="language-hbs">{{!-- slot file sees the values at the root --}}
+{{!-- slots/field_help/long-text-hint.hbs --}}
+{{#if (eq kind "richtext")}}
+  &lt;p class="form__help"&gt;Use &lt;kbd&gt;Ctrl+B&lt;/kbd&gt; for bold.&lt;/p&gt;
+{{/if}}
+</code></pre>
+<p>Hash params are useful for slots that fire <strong>once per item</strong> (e.g.
+once per field, once per collection row) and need the item’s data
+without traversing the page context.</p>
+<h2 id="block-form-inline-fallback"><a class="header" href="#block-form-inline-fallback">Block form (inline fallback)</a></h2>
+<p>A built-in template can declare a slot with an inline fallback that
+renders <strong>only when no slot files exist</strong>:</p>
+<pre><code class="language-hbs">{{#slot "dashboard_widgets"}}
+  &lt;p class="muted"&gt;No widgets configured yet.&lt;/p&gt;
+{{/slot}}
+</code></pre>
+<p>If you drop <em>any</em> file at <code>slots/dashboard_widgets/</code>, the fallback is
+suppressed and your file(s) render instead.</p>
+<h2 id="built-in-slots"><a class="header" href="#built-in-slots">Built-in slots</a></h2>
+<p>These slots are declared in the built-in templates. Each one is a
+public extension surface — its name and context are part of the
+stable API.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Slot</th><th>Declared in</th><th>Context</th><th>Use for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>head_extras</code></td><td><code>layout/base.hbs</code></td><td>full page context</td><td>extra <code>&lt;meta&gt;</code> tags, OG tags, robots directives, PWA <code>&lt;link rel="manifest"&gt;</code>, custom <code>&lt;link rel="preconnect"&gt;</code>, analytics <code>&lt;script&gt;</code></td></tr>
+<tr><td><code>body_end_scripts</code></td><td><code>layout/base.hbs</code></td><td>full page context</td><td>end-of-body analytics, custom event listeners, third-party scripts that should load after the admin</td></tr>
+<tr><td><code>page_header_actions</code></td><td><code>layout/header.hbs</code></td><td>full page context</td><td>extra buttons in the top header bar (next to the logout button)</td></tr>
+<tr><td><code>dashboard_widgets</code></td><td><code>dashboard/index.hbs</code></td><td>dashboard context</td><td>custom dashboard cards (recent activity, system status, weather, queue depth, …)</td></tr>
+<tr><td><code>collection_edit_toolbar</code></td><td><code>collections/edit_form.hbs</code></td><td>edit-form context (<code>document</code>, <code>collection</code>, <code>user</code>)</td><td>extra toolbar actions on collection edit pages (e.g., a “Preview” button)</td></tr>
+<tr><td><code>collection_edit_sidebar</code></td><td><code>collections/edit_sidebar.hbs</code></td><td>edit-form context</td><td>extra sidebar panels on collection edit pages (related items, audit log, custom metadata)</td></tr>
+<tr><td><code>sidebar_bottom</code></td><td><code>layout/sidebar.hbs</code></td><td>nav context</td><td>extra navigation links pinned to the bottom of the left sidebar</td></tr>
+<tr><td><code>login_extras</code></td><td><code>auth/login.hbs</code></td><td>minimal auth context</td><td>additional content on the login page (compliance notices, SSO links, banner messages)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="worked-example--dashboard-weather-widget"><a class="header" href="#worked-example--dashboard-weather-widget">Worked example — dashboard weather widget</a></h2>
+<p>Goal: add a weather card to the admin dashboard that shows the
+current temperature.</p>
+<p><strong>Step 1</strong>: drop a slot file at the matching path. Use
+<code>{{data "name"}}</code> to pull dynamic values from a Lua function
+registered below:</p>
+<pre><code class="language-hbs">{{!-- &lt;config_dir&gt;/templates/slots/dashboard_widgets/weather.hbs --}}
+&lt;div class="card"&gt;
+  &lt;div class="card__header"&gt;
+    &lt;span class="material-symbols-outlined"&gt;cloud&lt;/span&gt;
+    &lt;h3&gt;Weather&lt;/h3&gt;
+  &lt;/div&gt;
+  &lt;div class="card__body"&gt;
+    {{#with (data "weather_now")}}
+      &lt;p class="metric"&gt;{{temp}}°C, {{condition}}&lt;/p&gt;
+      &lt;p class="muted"&gt;{{location}} — updated {{updated_at}}&lt;/p&gt;
+    {{else}}
+      &lt;p class="muted"&gt;Weather data unavailable.&lt;/p&gt;
+    {{/with}}
+  &lt;/div&gt;
+&lt;/div&gt;
+</code></pre>
+<p><strong>Step 2</strong>: register the data function in <code>init.lua</code>:</p>
+<pre><code class="language-lua">-- &lt;config_dir&gt;/init.lua
+crap.template_data.register("weather_now", function(ctx)
+  -- ctx is the page render context. Return a table; {{#with (data ...)}}
+  -- binds it. Return nil to fall through to the {{else}} branch.
+  return {
+    temp = 22,
+    condition = "Sunny",
+    location = "Berlin",
+    updated_at = os.date("%H:%M"),
+  }
+end)
+</code></pre>
+<p>The function runs <strong>on demand</strong> — only when a page actually evaluates
+<code>{{data "weather_now"}}</code>. Pages without your widget pay no cost.</p>
+<p><strong>Step 3</strong>: restart crap-cms (Lua loads at startup). Open
+<code>/admin</code> — the card renders alongside any other dashboard widgets.</p>
+<p>For the full version with <code>crap.http.request</code>, env-var-keyed API
+auth, error handling, and caching, see
+<a href="../scenarios/04-dashboard-widget.html">Scenario 4: Dashboard widget</a>.</p>
+<h2 id="adding-a-slot-to-a-custom-template"><a class="header" href="#adding-a-slot-to-a-custom-template">Adding a slot to a custom template</a></h2>
+<p>If you’ve overridden a built-in template (<code>&lt;config_dir&gt;/templates/foo.hbs</code>),
+you can declare your own slots in it:</p>
+<pre><code class="language-hbs">{{!-- your overridden template --}}
+&lt;div class="my-page"&gt;
+  {{slot "my_page_extras" page="my-page"}}
+&lt;/div&gt;
+</code></pre>
+<p>Anyone (including future-you) can extend the page by dropping a file
+at <code>slots/my_page_extras/&lt;anything&gt;.hbs</code>. The hash param <code>page</code> is
+visible inside slot files as <code>{{page}}</code> for context-sensitive output.</p>
+<h2 id="when-not-to-use-a-slot"><a class="header" href="#when-not-to-use-a-slot">When NOT to use a slot</a></h2>
 <ul>
-<li><code>collection</code> — collection definition</li>
-<li><code>document</code> — document data (edit forms)</li>
-<li><code>docs</code> — document list (list views)</li>
-<li><code>fields</code> — field definitions</li>
-<li><code>global</code> — global definition (global edit pages)</li>
-<li><code>user</code> — authenticated user (if auth is configured)</li>
+<li><strong>Replacing a single value</strong> (site name, theme color) — use a
+config field with <code>{{crap.foo}}</code> rendering.</li>
+<li><strong>Replacing markup</strong> (the logo SVG, the meta-tags block) — use a
+partial drop at <code>templates/partials/&lt;name&gt;.hbs</code>.</li>
+<li><strong>Replacing a whole page template</strong> — drop the file at
+<code>templates/&lt;page&gt;.hbs</code>.</li>
 </ul>
+<p>Slots are specifically for <strong>additive insertions</strong> at named extension
+points. Reaching for one when you really want a replacement leads to
+contortions; reaching for a replacement when you want to add content
+alongside upstream’s defaults forces you to maintain a fork. See the
+<a href="../index.html#when-to-use-what">admin UI overview</a> for the full
+mechanism matrix.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../admin-ui/overview.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../admin-ui/scenarios/08-upgrade.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../admin-ui/template-context.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../admin-ui/guides/partials.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -267,11 +361,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../admin-ui/overview.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../admin-ui/scenarios/08-upgrade.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../admin-ui/template-context.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../admin-ui/guides/partials.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -291,13 +385,13 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

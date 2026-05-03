@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -286,9 +286,142 @@ crap-cms work -d --queues email         # email-only worker
 crap-cms work -d --queues heavy --concurrency 2  # heavy processing
 </code></pre>
 <h3 id="status--show-project-status"><a class="header" href="#status--show-project-status"><code>status</code> — Show project status</a></h3>
-<pre><code class="language-bash">crap-cms status
+<pre><code class="language-bash">crap-cms status [--check]
 </code></pre>
-<p>Prints collections (with row counts), globals, DB size, and migration status.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--check</code></td><td>Run best-practice health checks on configuration and project state</td></tr>
+</tbody>
+</table>
+</div>
+<p>Prints a comprehensive project overview:</p>
+<ul>
+<li><strong>Server config</strong> — ports, compression, rate limiting</li>
+<li><strong>Database</strong> — path, size (SQLite), or backend name (PostgreSQL)</li>
+<li><strong>Uploads</strong> — total size and file count</li>
+<li><strong>Locales</strong> — configured locales and fallback setting</li>
+<li><strong>Collections</strong> — row counts, trash counts (soft-deleted documents), and tags (auth, upload, versions, soft_delete)</li>
+<li><strong>Globals</strong> — registered global documents</li>
+<li><strong>Versioning</strong> — which collections have drafts enabled and max version limits</li>
+<li><strong>Access rules</strong> — read/create/update/delete functions per collection and global, with default deny/allow indicator</li>
+<li><strong>Hooks</strong> — which lifecycle hooks are wired and to which functions</li>
+<li><strong>Live events</strong> — event mode per target (metadata, full, disabled, or filter function)</li>
+<li><strong>Migrations</strong> — total, applied, pending</li>
+<li><strong>Jobs</strong> — defined, running, failed in last 24h</li>
+</ul>
+<h4 id="status---check"><a class="header" href="#status---check"><code>status --check</code></a></h4>
+<p>Runs a best-practice audit with 24 checks across four categories:</p>
+<p><strong>Security:</strong></p>
+<ul>
+<li>Auth secret too short or placeholder value</li>
+<li>Brute-force protection disabled</li>
+<li><code>default_deny = false</code> (collections publicly accessible)</li>
+<li>Collections without access rules</li>
+<li>gRPC rate limiting disabled with auth collections</li>
+<li>CORS wildcard origin with credentials</li>
+</ul>
+<p><strong>Performance:</strong></p>
+<ul>
+<li><code>max_depth &gt; 3</code> (N+1 query growth)</li>
+<li>Cache disabled with relationship fields</li>
+<li>Pool size too small or connection timeout too aggressive</li>
+<li>Response compression disabled</li>
+<li><code>pagination.max_limit &gt; 500</code></li>
+<li>Too many hooks or before_change hooks per collection</li>
+<li>Too many collections with <code>live_mode = "full"</code></li>
+</ul>
+<p><strong>Configuration:</strong></p>
+<ul>
+<li><code>dev_mode</code> enabled</li>
+<li><code>default_depth</code> exceeds <code>max_depth</code></li>
+<li>Email provider set to <code>"log"</code> with <code>verify_email</code> enabled</li>
+</ul>
+<p><strong>Operations:</strong></p>
+<ul>
+<li>Pending migrations</li>
+<li>Auth collection without soft_delete</li>
+<li>Upload collection without versioning</li>
+<li>Soft delete without retention policy</li>
+<li>Empty auth collection (0 users)</li>
+</ul>
+<pre><code class="language-bash">crap-cms status                # project overview
+crap-cms status --check        # overview + health audit
+</code></pre>
+<h3 id="bench--benchmark-hooks-queries-and-write-cycles"><a class="header" href="#bench--benchmark-hooks-queries-and-write-cycles"><code>bench</code> — Benchmark hooks, queries, and write cycles</a></h3>
+<p>Developer performance profiling tool. Measures hook execution time, query latency, and end-to-end write cycle duration.</p>
+<h4 id="bench-hooks"><a class="header" href="#bench-hooks"><code>bench hooks</code></a></h4>
+<pre><code class="language-bash">crap-cms bench hooks [-c &lt;COLLECTION&gt;] [-n &lt;ITERATIONS&gt;] [--hooks &lt;LIST&gt;] [--exclude &lt;LIST&gt;] [--all] [-d &lt;JSON&gt;]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--collection</code></td><td><code>-c</code></td><td>—</td><td>Filter to a specific collection</td></tr>
+<tr><td><code>--iterations</code></td><td><code>-n</code></td><td><code>10</code></td><td>Number of iterations per hook</td></tr>
+<tr><td><code>--hooks</code></td><td>—</td><td>—</td><td>Run only these hooks (comma-separated function refs)</td></tr>
+<tr><td><code>--exclude</code></td><td>—</td><td>—</td><td>Run all hooks except these (comma-separated)</td></tr>
+<tr><td><code>--all</code></td><td>—</td><td>—</td><td>Run all hooks (skip interactive selection)</td></tr>
+<tr><td><code>--data</code></td><td><code>-d</code></td><td>—</td><td>Input data as JSON object</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Safety model:</strong> Hooks may have external side effects (webhooks, API calls). By default, an interactive <code>MultiSelect</code> wizard lets you choose which hooks to benchmark. Use <code>--hooks</code> or <code>--all</code> for non-interactive use.</p>
+<p><strong>Data resolution:</strong> <code>--data</code> JSON &gt; existing document from DB &gt; synthetic fallback. Hook errors are caught and reported without stopping the benchmark.</p>
+<pre><code class="language-bash">crap-cms bench hooks                                    # interactive wizard
+crap-cms bench hooks --all                              # run all (with warning)
+crap-cms bench hooks --hooks hooks.auto_slug -n 20      # specific hook, 20 iterations
+crap-cms bench hooks -c posts --exclude hooks.send_webhook  # all posts hooks except one
+</code></pre>
+<h4 id="bench-queries"><a class="header" href="#bench-queries"><code>bench queries</code></a></h4>
+<pre><code class="language-bash">crap-cms bench queries [-c &lt;COLLECTION&gt;] [--explain] [-w &lt;JSON&gt;]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--collection</code></td><td><code>-c</code></td><td>—</td><td>Filter to a specific collection</td></tr>
+<tr><td><code>--explain</code></td><td>—</td><td>—</td><td>Show <code>EXPLAIN QUERY PLAN</code> output (SQLite only)</td></tr>
+<tr><td><code>--where</code></td><td><code>-w</code></td><td>—</td><td>JSON filter clause (same format as gRPC <code>where</code> parameter)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Read-only — no side effects, no confirmation needed. The <code>--where</code> filter uses the same JSON syntax as the gRPC API (e.g., <code>{"slug": {"equals": "my-post"}}</code>). Combined with <code>--explain</code>, this shows whether queries hit indexes.</p>
+<pre><code class="language-bash">crap-cms bench queries                                           # all collections
+crap-cms bench queries -c posts --explain                        # single collection with query plan
+crap-cms bench queries -c posts --where '{"status": "published"}' --explain  # filtered + plan
+</code></pre>
+<h4 id="bench-create"><a class="header" href="#bench-create"><code>bench create</code></a></h4>
+<pre><code class="language-bash">crap-cms bench create &lt;COLLECTION&gt; [-n &lt;ITERATIONS&gt;] [-d &lt;JSON&gt;] [--no-hooks] [-y]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--iterations</code></td><td><code>-n</code></td><td><code>5</code></td><td>Number of iterations</td></tr>
+<tr><td><code>--data</code></td><td><code>-d</code></td><td>—</td><td>Input data as JSON object</td></tr>
+<tr><td><code>--no-hooks</code></td><td>—</td><td>—</td><td>Skip hooks (measure pure validation + persist)</td></tr>
+<tr><td><code>--yes</code></td><td><code>-y</code></td><td>—</td><td>Skip confirmation prompt</td></tr>
+</tbody>
+</table>
+</div>
+<p>Runs the full service-layer create cycle (access check, validation, before-hooks, persist, after-hooks) inside a transaction that is rolled back after each iteration. <strong>No data is persisted.</strong></p>
+<p>When hooks are enabled and <code>-y</code> is not set, a confirmation prompt is shown because hooks may call external APIs. Unique fields are automatically randomized per iteration to avoid constraint violations.</p>
+<pre><code class="language-bash">crap-cms bench create posts                  # full cycle with confirmation
+crap-cms bench create posts -y               # skip confirmation
+crap-cms bench create posts --no-hooks       # pure validation + persist
+crap-cms bench create posts -y -n 20         # 20 iterations, no prompt
+crap-cms bench create posts -d '{"title": "test", "slug": "bench-test"}'  # custom data
+</code></pre>
 <h3 id="user--user-management"><a class="header" href="#user--user-management"><code>user</code> — User management</a></h3>
 <h4 id="user-create"><a class="header" href="#user-create"><code>user create</code></a></h4>
 <pre><code class="language-bash">crap-cms user create [-c &lt;COLLECTION&gt;] [-e &lt;EMAIL&gt;] [-p &lt;PASSWORD&gt;] [-f &lt;KEY=VALUE&gt;]...
@@ -382,7 +515,7 @@ crap-cms user unverify [-c &lt;COLLECTION&gt;] [-e &lt;EMAIL&gt;] [--id &lt;ID&g
 </tbody>
 </table>
 </div>
-<p>A 64-character auth secret is auto-generated and written to <code>crap.toml</code>.</p>
+<p>A 64-character auth secret is auto-generated and written to <code>crap.toml</code>. A <code>.mcp.json</code> file is also created for <a href="../mcp/overview.html">Claude Code</a> integration.</p>
 <pre><code class="language-bash">crap-cms init ./my-project
 </code></pre>
 <p>After scaffolding:</p>
@@ -710,8 +843,9 @@ crap-cms backup -o /tmp/backups -i
 <pre><code class="language-bash">crap-cms restore ./backups/backup-2026-03-07T10-00-00 -y
 crap-cms restore /tmp/backups/backup-2026-03-07T10-00-00 -i -y
 </code></pre>
-<h3 id="templates--list-and-extract-default-admin-templates"><a class="header" href="#templates--list-and-extract-default-admin-templates"><code>templates</code> — List and extract default admin templates</a></h3>
-<p>Extract the compiled-in admin templates and static files into your config directory for customization.</p>
+<h3 id="templates--manage-admin-template--static-customizations"><a class="header" href="#templates--manage-admin-template--static-customizations"><code>templates</code> — Manage admin template / static customizations</a></h3>
+<p>Extract the compiled-in admin templates and static files into your config directory for customization, then track drift between your customizations and upstream.</p>
+<p>Each extracted file gets a <code>crap-cms:source &lt;version&gt;</code> header (in the file’s native comment syntax) so <code>templates status</code> can report which version your customizations were extracted from.</p>
 <h4 id="templates-list"><a class="header" href="#templates-list"><code>templates list</code></a></h4>
 <pre><code class="language-bash">crap-cms templates list [-t &lt;TYPE&gt;] [-v]
 </code></pre>
@@ -753,6 +887,65 @@ crap-cms templates extract --all --type templates
 
 # Extract everything, overwriting existing
 crap-cms templates extract --all --force
+</code></pre>
+<h4 id="templates-status"><a class="header" href="#templates-status"><code>templates status</code></a></h4>
+<pre><code class="language-bash">crap-cms templates status
+</code></pre>
+<p>Reports the relationship between every customized file in <code>&lt;config_dir&gt;/{templates,static}/</code> and the upstream embedded default. Each file is classified as one of:</p>
+<ul>
+<li><code>✓ current</code> — extracted from the running version</li>
+<li><code>⚠ behind: extracted from &lt;ver&gt;</code> — older version, may be missing upstream fixes</li>
+<li><code>↑ ahead: extracted from &lt;ver&gt;</code> — newer than running (downgrade scenario)</li>
+<li><code>= pristine (matches upstream)</code> — extracted but never customized</li>
+<li><code>? no source header</code> — hand-written, or header was stripped</li>
+<li><code>? unparseable source header</code> — header found but version isn’t valid semver</li>
+<li><code>✗ orphaned</code> — file no longer exists in the embedded upstream</li>
+</ul>
+<h4 id="templates-diff"><a class="header" href="#templates-diff"><code>templates diff</code></a></h4>
+<pre><code class="language-bash">crap-cms templates diff &lt;PATH&gt;
+</code></pre>
+<p>Shows a unified diff between a customized file and its embedded default. The path is relative to the config dir (e.g. <code>templates/layout/base.hbs</code>, <code>static/styles.css</code>).</p>
+<pre><code class="language-bash">crap-cms templates diff templates/layout/base.hbs
+</code></pre>
+<h3 id="fmt--format-handlebars-templates"><a class="header" href="#fmt--format-handlebars-templates"><code>fmt</code> — Format Handlebars templates</a></h3>
+<p>Format <code>.hbs</code> files in place using the project’s built-in Handlebars formatter. Same role as <code>cargo fmt</code> for Rust or <code>biome check --write</code> for JS/CSS — keeps the templates’ style consistent.</p>
+<pre><code class="language-bash">crap-cms fmt [PATHS...] [--check] [--stdio]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>(none)</td><td>Format every <code>.hbs</code> under the given paths in place. Default scope is <code>templates/</code>.</td></tr>
+<tr><td><code>--check</code></td><td>Don’t write — exit non-zero if any file would change. CI gate.</td></tr>
+<tr><td><code>--stdio</code></td><td>Read from stdin, write the formatted result to stdout. Used by editor formatter integrations. Mutually exclusive with <code>--check</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-bash">crap-cms fmt                              # format all templates/
+crap-cms fmt templates/auth/              # one subtree
+crap-cms fmt templates/fields/text.hbs    # one file
+crap-cms fmt --check                      # CI: exit 1 if any file would change
+cat my.hbs | crap-cms fmt --stdio         # editor pipe
+</code></pre>
+<p>The formatter is idempotent (<code>fmt(fmt(x)) == fmt(x)</code>) and applies the rule set documented in the <a href="../admin-ui/guides/template-formatter.html">Admin UI: Template Formatter</a> page (block-helper indentation, attribute stacking, comment preservation, etc.).</p>
+<p><strong>Editor integration (Neovim + conform.nvim):</strong></p>
+<pre><code class="language-lua">-- ~/.config/nvim/lua/plugins/conform.lua
+opts = {
+  formatters_by_ft = { handlebars = { 'crap_cms' } },
+  formatters = {
+    crap_cms = {
+      command = 'crap-cms',
+      args = { 'fmt', '--stdio' },
+      stdin = true,
+    },
+  },
+},
+</code></pre>
+<p><strong>Pre-commit hook entry:</strong></p>
+<pre><code class="language-bash">echo "Running crap-cms fmt..."
+cargo run --quiet --bin crap-cms -- fmt --check
 </code></pre>
 <h3 id="jobs--manage-background-jobs"><a class="header" href="#jobs--manage-background-jobs"><code>jobs</code> — Manage background jobs</a></h3>
 <h4 id="jobs-list"><a class="header" href="#jobs-list"><code>jobs list</code></a></h4>
@@ -980,6 +1173,70 @@ crap-cms logs -n 50          # show last 50 lines
 crap-cms logs clear          # remove old rotated files
 </code></pre>
 <p>Log files are stored in <code>data/logs/</code> (or the path configured in <code>[logging] path</code>). Old files are automatically pruned on startup based on <code>max_files</code>. See <a href="../configuration/crap-toml.html">Configuration Reference</a> for all logging options.</p>
+<h3 id="update--manage-installed-versions"><a class="header" href="#update--manage-installed-versions"><code>update</code> — Manage installed versions</a></h3>
+<pre><code class="language-bash">crap-cms update [-y] [--force]
+crap-cms update &lt;SUBCOMMAND&gt;
+</code></pre>
+<p>Without a subcommand, checks for a newer release and installs + activates it (with confirmation prompt).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>-y</code>, <code>--yes</code></td><td>Skip confirmation prompts</td></tr>
+<tr><td><code>--force</code></td><td>Allow self-update even when the binary looks distro-managed</td></tr>
+</tbody>
+</table>
+</div>
+<h4 id="update-check"><a class="header" href="#update-check"><code>update check</code></a></h4>
+<pre><code class="language-bash">crap-cms update check
+</code></pre>
+<p>Compare current version to the latest GitHub release. Exit code 0 if up-to-date, 1 if newer is available.</p>
+<h4 id="update-list"><a class="header" href="#update-list"><code>update list</code></a></h4>
+<pre><code class="language-bash">crap-cms update list
+</code></pre>
+<p>List available release tags, marking installed versions and the active one.</p>
+<h4 id="update-install"><a class="header" href="#update-install"><code>update install</code></a></h4>
+<pre><code class="language-bash">crap-cms update install &lt;VERSION&gt; [--reinstall]
+</code></pre>
+<p>Download, verify (SHA256), and stage a version in the local store (<code>~/.local/share/crap-cms/versions/</code>). Does not activate — use <code>update use</code> to switch.</p>
+<h4 id="update-use"><a class="header" href="#update-use"><code>update use</code></a></h4>
+<pre><code class="language-bash">crap-cms update use &lt;VERSION&gt;
+</code></pre>
+<p>Switch the <code>current</code> symlink to the given installed version. Also auto-installs shell completions for the user’s login shell (bash, zsh, or fish) — see <code>update completions</code> for where files are written and how the zsh <code>$fpath</code> is probed.</p>
+<h4 id="update-uninstall"><a class="header" href="#update-uninstall"><code>update uninstall</code></a></h4>
+<pre><code class="language-bash">crap-cms update uninstall &lt;VERSION&gt;
+</code></pre>
+<p>Remove an installed version from the store. Refuses to uninstall the active version. If this removes the last installed version, auto-installed shell completion files are cleaned up too.</p>
+<h4 id="update-where"><a class="header" href="#update-where"><code>update where</code></a></h4>
+<pre><code class="language-bash">crap-cms update where
+</code></pre>
+<p>Print the resolved path of the currently active binary.</p>
+<h4 id="update-completions"><a class="header" href="#update-completions"><code>update completions</code></a></h4>
+<pre><code class="language-bash">crap-cms update completions &lt;SHELL&gt;
+crap-cms update completions &lt;SHELL&gt; --uninstall
+crap-cms update completions --uninstall
+</code></pre>
+<p>Generate shell completions (to stdout) or remove installed files. Supported shells: <code>bash</code>, <code>zsh</code>, <code>fish</code>, <code>elvish</code>, <code>powershell</code>.</p>
+<p>For bash, zsh, and fish, completions are also auto-installed after <code>update use</code> and bare <code>update</code>:</p>
+<ul>
+<li><strong>Zsh</strong>: the install directory is chosen by probing <code>$fpath</code> (<code>zsh -i -c 'print -l $fpath'</code>). If <code>~/.zfunc</code> is already on <code>$fpath</code>, the file goes there; otherwise the first user-owned directory on <code>$fpath</code> is used. If neither is available, the file is written to <code>~/.zfunc</code> and an activation hint (<code>fpath=(~/.zfunc $fpath)</code> before <code>compinit</code>) is shown on every install until it’s wired up.</li>
+<li><strong>Bash</strong>: installed under <code>$XDG_DATA_HOME/bash-completion/completions/crap-cms</code>. A hint is emitted if the <code>bash-completion</code> entry point isn’t present on the system.</li>
+<li><strong>Fish</strong>: installed under <code>$XDG_CONFIG_HOME/fish/completions/crap-cms.fish</code> — auto-loaded by fish.</li>
+</ul>
+<p><code>--uninstall</code> without a shell removes every auto-installed completion file. With a shell, it removes just that shell’s file. <code>update uninstall</code> of the last installed version also runs this cleanup automatically.</p>
+<pre><code class="language-bash">crap-cms update                          # install latest + activate
+crap-cms update -y                       # non-interactive
+crap-cms update check                    # check for updates
+crap-cms update list                     # list available versions
+crap-cms update install v0.1.0-alpha.7   # download + verify
+crap-cms update use v0.1.0-alpha.7       # switch to version
+crap-cms update uninstall v0.1.0-alpha.6 # remove old version
+crap-cms update where                    # print active binary path
+crap-cms update completions bash         # print bash completions
+eval "$(crap-cms update completions bash)"  # source directly
+</code></pre>
 <h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
 <div class="table-wrapper">
 <table>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Static Files - Crap CMS</title>
+        <title>Add a custom richtext node - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">Crap CMS</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
@@ -177,54 +177,273 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="static-files"><a class="header" href="#static-files">Static Files</a></h1>
-<p>Static files (CSS, JS, fonts, images) use the same overlay pattern as templates.</p>
-<h2 id="overlay-pattern"><a class="header" href="#overlay-pattern">Overlay Pattern</a></h2>
-<ol>
-<li><strong>Config directory</strong> — <code>&lt;config_dir&gt;/static/</code> is served via <code>tower_http::ServeDir</code></li>
-<li><strong>Compiled defaults</strong> — built into the binary via <code>include_dir!</code> macro</li>
-</ol>
-<p>If a file exists in both locations, the config directory version wins.</p>
-<h2 id="accessing-static-files"><a class="header" href="#accessing-static-files">Accessing Static Files</a></h2>
-<p>All static files are served under <code>/static/</code>:</p>
-<pre><code class="language-html">&lt;link rel="stylesheet" href="/static/styles.css"&gt;
-&lt;script type="module" src="/static/components/index.js"&gt;&lt;/script&gt;
-</code></pre>
-<h2 id="overriding-static-files"><a class="header" href="#overriding-static-files">Overriding Static Files</a></h2>
-<p>Place files in your config directory’s <code>static/</code> folder:</p>
-<pre><code>my-project/
-└── static/
-    └── css/
-        └── custom.css    # served at /static/css/custom.css
-</code></pre>
-<p>To override a built-in file (e.g., the main stylesheet or a JS component), use the same path:</p>
-<pre><code>my-project/
-└── static/
-    ├── styles.css                  # overrides the compiled-in stylesheet
-    └── components/
-        └── toast.js                # overrides just the toast component
-</code></pre>
-<h2 id="compiled-in-files"><a class="header" href="#compiled-in-files">Compiled-In Files</a></h2>
-<p>Default static files are compiled into the binary using the <code>include_dir!</code> macro. This means:</p>
+                        <h1 id="scenario-6-add-a-custom-richtext-node"><a class="header" href="#scenario-6-add-a-custom-richtext-node">Scenario 6: Add a custom richtext node</a></h1>
+<p><strong>Goal</strong>: add a new richtext node type (e.g., a “Call to Action”
+button or an <code>@mention</code> pill) that authors can insert inside any
+richtext field in any collection.</p>
+<p><strong>Difficulty</strong>: medium. ~30 minutes from scratch to a working
+custom node, with admin UI, validation, and HTML rendering.</p>
+<p><strong>You’ll touch</strong>: <code>init.lua</code> only — no new files, no Rust, no JS.
+Or run <code>crap-cms make node &lt;name&gt;</code> to scaffold the registration
+file.</p>
+<blockquote>
+<p>Looking to add a <strong>top-level custom field type</strong> (e.g. a rating
+column on a collection, with stars in the admin and integer
+storage)? See <a href="07-custom-field-type.html">Scenario 7: Add a custom field type</a>.
+That scenario covers per-field render templates via
+<code>admin.template</code> + <code>admin.extra</code> — first-class shipped support.</p>
+</blockquote>
+<h2 id="approach"><a class="header" href="#approach">Approach</a></h2>
+<p>Crap CMS lets you register <strong>custom richtext nodes</strong> from Lua via
+<code>crap.richtext.register_node</code>. A node is a typed insertion point
+inside the richtext document tree:</p>
 <ul>
-<li>The binary is self-contained — no external files needed for the default admin UI</li>
-<li><strong>After modifying compiled-in static files, you must run <code>cargo build</code></strong> for changes to take effect</li>
-<li>Config directory overrides don’t require rebuilding</li>
+<li><strong>Block-level</strong> (<code>inline = false</code>) — a full block, like a hero
+card or a CTA button row.</li>
+<li><strong>Inline</strong> (<code>inline = true</code>) — sits inside a paragraph, like an
+<code>@mention</code> pill or a custom badge.</li>
 </ul>
-<h2 id="mime-types"><a class="header" href="#mime-types">MIME Types</a></h2>
-<p>Content-Type headers are automatically detected from file extensions using the <code>mime_guess</code> crate.</p>
-<h2 id="technical-note"><a class="header" href="#technical-note">Technical Note</a></h2>
-<p>The embedded fallback handler uses <code>axum::http::Uri</code> extraction (not <code>axum::extract::Path</code>) because it runs as a <code>ServeDir</code> fallback service where no route parameters are defined.</p>
+<p>Each node carries its own typed attributes (text, number, select,
+date, etc.), full admin UI editing, validation, and a Lua render
+function that turns the node into HTML for output.</p>
+<p>The <code>example/init.lua</code> shipped in the repo defines two real custom
+nodes — a CTA button and an <code>@mention</code> pill — that you can copy as
+a starting template.</p>
+<h2 id="step-1--register-the-node"><a class="header" href="#step-1--register-the-node">Step 1 — register the node</a></h2>
+<p>Add to <code>&lt;config_dir&gt;/init.lua</code>:</p>
+<pre><code class="language-lua">-- Block-level: Call to Action button
+crap.richtext.register_node("cta", {
+  label = "Call to Action",
+  inline = false,
+  attrs = {
+    crap.fields.text({
+      name = "text",
+      required = true,
+      min_length = 2,
+      max_length = 80,
+      admin = {
+        label = "Button Text",
+        description = "The visible text on the button",
+      },
+    }),
+    crap.fields.text({
+      name = "url",
+      required = true,
+      admin = { label = "URL", placeholder = "https://..." },
+    }),
+    crap.fields.select({
+      name = "style",
+      admin = { label = "Style" },
+      options = {
+        { label = "Primary", value = "primary" },
+        { label = "Secondary", value = "secondary" },
+        { label = "Outline", value = "outline" },
+      },
+    }),
+    crap.fields.number({
+      name = "padding",
+      min = 0,
+      max = 100,
+      admin = { label = "Padding (px)", step = "1", width = "50%" },
+    }),
+  },
+  searchable_attrs = { "text" },
+  render = function(attrs)
+    local style = ""
+    if attrs.padding and attrs.padding ~= "" then
+      style = string.format(' style="padding: %spx 0"', tostring(attrs.padding))
+    end
+    return string.format(
+      '&lt;a href="%s" class="btn btn--%s"%s&gt;%s&lt;/a&gt;',
+      attrs.url or "#",
+      attrs.style or "primary",
+      style,
+      attrs.text or ""
+    )
+  end,
+})
+</code></pre>
+<p>What each spec field does:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Required</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>label</code></td><td>no</td><td>Display name in the richtext block picker. Defaults to the node name.</td></tr>
+<tr><td><code>inline</code></td><td>no</td><td><code>true</code> for inline nodes (mentions, badges); <code>false</code> (default) for block-level.</td></tr>
+<tr><td><code>attrs</code></td><td>no</td><td>Array of typed attributes via <code>crap.fields.text/number/select/date/email/json/code/textarea/radio/checkbox</code>. Restricted to scalar types — no nested arrays/blocks.</td></tr>
+<tr><td><code>searchable_attrs</code></td><td>no</td><td>Names of attrs whose values get indexed for full-text search. Must reference real attr names.</td></tr>
+<tr><td><code>render</code></td><td>no</td><td>Lua function <code>(attrs) -&gt; string</code> that turns the node into HTML. Return any HTML you want; remember to escape user input. <strong>If omitted, the node falls through to the <a href="#what-renders-without-a-render-function"><code>&lt;crap-node&gt;</code> passthrough</a> instead of returning HTML directly.</strong></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="two-ways-to-render-custom-node-output"><a class="header" href="#two-ways-to-render-custom-node-output">Two ways to render custom-node output</a></h2>
+<p>Custom richtext nodes have <strong>two output paths</strong>, and there’s no
+HBS-template equivalent — node output is programmatic.</p>
+<h3 id="path-a--lua-render-function-server-side-html"><a class="header" href="#path-a--lua-render-function-server-side-html">Path A — Lua <code>render</code> function (server-side HTML)</a></h3>
+<p>Provide a <code>render = function(attrs) ... end</code> in the spec. When the
+admin (or anything else) calls <code>crap.richtext.render(content)</code>, your
+function fires for every node of that type and its return value is
+spliced into the HTML output. This is the path used by the CTA
+example above.</p>
+<p>Best for:</p>
+<ul>
+<li>Pages that render the full HTML server-side (Markdown blogs,
+static sites, server-rendered pages backed by crap-cms).</li>
+<li>Cases where you want the <code>&lt;a class="btn"&gt;</code> (or whatever) to
+appear directly in the served HTML.</li>
+</ul>
+<h3 id="path-b--crap-node-passthrough-client-side-rendering"><a class="header" href="#path-b--crap-node-passthrough-client-side-rendering">Path B — <code>&lt;crap-node&gt;</code> passthrough (client-side rendering)</a></h3>
+<p>Omit <code>render</code> entirely. The renderer emits a placeholder element
+instead:</p>
+<pre><code class="language-html">&lt;crap-node data-type="cta" data-attrs='{"text":"Sign up","url":"/signup",...}'&gt;&lt;/crap-node&gt;
+</code></pre>
+<p>Your downstream consumer (a Web Component, a JS framework, a JSX
+component, an iOS app reading the JSON) picks up the
+<code>&lt;crap-node data-type="..."&gt;</code> element and renders it however it
+wants. The attrs are JSON-encoded into the <code>data-attrs</code> attribute.</p>
+<p>Best for:</p>
+<ul>
+<li>Single-page apps and React/Vue/Svelte frontends where the
+richtext is rendered by a frontend component, not the server.</li>
+<li>Cases where the render is environment-specific (different markup
+on iOS vs. web, dark mode adjustments at view time, A/B-tested
+variants, etc.).</li>
+<li>Mixed deployments: server-render the framing, let the client
+decide how to render the richtext nodes.</li>
+</ul>
+<p>You can register a node with <strong>just <code>attrs</code></strong> — admin-UI editing
+works fully (the form is auto-generated from the attrs spec), and
+the consuming side handles rendering:</p>
+<pre><code class="language-lua">crap.richtext.register_node("cta", {
+  label = "Call to Action",
+  attrs = {
+    crap.fields.text({ name = "text", required = true }),
+    crap.fields.text({ name = "url", required = true }),
+    crap.fields.select({ name = "style", options = { ... } }),
+  },
+  -- No render fn — output will be a &lt;crap-node&gt; passthrough.
+})
+</code></pre>
+<h3 id="what-renders-without-a-render-function"><a class="header" href="#what-renders-without-a-render-function">What renders <em>without</em> a render function</a></h3>
+<p>When the renderer encounters a custom node and no <code>render</code> is
+registered for it, output looks like:</p>
+<pre><code class="language-html">&lt;crap-node
+  data-type="cta"
+  data-attrs='{"text":"Sign up","url":"/signup","style":"primary"}'
+&gt;&lt;/crap-node&gt;
+</code></pre>
+<p>The consumer is responsible for transforming these elements into
+final HTML. The <code>data-attrs</code> is HTML-escaped JSON of the node’s
+attribute values.</p>
+<h3 id="why-no-hbs-template-path"><a class="header" href="#why-no-hbs-template-path">Why no HBS template path</a></h3>
+<p>Crap-cms doesn’t ship an HBS template renderer for custom richtext
+nodes. The two paths above (Lua function + JSON passthrough) cover
+both server-side and client-side rendering needs without
+introducing a third mechanism. If you specifically want HBS,
+you can call back into Handlebars from your Lua <code>render</code> function
+— but in practice the Lua <code>string.format</code> / <code>table.concat</code> style
+shown in the CTA example is sufficient for node-level HTML.</p>
+<h2 id="admin-form-rendering"><a class="header" href="#admin-form-rendering">Admin form rendering</a></h2>
+<p>The admin’s in-document editing form (the modal that pops up when
+you insert or edit a node) is <strong>auto-generated from the <code>attrs</code>
+spec</strong>. There’s no per-node admin template to override; the form
+is built dynamically by <code>&lt;crap-richtext&gt;</code> from the attr definitions.</p>
+<p>This is by design — node attrs are restricted to scalar types
+(text, number, select, etc.), so the auto-generated form is always
+a flat collection of standard <code>&lt;crap-*&gt;</code> field components. The
+consistency means every custom node gets the same UX as the
+built-in nodes.</p>
+<p>If you need a wholly different admin UI for a node (e.g., a custom
+visual picker, drag-and-drop sub-editor, etc.), you’d need to fork
+<code>&lt;crap-richtext&gt;</code> itself. For most “extra typed data on a
+content node” cases, the auto-form is exactly what you want.</p>
+<h2 id="step-2--restart"><a class="header" href="#step-2--restart">Step 2 — restart</a></h2>
+<p>Lua loads at startup. Restart crap-cms.</p>
+<h2 id="step-3--use-it"><a class="header" href="#step-3--use-it">Step 3 — use it</a></h2>
+<p>Open any collection with a richtext field (e.g., <code>posts.body</code>).
+Click the block-picker <code>+</code> button — your “Call to Action” entry
+appears alongside the built-in nodes (paragraph, heading,
+blockquote, etc.). Insert one; the admin renders an editable form
+for <code>text</code>, <code>url</code>, <code>style</code>, <code>padding</code> based on the <code>attrs</code> you
+declared.</p>
+<p>When the document is rendered (server-side, via the richtext field’s
+<code>{{render}}</code> helper), your <code>render</code> function fires for every CTA
+node and returns the HTML you specified.</p>
+<h2 id="inline-nodes"><a class="header" href="#inline-nodes">Inline nodes</a></h2>
+<p>For inline content (mentions, badges, custom small widgets), set
+<code>inline = true</code>:</p>
+<pre><code class="language-lua">crap.richtext.register_node("mention", {
+  label = "Mention",
+  inline = true,
+  attrs = {
+    crap.fields.text({ name = "name", required = true, admin = { label = "Name" } }),
+    crap.fields.text({ name = "user_id", admin = { label = "User ID" } }),
+  },
+  searchable_attrs = { "name" },
+  render = function(attrs)
+    return string.format('&lt;span class="mention"&gt;@%s&lt;/span&gt;', attrs.name or "?")
+  end,
+})
+</code></pre>
+<p>Inline nodes appear in the inline-formatting toolbar (next to bold,
+italic, link) instead of the block picker.</p>
+<h2 id="what-you-can-build-with-this"><a class="header" href="#what-you-can-build-with-this">What you can build with this</a></h2>
+<p>The block-shape is general enough to cover most “custom data with
+admin UI inside a document” needs:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Use case</th><th>Shape</th></tr>
+</thead>
+<tbody>
+<tr><td>Hero / banner</td><td>block-level node with text + image-URL + alignment select</td></tr>
+<tr><td>Embed (YouTube, Twitter)</td><td>block-level node with <code>url</code> text attr; render emits the embed iframe</td></tr>
+<tr><td>Pull quote</td><td>block-level node with <code>quote</code> textarea + <code>author</code> text</td></tr>
+<tr><td>Footnote</td><td>inline node with <code>note</code> textarea</td></tr>
+<tr><td>Mention</td><td>inline node with <code>user_id</code> lookup</td></tr>
+<tr><td>Glossary term</td><td>inline node with <code>term</code> text + <code>definition</code> textarea</td></tr>
+<tr><td>CTA / button</td><td>(the example above)</td></tr>
+<tr><td>Code playground</td><td>block-level node with <code>lang</code> select + <code>code</code> code attr</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>render</code> function gives you total control over output HTML, so
+you can wrap nodes in any markup your site theme needs.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<p>These are real today:</p>
+<ul>
+<li><strong>Attr types restricted to scalars.</strong> Allowed: <code>text</code>, <code>number</code>,
+<code>textarea</code>, <code>select</code>, <code>radio</code>, <code>checkbox</code>, <code>date</code>, <code>email</code>,
+<code>json</code>, <code>code</code>. Not allowed: nested <code>array</code>, nested <code>blocks</code>,
+<code>relationship</code>. (Use <code>json</code> if you need a structured blob.)</li>
+<li><strong>No live preview of the rendered HTML.</strong> The admin shows the
+attr-editing form; the rendered output is what end-users see on
+the public site. Test renders happen server-side at content
+fetch time.</li>
+<li><strong><code>searchable_attrs</code> must be top-level scalars.</strong> You can’t
+search into a nested JSON attr.</li>
+</ul>
+<h2 id="verifying"><a class="header" href="#verifying">Verifying</a></h2>
+<pre><code>$ crap-cms templates status
+  · init.lua  —  user-original (no upstream counterpart)
+</code></pre>
+<p>Custom-node registrations live entirely in <code>init.lua</code>. They’re
+user-original and never drift.</p>
+<p>The shipped example has the CTA + mention nodes working — see
+<a href="https://github.com/dkluhs/crap-cms/blob/main/example/init.lua"><code>example/init.lua</code></a>
+for the live reference.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../admin-ui/template-context.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../admin-ui/scenarios/05-custom-page.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../admin-ui/display-conditions.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../admin-ui/scenarios/07-custom-field-type.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -234,11 +453,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../admin-ui/template-context.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../admin-ui/scenarios/05-custom-page.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../admin-ui/display-conditions.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../admin-ui/scenarios/07-custom-field-type.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -258,13 +477,13 @@
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

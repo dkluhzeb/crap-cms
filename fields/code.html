@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +180,9 @@
                         <h1 id="code"><a class="header" href="#code">Code</a></h1>
 <p>Code editor field stored as a plain text string. Renders a CodeMirror 6 editor in the admin UI with syntax highlighting and language-aware features.</p>
 <h2 id="sqlite-storage"><a class="header" href="#sqlite-storage">SQLite Storage</a></h2>
-<p><code>TEXT</code> column containing the raw code string.</p>
+<p><code>TEXT</code> column containing the raw code string. When the optional editor-time
+language picker is enabled (see below), a companion <code>&lt;name&gt;_lang</code> TEXT column
+stores the editor’s per-document language pick.</p>
 <h2 id="definition"><a class="header" href="#definition">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.code({
     name = "metadata",
@@ -196,7 +198,8 @@
 <tr><th>Property</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>admin.language</code></td><td>string</td><td><code>"json"</code></td><td>Language mode for syntax highlighting.</td></tr>
+<tr><td><code>admin.language</code></td><td>string</td><td><code>"json"</code></td><td>Default language mode for syntax highlighting.</td></tr>
+<tr><td><code>admin.languages</code></td><td>string[]</td><td><code>[]</code></td><td>Optional allow-list. When non-empty, the form renders a language picker next to the editor and persists the choice per document in a <code>&lt;name&gt;_lang</code> companion column.</td></tr>
 </tbody>
 </table>
 </div>
@@ -216,6 +219,28 @@
 </tbody>
 </table>
 </div>
+<h2 id="per-document-language-picker"><a class="header" href="#per-document-language-picker">Per-document language picker</a></h2>
+<p>When the document being edited may contain code in different languages
+(e.g. an “examples” collection with one block holding JS and the next
+holding Python), set <code>admin.languages</code> to the allow-list of choices.
+The form then renders a small <code>&lt;select&gt;</code> next to the editor; changing it
+swaps the editor’s syntax highlighting and stores the pick in the
+companion column so it persists across edits.</p>
+<pre><code class="language-lua">crap.fields.code({
+    name = "snippet",
+    admin = {
+        language  = "javascript",                      -- initial / fallback
+        languages = { "javascript", "python", "html" }, -- editor-pickable list
+    },
+})
+</code></pre>
+<p>The companion column is named <code>&lt;field&gt;_lang</code> (e.g. <code>snippet_lang</code>) and is
+created automatically on the next migration. For code fields nested inside
+groups, the prefixed naming applies — <code>meta__snippet</code> gets a sibling
+<code>meta__snippet_lang</code>.</p>
+<p>When <code>admin.languages</code> is empty or absent, the language is fixed to
+<code>admin.language</code> and no picker, hidden input, or companion column is
+emitted.</p>
 <h2 id="admin-rendering"><a class="header" href="#admin-rendering">Admin Rendering</a></h2>
 <p>Renders as a CodeMirror 6 editor with line numbers, bracket matching, code folding, auto-completion, and search. Falls back to a plain <code>&lt;textarea&gt;</code> if the CodeMirror bundle is not loaded.</p>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
@@ -224,6 +249,9 @@
 <li>Supports <code>min_length</code> and <code>max_length</code> validation (applied to the raw string)</li>
 <li>The CodeMirror bundle (<code>static/codemirror.js</code>) is loaded via <code>&lt;script defer&gt;</code> in the admin layout</li>
 <li>To rebuild the bundle: <code>bash scripts/bundle-codemirror.sh</code></li>
+<li>The language picker (when enabled) is rendered inside the
+<code>&lt;crap-code&gt;</code> shadow root and styled by the same input tokens as the
+rest of the admin (<code>--input-bg</code>, <code>--input-border</code>, <code>--text-primary</code>).</li>
 </ul>
 
                     </main>

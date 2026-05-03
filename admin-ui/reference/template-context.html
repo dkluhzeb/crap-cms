@@ -1,0 +1,1425 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Template Context - Crap CMS</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for Crap CMS — a headless CMS in Rust with Lua hooks">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-094f01c0.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Crap CMS</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <!--
+  AUTO-GENERATED — do not edit by hand.
+  Source of truth: typed page-context structs in `src/admin/context/page/`.
+  Regenerate with: `UPDATE_SCHEMA_DOC=1 cargo test template_context_doc_is_in_sync`
+-->
+<h1 id="admin-template-context-reference"><a class="header" href="#admin-template-context-reference">Admin template context reference</a></h1>
+<p>Every admin page renders a typed Rust struct serialized to JSON, runs it through the optional <code>before_render</code> Lua hook, and hands it to Handlebars. This file lists every page, its <code>page.type</code> discriminant, the template it renders, and the fields the template can rely on.</p>
+<p>Field types use Rust-style notation: <code>string</code>, <code>integer</code>, <code>boolean</code>, <code>Vec&lt;T&gt;</code>, <code>Option&lt;T&gt;</code>. Composite leaves like <code>CrapMeta</code>, <code>NavData</code>, <code>FieldContext</code> link into the <a href="#shared-definitions">shared definitions</a> section at the bottom.</p>
+<h2 id="login-page"><a class="header" href="#login-page">Login page</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>auth_login</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/auth/login.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>error</code></strong> (Option<string>) <em>(optional)</em> — Error key (e.g., <code>"error_invalid_credentials"</code>) — present after a failed login post.</string></p>
+</li>
+<li>
+<p><strong><code>email</code></strong> (Option<string>) <em>(optional)</em> — Pre-fills the email field after a failed login.</string></p>
+</li>
+<li>
+<p><strong><code>collections</code></strong> (Vec&lt;<a href="#authcollection">AuthCollection</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>show_collection_picker</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>disable_local</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>show_forgot_password</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>success</code></strong> (Option<string>) <em>(optional)</em> — Whitelisted success-message key shown after redirect from logout / email verification / password reset. Always emitted (as <code>null</code> when absent) to preserve the original <code>Option</code>-as-null contract.</string></p>
+</li>
+</ul>
+<h2 id="mfa-challenge-page"><a class="header" href="#mfa-challenge-page">MFA challenge page</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>auth_mfa</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/auth/mfa.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>error</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+</ul>
+<h2 id="forgot-password-page"><a class="header" href="#forgot-password-page">Forgot password page</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>auth_forgot</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/auth/forgot_password.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>success</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>collections</code></strong> (Vec&lt;<a href="#authcollection">AuthCollection</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>show_collection_picker</code></strong> (boolean)</p>
+</li>
+</ul>
+<h2 id="reset-password-page"><a class="header" href="#reset-password-page">Reset password page</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>auth_reset</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/auth/reset_password.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>)</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>token</code></strong> (Option<string>) <em>(optional)</em> — Token from the URL — present only when valid. Absent when the link is bad / expired (in which case <code>error</code> is set instead).</string></p>
+</li>
+<li>
+<p><strong><code>error</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+</ul>
+<h2 id="error-pages-403--404--500"><a class="header" href="#error-pages-403--404--500">Error pages (403 / 404 / 500)</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>error_403 | error_404 | error_500</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/errors/{403,404,500}.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>message</code></strong> (string) — User-facing error message body.</p>
+</li>
+</ul>
+<h2 id="dashboard"><a class="header" href="#dashboard">Dashboard</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>dashboard</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/dashboard/index.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection_cards</code></strong> (Vec&lt;<a href="#collectioncard">CollectionCard</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>global_cards</code></strong> (Vec&lt;<a href="#globalcard">GlobalCard</a>&gt;)</p>
+</li>
+</ul>
+<h2 id="collection-list"><a class="header" href="#collection-list">Collection list</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_list</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/list.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collections</code></strong> (Vec&lt;<a href="#collectionentry">CollectionEntry</a>&gt;)</p>
+</li>
+</ul>
+<h2 id="collection-items-list"><a class="header" href="#collection-items-list">Collection items list</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_items</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/items.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>docs</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>pagination</code></strong> (<a href="#paginationcontext">PaginationContext</a>)</p>
+</li>
+<li>
+<p><strong><code>has_drafts</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_soft_delete</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>is_trash</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>search</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>sort</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>table_columns</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>column_options</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>filter_fields</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>active_filters</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>active_filter_count</code></strong> (integer)</p>
+</li>
+<li>
+<p><strong><code>title_sort_url</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>title_sorted_asc</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>title_sorted_desc</code></strong> (boolean)</p>
+</li>
+</ul>
+<h2 id="collection-edit-form"><a class="header" href="#collection-edit-form">Collection edit form</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_edit</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/edit.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>document</code></strong> (<a href="#documentref">DocumentRef</a>)</p>
+</li>
+<li>
+<p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>sidebar_fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>editing</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_drafts</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_versions</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>has_more_versions</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>restore_url_prefix</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>versions_url</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>document_title</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>ref_count</code></strong> (integer)</p>
+</li>
+<li>
+<p><strong><code>has_locales</code></strong> (boolean) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>current_locale</code></strong> (string) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>locales</code></strong> (Vec&lt;<a href="#localetemplateoption">LocaleTemplateOption</a>&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>upload</code></strong> (<a href="#uploadformcontext">UploadFormContext</a> | null) <em>(optional)</em> — Upload preview block — present only on upload collections.</p>
+</li>
+</ul>
+<h2 id="collection-create-form"><a class="header" href="#collection-create-form">Collection create form</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_create</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/edit.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>sidebar_fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>editing</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_drafts</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_locales</code></strong> (boolean) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>current_locale</code></strong> (string) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>locales</code></strong> (Vec&lt;<a href="#localetemplateoption">LocaleTemplateOption</a>&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>upload</code></strong> (<a href="#uploadformcontext">UploadFormContext</a> | null) <em>(optional)</em></p>
+</li>
+</ul>
+<h2 id="collection-form-error-re-render"><a class="header" href="#collection-form-error-re-render">Collection form-error re-render</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_edit | collection_create</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/edit.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>document</code></strong> (<a href="#documentref">DocumentRef</a> | null) <em>(optional)</em> — Document stub (with <code>id</code> only) on edit error; absent on create error.</p>
+</li>
+<li>
+<p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>sidebar_fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>editing</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_drafts</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>upload_hidden_fields</code></strong> (Option&lt;Vec<any>&gt;) <em>(optional)</em> — Hidden upload fields preserved from the submitted form (edit-mode upload errors only, so the user keeps their pending file metadata).</any></p>
+</li>
+</ul>
+<h2 id="collection-delete-confirmation"><a class="header" href="#collection-delete-confirmation">Collection delete confirmation</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_delete</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/delete.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>document_id</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>title_value</code></strong> (Option<string>) <em>(optional)</em> — Document title for display. <code>None</code> (serialized as <code>null</code>) when the collection has no title field or the read fell through.</string></p>
+</li>
+<li>
+<p><strong><code>ref_count</code></strong> (integer)</p>
+</li>
+</ul>
+<h2 id="collection-versions-list"><a class="header" href="#collection-versions-list">Collection versions list</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_versions</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/versions.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>document</code></strong> (<a href="#documentref">DocumentRef</a>)</p>
+</li>
+<li>
+<p><strong><code>pagination</code></strong> (<a href="#paginationcontext">PaginationContext</a>)</p>
+</li>
+<li>
+<p><strong><code>doc_title</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>restore_url_prefix</code></strong> (string)</p>
+</li>
+</ul>
+<h2 id="collection-restore-confirmation"><a class="header" href="#collection-restore-confirmation">Collection restore confirmation</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>collection_versions</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/collections/restore.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>collection</code></strong> (<a href="#collectioncontext">CollectionContext</a>)</p>
+</li>
+<li>
+<p><strong><code>document</code></strong> (<a href="#documentref">DocumentRef</a>)</p>
+</li>
+<li>
+<p><strong><code>version_number</code></strong> (any) — Version number being restored (from the version row’s <code>version</code> column).</p>
+</li>
+<li>
+<p><strong><code>missing_relations</code></strong> (Vec<any>) — IDs of relationship references whose targets no longer exist.</any></p>
+</li>
+<li>
+<p><strong><code>restore_url</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>back_url</code></strong> (string)</p>
+</li>
+</ul>
+<h2 id="global-edit-form"><a class="header" href="#global-edit-form">Global edit form</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>global_edit</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/globals/edit.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>global</code></strong> (<a href="#globalcontext">GlobalContext</a>)</p>
+</li>
+<li>
+<p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>sidebar_fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>has_drafts</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>has_versions</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>has_more_versions</code></strong> (boolean)</p>
+</li>
+<li>
+<p><strong><code>restore_url_prefix</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>versions_url</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>doc_status</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>has_locales</code></strong> (boolean) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>current_locale</code></strong> (string) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>locales</code></strong> (Vec&lt;<a href="#localetemplateoption">LocaleTemplateOption</a>&gt;) <em>(optional)</em></p>
+</li>
+</ul>
+<h2 id="global-form-error-re-render"><a class="header" href="#global-form-error-re-render">Global form-error re-render</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>global_edit</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/globals/edit.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>global</code></strong> (<a href="#globalcontext">GlobalContext</a>)</p>
+</li>
+<li>
+<p><strong><code>fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+<li>
+<p><strong><code>sidebar_fields</code></strong> (Vec&lt;<a href="#fieldcontext">FieldContext</a>&gt;)</p>
+</li>
+</ul>
+<h2 id="global-versions-list"><a class="header" href="#global-versions-list">Global versions list</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>global_versions</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/globals/versions.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>global</code></strong> (<a href="#globalcontext">GlobalContext</a>)</p>
+</li>
+<li>
+<p><strong><code>pagination</code></strong> (<a href="#paginationcontext">PaginationContext</a>)</p>
+</li>
+<li>
+<p><strong><code>versions</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>restore_url_prefix</code></strong> (string)</p>
+</li>
+</ul>
+<h2 id="global-restore-confirmation"><a class="header" href="#global-restore-confirmation">Global restore confirmation</a></h2>
+<ul>
+<li>
+<p><strong><code>page.type</code></strong>: <code>global_versions</code></p>
+</li>
+<li>
+<p><strong>Template</strong>: <code>templates/globals/restore.hbs</code></p>
+</li>
+<li>
+<p><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</p>
+</li>
+<li>
+<p><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>_locale</code></strong> (string) — Active UI translation locale.</p>
+</li>
+<li>
+<p><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></p>
+</li>
+<li>
+<p><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</p>
+</li>
+<li>
+<p><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</p>
+</li>
+<li>
+<p><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</p>
+</li>
+<li>
+<p><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></p>
+</li>
+<li>
+<p><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></p>
+</li>
+<li>
+<p><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></p>
+</li>
+<li>
+<p><strong><code>global</code></strong> (<a href="#globalcontext">GlobalContext</a>)</p>
+</li>
+<li>
+<p><strong><code>version_number</code></strong> (any)</p>
+</li>
+<li>
+<p><strong><code>missing_relations</code></strong> (Vec<any>)</any></p>
+</li>
+<li>
+<p><strong><code>restore_url</code></strong> (string)</p>
+</li>
+<li>
+<p><strong><code>back_url</code></strong> (string)</p>
+</li>
+</ul>
+<hr>
+<h2 id="shared-definitions"><a class="header" href="#shared-definitions">Shared definitions</a></h2>
+<p>Every page above flattens <a href="#basepagecontext">BasePageContext</a> (or <a href="#authbasepagecontext">AuthBasePageContext</a> for auth-flow pages) into its top-level fields. The base structs and their leaves are defined here once.</p>
+<h3 id="basepagecontext"><a class="header" href="#basepagecontext">BasePageContext</a></h3>
+<ul>
+<li><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</li>
+<li><strong><code>nav</code></strong> (<a href="#navdata">NavData</a>)</li>
+<li><strong><code>user</code></strong> (<a href="#usercontext">UserContext</a> | null) <em>(optional)</em></li>
+<li><strong><code>_locale</code></strong> (string) — Active UI translation locale.</li>
+<li><strong><code>available_locales</code></strong> (Vec<string>) — Available UI translation locales (for the locale picker).</string></li>
+<li><strong><code>title</code></strong> (string) — Page title — duplicated at top level for backward compat with the base layout that reads <code>{{title}}</code> directly. Templates that have migrated read <code>{{page.title}}</code> instead.</li>
+<li><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</li>
+<li><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Top-level breadcrumb mirror of <code>page.breadcrumbs</code>. The breadcrumb partial prefers <code>page.breadcrumbs</code> and falls back to this. Kept for backward compat with overridden templates.</li>
+<li><strong><code>has_editor_locales</code></strong> (Option<boolean>) <em>(optional)</em></boolean></li>
+<li><strong><code>editor_locale</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>editor_locales</code></strong> (Option&lt;Vec&lt;<a href="#editorlocaleoption">EditorLocaleOption</a>&gt;&gt;) <em>(optional)</em></li>
+</ul>
+<h3 id="authbasepagecontext"><a class="header" href="#authbasepagecontext">AuthBasePageContext</a></h3>
+<ul>
+<li><strong><code>crap</code></strong> (<a href="#crapmeta">CrapMeta</a>)</li>
+<li><strong><code>_locale</code></strong> (string)</li>
+<li><strong><code>available_locales</code></strong> (Vec<string>)</string></li>
+<li><strong><code>title</code></strong> (string)</li>
+<li><strong><code>page</code></strong> (<a href="#pagemeta">PageMeta</a>)</li>
+</ul>
+<h3 id="pagemeta"><a class="header" href="#pagemeta">PageMeta</a></h3>
+<ul>
+<li><strong><code>type</code></strong> (string) — Page-type discriminant. Serialized as a snake_case string literal so templates can branch with <code>{{#if (eq page.type "collection_edit")}}</code>.</li>
+<li><strong><code>title</code></strong> (string) — Page title or translation key.</li>
+<li><strong><code>title_name</code></strong> (Option<string>) <em>(optional)</em> — Optional interpolation param for <code>{{t page.title name=page.title_name}}</code>.</string></li>
+<li><strong><code>breadcrumbs</code></strong> (Vec&lt;<a href="#breadcrumb">Breadcrumb</a>&gt;) — Breadcrumb trail rendered by <code>partials/breadcrumb.hbs</code>.</li>
+</ul>
+<h3 id="crapmeta"><a class="header" href="#crapmeta">CrapMeta</a></h3>
+<ul>
+<li><strong><code>version</code></strong> (string) — Crate version (Cargo.toml <code>version</code>).</li>
+<li><strong><code>build_hash</code></strong> (string) — Build hash (set by build script from git).</li>
+<li><strong><code>dev_mode</code></strong> (boolean) — Whether admin dev-mode is enabled (per-request template reload, etc.).</li>
+<li><strong><code>auth_enabled</code></strong> (boolean) — Whether the system has any auth-enabled collections.</li>
+<li><strong><code>csp_nonce</code></strong> (string) — Per-request CSP nonce (empty string outside request scope).</li>
+<li><strong><code>site_name</code></strong> (string) — Branding string shown in the admin header wordmark and <code>&lt;title&gt;</code> tags. Defaults to <code>"Crap CMS"</code>; configurable via <code>[admin] site_name = "..."</code> in <code>crap.toml</code>.</li>
+</ul>
+<h3 id="navdata"><a class="header" href="#navdata">NavData</a></h3>
+<ul>
+<li><strong><code>collections</code></strong> (Vec&lt;<a href="#navcollection">NavCollection</a>&gt;)</li>
+<li><strong><code>globals</code></strong> (Vec&lt;<a href="#navglobal">NavGlobal</a>&gt;)</li>
+<li><strong><code>custom_pages</code></strong> (Vec&lt;<a href="#custompage">CustomPage</a>&gt;) — Filesystem-routed custom admin pages registered via <code>crap.pages.register</code>. Only entries with a <code>label</code> set appear here.</li>
+</ul>
+<h3 id="navcollection"><a class="header" href="#navcollection">NavCollection</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+<li><strong><code>is_auth</code></strong> (boolean)</li>
+<li><strong><code>is_upload</code></strong> (boolean)</li>
+</ul>
+<h3 id="navglobal"><a class="header" href="#navglobal">NavGlobal</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+</ul>
+<h3 id="usercontext"><a class="header" href="#usercontext">UserContext</a></h3>
+<ul>
+<li><strong><code>email</code></strong> (string)</li>
+<li><strong><code>id</code></strong> (string)</li>
+<li><strong><code>collection</code></strong> (string)</li>
+</ul>
+<h3 id="editorlocaleoption"><a class="header" href="#editorlocaleoption">EditorLocaleOption</a></h3>
+<ul>
+<li><strong><code>value</code></strong> (string)</li>
+<li><strong><code>label</code></strong> (string)</li>
+<li><strong><code>selected</code></strong> (boolean)</li>
+</ul>
+<h3 id="localetemplateoption"><a class="header" href="#localetemplateoption">LocaleTemplateOption</a></h3>
+<ul>
+<li><strong><code>value</code></strong> (string)</li>
+<li><strong><code>label</code></strong> (string)</li>
+<li><strong><code>selected</code></strong> (boolean)</li>
+</ul>
+<h3 id="breadcrumb"><a class="header" href="#breadcrumb">Breadcrumb</a></h3>
+<ul>
+<li><strong><code>label</code></strong> (string) — The text label to display for the breadcrumb.</li>
+<li><strong><code>url</code></strong> (Option<string>) <em>(optional)</em> — The optional URL to link to. If None, the breadcrumb is the current page.</string></li>
+<li><strong><code>label_name</code></strong> (Option<string>) <em>(optional)</em> — Optional interpolation param for <code>{{t label name=label_name}}</code>.</string></li>
+</ul>
+<h3 id="collectioncontext"><a class="header" href="#collectioncontext">CollectionContext</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+<li><strong><code>singular_name</code></strong> (string)</li>
+<li><strong><code>title_field</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>timestamps</code></strong> (boolean)</li>
+<li><strong><code>is_auth</code></strong> (boolean)</li>
+<li><strong><code>is_upload</code></strong> (boolean)</li>
+<li><strong><code>has_drafts</code></strong> (boolean)</li>
+<li><strong><code>has_versions</code></strong> (boolean)</li>
+<li><strong><code>soft_delete</code></strong> (boolean)</li>
+<li><strong><code>can_permanently_delete</code></strong> (boolean)</li>
+<li><strong><code>admin</code></strong> (<a href="#adminmeta">AdminMeta</a>)</li>
+<li><strong><code>upload</code></strong> (<a href="#uploadmeta">UploadMeta</a> | null) <em>(optional)</em></li>
+<li><strong><code>versions</code></strong> (<a href="#versionsmeta">VersionsMeta</a> | null) <em>(optional)</em></li>
+<li><strong><code>auth</code></strong> (<a href="#authmeta">AuthMeta</a> | null) <em>(optional)</em></li>
+<li><strong><code>fields_meta</code></strong> (Vec&lt;<a href="#fieldmeta">FieldMeta</a>&gt;)</li>
+</ul>
+<h3 id="globalcontext"><a class="header" href="#globalcontext">GlobalContext</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+<li><strong><code>has_drafts</code></strong> (boolean)</li>
+<li><strong><code>has_versions</code></strong> (boolean)</li>
+<li><strong><code>versions</code></strong> (<a href="#versionsmeta">VersionsMeta</a> | null) <em>(optional)</em></li>
+<li><strong><code>fields_meta</code></strong> (Vec&lt;<a href="#fieldmeta">FieldMeta</a>&gt;)</li>
+</ul>
+<h3 id="documentref"><a class="header" href="#documentref">DocumentRef</a></h3>
+<ul>
+<li><strong><code>id</code></strong> (string)</li>
+<li><strong><code>created_at</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>updated_at</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>status</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>data</code></strong> (Option<object>) <em>(optional)</em></object></li>
+</ul>
+<h3 id="paginationcontext"><a class="header" href="#paginationcontext">PaginationContext</a></h3>
+<ul>
+<li><strong><code>per_page</code></strong> (integer)</li>
+<li><strong><code>total</code></strong> (integer)</li>
+<li><strong><code>has_prev</code></strong> (boolean)</li>
+<li><strong><code>has_next</code></strong> (boolean)</li>
+<li><strong><code>prev_url</code></strong> (string)</li>
+<li><strong><code>next_url</code></strong> (string)</li>
+<li><strong><code>page</code></strong> (Option<integer>) <em>(optional)</em> — Page-mode only — current page number (1-indexed).</integer></li>
+<li><strong><code>total_pages</code></strong> (Option<integer>) <em>(optional)</em> — Page-mode only — total page count.</integer></li>
+</ul>
+<h3 id="fieldcontext"><a class="header" href="#fieldcontext">FieldContext</a></h3>
+<p><em>(No fields.)</em></p>
+<h3 id="authcollection"><a class="header" href="#authcollection">AuthCollection</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+</ul>
+<h3 id="collectionentry"><a class="header" href="#collectionentry">CollectionEntry</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+<li><strong><code>field_count</code></strong> (integer)</li>
+</ul>
+<h3 id="collectioncard"><a class="header" href="#collectioncard">CollectionCard</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+<li><strong><code>singular_name</code></strong> (string)</li>
+<li><strong><code>count</code></strong> (integer)</li>
+<li><strong><code>last_updated</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>is_auth</code></strong> (boolean)</li>
+<li><strong><code>is_upload</code></strong> (boolean)</li>
+<li><strong><code>has_versions</code></strong> (boolean)</li>
+</ul>
+<h3 id="globalcard"><a class="header" href="#globalcard">GlobalCard</a></h3>
+<ul>
+<li><strong><code>slug</code></strong> (string)</li>
+<li><strong><code>display_name</code></strong> (string)</li>
+<li><strong><code>last_updated</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>has_versions</code></strong> (boolean)</li>
+</ul>
+<h3 id="uploadformcontext"><a class="header" href="#uploadformcontext">UploadFormContext</a></h3>
+<ul>
+<li><strong><code>accept</code></strong> (Option<string>) <em>(optional)</em> — Comma-joined accept list for the file input — emitted only when the collection declares allowed mime types.</string></li>
+<li><strong><code>focal_x</code></strong> (Option<number>) <em>(optional)</em></number></li>
+<li><strong><code>focal_y</code></strong> (Option<number>) <em>(optional)</em></number></li>
+<li><strong><code>preview</code></strong> (Option<string>) <em>(optional)</em> — Image preview URL when the file is an image.</string></li>
+<li><strong><code>info</code></strong> (<a href="#uploadinfo">UploadInfo</a> | null) <em>(optional)</em> — Filename + dimensions/filesize info pill.</li>
+</ul>
+<h3 id="uploadinfo"><a class="header" href="#uploadinfo">UploadInfo</a></h3>
+<ul>
+<li><strong><code>filename</code></strong> (string)</li>
+<li><strong><code>filesize_display</code></strong> (Option<string>) <em>(optional)</em></string></li>
+<li><strong><code>dimensions</code></strong> (Option<string>) <em>(optional)</em></string></li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../admin-ui/reference/atom-inventory.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../admin-ui/reference/css-variables.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../admin-ui/reference/atom-inventory.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../admin-ui/reference/css-variables.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

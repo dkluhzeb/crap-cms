@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Overview - Crap CMS</title>
+        <title>Migrating From Old Layout - Crap CMS</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-2459343d.css">
-        <link rel="stylesheet" href="../css/chrome-ae938929.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5fa5c493.js";
+            window.path_to_searchindex_js = "../../searchindex-d82968e4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-70c0d16d.js"></script>
+        <script src="../../toc-094f01c0.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">Crap CMS</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
@@ -177,149 +177,245 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="admin-ui"><a class="header" href="#admin-ui">Admin UI</a></h1>
-<p>Crap CMS includes a built-in admin UI served via Axum with Handlebars templates and HTMX.</p>
-<h2 id="access"><a class="header" href="#access">Access</a></h2>
-<p>Default: <a href="http://localhost:3000/admin">http://localhost:3000/admin</a></p>
-<p>Access to the admin panel is controlled by two gates:</p>
+                        <h1 id="migrating-from-the-old-overlay-layout"><a class="header" href="#migrating-from-the-old-overlay-layout">Migrating from the old overlay layout</a></h1>
+<p>In the run-up to 1.0, the admin UI customization surface was reshuffled
+into a stable, role-grouped layout. This page is the <strong>one-stop
+migration guide</strong> for any config dir built against the previous
+layout.</p>
+<blockquote>
+<p><strong>Breaking change — no compatibility aliases.</strong> Old paths now 404
+outright. Config-dir overlays at any old path silently stop serving
+after the upgrade. <strong>Migrate before you upgrade</strong>, using the recipe
+below.</p>
+</blockquote>
+<h2 id="tldr"><a class="header" href="#tldr">TL;DR</a></h2>
+<ul>
+<li><strong>Public components</strong> (<code>&lt;crap-toast&gt;</code>, <code>&lt;crap-richtext&gt;</code>, etc.):
+override paths are <strong>unchanged</strong>. If your config dir has
+<code>static/components/toast.js</code>, it still works exactly as before.</li>
+<li><strong>CSS files</strong>: moved from <code>static/*.css</code> flat into
+<code>static/styles/{base,parts,layout,themes}/</code>. Overlays at the old
+flat paths return 404.</li>
+<li><strong>Vendored JS</strong> (<code>htmx.js</code>, <code>codemirror.js</code>, <code>prosemirror.js</code>):
+moved to <code>static/vendor/</code>. Old paths 404.</li>
+<li><strong>Icons</strong> (<code>favicon.svg</code>, <code>crap-cms.svg</code>): moved to <code>static/icons/</code>.
+Old paths 404.</li>
+<li><strong>Plumbing JS modules</strong> (<code>h.js</code>, <code>css.js</code>, <code>i18n.js</code>, <code>util/</code>,
+others): moved to <code>static/components/_internal/</code>. Old paths 404.
+<strong>Most users should never have overridden these.</strong></li>
+<li><strong>Templates</strong>: not moved. Page-family folders (<code>auth/</code>,
+<code>collections/</code>, <code>dashboard/</code>, <code>errors/</code>, <code>globals/</code>) stay at the
+top level alongside <code>partials/</code>, <code>fields/</code>, <code>layout/</code>, <code>email/</code>.</li>
+</ul>
+<p>Run <code>crap-cms templates layout</code> against your config dir for an
+auto-generated migration recipe (<code>mkdir -p</code> + <code>git mv</code> lines plus
+flagged manual cleanups). Run it <strong>before</strong> upgrading: once you’re
+on alpha.8, overlays at the old paths simply stop serving and the
+admin falls back to the embedded defaults without a warning.</p>
+<h2 id="why-the-change"><a class="header" href="#why-the-change">Why the change</a></h2>
+<p>Five problems with the old layout, in roughly the order users hit
+them:</p>
 <ol>
-<li><strong><code>require_auth</code></strong> (default: <code>true</code>) — when no auth collection exists, the admin shows a “Setup Required” page (HTTP 503) instead of being open. Set <code>require_auth = false</code> in <code>[admin]</code> for fully open dev mode.</li>
-<li><strong><code>access</code></strong> (optional Lua function ref) — checked after successful authentication. Gates which authenticated users can access the admin panel. Return <code>true</code> to allow, <code>false</code>/<code>nil</code> to show “Access Denied” (HTTP 403).</li>
+<li><strong>Visual clutter at the static root.</strong> Fourteen sibling CSS files
+plus the entry stylesheet plus three vendor JS bundles plus two
+SVGs all rubbing shoulders. No directory hint to indicate which
+was which.</li>
+<li><strong>No segregation between override targets and plumbing.</strong> The
+<code>components/</code> folder mixed 33 public web components with 13
+internal helpers (<code>h.js</code>, <code>css.js</code>, <code>events.js</code>, <code>util/*</code>). New
+integrators couldn’t tell which files were safe to fork.</li>
+<li><strong>No “extend, don’t replace” anchor.</strong> Users wanting to add a thin
+subclass on top of a built-in component had no stable URL to import
+the upstream version from.</li>
+<li><strong>No user seam for new components.</strong> Adding a bespoke
+<code>&lt;my-widget&gt;</code> required a fork of <code>index.js</code> to get it imported.</li>
+<li><strong>No upgrade visibility.</strong> Once you’d customized files, there was
+no built-in tooling to tell you which ones had drifted from
+upstream or moved.</li>
 </ol>
-<pre><code class="language-toml">[admin]
-require_auth = true                     # block admin if no auth collection (default)
-access = "access.admin_panel"           # only allow users passing this function
+<p>The reshuffle solves all five with the smallest blast radius
+possible: public override paths stay unchanged, plumbing moves out of
+the way, and three new conventions land alongside.</p>
+<h2 id="whats-new"><a class="header" href="#whats-new">What’s new</a></h2>
+<h3 id="staticstyles--css-organized-into-a-system"><a class="header" href="#staticstyles--css-organized-into-a-system"><code>static/styles/</code> — CSS organized into a system</a></h3>
+<pre><code>static/styles/
+  main.css                   # entry — @imports the rest in cascade order
+  tokens.css                 # design tokens (CSS custom properties)
+  base/
+    normalize.css            # vendored normalize
+    fonts.css                # @font-face declarations
+    reset.css                # global resets, utilities, web-component plumbing
+  parts/
+    badges.css  breadcrumb.css  buttons.css  cards.css
+    forms.css   lists.css   pagination.css   tables.css
+  layout/
+    layout.css  edit-sidebar.css
+  themes/
+    default.css              # light/dark default tokens
+    # users drop themes-&lt;name&gt;.css here
 </code></pre>
-<pre><code class="language-lua">-- access/admin_panel.lua
-return function(ctx)
-    return ctx.user and ctx.user.role == "admin"
-end
+<p>The entry HTML reference is now <code>&lt;link href="/static/styles/main.css"&gt;</code>.
+The old URL <code>/static/styles.css</code> returns 404 — update overlays before
+upgrading.</p>
+<h3 id="staticvendor--bundled-third-party"><a class="header" href="#staticvendor--bundled-third-party"><code>static/vendor/</code> — bundled third-party</a></h3>
+<p><code>htmx.js</code>, <code>codemirror.js</code>, <code>prosemirror.js</code> moved here. The HBS
+layout <code>&lt;script&gt;</code> tags now reference <code>/static/vendor/&lt;name&gt;.js</code>. Old
+URLs (<code>/static/htmx.js</code>, etc.) return 404.</p>
+<h3 id="staticicons--svgs"><a class="header" href="#staticicons--svgs"><code>static/icons/</code> — SVGs</a></h3>
+<p><code>favicon.svg</code> and <code>crap-cms.svg</code> moved here. The favicon <code>&lt;link&gt;</code> now
+references <code>/static/icons/favicon.svg</code>. Old URLs return 404.</p>
+<h3 id="staticcomponents_internal--plumbing"><a class="header" href="#staticcomponents_internal--plumbing"><code>static/components/_internal/</code> — plumbing</a></h3>
+<p>The 13 internal helper modules moved into this reserved namespace:</p>
+<pre><code>static/components/_internal/
+  css.js       global.js    groups.js
+  h.js         i18n.js      picker-base.js
+  util/
+    cookies.js  discover.js  htmx.js
+    index.js    json.js      toast.js
 </code></pre>
-<p>When auth collections are configured and no <code>access</code> function is set, any authenticated user can access the admin.</p>
-<p><strong>Security features:</strong></p>
-<ul>
-<li><strong>Content-Security-Policy</strong> header with configurable per-directive source lists (see <code>[admin.csp]</code>)</li>
-<li>CSRF protection on all forms and HTMX requests (double-submit cookie pattern)</li>
-<li><code>Secure</code> flag on session cookies in production (<code>dev_mode = false</code>)</li>
-<li>Rate limiting on login (configurable max attempts and lockout duration)</li>
-<li><code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, <code>Referrer-Policy</code>, <code>Permissions-Policy</code> headers</li>
-</ul>
-<h2 id="technology"><a class="header" href="#technology">Technology</a></h2>
-<ul>
-<li><strong>Axum</strong> web framework for routing and middleware</li>
-<li><strong>Handlebars</strong> templates with partial inheritance</li>
-<li><strong>HTMX</strong> for dynamic page updates without JavaScript frameworks</li>
-<li><strong>Plain CSS</strong> with custom properties (no preprocessor, no build step)</li>
-<li><strong>Web Components</strong> with Shadow DOM (<code>&lt;crap-toast&gt;</code>, <code>&lt;crap-confirm&gt;</code>)</li>
-</ul>
-<h2 id="routes"><a class="header" href="#routes">Routes</a></h2>
+<p>The leading underscore marks the namespace as <strong>framework-reserved</strong>.
+Don’t override these unless you know exactly what you’re doing — they
+have no stability contract. Public components are unaffected.</p>
+<h3 id="adding-behavior-without-replacing--capture-phase-event-listeners"><a class="header" href="#adding-behavior-without-replacing--capture-phase-event-listeners">Adding behavior without replacing — capture-phase event listeners</a></h3>
+<p>Most singletons (<code>&lt;crap-toast&gt;</code>, <code>&lt;crap-drawer&gt;</code>, <code>&lt;crap-confirm-dialog&gt;</code>,
+etc.) are dispatch-discovered: code anywhere on the page fires a
+<code>CustomEvent</code> and the singleton picks it up. To add behavior without
+replacing the component, listen for the same event in the capture
+phase and let it continue:</p>
+<pre><code class="language-js">// &lt;config_dir&gt;/static/components/custom.js
+document.addEventListener('crap:toast-request', (e) =&gt; {
+  fetch('/api/audit', {
+    method: 'POST',
+    body: JSON.stringify({ message: e.detail.message }),
+  });
+  // No stopPropagation() — upstream's &lt;crap-toast&gt; still gets the
+  // event and shows the toast normally. Strictly additive.
+}, true /* capture phase */);
+</code></pre>
+<p>This is <strong>strictly additive</strong> — you don’t replace the toast component,
+so upstream improvements to the toast UI flow through automatically.
+Inheritance / subclassing isn’t required for the common “I want to
+add behavior X to component Y” goal.</p>
+<p>For the rarer case where you genuinely need to replace the component
+(e.g. swap out the entire rendering), drop a same-named file at
+<code>&lt;config_dir&gt;/static/components/&lt;name&gt;.js</code>. Run
+<code>crap-cms templates status</code> to see when upstream drifts so you can
+re-port your changes.</p>
+<h3 id="staticcomponentscustomjs--bespoke-component-seam"><a class="header" href="#staticcomponentscustomjs--bespoke-component-seam"><code>static/components/custom.js</code> — bespoke component seam</a></h3>
+<p>If <code>&lt;config_dir&gt;/static/components/custom.js</code> exists, the admin’s
+<code>index.js</code> auto-imports it after all built-in atoms register. Use it
+to register your own <code>&lt;my-widget&gt;</code> components without forking
+<code>index.js</code>:</p>
+<pre><code class="language-js">// &lt;config_dir&gt;/static/components/custom.js
+import './my-weather-card.js';
+import './my-status-pill.js';
+</code></pre>
+<p>When the file is absent, the auto-import is a silent no-op.</p>
+<h2 id="path-by-path-migration-map"><a class="header" href="#path-by-path-migration-map">Path-by-path migration map</a></h2>
+<p>The full move table. Every old path in this table returns 404 in
+alpha.8. Run <code>crap-cms templates layout</code> to get the exact <code>git mv</code>
+lines for the files you actually have.</p>
+<h3 id="static--css"><a class="header" href="#static--css">Static — CSS</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Route</th><th>Description</th></tr>
+<tr><th>Old path</th><th>New path</th></tr>
 </thead>
 <tbody>
-<tr><td><code>/health</code></td><td>Liveness check (public)</td></tr>
-<tr><td><code>/ready</code></td><td>Readiness check (public)</td></tr>
-<tr><td><code>/admin</code></td><td>Dashboard</td></tr>
-<tr><td><code>/admin/login</code></td><td>Login page (public)</td></tr>
-<tr><td><code>/admin/logout</code></td><td>Logout (public)</td></tr>
-<tr><td><code>/admin/forgot-password</code></td><td>Forgot password page (public)</td></tr>
-<tr><td><code>/admin/reset-password</code></td><td>Reset password page (public)</td></tr>
-<tr><td><code>/admin/verify-email</code></td><td>Email verification (public)</td></tr>
-<tr><td><code>/admin/collections</code></td><td>Collection list</td></tr>
-<tr><td><code>/admin/collections/{slug}</code></td><td>Collection items list</td></tr>
-<tr><td><code>/admin/collections/{slug}/create</code></td><td>Create form</td></tr>
-<tr><td><code>/admin/collections/{slug}/{id}</code></td><td>Edit form</td></tr>
-<tr><td><code>/admin/collections/{slug}/{id}/delete</code></td><td>Delete confirmation</td></tr>
-<tr><td><code>/admin/collections/{slug}/{id}/versions</code></td><td>Version history</td></tr>
-<tr><td><code>/admin/collections/{slug}/{id}/versions/{version_id}/restore</code></td><td>Restore a version</td></tr>
-<tr><td><code>/admin/collections/{slug}/validate</code></td><td>Inline validation (POST)</td></tr>
-<tr><td><code>/admin/collections/{slug}/evaluate-conditions</code></td><td>Display condition evaluation (POST)</td></tr>
-<tr><td><code>/admin/globals/{slug}</code></td><td>Global edit form</td></tr>
-<tr><td><code>/admin/globals/{slug}/validate</code></td><td>Global inline validation (POST)</td></tr>
-<tr><td><code>/admin/globals/{slug}/versions</code></td><td>Global version history</td></tr>
-<tr><td><code>/admin/globals/{slug}/versions/{version_id}/restore</code></td><td>Restore global version</td></tr>
-<tr><td><code>/admin/events</code></td><td>SSE live update stream</td></tr>
-<tr><td><code>/admin/api/search/{slug}</code></td><td>Relationship search endpoint</td></tr>
-<tr><td><code>/admin/api/session-refresh</code></td><td>Session token refresh (POST)</td></tr>
-<tr><td><code>/admin/api/locale</code></td><td>Save locale preference (POST)</td></tr>
-<tr><td><code>/admin/api/user-settings/{slug}</code></td><td>Save user settings (POST)</td></tr>
-<tr><td><code>/api/upload/{slug}</code></td><td>File upload endpoint (POST)</td></tr>
-<tr><td><code>/mcp</code></td><td>MCP HTTP endpoint (POST, if enabled)</td></tr>
-<tr><td><code>/static/*</code></td><td>Static assets (public)</td></tr>
-<tr><td><code>/uploads/{collection_slug}/{filename}</code></td><td>Uploaded files</td></tr>
+<tr><td><code>static/styles.css</code></td><td><code>static/styles/main.css</code></td></tr>
+<tr><td><code>static/normalize.css</code></td><td><code>static/styles/base/normalize.css</code></td></tr>
+<tr><td><code>static/fonts.css</code></td><td><code>static/styles/base/fonts.css</code></td></tr>
+<tr><td><code>static/badges.css</code></td><td><code>static/styles/parts/badges.css</code></td></tr>
+<tr><td><code>static/breadcrumb.css</code></td><td><code>static/styles/parts/breadcrumb.css</code></td></tr>
+<tr><td><code>static/buttons.css</code></td><td><code>static/styles/parts/buttons.css</code></td></tr>
+<tr><td><code>static/cards.css</code></td><td><code>static/styles/parts/cards.css</code></td></tr>
+<tr><td><code>static/forms.css</code></td><td><code>static/styles/parts/forms.css</code></td></tr>
+<tr><td><code>static/tables.css</code></td><td><code>static/styles/parts/tables.css</code></td></tr>
+<tr><td><code>static/layout.css</code></td><td><code>static/styles/layout/layout.css</code></td></tr>
+<tr><td><code>static/edit-sidebar.css</code></td><td><code>static/styles/layout/edit-sidebar.css</code></td></tr>
+<tr><td><code>static/themes.css</code></td><td><code>static/styles/themes/default.css</code></td></tr>
+<tr><td><code>static/lists.css</code> <em>and</em> <code>static/list-toolbar.css</code></td><td>merged → <code>static/styles/parts/lists.css</code></td></tr>
+<tr><td>(extracted from old <code>styles.css</code>)</td><td><code>static/styles/tokens.css</code></td></tr>
+<tr><td>(extracted from old <code>styles.css</code>)</td><td><code>static/styles/parts/pagination.css</code></td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="session-refresh-endpoint"><a class="header" href="#session-refresh-endpoint">Session Refresh Endpoint</a></h3>
-<p><code>POST /admin/api/session-refresh</code> reissues the admin session cookie when the user is about to be logged out by token expiry.</p>
-<ul>
-<li><strong>Triggered by the client.</strong> The <code>&lt;crap-session-guard&gt;</code> web component (<code>static/components/session-guard.js</code>) shows a pre-expiry warning toast and POSTs here when the operator clicks “Stay signed in”. It is <strong>not</strong> polled on a fixed interval — only fired in response to the warning.</li>
-<li><strong>Authentication required.</strong> The handler reads <code>Claims</code> from request extensions (populated by the admin auth middleware), so an unauthenticated request returns <code>401 Unauthorized</code> before any work is done. CSRF is enforced via the <code>X-CSRF-Token</code> header / <code>crap_csrf</code> cookie like the rest of the admin POST routes.</li>
-<li><strong>Re-validates the user before reissuing.</strong> It checks that the user still exists, is not <code>_locked</code>, and that the token’s <code>session_version</code> matches the current value in the auth collection (so a password change or session-version bump invalidates older tokens). Any failure returns <code>401</code>; a deleted user can’t silently keep refreshing.</li>
-<li><strong>Behavior on success.</strong> Issues a fresh JWT, sets <code>crap_session</code> (and the matching expiry cookie) with the same <code>SameSite</code>/<code>Secure</code> flags as login, and returns <code>204 No Content</code>. The body is empty — the client treats the new cookie as the success signal.</li>
-<li><strong>No explicit rate limit.</strong> The endpoint is not separately rate-limited, but it requires a valid existing session (so it can’t be abused unauthenticated) and the cost is one DB read plus a JWT sign.</li>
-</ul>
-<h2 id="versioning--drafts-workflow"><a class="header" href="#versioning--drafts-workflow">Versioning &amp; Drafts Workflow</a></h2>
-<p>For collections with <code>versions = { drafts = true }</code>, the admin UI provides a draft/publish workflow:</p>
-<p><strong>List view:</strong></p>
-<ul>
-<li>Shows all documents (both draft and published) with status badges</li>
-<li>A “Status” column displays <code>published</code> or <code>draft</code> per row</li>
-</ul>
-<p><strong>Create form:</strong></p>
-<ul>
-<li><strong>Publish</strong> (primary button) — creates as published, enforces required field validation</li>
-<li><strong>Save as Draft</strong> (secondary button) — creates as draft, skips required field validation</li>
-</ul>
-<p><strong>Edit form:</strong></p>
-<ul>
-<li><strong>Draft document:</strong> “Publish” (primary) + “Save Draft” (secondary) buttons</li>
-<li><strong>Published document:</strong> “Update” (primary) + “Save Draft” (secondary) + “Unpublish” (ghost) buttons</li>
-<li>Draft saves create a version snapshot only — the main (published) document is not modified until you publish</li>
-</ul>
-<p><strong>Sidebar:</strong></p>
-<ul>
-<li>Status badge showing current document status</li>
-<li>Version history panel listing recent versions with version number, status, date, and a “Restore” button</li>
-<li>Restoring a version writes the snapshot data back to the main table and creates a new version entry</li>
-</ul>
-<p>Collections without <code>versions</code> configured work exactly as before — a single “Create” or “Update” button with no status management.</p>
-<p>See <a href="../collections/versions.html">Versions &amp; Drafts</a> for the full configuration and behavioral reference.</p>
-<h2 id="css-architecture"><a class="header" href="#css-architecture">CSS Architecture</a></h2>
-<ul>
-<li>Custom properties in <code>:root</code> (colors, spacing, fonts, shadows)</li>
-<li>Separate files per concern: <code>layout.css</code>, <code>buttons.css</code>, <code>cards.css</code>, <code>forms.css</code>, <code>tables.css</code></li>
-<li>Composed via <code>@import</code> in <code>styles.css</code></li>
-<li>BEM-ish naming (<code>.block</code>, <code>.block__element</code>, <code>.block--modifier</code>)</li>
-<li>Geist font family (variable weight)</li>
-</ul>
-<h2 id="javascript"><a class="header" href="#javascript">JavaScript</a></h2>
-<ul>
-<li>No build step, no npm, no bundler — browser-native ES modules</li>
-<li><code>static/components/index.js</code> entry point loaded with <code>&lt;script type="module"&gt;</code></li>
-<li>Each feature is a separate module under <code>static/components/</code> (individually overridable)</li>
-<li>JSDoc annotations for all types</li>
-<li>Web Components (Shadow DOM, CSS variables for theming):
-<ul>
-<li><code>&lt;crap-toast&gt;</code> — toast notifications (listens for <code>htmx:afterRequest</code>, reads <code>X-Crap-Toast</code> header)</li>
-<li><code>&lt;crap-confirm&gt;</code> — confirmation dialogs (wraps forms, intercepts submit)</li>
-<li><code>&lt;crap-confirm-dialog&gt;</code> — standalone confirm for <code>hx-confirm</code> attributes (replaces native <code>window.confirm</code>)</li>
-<li><code>&lt;crap-richtext&gt;</code> — ProseMirror WYSIWYG editor</li>
-</ul>
-</li>
-</ul>
+<h3 id="static--vendor--icons"><a class="header" href="#static--vendor--icons">Static — vendor + icons</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Old path</th><th>New path</th></tr>
+</thead>
+<tbody>
+<tr><td><code>static/htmx.js</code></td><td><code>static/vendor/htmx.js</code></td></tr>
+<tr><td><code>static/codemirror.js</code></td><td><code>static/vendor/codemirror.js</code></td></tr>
+<tr><td><code>static/prosemirror.js</code></td><td><code>static/vendor/prosemirror.js</code></td></tr>
+<tr><td><code>static/favicon.svg</code></td><td><code>static/icons/favicon.svg</code></td></tr>
+<tr><td><code>static/crap-cms.svg</code></td><td><code>static/icons/crap-cms.svg</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="static--plumbing-js"><a class="header" href="#static--plumbing-js">Static — plumbing JS</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Old path</th><th>New path</th></tr>
+</thead>
+<tbody>
+<tr><td><code>static/components/css.js</code></td><td><code>static/components/_internal/css.js</code></td></tr>
+<tr><td><code>static/components/global.js</code></td><td><code>static/components/_internal/global.js</code></td></tr>
+<tr><td><code>static/components/groups.js</code></td><td><code>static/components/_internal/groups.js</code></td></tr>
+<tr><td><code>static/components/h.js</code></td><td><code>static/components/_internal/h.js</code></td></tr>
+<tr><td><code>static/components/i18n.js</code></td><td><code>static/components/_internal/i18n.js</code></td></tr>
+<tr><td><code>static/components/picker-base.js</code></td><td><code>static/components/_internal/picker-base.js</code></td></tr>
+<tr><td><code>static/components/util/cookies.js</code></td><td><code>static/components/_internal/util/cookies.js</code></td></tr>
+<tr><td><code>static/components/util/discover.js</code></td><td><code>static/components/_internal/util/discover.js</code></td></tr>
+<tr><td><code>static/components/util/htmx.js</code></td><td><code>static/components/_internal/util/htmx.js</code></td></tr>
+<tr><td><code>static/components/util/index.js</code></td><td><code>static/components/_internal/util/index.js</code></td></tr>
+<tr><td><code>static/components/util/json.js</code></td><td><code>static/components/_internal/util/json.js</code></td></tr>
+<tr><td><code>static/components/util/toast.js</code></td><td><code>static/components/_internal/util/toast.js</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="public-components--unchanged"><a class="header" href="#public-components--unchanged">Public components — unchanged</a></h3>
+<p>The 33 public web components (<code>&lt;crap-toast&gt;</code>, <code>&lt;crap-richtext&gt;</code>,
+<code>&lt;crap-relationship-search&gt;</code>, etc.) <strong>stay at</strong>
+<code>static/components/&lt;name&gt;.js</code>. Override paths are unchanged.</p>
+<h3 id="templates--unchanged"><a class="header" href="#templates--unchanged">Templates — unchanged</a></h3>
+<p>No template files moved. <code>templates/auth/</code>, <code>templates/collections/</code>,
+<code>templates/dashboard/</code>, etc. stay flat at the top level alongside
+<code>templates/partials/</code>, <code>templates/fields/</code>, <code>templates/layout/</code>,
+<code>templates/email/</code>.</p>
+<h2 id="auto-generated-migration-recipe"><a class="header" href="#auto-generated-migration-recipe">Auto-generated migration recipe</a></h2>
+<p>For any config dir built against the old layout:</p>
+<pre><code>$ crap-cms templates layout
+</code></pre>
+<p>The command walks your config dir, prints every old-layout file it
+finds with its new-layout target, and emits copy-pasteable shell
+commands (<code>mkdir -p</code>, <code>git mv</code>, plus <code>cat ... &gt; ...</code> for the merged
+<code>lists.css</code>/<code>list-toolbar.css</code> case). It also flags after-move
+verifications the tool can’t safely automate (<code>@import</code> paths inside
+moved CSS, relative <code>import</code> paths inside moved JS).</p>
+<p>The command is <strong>read-only</strong> — it describes; you transform.</p>
+<h2 id="why-no-compatibility-aliases"><a class="header" href="#why-no-compatibility-aliases">Why no compatibility aliases?</a></h2>
+<p>Every alias is a permanent maintenance tax: it pins a second public
+URL to the same asset, has to be tested across upgrades, and tends to
+outlive the deprecation it was meant to soften. The reshuffle is
+small, mechanical, and tooling-assisted (<code>crap-cms templates layout</code>
+gives you the exact <code>git mv</code> lines), so a one-shot migration is less
+costly than maintaining aliases through 1.0 and beyond. If you need a
+soft rollout, stage the upgrade in pre-prod with the migration
+applied, verify under the strict CSP, then bump production.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../live-updates/hooks.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../admin-ui/reference/routes.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../admin-ui/template-overlay.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../admin-ui/upgrade/drift-tooling.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -329,11 +425,11 @@ end
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../live-updates/hooks.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../admin-ui/reference/routes.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../admin-ui/template-overlay.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../admin-ui/upgrade/drift-tooling.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -353,13 +449,13 @@ end
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-c2a407aa.js"></script>
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-a0b12cfe.js"></script>
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 
