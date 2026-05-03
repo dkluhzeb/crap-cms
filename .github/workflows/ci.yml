@@ -7,6 +7,13 @@ on:
   pull_request:
     branches: [main]
 
+# Default to read-only on the GITHUB_TOKEN. CI doesn't push, comment, or
+# release; any step that needs more must elevate explicitly. Without this
+# block the token defaults to write-all on `push` events, so a compromised
+# third-party action could publish releases or push commits.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -25,7 +32,9 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin third-party actions by full commit SHA — tag/branch refs are
+      # mutable. Comment tracks the human-readable ref for bumps.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
         with:
           components: rustfmt, clippy
 
@@ -41,6 +50,8 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Install Biome
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Biome 2.x tags as `@biomejs/biome@X.Y.Z`; the legacy `cli/vX.Y.Z`
           # scheme that 1.x used has no 2.x assets, so the old URL 404s.
@@ -48,8 +59,18 @@ jobs:
           # which tracks Arch's `extra` repo so contributors lint locally
           # with the same version CI uses. Bump CI + schema together when
           # Arch picks up a newer release.
-          curl -fsSL "https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%402.3.15/biome-linux-x64" -o /usr/local/bin/biome
-          chmod +x /usr/local/bin/biome
+          #
+          # `gh attestation verify` checks the artifact's sigstore-based
+          # GitHub attestation (cryptographic provenance proving the bytes
+          # were produced by biome's release workflow under the
+          # `biomejs/biome` repo). Stronger than a SHA-pin: also catches
+          # an unauthorized publish under a different workflow identity,
+          # and bumps don't require re-pinning a hash.
+          BIOME_VERSION="2.3.15"
+          curl -fsSL "https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%40${BIOME_VERSION}/biome-linux-x64" \
+            -o /tmp/biome
+          gh attestation verify /tmp/biome --repo biomejs/biome
+          sudo install -m 755 /tmp/biome /usr/local/bin/biome
           biome --version
 
       - name: Biome (JS + CSS format + lint)
@@ -63,7 +84,11 @@ jobs:
 
       - name: Security audit (cargo audit)
         run: |
-          cargo install --locked cargo-audit --version "^0.22"
+          # Pin to exact version — caret ranges let crates.io serve
+          # arbitrary newer patches between CI runs without review.
+          # cargo-audit is itself the supply-chain checker; tightening
+          # its trust boundary matters more than for most tools.
+          cargo install --locked cargo-audit --version "=0.22.1"
           cargo audit
 
       - name: Run tests
@@ -103,7 +128,7 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
         with:
           components: clippy
 
@@ -139,7 +164,7 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable @ 2026-03-27
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -152,7 +177,7 @@ jobs:
       # chromiumoxide finds Chrome via PATH; setup-chrome puts the
       # `chrome` binary on PATH and prints its path for debug output.
       - name: Set up Chrome
-        uses: browser-actions/setup-chrome@v1
+        uses: browser-actions/setup-chrome@c785b87e244131f27c9f19c1a33e2ead956ab7ce # v1, 2025-01-25
         with:
           chrome-version: stable
 
