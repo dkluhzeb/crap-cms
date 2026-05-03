@@ -16,11 +16,15 @@ unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*' && \
 rm /tmp/protoc.zip
 """]
 
+# Windows GNU also needs NASM: rustls' default `aws-lc-rs` crypto
+# provider builds assembly via aws-lc-sys, which fails the Windows
+# target without NASM ("NASM command not found! Build cannot
+# continue."). Linux musl targets use GAS — no NASM required.
 [target.x86_64-pc-windows-gnu]
 pre-build = ["""
 PROTOC_VERSION=29.3 && \
 curl -sSL https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip -o /tmp/protoc.zip && \
-apt-get update && apt-get install -y unzip && \
+apt-get update && apt-get install -y unzip nasm && \
 unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*' && \
 rm /tmp/protoc.zip
 """]
