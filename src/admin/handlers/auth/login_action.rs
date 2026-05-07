@@ -212,12 +212,13 @@ fn send_mfa_code(params: MfaCodeParams, code: &str) {
 
     if let Err(e) = email::queue_email(
         &conn,
-        &params.user_email,
-        "Your verification code",
-        &html,
-        None,
-        params.email_config.queue_retries + 1,
-        &params.email_config.queue_name,
+        &email::EmailJobData {
+            to: params.user_email.clone(),
+            subject: "Your verification code".to_string(),
+            html,
+            text: None,
+        },
+        &params.email_config,
     ) {
         error!("Failed to queue MFA email: {}", e);
     }

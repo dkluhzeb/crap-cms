@@ -1,4 +1,47 @@
-use crate::core::collection::Hooks;
+//! Lua function references for collection/global lifecycle hooks.
+
+use serde::{Deserialize, Serialize};
+
+/// Lua function references for lifecycle hooks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Hooks {
+    /// Functions called before document validation.
+    #[serde(default)]
+    pub before_validate: Vec<String>,
+    /// Functions called before a document is changed (created or updated).
+    #[serde(default)]
+    pub before_change: Vec<String>,
+    /// Functions called after a document is changed.
+    #[serde(default)]
+    pub after_change: Vec<String>,
+    /// Functions called before a document is read.
+    #[serde(default)]
+    pub before_read: Vec<String>,
+    /// Functions called after a document is read.
+    #[serde(default)]
+    pub after_read: Vec<String>,
+    /// Functions called before a document is deleted.
+    #[serde(default)]
+    pub before_delete: Vec<String>,
+    /// Functions called after a document is deleted.
+    #[serde(default)]
+    pub after_delete: Vec<String>,
+    /// Functions called before an event is broadcast.
+    #[serde(default)]
+    pub before_broadcast: Vec<String>,
+}
+
+impl Hooks {
+    /// Create a new default hooks configuration.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a builder for hooks configuration.
+    pub fn builder() -> HooksBuilder {
+        HooksBuilder::new()
+    }
+}
 
 /// Builder for [`Hooks`]. Created via [`Hooks::builder`].
 #[derive(Default)]
@@ -20,41 +63,49 @@ impl HooksBuilder {
 
     pub fn before_validate(mut self, v: Vec<String>) -> Self {
         self.before_validate = v;
+
         self
     }
 
     pub fn before_change(mut self, v: Vec<String>) -> Self {
         self.before_change = v;
+
         self
     }
 
     pub fn after_change(mut self, v: Vec<String>) -> Self {
         self.after_change = v;
+
         self
     }
 
     pub fn before_read(mut self, v: Vec<String>) -> Self {
         self.before_read = v;
+
         self
     }
 
     pub fn after_read(mut self, v: Vec<String>) -> Self {
         self.after_read = v;
+
         self
     }
 
     pub fn before_delete(mut self, v: Vec<String>) -> Self {
         self.before_delete = v;
+
         self
     }
 
     pub fn after_delete(mut self, v: Vec<String>) -> Self {
         self.after_delete = v;
+
         self
     }
 
     pub fn before_broadcast(mut self, v: Vec<String>) -> Self {
         self.before_broadcast = v;
+
         self
     }
 

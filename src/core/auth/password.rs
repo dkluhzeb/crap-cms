@@ -8,7 +8,7 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 
-use crate::core::auth::HashedPassword;
+use crate::core::HashedPassword;
 
 /// Thread-safe shared reference to a password provider.
 pub type SharedPasswordProvider = Arc<dyn PasswordProvider>;

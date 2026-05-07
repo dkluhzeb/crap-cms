@@ -20,14 +20,17 @@ pub mod upload;
 pub mod validate;
 
 pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError};
-pub use collection::CollectionDefinition;
+pub use collection::{CollectionDefinition, GlobalDefinition};
 pub use condition::{ConditionExpr, ConditionOp, ConditionRow};
 pub use document::Document;
 pub use document_id::DocumentId;
 pub use field::{
-    BlockDefinition, FieldAdmin, FieldDefinition, FieldTab, FieldType, LocalizedString,
-    RelationshipConfig, SelectOption, validate_template_name,
+    BlockDefinition, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldTab, FieldType,
+    LocalizedString, McpFieldConfig, RelationshipConfig, SelectOption, validate_template_name,
 };
+pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
 pub use registry::{Registry, SharedRegistry};
 pub use req_context::ReqContext;
+pub use richtext::RichtextNodeDef;
 pub use slug::Slug;
+pub use validate::{FieldError, ValidationError};

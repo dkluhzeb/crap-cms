@@ -8,7 +8,7 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::CrapConfig,
-    core::email::{create_email_provider, queue_email, validate_no_crlf},
+    core::email::{EmailJobData, create_email_provider, queue_email, validate_no_crlf},
 };
 
 use super::super::lifecycle::crud::get_tx_conn;
@@ -46,9 +46,13 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
         Ok(true)
     })?;
 
-    // crap.email.queue(opts) — async, queued with retries
-    let default_retries = config.email.queue_retries;
-    let default_queue = config.email.queue_name.clone();
+    // crap.email.queue(opts) — async, queued with retries.
+    //
+    // We clone the email config into the closure so per-call `opts.retries`
+    // overrides flow through `EmailConfig::queue_retries` without changing
+    // the `queue_email` signature. `EmailConfig` is plain owned data, so the
+    // clone is cheap and per-call mutation can't leak back to the global.
+    let email_config = config.email.clone();
 
     let email_queue_fn = lua.create_function(move |lua, opts: Table| -> mlua::Result<String> {
         let to: String = opts.get("to")?;
@@ -58,11 +62,11 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
 
         validate_email_fields(&to, &subject)?;
 
-        let retries: u32 = opts
-            .get::<Option<u32>>("retries")
-            .ok()
-            .flatten()
-            .unwrap_or(default_retries);
+        // Per-call `retries` override; falls back to the captured config.
+        let mut config = email_config.clone();
+        if let Ok(Some(retries)) = opts.get::<Option<u32>>("retries") {
+            config.queue_retries = retries;
+        }
 
         let conn_ptr = get_tx_conn(lua)?;
         // SAFETY: pointer is valid for the hook call duration — see TxContext pattern in architecture docs
@@ -70,12 +74,13 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
 
         let job_id = queue_email(
             conn,
-            &to,
-            &subject,
-            &html,
-            text.as_deref(),
-            retries + 1, // max_attempts = retries + 1
-            &default_queue,
+            &EmailJobData {
+                to,
+                subject,
+                html,
+                text,
+            },
+            &config,
         )
         .map_err(|e| RuntimeError(format!("email queue error: {:#}", e)))?;
 

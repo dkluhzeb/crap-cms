@@ -258,11 +258,11 @@ mod tests {
     /// 301 redirects / signature-mismatch errors at first use with
     /// no startup hint. Must now bail with a clear diagnostic.
     #[test]
-    fn create_s3_storage_rejects_unparseable_region() {
+    fn create_s3_storage_rejects_unparsable_region() {
         let cfg = s3_config_with_region("eu-west-1-typo");
         let result = create_s3_storage(&cfg);
         let err = match result {
-            Ok(_) => panic!("expected error for unparseable region"),
+            Ok(_) => panic!("expected error for unparsable region"),
             Err(e) => e,
         };
         let msg = format!("{:#}", err);

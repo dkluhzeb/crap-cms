@@ -189,8 +189,8 @@ mod tests {
     use crate::core::{
         Document, DocumentId,
         upload::{
-            FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUploadBuilder,
-            SizeResultBuilder, storage::LocalStorage,
+            FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUpload,
+            SizeResult, storage::LocalStorage,
         },
     };
 
@@ -405,13 +405,17 @@ mod tests {
 
     #[test]
     fn inject_upload_metadata_basic() {
-        let processed =
-            ProcessedUploadBuilder::new("abc_photo.png", "/uploads/media/abc_photo.png")
-                .mime_type("image/png")
-                .filesize(12345)
-                .width(800)
-                .height(600)
-                .build();
+        let processed = ProcessedUpload {
+            filename: "abc_photo.png".to_string(),
+            mime_type: "image/png".to_string(),
+            filesize: 12345,
+            width: Some(800),
+            height: Some(600),
+            url: "/uploads/media/abc_photo.png".to_string(),
+            sizes: HashMap::new(),
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 
@@ -428,10 +432,17 @@ mod tests {
 
     #[test]
     fn inject_upload_metadata_no_dimensions() {
-        let processed = ProcessedUploadBuilder::new("doc.pdf", "/uploads/docs/doc.pdf")
-            .mime_type("application/pdf")
-            .filesize(999)
-            .build();
+        let processed = ProcessedUpload {
+            filename: "doc.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            filesize: 999,
+            width: None,
+            height: None,
+            url: "/uploads/docs/doc.pdf".to_string(),
+            sizes: HashMap::new(),
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 
@@ -447,20 +458,25 @@ mod tests {
         let mut sizes = HashMap::new();
         sizes.insert(
             "thumb".into(),
-            SizeResultBuilder::new("/uploads/m/t.png")
-                .width(100)
-                .height(100)
-                .formats(formats)
-                .build(),
+            SizeResult {
+                url: "/uploads/m/t.png".to_string(),
+                width: 100,
+                height: 100,
+                formats,
+            },
         );
 
-        let processed = ProcessedUploadBuilder::new("img.png", "/uploads/m/img.png")
-            .mime_type("image/png")
-            .filesize(5000)
-            .width(800)
-            .height(600)
-            .sizes(sizes)
-            .build();
+        let processed = ProcessedUpload {
+            filename: "img.png".to_string(),
+            mime_type: "image/png".to_string(),
+            filesize: 5000,
+            width: Some(800),
+            height: Some(600),
+            url: "/uploads/m/img.png".to_string(),
+            sizes,
+            queued_conversions: Vec::new(),
+            created_files: Vec::new(),
+        };
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 

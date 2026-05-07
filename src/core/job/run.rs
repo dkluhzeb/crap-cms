@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::job::{JobRunBuilder, JobStatus};
+use crate::core::job::JobStatus;
 
 /// A single execution instance of a job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,5 +30,194 @@ pub struct JobRun {
 impl JobRun {
     pub fn builder(id: impl Into<String>, slug: impl Into<String>) -> JobRunBuilder {
         JobRunBuilder::new(id, slug)
+    }
+}
+
+/// Builder for [`JobRun`].
+///
+/// `id` and `slug` are taken in `new()`. Sensible defaults are pre-populated.
+pub struct JobRunBuilder {
+    id: String,
+    slug: String,
+    status: JobStatus,
+    queue: String,
+    data: String,
+    result: Option<String>,
+    error: Option<String>,
+    attempt: u32,
+    max_attempts: u32,
+    scheduled_by: Option<String>,
+    created_at: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    heartbeat_at: Option<String>,
+    retry_after: Option<String>,
+}
+
+impl JobRunBuilder {
+    /// Create a new builder with the required `id` and `slug` fields.
+    pub fn new(id: impl Into<String>, slug: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            slug: slug.into(),
+            status: JobStatus::Pending,
+            queue: "default".to_string(),
+            data: "{}".to_string(),
+            result: None,
+            error: None,
+            attempt: 0,
+            max_attempts: 1,
+            scheduled_by: None,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            heartbeat_at: None,
+            retry_after: None,
+        }
+    }
+
+    pub fn status(mut self, s: JobStatus) -> Self {
+        self.status = s;
+
+        self
+    }
+
+    pub fn queue(mut self, q: impl Into<String>) -> Self {
+        self.queue = q.into();
+
+        self
+    }
+
+    pub fn data(mut self, d: impl Into<String>) -> Self {
+        self.data = d.into();
+
+        self
+    }
+
+    pub fn result(mut self, r: impl Into<String>) -> Self {
+        self.result = Some(r.into());
+
+        self
+    }
+
+    pub fn error(mut self, e: impl Into<String>) -> Self {
+        self.error = Some(e.into());
+
+        self
+    }
+
+    pub fn attempt(mut self, a: u32) -> Self {
+        self.attempt = a;
+
+        self
+    }
+
+    pub fn max_attempts(mut self, m: u32) -> Self {
+        self.max_attempts = m;
+
+        self
+    }
+
+    pub fn scheduled_by(mut self, s: impl Into<String>) -> Self {
+        self.scheduled_by = Some(s.into());
+
+        self
+    }
+
+    pub fn created_at(mut self, ts: impl Into<String>) -> Self {
+        self.created_at = Some(ts.into());
+
+        self
+    }
+
+    pub fn started_at(mut self, ts: impl Into<String>) -> Self {
+        self.started_at = Some(ts.into());
+
+        self
+    }
+
+    pub fn completed_at(mut self, ts: impl Into<String>) -> Self {
+        self.completed_at = Some(ts.into());
+
+        self
+    }
+
+    pub fn heartbeat_at(mut self, ts: impl Into<String>) -> Self {
+        self.heartbeat_at = Some(ts.into());
+
+        self
+    }
+
+    pub fn retry_after(mut self, ts: impl Into<String>) -> Self {
+        self.retry_after = Some(ts.into());
+
+        self
+    }
+
+    /// Build the final [`JobRun`].
+    pub fn build(self) -> JobRun {
+        JobRun {
+            id: self.id,
+            slug: self.slug,
+            status: self.status,
+            queue: self.queue,
+            data: self.data,
+            result: self.result,
+            error: self.error,
+            attempt: self.attempt,
+            max_attempts: self.max_attempts,
+            scheduled_by: self.scheduled_by,
+            created_at: self.created_at,
+            started_at: self.started_at,
+            completed_at: self.completed_at,
+            heartbeat_at: self.heartbeat_at,
+            retry_after: self.retry_after,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_job_run_with_defaults() {
+        let run = JobRunBuilder::new("run-1", "cleanup").build();
+        assert_eq!(run.id, "run-1");
+        assert_eq!(run.slug, "cleanup");
+        assert_eq!(run.status, JobStatus::Pending);
+        assert_eq!(run.queue, "default");
+        assert_eq!(run.data, "{}");
+        assert_eq!(run.attempt, 0);
+        assert_eq!(run.max_attempts, 1);
+        assert!(run.result.is_none());
+        assert!(run.error.is_none());
+        assert!(run.created_at.is_none());
+    }
+
+    #[test]
+    fn builds_job_run_with_all_fields() {
+        let run = JobRunBuilder::new("run-2", "report")
+            .status(JobStatus::Completed)
+            .queue("reports")
+            .data(r#"{"foo":"bar"}"#)
+            .result(r#"{"ok":true}"#)
+            .error("none")
+            .attempt(2)
+            .max_attempts(3)
+            .scheduled_by("cron")
+            .created_at("2024-01-01T00:00:00Z")
+            .started_at("2024-01-01T00:01:00Z")
+            .completed_at("2024-01-01T00:02:00Z")
+            .heartbeat_at("2024-01-01T00:01:30Z")
+            .build();
+        assert_eq!(run.status, JobStatus::Completed);
+        assert_eq!(run.queue, "reports");
+        assert_eq!(run.attempt, 2);
+        assert_eq!(run.max_attempts, 3);
+        assert_eq!(run.scheduled_by.as_deref(), Some("cron"));
+        assert_eq!(run.result.as_deref(), Some(r#"{"ok":true}"#));
+        assert_eq!(run.completed_at.as_deref(), Some("2024-01-01T00:02:00Z"));
+        assert_eq!(run.heartbeat_at.as_deref(), Some("2024-01-01T00:01:30Z"));
     }
 }

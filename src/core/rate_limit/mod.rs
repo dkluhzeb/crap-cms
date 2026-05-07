@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-pub use factory::create_rate_limit_backend;
+pub use factory::{RateLimitFactoryConfig, create_rate_limit_backend};
 pub use grpc::GrpcRateLimiter;
 pub use login::LoginRateLimiter;
 pub use memory::MemoryRateLimitBackend;

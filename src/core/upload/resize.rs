@@ -10,7 +10,7 @@ use tracing::warn;
 
 use crate::core::upload::{
     CollectionUpload, FormatQuality, FormatResult, ImageFit, ImageSize, QueuedConversion,
-    QueuedConversionBuilder, SharedStorage, SizeResult, SizeResultBuilder,
+    SharedStorage, SizeResult,
 };
 
 use super::{StorageBackend, process::CleanupGuard};
@@ -150,25 +150,33 @@ pub fn process_image_entry_with_storage(
     Ok(())
 }
 
+/// Inputs for [`save_resized_image`]. Grouped because the function takes
+/// six effectively-flat strings + the image; passing them positionally
+/// is a known footgun.
+pub(super) struct SaveResizedImageInput<'a> {
+    pub resized: &'a DynamicImage,
+    pub stem: &'a str,
+    pub ext: &'a str,
+    pub size_name: &'a str,
+    pub collection_slug: &'a str,
+    pub storage: &'a SharedStorage,
+}
+
 /// Save a resized image to storage and return `(size_key, size_url)`.
 pub(super) fn save_resized_image(
-    resized: &DynamicImage,
-    stem: &str,
-    ext: &str,
-    size_name: &str,
-    collection_slug: &str,
-    storage: &SharedStorage,
+    input: &SaveResizedImageInput<'_>,
     guard: &mut CleanupGuard,
 ) -> Result<(String, String)> {
-    let size_filename = format!("{}_{}.{}", stem, size_name, ext);
-    let size_key = format!("{}/{}", collection_slug, size_filename);
+    let size_filename = format!("{}_{}.{}", input.stem, input.size_name, input.ext);
+    let size_key = format!("{}/{}", input.collection_slug, size_filename);
 
     let mut buf = Cursor::new(Vec::new());
 
-    resized
+    input
+        .resized
         .write_to(
             &mut buf,
-            ImageFormat::from_extension(ext).unwrap_or(ImageFormat::Png),
+            ImageFormat::from_extension(input.ext).unwrap_or(ImageFormat::Png),
         )
         .with_context(|| format!("Failed to encode resized image: {}", size_key))?;
 
@@ -176,7 +184,8 @@ pub(super) fn save_resized_image(
         .first_or_octet_stream()
         .to_string();
 
-    storage
+    input
+        .storage
         .put(&size_key, &buf.into_inner(), &size_mime)
         .with_context(|| format!("Failed to save resized image: {}", size_key))?;
 
@@ -219,14 +228,14 @@ pub(super) fn process_format_variant(
         // the absolute filesystem path — this was backend-specific (returned
         // `None` for S3) and was rejected by `LocalStorage`'s post-hardening
         // path validator, producing persistent "Source image not found" errors.
-        queued.push(
-            QueuedConversionBuilder::new(ctx.size_key.to_string(), variant_key.clone())
-                .format(ctx.format_name)
-                .quality(ctx.opts.quality)
-                .url_column(format!("{}_{}_url", ctx.size_name, ctx.format_name))
-                .url_value(variant_url)
-                .build(),
-        );
+        queued.push(QueuedConversion {
+            source_path: ctx.size_key.to_string(),
+            target_path: variant_key.clone(),
+            format: ctx.format_name.to_string(),
+            quality: ctx.opts.quality,
+            url_column: format!("{}_{}_url", ctx.size_name, ctx.format_name),
+            url_value: variant_url,
+        });
     } else {
         let data = match ctx.format_name {
             "webp" => webp_to_bytes(ctx.resized, ctx.opts.quality),
@@ -278,12 +287,14 @@ pub(super) fn process_image_sizes(
         };
 
         let (size_key, size_url) = save_resized_image(
-            &resized,
-            stem,
-            ext,
-            &size_def.name,
-            collection_slug,
-            storage,
+            &SaveResizedImageInput {
+                resized: &resized,
+                stem,
+                ext,
+                size_name: &size_def.name,
+                collection_slug,
+                storage,
+            },
             guard,
         )?;
 
@@ -321,11 +332,12 @@ pub(super) fn process_image_sizes(
 
         sizes.insert(
             size_def.name.clone(),
-            SizeResultBuilder::new(size_url)
-                .width(resized.width())
-                .height(resized.height())
-                .formats(formats)
-                .build(),
+            SizeResult {
+                url: size_url,
+                width: resized.width(),
+                height: resized.height(),
+                formats,
+            },
         );
     }
 

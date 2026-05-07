@@ -8,7 +8,7 @@ use tracing::{error, warn};
 
 use crate::{
     config::{EmailConfig, ServerConfig},
-    core::email::{EmailRenderer, VerifyEmailContext, is_configured, queue_email},
+    core::email::{EmailJobData, EmailRenderer, VerifyEmailContext, is_configured, queue_email},
     db::{DbPool, query},
 };
 
@@ -73,12 +73,13 @@ pub fn send_verification_email(
 
         if let Err(e) = queue_email(
             &conn,
-            &user_email,
-            "Verify your email",
-            &html,
-            None,
-            email_config.queue_retries + 1,
-            &email_config.queue_name,
+            &EmailJobData {
+                to: user_email.clone(),
+                subject: "Verify your email".to_string(),
+                html,
+                text: None,
+            },
+            &email_config,
         ) {
             error!("Failed to queue verification email: {}", e);
         }

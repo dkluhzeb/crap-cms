@@ -3,10 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Supported field types. Each variant maps to a database column type (or join table for Array/Blocks/has-many).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
     /// Single-line plain text.
+    #[default]
     Text,
     /// Floating-point or integer number.
     Number,

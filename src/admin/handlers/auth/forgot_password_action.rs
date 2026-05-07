@@ -99,12 +99,13 @@ fn send_reset_email(params: ResetEmailParams) {
 
     if let Err(e) = email::queue_email(
         &conn,
-        &params.user_email,
-        "Reset your password",
-        &html,
-        None,
-        params.email_config.queue_retries + 1,
-        &params.email_config.queue_name,
+        &email::EmailJobData {
+            to: params.user_email.clone(),
+            subject: "Reset your password".to_string(),
+            html,
+            text: None,
+        },
+        &params.email_config,
     ) {
         error!("Failed to queue reset email: {}", e);
     }

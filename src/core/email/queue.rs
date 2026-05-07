@@ -6,7 +6,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::db::{DbConnection, query};
+use crate::{
+    config::EmailConfig,
+    db::{DbConnection, query},
+};
 
 use super::validation::validate_no_crlf;
 
@@ -26,41 +29,31 @@ pub struct EmailJobData {
 /// Queue an email for async delivery via the job system.
 ///
 /// The email will be processed by the scheduler with retries on failure.
-/// Returns the job run ID.
+/// `config` supplies the retry budget (`queue_retries + 1` total attempts)
+/// and the queue name. Returns the job run ID.
 pub fn queue_email(
     conn: &dyn DbConnection,
-    to: &str,
-    subject: &str,
-    html: &str,
-    text: Option<&str>,
-    max_attempts: u32,
-    queue: &str,
+    data: &EmailJobData,
+    config: &EmailConfig,
 ) -> Result<String> {
-    validate_no_crlf("to", to)?;
-    validate_no_crlf("subject", subject)?;
+    validate_no_crlf("to", &data.to)?;
+    validate_no_crlf("subject", &data.subject)?;
 
-    let data = EmailJobData {
-        to: to.to_string(),
-        subject: subject.to_string(),
-        html: html.to_string(),
-        text: text.map(|s| s.to_string()),
-    };
-
-    let data_json = serde_json::to_string(&data)?;
+    let data_json = serde_json::to_string(data)?;
 
     let job = query::jobs::insert_job(
         conn,
         SYSTEM_EMAIL_JOB,
         &data_json,
         "system",
-        max_attempts,
-        queue,
+        config.queue_retries + 1,
+        &config.queue_name,
     )?;
 
     tracing::debug!(
         "Queued email to {} (subject: \"{}\") as job {}",
-        to,
-        subject,
+        data.to,
+        data.subject,
         job.id
     );
 

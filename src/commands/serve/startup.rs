@@ -24,7 +24,9 @@ use crate::{
             SharedEventTransport, SharedInvalidationTransport, create_event_transport,
             create_invalidation_transport,
         },
-        rate_limit::{LoginRateLimiter, RateLimitBackend, create_rate_limit_backend},
+        rate_limit::{
+            LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
+        },
         upload::{create_storage, format_filesize},
     },
     db::{
@@ -291,11 +293,11 @@ fn create_rate_limiters(cfg: &CrapConfig) -> Result<RateLimiters> {
         &cfg.auth.rate_limit_redis_url
     };
 
-    let rl_backend = create_rate_limit_backend(
-        &cfg.auth.rate_limit_backend,
-        rl_redis_url,
-        &cfg.auth.rate_limit_prefix,
-    )?;
+    let rl_backend = create_rate_limit_backend(&RateLimitFactoryConfig {
+        backend: &cfg.auth.rate_limit_backend,
+        redis_url: rl_redis_url,
+        prefix: &cfg.auth.rate_limit_prefix,
+    })?;
 
     let login_limiter = Arc::new(LoginRateLimiter::with_backend(
         rl_backend.clone(),

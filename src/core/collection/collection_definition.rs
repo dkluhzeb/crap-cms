@@ -6,7 +6,7 @@ use crate::core::{
     FieldDefinition, Slug,
     collection::{
         Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveMode, LiveSetting,
-        McpConfig, VersionsConfig,
+        McpConfig, VersionsConfig, labels::resolve_label,
     },
     upload::CollectionUpload,
 };
@@ -107,44 +107,30 @@ impl CollectionDefinition {
 
     /// Get the display label (plural form, falls back to slug). Uses default resolution.
     pub fn display_name(&self) -> &str {
-        self.labels
-            .plural
-            .as_ref()
-            .map(|ls| ls.resolve_default())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&self.slug)
+        resolve_label(self.labels.plural.as_ref(), &self.slug, None)
     }
 
     /// Get the singular label (falls back to slug). Uses default resolution.
     pub fn singular_name(&self) -> &str {
-        self.labels
-            .singular
-            .as_ref()
-            .map(|ls| ls.resolve_default())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&self.slug)
+        resolve_label(self.labels.singular.as_ref(), &self.slug, None)
     }
 
     /// Get the display label resolved for a specific locale.
-    #[allow(dead_code)]
     pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        self.labels
-            .plural
-            .as_ref()
-            .map(|ls| ls.resolve(locale, default_locale))
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&self.slug)
+        resolve_label(
+            self.labels.plural.as_ref(),
+            &self.slug,
+            Some((locale, default_locale)),
+        )
     }
 
     /// Get the singular label resolved for a specific locale.
-    #[allow(dead_code)]
     pub fn singular_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        self.labels
-            .singular
-            .as_ref()
-            .map(|ls| ls.resolve(locale, default_locale))
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&self.slug)
+        resolve_label(
+            self.labels.singular.as_ref(),
+            &self.slug,
+            Some((locale, default_locale)),
+        )
     }
 
     /// Get the field name to use as item title in admin lists.
@@ -181,7 +167,7 @@ impl CollectionDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{field::LocalizedString, upload::CollectionUpload};
+    use crate::core::{LocalizedString, upload::CollectionUpload};
     use std::collections::HashMap;
 
     fn make_collection(
@@ -425,5 +411,151 @@ mod tests {
         col.soft_delete_retention = Some("30d".to_string());
         assert!(col.has_soft_delete());
         assert_eq!(col.soft_delete_retention.as_deref(), Some("30d"));
+    }
+}
+
+/// Builder for [`CollectionDefinition`].
+///
+/// `slug` is taken in `new()`. All other fields default via
+/// [`CollectionDefinition::default()`].
+pub struct CollectionDefinitionBuilder {
+    inner: CollectionDefinition,
+}
+
+impl CollectionDefinitionBuilder {
+    /// Create a new `CollectionDefinitionBuilder` with the given slug.
+    pub fn new(slug: impl Into<Slug>) -> Self {
+        Self {
+            inner: CollectionDefinition {
+                slug: slug.into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Set the plural and singular labels for the collection.
+    pub fn labels(mut self, v: Labels) -> Self {
+        self.inner.labels = v;
+        self
+    }
+
+    /// Set whether the collection should include standard timestamps.
+    pub fn timestamps(mut self, v: bool) -> Self {
+        self.inner.timestamps = v;
+        self
+    }
+
+    /// Set the field definitions for the collection.
+    pub fn fields(mut self, v: Vec<FieldDefinition>) -> Self {
+        self.inner.fields = v;
+        self
+    }
+
+    /// Set the admin UI configuration for the collection.
+    pub fn admin(mut self, v: AdminConfig) -> Self {
+        self.inner.admin = v;
+        self
+    }
+
+    /// Set the lifecycle hooks for the collection.
+    pub fn hooks(mut self, v: Hooks) -> Self {
+        self.inner.hooks = v;
+        self
+    }
+
+    /// Set the authentication configuration for the collection.
+    pub fn auth(mut self, v: Auth) -> Self {
+        self.inner.auth = Some(v);
+        self
+    }
+
+    /// Set the file upload configuration for the collection.
+    pub fn upload(mut self, v: CollectionUpload) -> Self {
+        self.inner.upload = Some(v);
+        self
+    }
+
+    /// Set the access control rules for the collection.
+    pub fn access(mut self, v: Access) -> Self {
+        self.inner.access = v;
+        self
+    }
+
+    /// Set the MCP-specific configuration for the collection.
+    pub fn mcp(mut self, v: McpConfig) -> Self {
+        self.inner.mcp = v;
+        self
+    }
+
+    /// Set the live update settings for the collection.
+    pub fn live(mut self, v: LiveSetting) -> Self {
+        self.inner.live = Some(v);
+        self
+    }
+
+    /// Set the versioning and drafts configuration for the collection.
+    pub fn versions(mut self, v: VersionsConfig) -> Self {
+        self.inner.versions = Some(v);
+        self
+    }
+
+    /// Set additional database indexes for the collection.
+    pub fn indexes(mut self, v: Vec<IndexDefinition>) -> Self {
+        self.inner.indexes = v;
+        self
+    }
+
+    /// Enable soft deletes for the collection.
+    pub fn soft_delete(mut self, v: bool) -> Self {
+        self.inner.soft_delete = v;
+        self
+    }
+
+    /// Set the retention period for soft-deleted documents.
+    pub fn soft_delete_retention(mut self, v: impl Into<String>) -> Self {
+        self.inner.soft_delete_retention = Some(v.into());
+        self
+    }
+
+    /// Build the final `CollectionDefinition` instance.
+    pub fn build(self) -> CollectionDefinition {
+        self.inner
+    }
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+
+    #[test]
+    fn builds_with_defaults() {
+        let def = CollectionDefinitionBuilder::new("posts").build();
+        assert_eq!(def.slug, "posts");
+        assert!(def.timestamps);
+        assert!(def.fields.is_empty());
+        assert!(def.auth.is_none());
+        assert!(def.upload.is_none());
+        assert!(def.versions.is_none());
+        assert!(def.indexes.is_empty());
+    }
+
+    #[test]
+    fn builds_with_overrides() {
+        let def = CollectionDefinitionBuilder::new("posts")
+            .timestamps(false)
+            .versions(VersionsConfig::new(true, 5))
+            .build();
+        assert_eq!(def.slug, "posts");
+        assert!(!def.timestamps);
+        assert!(def.versions.is_some());
+        assert!(def.versions.unwrap().drafts);
+    }
+
+    #[test]
+    fn builds_with_auth() {
+        let def = CollectionDefinitionBuilder::new("users")
+            .auth(Auth::new(true))
+            .build();
+        assert!(def.is_auth_collection());
     }
 }

@@ -7,8 +7,6 @@
 
 pub mod renderer;
 pub mod richtext_node_def;
-pub mod richtext_node_def_builder;
 
 pub use renderer::{render_html_custom_nodes, render_prosemirror_to_html};
-pub use richtext_node_def::RichtextNodeDef;
-pub use richtext_node_def_builder::RichtextNodeDefBuilder;
+pub use richtext_node_def::{RichtextNodeDef, RichtextNodeDefBuilder};

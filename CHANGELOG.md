@@ -167,6 +167,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   gRPC proto bridge, JSON-RPC envelopes, JSON Schema output,
   user-supplied filter/validation values, the Lua hook context bag —
   and stays as `Value`.
+- `core/` module restructured for colocation. Every struct that has a
+  builder now lives in a single file with its builder and tests next
+  to it (claims, document, version_snapshot, field_admin,
+  field_definition, collection_definition, global_definition,
+  job/definition, richtext_node_def). The orphaned `*_builder.rs`
+  pair-files are gone. `JobRunBuilder` moved from `job/definition.rs`
+  into `job/run.rs` next to `JobRun`. No public-API change.
+- `core/collection/shared.rs` (269 LOC, 9 types) decomposed into
+  per-concept files: `access.rs`, `hooks.rs`, `admin_config.rs`,
+  `labels.rs` (also home to the `resolve_label` helper, with new
+  unit tests), `mcp_config.rs`, `versions_config.rs`, `live.rs`
+  (`LiveSetting` + `LiveMode`), `index_definition.rs`. `shared.rs`
+  is gone.
+- `core::` top-level re-export surface tightened for consistency.
+  `GlobalDefinition`, `RichtextNodeDef`, `JobDefinition`, `JobRun`,
+  `JobStatus`, `JobLabels`, `FieldAccess`, `FieldHooks`,
+  `McpFieldConfig`, `FieldError`, and `ValidationError` now reachable
+  as `crate::core::*` without going through their submodule. Builders
+  remain `pub` and continue to be reached via `Type::builder()`.
+- Removed every `#[allow(...)]` escape hatch from `core/`. The
+  remaining warnings the audit surfaced were addressed at the source
+  (typed param structs replacing `unused_variables` markers in
+  `core/rate_limit/factory.rs`, dead code that turned out to be live,
+  fields that were actually used in 5+ places).
+- Replaced four panic-on-missing-required builders with plain structs
+  + struct-literal construction since the builders' only value was
+  ceremony: `UploadedFile`, `ProcessedUpload`, `QueuedConversion`,
+  `SizeResult`. Builders that aid DX (chained construction with
+  defaults) are kept.
+- `queue_email` reduced from 7 → 3 args via `EmailJobData` payload
+  struct (`to`, `subject`, `html`, `text`) and `EmailConfig` for
+  retry/queue-name policy. Per-call `retries` override flows through
+  the captured `EmailConfig` clone in the Lua hook layer without
+  changing the function signature.
+- `save_resized_image` reduced from 7 → 2 args via
+  `SaveResizedImageInput` builder.
+- `core/event/mod.rs` (376 LOC) split into `types.rs`, `receiver.rs`,
+  `transport.rs`, and `sequence.rs`. `mod.rs` is now 35 lines of
+  declarations + re-exports.
+- Qualified-path cleanup in `core/`: no more `super::super::*`
+  chains, no `crate::core::field::FieldTab`-style re-export
+  re-traversals, no inline `use` statements inside function bodies.
+  All imports use the shortest available path per CLAUDE.md.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

@@ -6,10 +6,8 @@
 
 /// Authenticated user context for request extensions.
 pub mod auth_user;
-/// JWT claims module.
+/// JWT claims module + builder.
 pub mod claims;
-/// Builder for JWT claims.
-pub mod claims_builder;
 /// Error types for auth operations.
 pub mod errors;
 /// Newtype wrapper for Argon2id password hashes.
@@ -22,8 +20,7 @@ pub mod password;
 pub mod token;
 
 pub use auth_user::AuthUser;
-pub use claims::Claims;
-pub use claims_builder::ClaimsBuilder;
+pub use claims::{Claims, ClaimsBuilder};
 pub use errors::ResetTokenError;
 pub use hashed_password::HashedPassword;
 pub use jwt_secret::JwtSecret;

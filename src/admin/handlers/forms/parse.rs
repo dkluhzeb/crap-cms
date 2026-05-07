@@ -4,10 +4,7 @@ use anyhow::anyhow;
 use axum::extract::{Form, FromRequest, Multipart, Request, multipart::Field};
 use std::collections::HashMap;
 
-use crate::{
-    admin::AdminState,
-    core::upload::{UploadedFile, UploadedFileBuilder},
-};
+use crate::{admin::AdminState, core::upload::UploadedFile};
 
 /// Parsed form result: field data and optional uploaded file.
 pub(crate) type ParsedForm = (HashMap<String, String>, Option<UploadedFile>);
@@ -29,11 +26,11 @@ async fn extract_upload_field(field: Field<'_>) -> Result<Option<UploadedFile>, 
         return Ok(None);
     }
 
-    Ok(Some(
-        UploadedFileBuilder::new(filename, content_type)
-            .data(data.to_vec())
-            .build(),
-    ))
+    Ok(Some(UploadedFile {
+        filename,
+        content_type,
+        data: data.to_vec(),
+    }))
 }
 
 /// Collapse a list of `(key, value)` pairs into a `HashMap<String, String>`,

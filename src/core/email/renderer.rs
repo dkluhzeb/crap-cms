@@ -74,7 +74,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::core::email::contexts::{PasswordResetEmailContext, VerifyEmailContext};
+    use crate::core::email::{PasswordResetEmailContext, VerifyEmailContext};
 
     #[test]
     fn renderer_new_loads_compiled_templates() {

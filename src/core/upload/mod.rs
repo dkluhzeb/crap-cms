@@ -23,10 +23,10 @@ pub use metadata::{
     assemble_sizes_object, delete_upload_files, enqueue_conversions, inject_upload_metadata,
 };
 pub use process::{CleanupGuard, process_upload};
-pub use processed_upload::{ProcessedUpload, ProcessedUploadBuilder};
-pub use queued_conversion::{QueuedConversion, QueuedConversionBuilder};
+pub use processed_upload::ProcessedUpload;
+pub use queued_conversion::QueuedConversion;
 pub use resize::process_image_entry_with_storage;
-pub use size_result::{SizeResult, SizeResultBuilder};
+pub use size_result::SizeResult;
 pub use storage::{SharedStorage, StorageBackend, create_storage};
-pub use uploaded_file::{UploadedFile, UploadedFileBuilder};
+pub use uploaded_file::UploadedFile;
 pub use validate::format_filesize;

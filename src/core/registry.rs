@@ -12,7 +12,7 @@ use crate::core::{
 };
 
 /// Holds all collection, global, and job definitions loaded at startup.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Registry {
     pub collections: HashMap<Slug, CollectionDefinition>,
     pub globals: HashMap<Slug, GlobalDefinition>,
@@ -23,26 +23,15 @@ pub struct Registry {
 /// Thread-safe shared reference to the registry.
 pub type SharedRegistry = Arc<RwLock<Registry>>;
 
-impl Default for Registry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Registry {
     /// Create an empty registry with no collections or globals.
     pub fn new() -> Self {
-        Self {
-            collections: HashMap::new(),
-            globals: HashMap::new(),
-            jobs: HashMap::new(),
-            richtext_nodes: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Create a new registry wrapped in `Arc<RwLock<>>` for shared ownership.
     pub fn shared() -> SharedRegistry {
-        Arc::new(RwLock::new(Self::new()))
+        Arc::new(RwLock::new(Self::default()))
     }
 
     /// Register a collection definition, keyed by slug. Overwrites any existing definition.
@@ -167,7 +156,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{FieldDefinition, FieldType, richtext::RichtextNodeDef};
+    use crate::core::{FieldDefinition, FieldTab, FieldType, richtext::RichtextNodeDef};
 
     fn make_collection(slug: &str) -> CollectionDefinition {
         CollectionDefinition::new(slug)
@@ -260,8 +249,6 @@ mod tests {
 
     /// Wrap a child field inside a layout container for testing field_exists_recursive.
     fn wrap_in_container(container_type: FieldType, child_name: &str) -> Vec<FieldDefinition> {
-        use crate::core::field::FieldTab;
-
         let child = FieldDefinition::builder(child_name, FieldType::Text).build();
 
         match container_type {

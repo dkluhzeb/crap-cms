@@ -7,7 +7,6 @@ use crate::core::{Claims, Document};
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     /// The decoded JWT claims for this user.
-    #[allow(dead_code)]
     pub claims: Claims,
     /// The full document representing this user from their auth collection.
     pub user_doc: Document,

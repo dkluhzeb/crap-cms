@@ -6,7 +6,7 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
-use redis::{Client, Commands};
+use redis::{Client, Commands, Connection};
 
 use crate::core::cache::CacheBackend;
 
@@ -20,7 +20,7 @@ use crate::core::cache::CacheBackend;
 /// the next operation.
 pub struct RedisCache {
     client: Client,
-    conn: Mutex<redis::Connection>,
+    conn: Mutex<Connection>,
     prefix: String,
     ttl_secs: u64,
 }
