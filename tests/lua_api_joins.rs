@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::{ReqContext, SharedRegistry};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -689,7 +689,7 @@ fn lua_hook_error_rolls_back_inner_crud() {
         data: doc.fields.clone(),
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };

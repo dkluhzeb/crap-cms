@@ -3,11 +3,11 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow::Context as _;
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
     core::{
+        ReqContext,
         event::EventOperation,
         upload::{self, StorageBackend},
     },
@@ -27,7 +27,7 @@ pub fn delete_document(
     id: &str,
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
-) -> Result<HashMap<String, Value>> {
+) -> Result<ReqContext> {
     if ctx.pool.is_some() {
         delete_document_pool(ctx, id, storage, locale_config)
     } else {
@@ -41,7 +41,7 @@ fn delete_document_pool(
     id: &str,
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
-) -> Result<HashMap<String, Value>> {
+) -> Result<ReqContext> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
     let def = ctx.collection_def();
@@ -97,7 +97,7 @@ fn delete_document_conn(
     id: &str,
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
-) -> Result<HashMap<String, Value>> {
+) -> Result<ReqContext> {
     let def = ctx.collection_def();
     let result = delete_document_core(ctx, id, locale_config)?;
 

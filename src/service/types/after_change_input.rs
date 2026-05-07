@@ -1,10 +1,6 @@
 //! Bundled parameters for after-change hook invocation.
 
-use std::collections::HashMap;
-
-use serde_json::Value;
-
-use crate::core::Document;
+use crate::core::{Document, ReqContext};
 
 /// Bundled parameters for after-change hook invocation.
 pub(crate) struct AfterChangeInput<'a> {
@@ -12,7 +8,7 @@ pub(crate) struct AfterChangeInput<'a> {
     pub operation: &'a str,
     pub locale: Option<String>,
     pub is_draft: bool,
-    pub req_context: HashMap<String, Value>,
+    pub req_context: ReqContext,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
 }
@@ -30,7 +26,7 @@ pub(crate) struct AfterChangeInputBuilder<'a> {
     pub(in crate::service) operation: &'a str,
     pub(in crate::service) locale: Option<String>,
     pub(in crate::service) is_draft: bool,
-    pub(in crate::service) req_context: HashMap<String, Value>,
+    pub(in crate::service) req_context: ReqContext,
     pub(in crate::service) user: Option<&'a Document>,
     pub(in crate::service) ui_locale: Option<&'a str>,
 }
@@ -42,7 +38,7 @@ impl<'a> AfterChangeInputBuilder<'a> {
             operation,
             locale: None,
             is_draft: false,
-            req_context: HashMap::new(),
+            req_context: ReqContext::new(),
             user: None,
             ui_locale: None,
         }
@@ -58,8 +54,8 @@ impl<'a> AfterChangeInputBuilder<'a> {
         self
     }
 
-    pub fn req_context(mut self, req_context: HashMap<String, Value>) -> Self {
-        self.req_context = req_context;
+    pub fn req_context(mut self, req_context: impl Into<ReqContext>) -> Self {
+        self.req_context = req_context.into();
         self
     }
 

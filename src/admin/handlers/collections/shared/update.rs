@@ -22,6 +22,7 @@ use crate::{
         },
     },
     core::{
+        ReqContext,
         auth::AuthUser,
         collection::CollectionDefinition,
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
@@ -107,7 +108,7 @@ async fn spawn_update(
         let result = if input.action == "unpublish" && def_owned.has_versions() {
             let doc = service::unpublish_document(&ctx, &id_owned)?;
 
-            Ok((doc, HashMap::new()))
+            Ok((doc, ReqContext::new()))
         } else {
             service::update_document(
                 &ctx,

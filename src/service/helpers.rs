@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, collection::Hooks},
+    core::{Document, FieldDefinition, FieldType, ReqContext, collection::Hooks},
     db::{
         AccessResult, DbConnection, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
     },
@@ -38,7 +38,7 @@ pub(crate) fn run_after_change_hooks(
     doc: &Document,
     input: AfterChangeInput<'_>,
     tx: &dyn DbConnection,
-) -> anyhow::Result<HashMap<String, Value>> {
+) -> anyhow::Result<ReqContext> {
     let mut after_data = doc.fields.clone();
     after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
     let after_ctx = HookContext::builder(input.slug, input.operation)

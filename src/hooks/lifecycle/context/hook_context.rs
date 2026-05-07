@@ -5,7 +5,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, FieldDefinition, FieldType, ReqContext},
     hooks::{
         api,
         lifecycle::{HookDepth, converters::document_to_lua_table},
@@ -26,7 +26,7 @@ pub struct HookContext {
     /// Request-scoped shared table that flows from before_validate through after_change.
     /// Hooks can read/write this to share state within one request lifecycle.
     /// Only JSON-compatible values survive (no functions, userdata, etc.).
-    pub context: HashMap<String, JsonValue>,
+    pub context: ReqContext,
     /// Authenticated user document, if any. Exposed as `ctx.user` in Lua hooks.
     pub user: Option<Document>,
     /// Admin UI locale (e.g. "en", "de"). Exposed as `ctx.ui_locale` in Lua hooks.
@@ -158,7 +158,7 @@ mod tests {
         lua.set_app_data(HookDepth(3));
         let mut data = HashMap::new();
         data.insert("title".to_string(), json!("Hello"));
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("request_id".to_string(), json!("abc-123"));
 
         let ctx = HookContext::builder("posts", "create")
@@ -191,7 +191,7 @@ mod tests {
         context_tbl.set("key2", 42).unwrap();
         tbl.set("context", context_tbl).unwrap();
 
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("old_key".to_string(), json!("old_value"));
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
@@ -211,7 +211,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let tbl = lua.create_table().unwrap();
 
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("old_key".to_string(), json!("old_value"));
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)

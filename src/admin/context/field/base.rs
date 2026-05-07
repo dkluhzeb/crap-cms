@@ -6,6 +6,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::core::ConditionExpr;
+
 /// Common keys present on every field context. Variants flatten this into
 /// themselves via `#[serde(flatten)]` so the rendered JSON has no nesting.
 ///
@@ -129,9 +131,10 @@ pub struct ConditionData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition_ref: Option<String>,
 
-    /// Client-evaluable condition table (set when the condition function
+    /// Client-evaluable condition expression (set when the condition function
     /// returns a Lua table). The client evaluates this directly without a
-    /// round-trip.
+    /// round-trip. Serializes to the same JSON shape the JS evaluator at
+    /// `static/components/conditions.js` expects.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub condition_json: Option<Value>,
+    pub condition_json: Option<ConditionExpr>,
 }

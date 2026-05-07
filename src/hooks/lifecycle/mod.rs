@@ -23,7 +23,6 @@ pub(crate) use types::{
     LuaPopulateSingleflight, LuaStorage, MaxHookDepth, TxContext, UiLocaleContext, UserContext,
 };
 pub use validation::ValidationCtx;
-pub use validation::evaluate_condition_table;
 pub use validation::is_valid_email_format;
 pub(crate) use validation::richtext_attrs::run_before_validate_on_node_attrs;
 pub(crate) use validation::validate_fields_inner;

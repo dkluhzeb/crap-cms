@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::{
     core::{
@@ -14,12 +15,31 @@ use crate::{
     },
 };
 
+/// One entry under the document's `sizes` object — the PayloadCMS-style nested
+/// `{ url, width, height, formats: { webp: { url }, avif: { url } } }` shape.
+#[derive(Serialize)]
+struct ImageSizeEntry {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    formats: HashMap<String, FormatVariant>,
+}
+
+/// One entry under `formats` (e.g. `webp`, `avif`).
+#[derive(Serialize)]
+struct FormatVariant {
+    url: String,
+}
+
 /// Assemble per-size typed columns into a structured `sizes` object on the document.
 /// Reads `{name}_url`, `{name}_width`, `{name}_height`, `{name}_webp_url`, `{name}_avif_url`
 /// from document fields, builds a nested PayloadCMS-style object, inserts as `sizes`,
 /// and removes the individual per-size columns.
 pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
-    let mut sizes = Map::new();
+    let mut sizes: HashMap<String, ImageSizeEntry> = HashMap::new();
 
     for size_def in &upload.image_sizes {
         let name = &size_def.name;
@@ -44,9 +64,16 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
 
         if let Some(url) = url {
             let formats = collect_format_urls(doc, name, upload);
-            let entry = build_size_entry(url, width, height, formats);
 
-            sizes.insert(name.clone(), Value::Object(entry));
+            sizes.insert(
+                name.clone(),
+                ImageSizeEntry {
+                    url,
+                    width,
+                    height,
+                    formats,
+                },
+            );
         } else {
             // Still remove format columns even if there's no URL
             doc.fields.remove(&format!("{}_webp_url", name));
@@ -55,33 +82,9 @@ pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
     }
 
     if !sizes.is_empty() {
-        doc.fields.insert("sizes".to_string(), Value::Object(sizes));
+        let value = serde_json::to_value(&sizes).expect("ImageSizeEntry serialize");
+        doc.fields.insert("sizes".to_string(), value);
     }
-}
-
-/// Build the JSON object for a single image size entry.
-fn build_size_entry(
-    url: String,
-    width: Option<u32>,
-    height: Option<u32>,
-    formats: Map<String, Value>,
-) -> Map<String, Value> {
-    let mut entry = Map::new();
-    entry.insert("url".to_string(), Value::String(url));
-
-    if let Some(w) = width {
-        entry.insert("width".to_string(), json!(w));
-    }
-
-    if let Some(h) = height {
-        entry.insert("height".to_string(), json!(h));
-    }
-
-    if !formats.is_empty() {
-        entry.insert("formats".to_string(), Value::Object(formats));
-    }
-
-    entry
 }
 
 /// Collect format variant URLs (webp, avif) from document fields.
@@ -89,19 +92,19 @@ fn collect_format_urls(
     doc: &mut Document,
     size_name: &str,
     upload: &CollectionUpload,
-) -> Map<String, Value> {
-    let mut formats = Map::new();
+) -> HashMap<String, FormatVariant> {
+    let mut formats = HashMap::new();
 
     if upload.format_options.webp.is_some()
-        && let Some(Value::String(webp_url)) = doc.fields.remove(&format!("{}_webp_url", size_name))
+        && let Some(Value::String(url)) = doc.fields.remove(&format!("{}_webp_url", size_name))
     {
-        formats.insert("webp".to_string(), json!({ "url": webp_url }));
+        formats.insert("webp".to_string(), FormatVariant { url });
     }
 
     if upload.format_options.avif.is_some()
-        && let Some(Value::String(avif_url)) = doc.fields.remove(&format!("{}_avif_url", size_name))
+        && let Some(Value::String(url)) = doc.fields.remove(&format!("{}_avif_url", size_name))
     {
-        formats.insert("avif".to_string(), json!({ "url": avif_url }));
+        formats.insert("avif".to_string(), FormatVariant { url });
     }
 
     formats
@@ -180,6 +183,8 @@ pub fn enqueue_conversions(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::core::{
         Document, DocumentId,

@@ -5,12 +5,29 @@ use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use reqwest::blocking::Client;
-use serde_json::json;
+use serde::Serialize;
 use tracing::info;
 
 use crate::config::EmailConfig;
 
 use super::EmailProvider;
+
+/// JSON body POSTed to the configured webhook for each outgoing email.
+#[derive(Serialize)]
+struct WebhookEmailPayload<'a> {
+    from: WebhookFrom<'a>,
+    to: &'a str,
+    subject: &'a str,
+    html: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct WebhookFrom<'a> {
+    email: &'a str,
+    name: &'a str,
+}
 
 /// Webhook email provider that POSTs email data as JSON to a URL.
 pub struct WebhookEmailProvider {
@@ -46,19 +63,16 @@ impl WebhookEmailProvider {
 
 impl EmailProvider for WebhookEmailProvider {
     fn send(&self, to: &str, subject: &str, html: &str, text: Option<&str>) -> Result<()> {
-        let mut payload = json!({
-            "from": {
-                "email": self.from_address,
-                "name": self.from_name,
+        let payload = WebhookEmailPayload {
+            from: WebhookFrom {
+                email: &self.from_address,
+                name: &self.from_name,
             },
-            "to": to,
-            "subject": subject,
-            "html": html,
-        });
-
-        if let Some(plain) = text {
-            payload["text"] = json!(plain);
-        }
+            to,
+            subject,
+            html,
+            text,
+        };
 
         let mut req = self.client.post(&self.url).json(&payload);
 

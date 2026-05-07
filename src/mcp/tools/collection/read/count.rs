@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{Value, to_string};
 
 use crate::{
     core::Registry,
@@ -12,6 +13,12 @@ use crate::{
     mcp::tools::collection::helpers::parse_where_filters,
     service::{CountDocumentsInput, RunnerReadHooks, ServiceContext, count_documents},
 };
+
+/// Shape returned to the MCP client for a `count` tool call.
+#[derive(Serialize)]
+struct CountResponse {
+    count: i64,
+}
 
 /// Execute `count` — count documents matching filters.
 pub(in crate::mcp::tools) fn exec_count(
@@ -46,5 +53,5 @@ pub(in crate::mcp::tools) fn exec_count(
 
     let count = count_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
 
-    Ok(json!({ "count": count }).to_string())
+    Ok(to_string(&CountResponse { count })?)
 }

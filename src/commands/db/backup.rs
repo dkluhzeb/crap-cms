@@ -7,10 +7,10 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
 
 use crate::{
     cli::{self, Spinner},
+    commands::db::manifest::BackupManifest,
     config::CrapConfig,
     db::{DbConnection, pool},
 };
@@ -183,15 +183,15 @@ fn write_backup_manifest(
     uploads_size: Option<u64>,
     include_uploads: bool,
 ) -> Result<()> {
-    let manifest = json!({
-        "crap_version": env!("CARGO_PKG_VERSION"),
-        "timestamp": chrono::Local::now().to_rfc3339(),
-        "db_size": db_size,
-        "uploads_size": uploads_size,
-        "include_uploads": include_uploads,
-        "source_db": db_path.to_string_lossy(),
-        "source_config": config_dir.to_string_lossy(),
-    });
+    let manifest = BackupManifest {
+        crap_version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: chrono::Local::now().to_rfc3339(),
+        db_size,
+        uploads_size,
+        include_uploads,
+        source_db: db_path.to_string_lossy().into_owned(),
+        source_config: config_dir.to_string_lossy().into_owned(),
+    };
 
     fs::write(
         backup_dir.join("manifest.json"),

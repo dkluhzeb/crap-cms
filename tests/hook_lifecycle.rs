@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
+use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::db::query::AccessResult;
@@ -78,7 +79,7 @@ fn before_change_hook_modifies_data() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -122,7 +123,7 @@ fn before_validate_trims_title() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -195,7 +196,7 @@ fn registered_hook_fires_for_all_collections() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -261,7 +262,7 @@ fn run_before_write_full_lifecycle() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -318,7 +319,7 @@ fn run_before_write_fails_on_validation_error() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };

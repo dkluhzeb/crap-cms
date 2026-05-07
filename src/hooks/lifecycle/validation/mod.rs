@@ -1,5 +1,4 @@
-//! Field validation logic: required checks, unique checks, date format, custom Lua validators,
-//! and display condition evaluation.
+//! Field validation logic: required checks, unique checks, date format, custom Lua validators.
 
 mod checks;
 mod custom;
@@ -8,7 +7,7 @@ pub(crate) mod richtext_attrs;
 mod sub_fields;
 
 // Re-export public API
-pub use checks::{evaluate_condition_table, is_valid_email_format};
+pub use checks::is_valid_email_format;
 
 use std::collections::HashMap;
 

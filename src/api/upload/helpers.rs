@@ -9,7 +9,8 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 use tracing::{error, warn};
 
 use crate::{
@@ -23,6 +24,24 @@ use crate::{
     hooks::lifecycle::PublishEventInput,
     service::ServiceError,
 };
+
+/// JSON body for an error response: `{ "error": "<message>" }`.
+#[derive(Serialize)]
+struct ErrorBody<'a> {
+    error: &'a str,
+}
+
+/// JSON body for upload create/update success: `{ "document": <doc> }`.
+#[derive(Serialize)]
+pub struct DocumentBody<'a> {
+    pub document: &'a Document,
+}
+
+/// JSON body for upload delete success: `{ "success": true }`.
+#[derive(Serialize)]
+pub struct SuccessBody {
+    pub success: bool,
+}
 
 /// Extract Bearer token string from an Authorization header value.
 pub fn extract_bearer_token(auth_header: &str) -> Option<&str> {
@@ -80,14 +99,7 @@ pub fn extract_bearer_user(
 
 /// Return a JSON error response.
 pub fn json_error(status: StatusCode, message: &str) -> Response {
-    let body = json!({ "error": message });
-
-    (
-        status,
-        [(CONTENT_TYPE, "application/json; charset=utf-8")],
-        body.to_string(),
-    )
-        .into_response()
+    json_ok(status, &ErrorBody { error: message })
 }
 
 /// Classify a delete error message into the appropriate HTTP status code.
@@ -102,11 +114,13 @@ pub fn classify_delete_error(msg: &str) -> StatusCode {
 }
 
 /// Return a JSON success response with the given status and body.
-pub fn json_ok(status: StatusCode, body: &Value) -> Response {
+pub fn json_ok<T: Serialize>(status: StatusCode, body: &T) -> Response {
+    let serialized = serde_json::to_string(body).expect("response body serialize");
+
     (
         status,
         [(CONTENT_TYPE, "application/json; charset=utf-8")],
-        body.to_string(),
+        serialized,
     )
         .into_response()
 }
@@ -232,7 +246,6 @@ pub fn service_error_to_response(err: ServiceError) -> Response {
 mod tests {
     use anyhow::anyhow;
     use axum::body::to_bytes;
-    use serde_json::json;
 
     use super::*;
 
@@ -261,15 +274,14 @@ mod tests {
 
     #[tokio::test]
     async fn json_ok_returns_correct_status() {
-        let body = json!({ "success": true });
-        let resp = json_ok(StatusCode::CREATED, &body);
+        let resp = json_ok(StatusCode::CREATED, &SuccessBody { success: true });
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]
     async fn json_ok_body_matches() {
-        let body_val = json!({ "document": { "id": "abc" } });
-        let resp = json_ok(StatusCode::OK, &body_val);
+        let doc = Document::new("abc");
+        let resp = json_ok(StatusCode::OK, &DocumentBody { document: &doc });
         let body = to_bytes(resp.into_body(), 4096).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["document"]["id"], "abc");

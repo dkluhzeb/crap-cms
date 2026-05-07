@@ -3,6 +3,7 @@
 //! The `EmailProvider` trait allows pluggable email backends:
 //! `smtp` (default), `webhook` (HTTP API), `log` (dev mode), `custom` (Lua).
 
+mod contexts;
 mod custom;
 mod factory;
 mod log;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+pub use contexts::{MfaCodeEmailContext, PasswordResetEmailContext, VerifyEmailContext};
 pub use custom::CustomEmailProvider;
 pub use factory::{create_email_provider, is_configured};
 pub use queue::{EmailJobData, SYSTEM_EMAIL_JOB, queue_email};

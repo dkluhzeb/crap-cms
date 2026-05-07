@@ -7,7 +7,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use serde_json::json;
 use tokio::task;
 
 use crate::{
@@ -18,8 +17,8 @@ use crate::{
 };
 
 use super::helpers::{
-    check_upload_access, classify_delete_error, extract_bearer_user, json_error, json_ok,
-    publish_upload_event,
+    SuccessBody, check_upload_access, classify_delete_error, extract_bearer_user, json_error,
+    json_ok, publish_upload_event,
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -117,7 +116,7 @@ pub(super) async fn delete_upload(
                 None,
                 &auth_user,
             );
-            json_ok(StatusCode::OK, &json!({ "success": true }))
+            json_ok(StatusCode::OK, &SuccessBody { success: true })
         }
         Ok(Err(e)) => {
             let msg = e.to_string();

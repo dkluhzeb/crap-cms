@@ -1,6 +1,5 @@
 //! Forgot password handler — generate reset token and queue email.
 
-use serde_json::json;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -8,7 +7,10 @@ use tracing::error;
 use crate::{
     api::{content, handlers::ContentService},
     config::{EmailConfig, ServerConfig},
-    core::{CollectionDefinition, email, email::EmailRenderer},
+    core::{
+        CollectionDefinition, email,
+        email::{EmailRenderer, PasswordResetEmailContext},
+    },
     db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
 };
@@ -131,11 +133,11 @@ fn send_reset_email(ctx: &ResetEmailCtx) {
 
     let html = match ctx.email_renderer.render(
         "password_reset",
-        &json!({
-            "reset_url": reset_url,
-            "expiry_minutes": ctx.reset_expiry / 60,
-            "from_name": ctx.email_config.from_name,
-        }),
+        &PasswordResetEmailContext {
+            reset_url: &reset_url,
+            expiry_minutes: ctx.reset_expiry / 60,
+            from_name: &ctx.email_config.from_name,
+        },
     ) {
         Ok(h) => h,
         Err(e) => {

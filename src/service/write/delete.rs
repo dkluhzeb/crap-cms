@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
+    core::ReqContext,
     db::{AccessResult, LocaleContext, query},
     hooks::{HookContext, HookEvent},
     service::{ServiceContext, helpers::enforce_access_constraints},
@@ -18,7 +19,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Result of a delete operation.
 pub struct DeleteResult {
     /// Request-scoped context returned by after-delete hooks.
-    pub context: HashMap<String, Value>,
+    pub context: ReqContext,
     /// Upload file fields from the deleted document (for post-commit cleanup).
     pub upload_doc_fields: Option<HashMap<String, Value>>,
 }

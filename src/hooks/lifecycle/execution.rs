@@ -9,15 +9,15 @@ use tracing::{debug, error, warn};
 
 use crate::{
     core::{
-        Document, FieldDefinition, FieldType, collection::Hooks, document::DocumentBuilder,
-        field::FieldHooks,
+        ConditionExpr, Document, FieldDefinition, FieldType, collection::Hooks,
+        document::DocumentBuilder, field::FieldHooks,
     },
     db::query::helpers::prefixed_name,
     hooks::{
         api,
         lifecycle::{
             DisplayConditionResult, FieldHookEvent, HookEvent, UiLocaleContext, UserContext,
-            context::HookContext, converters::document_to_lua_table, evaluate_condition_table,
+            context::HookContext, converters::document_to_lua_table,
         },
     },
 };
@@ -202,12 +202,22 @@ pub(crate) fn call_display_condition_with_lua(
         Ok(Value::Boolean(b)) => Some(DisplayConditionResult::Bool(b)),
         Ok(val @ Value::Table(_)) => {
             let json = api::lua_to_json(lua, &val).ok()?;
-            let visible = evaluate_condition_table(&json, form_data);
 
-            Some(DisplayConditionResult::Table {
-                condition: json,
-                visible,
-            })
+            match serde_json::from_value::<ConditionExpr>(json) {
+                Ok(condition) => {
+                    let visible = condition.evaluate(form_data);
+
+                    Some(DisplayConditionResult::Table { condition, visible })
+                }
+                Err(e) => {
+                    warn!(
+                        "Display condition '{}' returned a malformed condition table: {} — hiding field (fail closed)",
+                        func_ref, e
+                    );
+
+                    Some(DisplayConditionResult::Bool(false))
+                }
+            }
         }
         Ok(Value::Nil) => None, // nil → no condition, show field normally
         Err(e) => {

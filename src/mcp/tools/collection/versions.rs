@@ -3,13 +3,14 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json, to_string_pretty, to_value};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty, to_value};
 use tracing::info;
 
 use crate::{
     config::CrapConfig,
     core::{Registry, cache::SharedCache, event::SharedEventTransport},
-    db::DbPool,
+    db::{DbPool, query::PaginationResult},
     hooks::HookRunner,
     service::{
         ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions,
@@ -18,6 +19,13 @@ use crate::{
 };
 
 use super::helpers::doc_to_json;
+
+/// Shape returned to the MCP client for a `list_versions` tool call.
+#[derive(Serialize)]
+struct ListVersionsResponse<'a> {
+    versions: Vec<Value>,
+    pagination: &'a PaginationResult,
+}
 
 /// Execute `list_versions` — list version snapshots for a document.
 pub(in crate::mcp::tools) fn exec_list_versions(
@@ -55,18 +63,18 @@ pub(in crate::mcp::tools) fn exec_list_versions(
 
     let result = list_versions(&ctx, &input)?;
 
-    let version_values: Vec<Value> = result
+    let versions: Vec<Value> = result
         .docs
         .iter()
         .map(|v| to_value(v).unwrap_or(Value::Null))
         .collect();
 
-    let output = json!({
-        "versions": version_values,
-        "pagination": to_value(&result.pagination)?,
-    });
+    let response = ListVersionsResponse {
+        versions,
+        pagination: &result.pagination,
+    };
 
-    Ok(to_string_pretty(&output)?)
+    Ok(to_string_pretty(&response)?)
 }
 
 /// Execute `restore_version` — restore a document to a specific version.

@@ -14,9 +14,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- `EmailRenderer::render` is now generic over `T: Serialize`. Built-in
+  templates have typed contexts in `crate::core::email`:
+  `PasswordResetEmailContext`, `VerifyEmailContext`,
+  `MfaCodeEmailContext`. Lua/custom callers using `serde_json::Value`
+  continue to work (`Value` implements `Serialize`).
+- Webhook email provider builds its outgoing payload through typed
+  `WebhookEmailPayload` / `WebhookFrom` structs in
+  `core/email/webhook.rs` instead of an ad-hoc `json!()`.
+- `commands/db/backup.rs` writes and `commands/db/restore.rs` reads
+  the backup `manifest.json` through a shared `BackupManifest` struct
+  instead of ad-hoc `serde_json::Value` lookups.
+- Upload HTTP API JSON responses use typed bodies:
+  `api/upload/helpers.rs` exposes `DocumentBody` and `SuccessBody`,
+  the local `ErrorBody` is constructed by `json_error`, and `json_ok`
+  is now generic over `T: Serialize`.
+- `core/upload/metadata.rs::assemble_sizes_object` builds the nested
+  `sizes` payload through typed `ImageSizeEntry` / `FormatVariant`
+  structs and serializes once at the boundary, replacing layered
+  `Map::new() + insert(Value::String(...))` plumbing.
+- MCP collection tool responses (`find`, `list_versions`, `count`,
+  `create_many`) use small typed wrapper structs that embed
+  `PaginationResult` directly.
+- `mcp::tools::schema::introspection::exec_list_field_types` returns a
+  typed `&[FieldTypeInfo]` constant; the table lives in code instead
+  of a `json!([...])` literal.
+- New `crate::core::ReqContext` newtype around the request-scoped
+  hook-context bag (the per-request scratchpad Lua hooks read/write
+  across the lifecycle). Replaces `HashMap<String, Value>` in
+  `WriteResult`, `AfterChangeInput.req_context`, `DeleteResult.context`,
+  `Upload{Create,Update}Result.req_context`, `HookContext.context`,
+  and the corresponding builders. The newtype derefs to
+  `HashMap<String, Value>` and has `From<HashMap>` / `Into<HashMap>`
+  for transparent boundary conversion. Adds `get_str` / `get_bool` /
+  `get_i64` typed accessors. Builders accept `impl Into<ReqContext>`
+  so existing call sites that already had a `HashMap` keep compiling.
+  No outside-API change — proto/Lua/admin-template surfaces serialize
+  transparently via `#[serde(transparent)]`.
+- New `crate::core::ConditionExpr` typed enum representing the
+  client-evaluable display condition shape emitted by Lua hooks.
+  `DisplayConditionResult::Table` now carries a typed `ConditionExpr`
+  rather than a free-form `serde_json::Value`. The grammar is now an
+  explicit Rust contract: `ConditionExpr = Single(ConditionRow) |
+  All(Vec<ConditionRow>)` with `ConditionOp` operators
+  (`equals`, `not_equals`, `in`, `not_in`, `is_truthy`, `is_falsy`).
+  Wire format unchanged — `untagged` + `flatten` + externally-tagged
+  serde representation matches what `static/components/conditions.js`
+  expects byte-for-byte. The legacy `evaluate_condition_table` free
+  function is gone; condition evaluation is now a method on the typed
+  enum. **Behavior change**: malformed condition tables (missing
+  `field`, unknown operator, non-object/non-array shapes) used to
+  default-to-show silently; they now fail to deserialize and the seam
+  hides the field (fail-closed) with a `warn!` log identifying the
+  offending hook ref.
+- New `crate::db::query::SortValue` enum (`Null` / `Bool` / `Integer` /
+  `Real` / `Text`). Replaces `CursorData.sort_val: serde_json::Value`
+  with a typed payload that mirrors the sortable subset of `DbValue`.
+  `From<&Value>` and `From<&SortValue> for DbValue` keep the existing
+  doc-field → cursor → SQL parameter pipeline intact. Wire-format
+  compatible — `#[serde(untagged)]` reproduces the raw JSON scalar in
+  `sort_val` slot of the cursor token, so existing cursor URLs decode
+  unchanged.
+- MCP `list_collections` and `describe_collection` tool responses are
+  typed: `ListEntry` (untagged collection/global) and
+  `DescribeResponse` (internally-tagged on `type` discriminator) in
+  `mcp/tools/schema/introspection.rs`. Wire format preserved exactly.
+- MCP `cli_reference` command-detail data table is typed: ~500 lines
+  of `json!({...})` replaced with 24 `static CliCommandDetail`
+  constants and supporting structs (`CliOverview`,
+  `CliCommandSummary`, `CliFlag`, `CliArg`, `CliSubcommand`,
+  `CliReferenceError`). Output bytes unchanged — verified with a
+  before/after dump comparison across all 24 commands plus their
+  alias forms.
+
 ### Fixed
 
+- Verification email now includes the configured `from_name` in the
+  footer. Previously the only call site
+  (`service::email::send_verification_email`) forgot to pass it and
+  the template silently rendered `Sent by` with a blank trailer
+  because Handlebars strict mode is off. Regression test in
+  `core::email::renderer::tests::verify_email_renders_from_name`.
+
 ### Internal
+
+- Continued the alpha.8 admin-context typing work into the rest of
+  the app: audited every non-admin `serde_json::Value` /
+  `HashMap<String, Value>` usage and typed the cases with a
+  compile-time shape — email template contexts, webhook payload,
+  backup manifest, upload HTTP API responses, image-sizes nested
+  structure, MCP collection tool responses, MCP field-type table.
+  The remainder is genuinely dynamic — user document fields, the
+  gRPC proto bridge, JSON-RPC envelopes, JSON Schema output,
+  user-supplied filter/validation values, the Lua hook context bag —
+  and stays as `Value`.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

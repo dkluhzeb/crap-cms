@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json, to_string_pretty};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
@@ -13,6 +14,13 @@ use crate::{
     mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
     service::{self, CreateManyItem, CreateManyOptions, ServiceContext},
 };
+
+/// Shape returned to the MCP client for a `create_many` tool call.
+#[derive(Serialize)]
+struct CreateManyResponse {
+    created: i64,
+    documents: Vec<Value>,
+}
 
 /// Execute `create_many` — bulk create multiple documents.
 pub(in crate::mcp::tools) fn exec_create_many(
@@ -69,10 +77,10 @@ pub(in crate::mcp::tools) fn exec_create_many(
 
     info!("MCP create_many {}: {} created", slug, result.created);
 
-    let docs_json: Vec<Value> = result.documents.iter().map(doc_to_json).collect();
+    let response = CreateManyResponse {
+        created: result.created,
+        documents: result.documents.iter().map(doc_to_json).collect(),
+    };
 
-    Ok(to_string_pretty(&json!({
-        "created": result.created,
-        "documents": docs_json,
-    }))?)
+    Ok(to_string_pretty(&response)?)
 }

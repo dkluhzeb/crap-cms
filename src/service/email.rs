@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use nanoid::nanoid;
-use serde_json::json;
 use tracing::{error, warn};
 
 use crate::{
     config::{EmailConfig, ServerConfig},
-    core::email::{EmailRenderer, is_configured, queue_email},
+    core::email::{EmailRenderer, VerifyEmailContext, is_configured, queue_email},
     db::{DbPool, query},
 };
 
@@ -57,8 +56,13 @@ pub fn send_verification_email(
 
         let base_url = server_config.base_url();
         let verify_url = format!("{}/admin/verify-email?token={}", base_url, token);
-        let data = json!({ "verify_url": verify_url });
-        let html = match email_renderer.render("verify_email", &data) {
+        let html = match email_renderer.render(
+            "verify_email",
+            &VerifyEmailContext {
+                verify_url: &verify_url,
+                from_name: &email_config.from_name,
+            },
+        ) {
             Ok(h) => h,
             Err(e) => {
                 error!("Failed to render verify email template: {}", e);

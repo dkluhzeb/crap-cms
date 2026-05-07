@@ -7,14 +7,13 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use serde_json::Value;
 use tracing::warn;
 
 use crate::{
     admin::handlers::forms::extract_join_data_from_form,
     config::LocaleConfig,
     core::{
-        Document,
+        Document, ReqContext,
         upload::{
             CleanupGuard, SharedStorage, UploadedFile, delete_upload_files, enqueue_conversions,
             inject_upload_metadata, process_upload,
@@ -30,13 +29,13 @@ use super::ServiceError;
 /// Result of a successful upload-create operation.
 pub struct UploadCreateResult {
     pub doc: Document,
-    pub req_context: HashMap<String, Value>,
+    pub req_context: ReqContext,
 }
 
 /// Result of a successful upload-update operation.
 pub struct UploadUpdateResult {
     pub doc: Document,
-    pub req_context: HashMap<String, Value>,
+    pub req_context: ReqContext,
 }
 
 /// Process a file and create an upload document.

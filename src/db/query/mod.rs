@@ -24,7 +24,7 @@ mod types;
 mod validation;
 
 pub use columns::{get_column_names, get_expected_column_names};
-pub use cursor::SortDirection;
+pub use cursor::{SortDirection, SortValue};
 pub use find_pagination::{FindPagination, PaginationCtx, validate_find_pagination};
 pub use helpers::{apply_pagination_limits, normalize_date_value};
 pub use locale::{

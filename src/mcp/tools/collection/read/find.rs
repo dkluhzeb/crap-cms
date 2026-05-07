@@ -3,16 +3,24 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
-use serde_json::{Value, json, to_string_pretty, to_value};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
     config::CrapConfig,
     core::Registry,
-    db::{DbPool, FindQuery, LocaleContext, query},
+    db::{DbPool, FindQuery, LocaleContext, query, query::PaginationResult},
     hooks::HookRunner,
     mcp::tools::collection::helpers::{doc_to_json, parse_where_filters},
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, find_documents},
 };
+
+/// Shape returned to the MCP client for a `find` tool call.
+#[derive(Serialize)]
+struct FindResponse<'a> {
+    docs: Vec<Value>,
+    pagination: &'a PaginationResult,
+}
 
 /// Execute `find` — paginated query with filters, search, and population.
 pub(in crate::mcp::tools) fn exec_find(
@@ -96,10 +104,10 @@ pub(in crate::mcp::tools) fn exec_find(
 
     let result = find_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
 
-    let doc_values: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
-    let output = json!({
-        "docs": doc_values,
-        "pagination": to_value(&result.pagination)?,
-    });
-    Ok(to_string_pretty(&output)?)
+    let docs: Vec<Value> = result.docs.iter().map(doc_to_json).collect();
+    let response = FindResponse {
+        docs,
+        pagination: &result.pagination,
+    };
+    Ok(to_string_pretty(&response)?)
 }

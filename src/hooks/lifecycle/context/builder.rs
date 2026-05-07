@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::{core::Document, hooks::HookContext};
+use crate::{
+    core::{Document, ReqContext},
+    hooks::HookContext,
+};
 
 /// Builder for `HookContext`. Created via [`HookContext::builder`].
 pub struct HookContextBuilder {
@@ -13,7 +16,7 @@ pub struct HookContextBuilder {
     data: HashMap<String, Value>,
     locale: Option<String>,
     draft: Option<bool>,
-    context: HashMap<String, Value>,
+    context: ReqContext,
     user: Option<Document>,
     ui_locale: Option<String>,
 }
@@ -26,7 +29,7 @@ impl HookContextBuilder {
             data: HashMap::new(),
             locale: None,
             draft: None,
-            context: HashMap::new(),
+            context: ReqContext::new(),
             user: None,
             ui_locale: None,
         }
@@ -47,8 +50,8 @@ impl HookContextBuilder {
         self
     }
 
-    pub fn context(mut self, context: HashMap<String, Value>) -> Self {
-        self.context = context;
+    pub fn context(mut self, context: impl Into<ReqContext>) -> Self {
+        self.context = context.into();
         self
     }
 
@@ -99,7 +102,7 @@ mod tests {
     fn builder_all_fields() {
         let mut data = HashMap::new();
         data.insert("title".to_string(), json!("Hello"));
-        let mut ctx_map = HashMap::new();
+        let mut ctx_map = ReqContext::new();
         ctx_map.insert("request_id".to_string(), json!("abc"));
 
         let ctx = HookContext::builder("posts", "update")

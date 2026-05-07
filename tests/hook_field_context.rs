@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
+use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::FieldDefinition;
 use crap_cms::db::{migrate, pool, query};
@@ -155,7 +156,7 @@ fn run_after_write_runs_hooks_with_crud_access() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -263,7 +264,7 @@ fn validate_required_field_errors() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -478,7 +479,7 @@ fn run_after_write_runs_field_after_change_hooks() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -522,7 +523,7 @@ fn run_after_write_with_non_after_change_event() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -590,7 +591,7 @@ fn hook_context_passes_locale_and_draft() {
         data,
         locale: Some("en".to_string()),
         draft: Some(true),
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -628,7 +629,7 @@ fn hook_context_table_flows_through() {
         data,
         locale: None,
         draft: None,
-        context,
+        context: context.into(),
         user: None,
         ui_locale: None,
     };
@@ -773,7 +774,7 @@ fn run_before_write_with_user_context() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: Some(user),
         ui_locale: None,
     };

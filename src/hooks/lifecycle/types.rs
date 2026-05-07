@@ -1,12 +1,11 @@
 //! Core types used across the lifecycle module.
 
 use mlua::Lua;
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
     core::{
-        Document,
+        ConditionExpr, Document,
         cache::SharedCache,
         event::{SharedEventTransport, SharedInvalidationTransport},
         upload::SharedStorage,
@@ -20,9 +19,14 @@ use crate::{
 pub enum DisplayConditionResult {
     /// Lua returned a boolean. Must be re-evaluated server-side on changes.
     Bool(bool),
-    /// Lua returned a condition table. Can be evaluated client-side.
-    /// `visible` is the initial evaluation result; `condition` is the JSON to embed.
-    Table { condition: Value, visible: bool },
+    /// Lua returned a condition table parseable into a typed [`ConditionExpr`].
+    /// Can be evaluated client-side. `visible` is the initial evaluation
+    /// result; `condition` is the typed shape that serializes to the same
+    /// JSON the JS evaluator expects.
+    Table {
+        condition: ConditionExpr,
+        visible: bool,
+    },
 }
 
 /// Events that trigger hooks.

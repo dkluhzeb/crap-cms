@@ -7,7 +7,6 @@ use axum::{
 };
 use chrono::Utc;
 use rand::Rng;
-use serde_json::json;
 use tokio::task;
 use tracing::{debug, error};
 
@@ -28,7 +27,7 @@ use crate::{
         auth::{ClaimsBuilder, SharedPasswordProvider},
         collection::MfaMode,
         email,
-        email::EmailRenderer,
+        email::{EmailRenderer, MfaCodeEmailContext},
     },
     db::{BoxedConnection, DbPool},
     hooks::HookRunner,
@@ -198,11 +197,11 @@ fn send_mfa_code(params: MfaCodeParams, code: &str) {
 
     let html = match params.email_renderer.render(
         "mfa_code",
-        &json!({
-            "code": code,
-            "expiry_minutes": MFA_PENDING_EXPIRY / 60,
-            "from_name": params.email_config.from_name,
-        }),
+        &MfaCodeEmailContext {
+            code,
+            expiry_minutes: MFA_PENDING_EXPIRY / 60,
+            from_name: &params.email_config.from_name,
+        },
     ) {
         Ok(h) => h,
         Err(e) => {

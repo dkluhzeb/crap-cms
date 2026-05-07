@@ -7,7 +7,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use serde_json::json;
 use tokio::task;
 
 use crate::{
@@ -17,8 +16,8 @@ use crate::{
 };
 
 use super::helpers::{
-    check_upload_access, extract_bearer_user, json_error, json_ok, publish_upload_event,
-    service_error_to_response,
+    DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
+    publish_upload_event, service_error_to_response,
 };
 use crate::admin::handlers::forms::parse_multipart_form;
 
@@ -117,7 +116,7 @@ pub(super) async fn update_upload(
                 &auth_user,
             );
 
-            json_ok(StatusCode::OK, &json!({ "document": doc }))
+            json_ok(StatusCode::OK, &DocumentBody { document: &doc })
         }
         Ok(Err(e)) => service_error_to_response(e),
         Err(e) => {

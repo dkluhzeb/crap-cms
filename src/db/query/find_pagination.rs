@@ -133,7 +133,7 @@ pub fn validate_find_pagination(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::query::cursor::SortDirection;
+    use crate::db::query::cursor::{SortDirection, SortValue};
 
     #[test]
     fn basic_page_limit_defaults() {
@@ -292,7 +292,7 @@ mod tests {
         let data = CursorData {
             sort_col: "created_at".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: serde_json::Value::String("2024-01-01".to_string()),
+            sort_val: SortValue::Text("2024-01-01".to_string()),
             id: "doc-123".to_string(),
             ..Default::default()
         };

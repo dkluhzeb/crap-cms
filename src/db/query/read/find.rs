@@ -1,7 +1,6 @@
 //! `find()` — query multiple documents with filters, sorting, and cursor pagination.
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::Value;
 
 use super::select::apply_select_filter;
 use crate::{
@@ -308,24 +307,6 @@ fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
     check_fields(col, &def.fields, "")
 }
 
-/// Convert a JSON value to its DbValue representation for cursor comparison.
-fn cursor_sort_value(val: &Value) -> DbValue {
-    match val {
-        Value::String(s) => DbValue::Text(s.clone()),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                DbValue::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                DbValue::Real(f)
-            } else {
-                DbValue::Text(n.to_string())
-            }
-        }
-        Value::Null => DbValue::Null,
-        other => DbValue::Text(other.to_string()),
-    }
-}
-
 /// Resolved sort configuration for cursor pagination.
 struct SortInfo<'a> {
     col: &'a str,
@@ -363,7 +344,7 @@ fn apply_cursor_keyset(
         (SortDirection::Desc, false) | (SortDirection::Asc, true) => "<",
         _ => ">",
     };
-    let sort_val = cursor_sort_value(&cursor.sort_val);
+    let sort_val = DbValue::from(&cursor.sort_val);
 
     let inner = inner_keyset_clause(conn, resolved_col, inner_op, sort_val, &cursor.id, params);
     let clause = if let Some(status_val) = cursor.status_val.as_deref() {
@@ -430,7 +411,7 @@ mod tests {
     use crate::core::field::*;
     use crate::db::{
         DbPool, Filter, FilterClause, FilterOp, FindQuery, pool,
-        query::{cursor::build_cursors, write::create},
+        query::{SortValue, cursor::build_cursors, write::create},
     };
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -573,7 +554,7 @@ mod tests {
             .after_cursor(Some(CursorData {
                 sort_col: "id".to_string(),
                 sort_dir: SortDirection::Asc,
-                sort_val: json!("abc"),
+                sort_val: SortValue::from(&json!("abc")),
                 id: "abc".to_string(),
                 ..Default::default()
             }))
@@ -617,7 +598,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(last.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(last.get_str("title").unwrap())),
             id: last.id.to_string(),
             ..Default::default()
         };
@@ -636,7 +617,7 @@ mod tests {
         let cursor2 = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(last2.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(last2.get_str("title").unwrap())),
             id: last2.id.to_string(),
             ..Default::default()
         };
@@ -676,7 +657,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Desc,
-            sort_val: json!(last.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(last.get_str("title").unwrap())),
             id: last.id.to_string(),
             ..Default::default()
         };
@@ -702,7 +683,7 @@ mod tests {
             .after_cursor(Some(CursorData {
                 sort_col: "status".to_string(),
                 sort_dir: SortDirection::Asc,
-                sort_val: json!("x"),
+                sort_val: SortValue::from(&json!("x")),
                 id: "abc".to_string(),
                 ..Default::default()
             }))
@@ -734,7 +715,7 @@ mod tests {
         let fwd_cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(last_p1.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(last_p1.get_str("title").unwrap())),
             id: last_p1.id.to_string(),
             ..Default::default()
         };
@@ -752,7 +733,7 @@ mod tests {
         let back_cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(first_p2.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(first_p2.get_str("title").unwrap())),
             id: first_p2.id.to_string(),
             ..Default::default()
         };
@@ -795,7 +776,7 @@ mod tests {
         let fwd_cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Desc,
-            sort_val: json!(last_p1.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(last_p1.get_str("title").unwrap())),
             id: last_p1.id.to_string(),
             ..Default::default()
         };
@@ -813,7 +794,7 @@ mod tests {
         let back_cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Desc,
-            sort_val: json!(first_p2.get_str("title").unwrap()),
+            sort_val: SortValue::from(&json!(first_p2.get_str("title").unwrap())),
             id: first_p2.id.to_string(),
             ..Default::default()
         };
@@ -839,7 +820,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "id".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!("abc"),
+            sort_val: SortValue::from(&json!("abc")),
             id: "abc".to_string(),
             ..Default::default()
         };
@@ -927,7 +908,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "points".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(9),
+            sort_val: SortValue::from(&json!(9)),
             id: "id-nine".to_string(),
             ..Default::default()
         };
@@ -945,7 +926,7 @@ mod tests {
         let cursor2 = CursorData {
             sort_col: "points".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(20),
+            sort_val: SortValue::from(&json!(20)),
             id: "id-twenty".to_string(),
             ..Default::default()
         };
@@ -969,7 +950,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: Value::Null,
+            sort_val: SortValue::Null,
             id: "anyid".to_string(),
             ..Default::default()
         };
@@ -1031,7 +1012,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "score".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(1.5),
+            sort_val: SortValue::from(&json!(1.5)),
             id: "id-low".to_string(),
             ..Default::default()
         };
@@ -1056,7 +1037,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!(true), // Bool variant
+            sort_val: SortValue::from(&json!(true)), // Bool variant
             id: "anyid".to_string(),
             ..Default::default()
         };
@@ -1089,7 +1070,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: SortDirection::Asc,
-            sort_val: json!("Post 01"),
+            sort_val: SortValue::from(&json!("Post 01")),
             id: "~".to_string(),
             ..Default::default()
         };
@@ -1306,7 +1287,7 @@ mod tests {
             .after_cursor(Some(CursorData {
                 sort_col: "title".to_string(),
                 sort_dir: SortDirection::Asc,
-                sort_val: Value::String("test".to_string()),
+                sort_val: SortValue::Text("test".to_string()),
                 id: "abc".to_string(),
                 ..Default::default()
             }))
@@ -1766,7 +1747,7 @@ mod tests {
         let legacy = CursorData {
             sort_col: "published_at".to_string(),
             sort_dir: SortDirection::Desc,
-            sort_val: serde_json::Value::String("2024-03-01T00:00:00Z".to_string()),
+            sort_val: SortValue::Text("2024-03-01T00:00:00Z".to_string()),
             id: "p3".to_string(),
             status_val: None,
         };

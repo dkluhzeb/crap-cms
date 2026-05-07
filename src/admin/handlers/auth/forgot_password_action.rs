@@ -5,7 +5,6 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::json;
 use tokio::task;
 use tracing::error;
 
@@ -17,7 +16,10 @@ use crate::{
         },
     },
     config::EmailConfig,
-    core::{CollectionDefinition, email, email::EmailRenderer},
+    core::{
+        CollectionDefinition, email,
+        email::{EmailRenderer, PasswordResetEmailContext},
+    },
     db::DbPool,
     service::{ServiceContext, auth::generate_reset_token},
 };
@@ -82,11 +84,11 @@ fn send_reset_email(params: ResetEmailParams) {
 
     let html = match params.email_renderer.render(
         "password_reset",
-        &json!({
-            "reset_url": reset_url,
-            "expiry_minutes": params.reset_expiry / 60,
-            "from_name": params.email_config.from_name,
-        }),
+        &PasswordResetEmailContext {
+            reset_url: &reset_url,
+            expiry_minutes: params.reset_expiry / 60,
+            from_name: &params.email_config.from_name,
+        },
     ) {
         Ok(h) => h,
         Err(e) => {

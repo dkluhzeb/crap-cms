@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::{ReqContext, SharedRegistry};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -743,7 +743,7 @@ crap.collections.define("items", {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -794,7 +794,7 @@ fn context_starts_empty() {
         data: HashMap::new(),
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -837,7 +837,7 @@ fn after_hook_has_crud_access() {
         data: doc.fields.clone(),
         locale: None,
         draft: None,
-        context: std::collections::HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -906,7 +906,7 @@ fn after_hook_error_rolls_back() {
         data: doc.fields.clone(),
         locale: None,
         draft: None,
-        context: std::collections::HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -952,7 +952,7 @@ fn context_flows_to_after_hooks() {
         data: HashMap::new(),
         locale: None,
         draft: None,
-        context: req_context,
+        context: req_context.into(),
         user: None,
         ui_locale: None,
     };

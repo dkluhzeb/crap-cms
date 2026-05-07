@@ -26,7 +26,7 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        Document, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
+        Document, ReqContext, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
         event::SharedEventTransport, validate::ValidationError,
     },
     db::{
@@ -57,9 +57,7 @@ struct UpdateParams {
 }
 
 /// Execute the global update (or unpublish) inside a blocking task.
-fn execute_update(
-    params: UpdateParams,
-) -> Result<(Document, HashMap<String, Value>), ServiceError> {
+fn execute_update(params: UpdateParams) -> Result<(Document, ReqContext), ServiceError> {
     let ctx = ServiceContext::global(&params.slug, &params.def)
         .pool(&params.pool)
         .runner(&params.runner)
@@ -72,7 +70,7 @@ fn execute_update(
     if params.action == "unpublish" && params.def.has_versions() {
         let doc = service::unpublish_global_document(&ctx)?;
 
-        Ok((doc, HashMap::new()))
+        Ok((doc, ReqContext::new()))
     } else {
         service::update_global_document(
             &ctx,

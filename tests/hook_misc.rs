@@ -1,15 +1,15 @@
 //! Miscellaneous hook tests for crap-cms hook lifecycle.
 //!
-//! Tests for: hook_ctx_to_string_map, evaluate_condition_table,
-//! call_row_label, call_display_condition, run_before_render,
-//! run_system_hooks, run_hooks (no conn), run_migration, run_job_handler,
-//! and related standalone lifecycle tests.
+//! Tests for: hook_ctx_to_string_map, call_row_label, call_display_condition,
+//! run_before_render, run_system_hooks, run_hooks (no conn), run_migration,
+//! run_job_handler, and related standalone lifecycle tests.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
@@ -139,213 +139,10 @@ fn to_string_map_group_as_string_falls_through() {
 }
 
 // ── 6L. evaluate_condition_table ─────────────────────────────────────────────
-
-#[test]
-fn evaluate_condition_equals() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "equals": "published"});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "equals": "draft"});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_not_equals() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "not_equals": "draft"});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "not_equals": "published"});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_in() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "in": ["published", "draft"]});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "in": ["archived", "deleted"]});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_not_in() {
-    let data = json!({"status": "published"});
-    let condition = json!({"field": "status", "not_in": ["draft", "archived"]});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-
-    let condition = json!({"field": "status", "not_in": ["published", "draft"]});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &condition, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_is_truthy() {
-    let data = json!({"active": true, "name": "test", "empty": "", "flag": false, "nothing": null});
-
-    let cond = json!({"field": "active", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "name", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "empty", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "flag", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "nothing", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_is_falsy() {
-    let data = json!({"active": false, "name": ""});
-
-    let cond = json!({"field": "active", "is_falsy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "name", "is_falsy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    let cond = json!({"field": "missing", "is_falsy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_array_means_and() {
-    let data = json!({"status": "published", "role": "admin"});
-
-    // All conditions true => true
-    let conditions = json!([
-        {"field": "status", "equals": "published"},
-        {"field": "role", "equals": "admin"}
-    ]);
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &conditions,
-        &data
-    ));
-
-    // One false => false
-    let conditions = json!([
-        {"field": "status", "equals": "published"},
-        {"field": "role", "equals": "editor"}
-    ]);
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &conditions,
-        &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_unknown_operator_shows() {
-    let data = json!({"x": 1});
-    let cond = json!({"field": "x", "unknown_op": "whatever"});
-    // Unknown operator defaults to true (show field)
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_non_object_non_array() {
-    let data = json!({"x": 1});
-    // Non-object, non-array condition defaults to true
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &json!("string"),
-        &data
-    ));
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &json!(42),
-        &data
-    ));
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &json!(true),
-        &data
-    ));
-}
-
-#[test]
-fn evaluate_condition_is_truthy_with_numbers_arrays_objects() {
-    let data = json!({
-        "count": 42,
-        "zero": 0,
-        "items": [1, 2],
-        "meta": {"key": "val"},
-        "empty_arr": [],
-        "empty_obj": {}
-    });
-
-    // Non-zero numbers are truthy
-    let cond = json!({"field": "count", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Zero is falsy
-    let cond = json!({"field": "zero", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Non-empty arrays are truthy
-    let cond = json!({"field": "items", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Non-empty objects are truthy
-    let cond = json!({"field": "meta", "is_truthy": true});
-    assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Empty arrays are falsy
-    let cond = json!({"field": "empty_arr", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-
-    // Empty objects are falsy
-    let cond = json!({"field": "empty_obj", "is_truthy": true});
-    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &cond, &data
-    ));
-}
+//
+// Removed in alpha.9. The `evaluate_condition_table` free function was
+// replaced by typed [`crap_cms::core::ConditionExpr::evaluate`]; the grammar
+// is now exercised directly as unit tests inside `core::condition::tests`.
 
 // ── 6M. call_row_label ───────────────────────────────────────────────────────
 
@@ -417,14 +214,12 @@ fn call_display_condition_table() {
     match result.unwrap() {
         crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible } => {
             assert!(visible, "status=published should be visible");
-            assert_eq!(
-                condition.get("field").and_then(|v| v.as_str()),
-                Some("status")
-            );
-            assert_eq!(
-                condition.get("equals").and_then(|v| v.as_str()),
-                Some("published")
-            );
+            let row = match &condition {
+                ConditionExpr::Single(row) => row,
+                ConditionExpr::All(_) => panic!("expected single row, got AND"),
+            };
+            assert_eq!(row.field, "status");
+            assert!(matches!(&row.op, ConditionOp::Equals(v) if v == &json!("published")));
         }
         other => panic!("Expected Table, got {:?}", other),
     }
@@ -519,7 +314,7 @@ fn run_hooks_no_conn_fires_collection_and_registered() {
         data,
         locale: None,
         draft: None,
-        context: HashMap::new(),
+        context: ReqContext::new(),
         user: None,
         ui_locale: None,
     };
@@ -1083,14 +878,12 @@ fn call_display_condition_standalone_table() {
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible }) => {
             assert!(visible, "status=published should match the condition");
-            assert_eq!(
-                condition.get("field").and_then(|v| v.as_str()),
-                Some("status")
-            );
-            assert_eq!(
-                condition.get("equals").and_then(|v| v.as_str()),
-                Some("published")
-            );
+            let row = match &condition {
+                ConditionExpr::Single(row) => row,
+                ConditionExpr::All(_) => panic!("expected single row, got AND"),
+            };
+            assert_eq!(row.field, "status");
+            assert!(matches!(&row.op, ConditionOp::Equals(v) if v == &json!("published")));
         }
         other => panic!("Expected Table result, got {:?}", other),
     }
