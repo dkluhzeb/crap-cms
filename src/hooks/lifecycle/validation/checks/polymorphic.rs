@@ -20,8 +20,6 @@
 //! no-op for plain (non-polymorphic) relationships, where the target
 //! collection is fixed by the field config and unforgeable.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
@@ -99,19 +97,19 @@ fn check_one(
         return;
     }
 
-    errors.push(FieldError::with_key(
-        data_key.to_owned(),
-        format!(
-            "{} references collection '{}' which is not in the polymorphic allowlist {:?}",
-            field.name, collection, allowed
-        ),
-        "validation.polymorphic_collection_not_allowed",
-        HashMap::from([
-            ("field".to_string(), field.name.clone()),
-            ("collection".to_string(), collection),
-            ("allowed".to_string(), allowed.join(",")),
-        ]),
-    ));
+    errors.push(
+        FieldError::with_key(
+            data_key.to_owned(),
+            format!(
+                "{} references collection '{}' which is not in the polymorphic allowlist {:?}",
+                field.name, collection, allowed
+            ),
+            "validation.polymorphic_collection_not_allowed",
+        )
+        .with_param("field", field.name.clone())
+        .with_param("collection", collection)
+        .with_param("allowed", allowed.join(",")),
+    );
 }
 
 #[cfg(test)]

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, validate::FieldError};
@@ -33,41 +31,43 @@ pub(crate) fn check_numeric_bounds(
     // would otherwise reach the DB unchallenged and break downstream
     // filters / aggregations (NaN ≠ NaN, no row ever matches).
     if !v.is_finite() {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be a finite number", field.name),
-            "validation.finite_number",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be a finite number", field.name),
+                "validation.finite_number",
+            )
+            .with_param("field", field.name.clone()),
+        );
         return;
     }
 
     if let Some(min_val) = field.min
         && v < min_val
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be at least {}", field.name, min_val),
-            "validation.min_value",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("min".to_string(), min_val.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be at least {}", field.name, min_val),
+                "validation.min_value",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("min", min_val.to_string()),
+        );
     }
 
     if let Some(max_val) = field.max
         && v > max_val
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be at most {}", field.name, max_val),
-            "validation.max_value",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("max".to_string(), max_val.to_string()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be at most {}", field.name, max_val),
+                "validation.max_value",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("max", max_val.to_string()),
+        );
     }
 }
 

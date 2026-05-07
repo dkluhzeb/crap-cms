@@ -248,12 +248,14 @@ fn validate_node_instance(
 
         // Required check (skip for drafts)
         if attr_def.required && is_empty && !ctx.is_draft {
-            errors.push(FieldError::with_key(
-                &data_key,
-                format!("{} is required", attr_def.name),
-                "validation.required",
-                HashMap::from([("field".to_string(), attr_def.name.clone())]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    &data_key,
+                    format!("{} is required", attr_def.name),
+                    "validation.required",
+                )
+                .with_param("field", attr_def.name.clone()),
+            );
             continue;
         }
 

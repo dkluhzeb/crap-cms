@@ -104,6 +104,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   borrow view over the `{type, text, attrs, content}` shape used by
   the FTS extractor. Replaces inline `.get(...).and_then(Value::as_*)`
   chains; pure clarity refactor with no behavior change.
+- `core::validate::FieldError::with_key` is no longer 4-arity. Drop
+  the trailing `params: HashMap<String, String>` argument; chain
+  `.with_param(name, value)` instead. ~30 call sites across
+  `hooks::lifecycle::validation::checks/*`, `recursive.rs`,
+  `richtext_attrs.rs`, `sub_fields/validate.rs` simplified; the
+  `use std::collections::HashMap;` import drops out of 10 leaf check
+  files.
+- `hooks::lifecycle::crud::helpers::ExtractedData` exposes
+  `join_data: HashMap<String, Value>` directly instead of a merged
+  `hook` map that callers re-filtered. Drops the `flat-as-strings +
+  join_data merge → re-filter for non-strings` round-trip from four
+  call sites (`create.rs`, `update.rs`).
 
 ### Fixed
 

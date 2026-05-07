@@ -36,12 +36,14 @@ pub(crate) fn check_custom_validate(
         Err(e) => {
             warn!("Validate function '{}' error: {}", validate_ref, e);
 
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("Validation failed (internal error in '{}')", validate_ref),
-                "validation.custom_error",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("Validation failed (internal error in '{}')", validate_ref),
+                    "validation.custom_error",
+                )
+                .with_param("field", field.name.clone()),
+            );
         }
     }
 }

@@ -1,7 +1,6 @@
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use std::collections::HashMap;
 
 /// Check required constraint. Skipped for checkboxes, drafts, and partial updates.
 /// For Array and has-many Relationship, "required" means at least one item.
@@ -26,12 +25,14 @@ pub(crate) fn check_required(
         return;
     }
 
-    errors.push(FieldError::with_key(
-        data_key.to_owned(),
-        format!("{} is required", field.name),
-        "validation.required",
-        HashMap::from([("field".to_string(), field.name.clone())]),
-    ));
+    errors.push(
+        FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} is required", field.name),
+            "validation.required",
+        )
+        .with_param("field", field.name.clone()),
+    );
 }
 
 /// Check if a field value is "present" for required validation purposes.

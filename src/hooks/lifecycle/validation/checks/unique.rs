@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::{
@@ -38,25 +36,29 @@ pub(crate) fn check_unique(
         ctx.soft_delete,
     ) {
         Ok(count) if count > 0 => {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} must be unique", field.name),
-                "validation.unique",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} must be unique", field.name),
+                    "validation.unique",
+                )
+                .with_param("field", field.name.clone()),
+            );
         }
         Ok(_) => {}
         Err(e) => {
             tracing::warn!("Unique check failed for {}.{}: {}", ctx.table, data_key, e);
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!(
-                    "Could not verify uniqueness for {} (database error)",
-                    field.name
-                ),
-                "validation.unique_check_failed",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!(
+                        "Could not verify uniqueness for {} (database error)",
+                        field.name
+                    ),
+                    "validation.unique_check_failed",
+                )
+                .with_param("field", field.name.clone()),
+            );
         }
     }
 }

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
 use chrono_tz::Tz;
 use serde_json::Value;
@@ -23,12 +21,14 @@ pub(crate) fn check_date_field(
     };
 
     if !is_valid_date_format(s) {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} is not a valid date format", field.name),
-            "validation.invalid_date",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} is not a valid date format", field.name),
+                "validation.invalid_date",
+            )
+            .with_param("field", field.name.clone()),
+        );
     }
 
     let date_part = s.get(..10).unwrap_or(s.as_str());
@@ -36,29 +36,29 @@ pub(crate) fn check_date_field(
     if let Some(ref min_date) = field.min_date
         && date_part < min_date.as_str()
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be on or after {}", field.name, min_date),
-            "validation.date_min",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("min".to_string(), min_date.clone()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be on or after {}", field.name, min_date),
+                "validation.date_min",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("min", min_date.clone()),
+        );
     }
 
     if let Some(ref max_date) = field.max_date
         && date_part > max_date.as_str()
     {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} must be on or before {}", field.name, max_date),
-            "validation.date_max",
-            HashMap::from([
-                ("field".to_string(), field.name.clone()),
-                ("max".to_string(), max_date.clone()),
-            ]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be on or before {}", field.name, max_date),
+                "validation.date_max",
+            )
+            .with_param("field", field.name.clone())
+            .with_param("max", max_date.clone()),
+        );
     }
 }
 

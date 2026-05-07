@@ -183,12 +183,14 @@ fn validate_leaf_sub_field(
 
     // 1. Required check (skip for Checkbox — absent/false is valid, skip for drafts)
     if sf.required && is_empty && !ctx.is_draft && sf.field_type != FieldType::Checkbox {
-        errors.push(FieldError::with_key(
-            qualified_name.to_owned(),
-            format!("{} is required", sf.name),
-            "validation.required",
-            HashMap::from([("field".to_string(), sf.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                qualified_name.to_owned(),
+                format!("{} is required", sf.name),
+                "validation.required",
+            )
+            .with_param("field", sf.name.clone()),
+        );
     }
 
     // 2. Date format check
@@ -197,12 +199,14 @@ fn validate_leaf_sub_field(
         && let Some(Value::String(s)) = value
         && !is_valid_date_format(s)
     {
-        errors.push(FieldError::with_key(
-            qualified_name.to_owned(),
-            format!("{} is not a valid date format", sf.name),
-            "validation.invalid_date",
-            HashMap::from([("field".to_string(), sf.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                qualified_name.to_owned(),
+                format!("{} is not a valid date format", sf.name),
+                "validation.invalid_date",
+            )
+            .with_param("field", sf.name.clone()),
+        );
     }
 
     // 3. Custom Lua validate function
@@ -224,12 +228,14 @@ fn validate_leaf_sub_field(
             Err(e) => {
                 warn!("Validate function '{}' error: {}", validate_ref, e);
 
-                errors.push(FieldError::with_key(
-                    qualified_name.to_owned(),
-                    format!("Validation failed (internal error in '{}')", validate_ref),
-                    "validation.custom_error",
-                    HashMap::from([("field".to_string(), sf.name.clone())]),
-                ));
+                errors.push(
+                    FieldError::with_key(
+                        qualified_name.to_owned(),
+                        format!("Validation failed (internal error in '{}')", validate_ref),
+                        "validation.custom_error",
+                    )
+                    .with_param("field", sf.name.clone()),
+                );
             }
         }
     }

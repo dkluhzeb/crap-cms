@@ -24,19 +24,32 @@ impl FieldError {
         }
     }
 
-    /// Create an error with a translation key and interpolation params.
+    /// Create an error with a translation key. Interpolation params for
+    /// the i18n template are added with [`with_param`](Self::with_param).
     pub fn with_key(
         field: impl Into<String>,
         message: impl Into<String>,
         key: impl Into<String>,
-        params: HashMap<String, String>,
     ) -> Self {
         Self {
             field: field.into(),
             message: message.into(),
             key: Some(key.into()),
-            params,
+            params: HashMap::new(),
         }
+    }
+
+    /// Add or override an interpolation parameter for the translation key.
+    /// Chainable on construction:
+    ///
+    /// ```ignore
+    /// FieldError::with_key(field_name, msg, "validation.length_min")
+    ///     .with_param("field", display_name)
+    ///     .with_param("min", min_len.to_string())
+    /// ```
+    pub fn with_param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.params.insert(name.into(), value.into());
+        self
     }
 }
 
@@ -148,17 +161,28 @@ mod tests {
 
     #[test]
     fn with_key_stores_key_and_params() {
-        let mut params = HashMap::new();
-        params.insert("field".to_string(), "title".to_string());
-        let err = FieldError::with_key(
-            "title",
-            "title is required",
-            "validation.required",
-            params.clone(),
-        );
+        let err = FieldError::with_key("title", "title is required", "validation.required")
+            .with_param("field", "title");
         assert_eq!(err.key.as_deref(), Some("validation.required"));
-        assert_eq!(err.params, params);
+        assert_eq!(err.params.get("field").map(String::as_str), Some("title"));
         assert_eq!(err.message, "title is required");
+    }
+
+    #[test]
+    fn with_param_chain_accumulates() {
+        let err = FieldError::with_key("title", "min 5", "validation.length_min")
+            .with_param("field", "Title")
+            .with_param("min", "5");
+        assert_eq!(err.params.get("field").map(String::as_str), Some("Title"));
+        assert_eq!(err.params.get("min").map(String::as_str), Some("5"));
+    }
+
+    #[test]
+    fn with_param_overrides_existing() {
+        let err = FieldError::with_key("title", "msg", "validation.required")
+            .with_param("field", "title")
+            .with_param("field", "Title");
+        assert_eq!(err.params.get("field").map(String::as_str), Some("Title"));
     }
 
     #[test]

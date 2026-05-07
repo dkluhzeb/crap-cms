@@ -1,10 +1,7 @@
 //! Registration of `crap.collections.update` Lua function.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
-use serde_json::Value;
 
 use super::unpublish::{UnpublishCtx, handle_unpublish};
 
@@ -64,7 +61,7 @@ fn update_document_lua(
 
     let ExtractedData {
         flat,
-        hook,
+        join_data,
         password,
     } = extract_data(lua, &data_table, &def)?;
 
@@ -72,13 +69,6 @@ fn update_document_lua(
     // via WriteHooks::field_write_denied.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
-
-    // Separate join data from the merged hook map
-    let join_data: HashMap<String, Value> = hook
-        .iter()
-        .filter(|(_, v)| !matches!(v, Value::String(_)))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
 
     let r = reg
         .read()

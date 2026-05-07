@@ -186,46 +186,54 @@ pub(crate) fn enforce_access(
     }
 }
 
-/// Extracted data from a Lua data table for create/update operations.
+/// Extracted data from a Lua data table for create/update/validate operations.
+///
+/// `flat` is the scalar-string column map (with group fields flattened to
+/// `parent__child` keys). `join_data` is the relations / has-many / arrays /
+/// blocks subset — non-string entries from the original Lua table that go
+/// into join tables, not the parent row's columns. `password` is split off
+/// from both maps for auth collections so it can be hashed before insert.
 pub(crate) struct ExtractedData {
     pub(crate) flat: HashMap<String, String>,
-    pub(crate) hook: HashMap<String, Value>,
+    pub(crate) join_data: HashMap<String, Value>,
     pub(crate) password: Option<String>,
 }
 
-/// Extract form data, join data, and password from a Lua data table.
+/// Extract scalar columns, join data, and password from a Lua data table.
 ///
-/// Shared by both `create` and `update` operations: flattens group fields,
-/// separates the password for auth collections, and builds the hook data map
-/// from flat string values plus JSON join data.
+/// Shared by `create`, `update`, and `validate`: flattens group fields,
+/// separates the password for auth collections, and partitions the
+/// remainder into scalar `flat` (one DB row column per key) and `join_data`
+/// (rows for join tables — relations, arrays, blocks).
 pub(crate) fn extract_data(
     lua: &Lua,
     data_table: &Table,
     def: &CollectionDefinition,
 ) -> LuaResult<ExtractedData> {
-    let mut data = lua_table_to_hashmap(data_table)?;
-    flatten_lua_groups(data_table, &def.fields, &mut data)?;
+    let mut flat = lua_table_to_hashmap(data_table)?;
+    flatten_lua_groups(data_table, &def.fields, &mut flat)?;
 
     let password = if def.is_auth_collection() {
-        data.remove("password")
+        flat.remove("password")
     } else {
         None
     };
 
-    let mut hook: HashMap<String, Value> = data
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+    // `lua_table_to_json_map` returns every Lua value as JSON; `flat`
+    // already captured the scalar-string subset. Filter out strings so
+    // `join_data` carries only the structurally rich values (objects,
+    // arrays, numbers, bools) that go into join tables.
+    let mut join_data: HashMap<String, Value> = lua_table_to_json_map(lua, data_table)?
+        .into_iter()
+        .filter(|(_, v)| !matches!(v, Value::String(_)))
         .collect();
-    let join_data = lua_table_to_json_map(lua, data_table)?;
-    hook.extend(join_data);
-
     if def.is_auth_collection() {
-        hook.remove("password");
+        join_data.remove("password");
     }
 
     Ok(ExtractedData {
-        flat: data,
-        hook,
+        flat,
+        join_data,
         password,
     })
 }

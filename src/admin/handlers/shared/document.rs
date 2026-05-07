@@ -296,15 +296,11 @@ mod tests {
     #[test]
     fn translate_with_key_uses_translation() {
         let translations = test_translations();
-        let mut params = HashMap::new();
-        params.insert("field".to_string(), "Title".to_string());
 
-        let ve = ValidationError::new(vec![FieldError::with_key(
-            "title",
-            "title is required",
-            "validation.required",
-            params,
-        )]);
+        let ve = ValidationError::new(vec![
+            FieldError::with_key("title", "title is required", "validation.required")
+                .with_param("field", "Title"),
+        ]);
 
         let map = translate_validation_errors(&ve, &translations, "en");
         assert_eq!(map.get("title").unwrap(), "Title is required");
@@ -321,15 +317,11 @@ mod tests {
     #[test]
     fn translate_german_locale() {
         let translations = test_translations();
-        let mut params = HashMap::new();
-        params.insert("field".to_string(), "Titel".to_string());
 
-        let ve = ValidationError::new(vec![FieldError::with_key(
-            "title",
-            "title is required",
-            "validation.required",
-            params,
-        )]);
+        let ve = ValidationError::new(vec![
+            FieldError::with_key("title", "title is required", "validation.required")
+                .with_param("field", "Titel"),
+        ]);
 
         let map = translate_validation_errors(&ve, &translations, "de");
         assert_eq!(map.get("title").unwrap(), "Titel ist erforderlich");

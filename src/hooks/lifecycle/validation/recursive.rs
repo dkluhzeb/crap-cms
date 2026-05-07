@@ -121,15 +121,15 @@ fn validate_scalar_field(
             let row_obj = match row.as_object() {
                 Some(obj) => obj,
                 None => {
-                    errors.push(FieldError::with_key(
-                        format!("{}[{}]", data_key, idx),
-                        format!("{} row {} must be an object", field.name, idx),
-                        "validation.invalid_row_type",
-                        HashMap::from([
-                            ("field".to_string(), field.name.clone()),
-                            ("index".to_string(), idx.to_string()),
-                        ]),
-                    ));
+                    errors.push(
+                        FieldError::with_key(
+                            format!("{}[{}]", data_key, idx),
+                            format!("{} row {} must be an object", field.name, idx),
+                            "validation.invalid_row_type",
+                        )
+                        .with_param("field", field.name.clone())
+                        .with_param("index", idx.to_string()),
+                    );
                     continue;
                 }
             };
@@ -141,19 +141,19 @@ fn validate_scalar_field(
                 match field.blocks.iter().find(|b| b.block_type == block_type) {
                     Some(bd) => &bd.fields,
                     None => {
-                        errors.push(FieldError::with_key(
-                            format!("{}[{}]", data_key, idx),
-                            format!(
-                                "{} row {} has unknown block type '{}'",
-                                field.name, idx, block_type
-                            ),
-                            "validation.unknown_block_type",
-                            HashMap::from([
-                                ("field".to_string(), field.name.clone()),
-                                ("index".to_string(), idx.to_string()),
-                                ("block_type".to_string(), block_type.to_string()),
-                            ]),
-                        ));
+                        errors.push(
+                            FieldError::with_key(
+                                format!("{}[{}]", data_key, idx),
+                                format!(
+                                    "{} row {} has unknown block type '{}'",
+                                    field.name, idx, block_type
+                                ),
+                                "validation.unknown_block_type",
+                            )
+                            .with_param("field", field.name.clone())
+                            .with_param("index", idx.to_string())
+                            .with_param("block_type", block_type.to_string()),
+                        );
                         continue;
                     }
                 }
@@ -186,18 +186,18 @@ fn validate_scalar_field(
         match sanitize_locale(locale) {
             Ok(l) => Some(format!("{}__{}", data_key, l)),
             Err(_) => {
-                errors.push(FieldError::with_key(
-                    data_key.clone(),
-                    format!(
-                        "{}: invalid locale '{}' — cannot verify uniqueness",
-                        field.name, locale,
-                    ),
-                    "validation.invalid_locale",
-                    HashMap::from([
-                        ("field".to_string(), field.name.clone()),
-                        ("locale".to_string(), locale.to_string()),
-                    ]),
-                ));
+                errors.push(
+                    FieldError::with_key(
+                        data_key.clone(),
+                        format!(
+                            "{}: invalid locale '{}' — cannot verify uniqueness",
+                            field.name, locale,
+                        ),
+                        "validation.invalid_locale",
+                    )
+                    .with_param("field", field.name.clone())
+                    .with_param("locale", locale.to_string()),
+                );
                 None
             }
         }

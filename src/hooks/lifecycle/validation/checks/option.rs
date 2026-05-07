@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
@@ -26,12 +24,14 @@ pub(crate) fn check_option_valid(
     if field.has_many {
         check_has_many_options(field, data_key, s, errors);
     } else if !field.options.iter().any(|opt| opt.value == *s) {
-        errors.push(FieldError::with_key(
-            data_key.to_owned(),
-            format!("{} has an invalid option", field.name),
-            "validation.invalid_option",
-            HashMap::from([("field".to_string(), field.name.clone())]),
-        ));
+        errors.push(
+            FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} has an invalid option", field.name),
+                "validation.invalid_option",
+            )
+            .with_param("field", field.name.clone()),
+        );
     }
 }
 
@@ -45,15 +45,17 @@ fn check_has_many_options(
     let values: Vec<String> = match serde_json::from_str(json_str) {
         Ok(v) => v,
         Err(_) => {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!(
-                    "{} has invalid multi-select value (malformed JSON)",
-                    field.name
-                ),
-                "validation.invalid_multi_select_json",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!(
+                        "{} has invalid multi-select value (malformed JSON)",
+                        field.name
+                    ),
+                    "validation.invalid_multi_select_json",
+                )
+                .with_param("field", field.name.clone()),
+            );
 
             return;
         }
@@ -61,15 +63,15 @@ fn check_has_many_options(
 
     for v in &values {
         if !field.options.iter().any(|opt| opt.value == *v) {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} has an invalid option: {}", field.name, v),
-                "validation.invalid_option_value",
-                HashMap::from([
-                    ("field".to_string(), field.name.clone()),
-                    ("value".to_string(), v.clone()),
-                ]),
-            ));
+            errors.push(
+                FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} has an invalid option: {}", field.name, v),
+                    "validation.invalid_option_value",
+                )
+                .with_param("field", field.name.clone())
+                .with_param("value", v.clone()),
+            );
         }
     }
 }
