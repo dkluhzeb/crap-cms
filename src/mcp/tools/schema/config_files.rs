@@ -6,8 +6,30 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::{Value, json, to_string_pretty};
+use serde::Serialize;
+use serde_json::to_string_pretty;
 use tracing::info;
+
+/// Response shape for `write_config_file`: echoes the relative path written.
+#[derive(Serialize)]
+struct WrittenResponse<'a> {
+    written: &'a str,
+}
+
+/// One entry in the `list_config_files` response.
+#[derive(Serialize)]
+struct ConfigFileEntry {
+    name: String,
+    #[serde(rename = "type")]
+    kind: ConfigFileKind,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConfigFileKind {
+    File,
+    Directory,
+}
 
 /// Safely resolve a relative path within the config directory.
 /// Rejects absolute paths, `..` components, and symlinks escaping the boundary.
@@ -57,13 +79,9 @@ pub(in crate::mcp::tools) fn safe_config_path(
 
 /// Read a file from the config directory.
 pub(in crate::mcp::tools) fn exec_read_config_file(
-    args: &Value,
+    path: &str,
     config_dir: &Path,
 ) -> Result<String> {
-    let path = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .context("Missing 'path' argument")?;
     let full_path = safe_config_path(config_dir, path)?;
     let content = fs::read_to_string(&full_path)
         .with_context(|| format!("Failed to read {}", full_path.display()))?;
@@ -72,17 +90,10 @@ pub(in crate::mcp::tools) fn exec_read_config_file(
 
 /// Write a file to the config directory, creating parent directories as needed.
 pub(in crate::mcp::tools) fn exec_write_config_file(
-    args: &Value,
+    path: &str,
+    content: &str,
     config_dir: &Path,
 ) -> Result<String> {
-    let path = args
-        .get("path")
-        .and_then(|v| v.as_str())
-        .context("Missing 'path' argument")?;
-    let content = args
-        .get("content")
-        .and_then(|v| v.as_str())
-        .context("Missing 'content' argument")?;
     let full_path = safe_config_path(config_dir, path)?;
 
     if let Some(parent) = full_path.parent() {
@@ -91,31 +102,32 @@ pub(in crate::mcp::tools) fn exec_write_config_file(
     info!("MCP write_config_file: {}", path);
     fs::write(&full_path, content)
         .with_context(|| format!("Failed to write {}", full_path.display()))?;
-    Ok(json!({ "written": path }).to_string())
+    Ok(to_string_pretty(&WrittenResponse { written: path })?)
 }
 
 /// List files and directories within a config subdirectory.
 pub(in crate::mcp::tools) fn exec_list_config_files(
-    args: &Value,
+    subdir: Option<&str>,
     config_dir: &Path,
 ) -> Result<String> {
-    let subdir = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let dir = if subdir.is_empty() {
-        config_dir.to_path_buf()
-    } else {
-        safe_config_path(config_dir, subdir)?
+    let dir = match subdir {
+        Some(s) if !s.is_empty() => safe_config_path(config_dir, s)?,
+        _ => config_dir.to_path_buf(),
     };
     let mut files = Vec::new();
 
     if dir.is_dir() {
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.file_type()?.is_dir();
-            files.push(json!({
-                "name": name,
-                "type": if is_dir { "directory" } else { "file" },
-            }));
+            let kind = if entry.file_type()?.is_dir() {
+                ConfigFileKind::Directory
+            } else {
+                ConfigFileKind::File
+            };
+            files.push(ConfigFileEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                kind,
+            });
         }
     }
     Ok(to_string_pretty(&files)?)

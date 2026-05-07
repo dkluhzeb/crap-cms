@@ -3,7 +3,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::cli;
 use crate::scaffold::render::render;
@@ -11,6 +11,22 @@ use crate::scaffold::render::render;
 use super::parser::{pluralize, singularize};
 use super::types::{CONTAINER_TYPES, CollectionOptions, FieldStub};
 use super::writer::write_field_lua;
+
+/// Handlebars context for the `collection` template.
+#[derive(Serialize)]
+struct CollectionTemplateContext<'a> {
+    slug: &'a str,
+    label_singular: String,
+    label_plural: String,
+    timestamps: &'static str,
+    auth: bool,
+    upload: bool,
+    versions: bool,
+    no_timestamps: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title_field: Option<&'a str>,
+    fields_lua: String,
+}
 
 /// Generate a collection Lua file at `<config_dir>/collections/<slug>.lua`.
 ///
@@ -91,18 +107,18 @@ fn render_collection_lua(
 
     render(
         "collection",
-        &json!({
-            "slug": slug,
-            "label_singular": label_singular,
-            "label_plural": label_plural,
-            "timestamps": if opts.no_timestamps { "false" } else { "true" },
-            "auth": opts.auth,
-            "upload": opts.upload,
-            "versions": opts.versions,
-            "no_timestamps": opts.no_timestamps,
-            "title_field": title_field(fields, opts),
-            "fields_lua": fields_lua,
-        }),
+        &CollectionTemplateContext {
+            slug,
+            label_singular,
+            label_plural,
+            timestamps: if opts.no_timestamps { "false" } else { "true" },
+            auth: opts.auth,
+            upload: opts.upload,
+            versions: opts.versions,
+            no_timestamps: opts.no_timestamps,
+            title_field: title_field(fields, opts),
+            fields_lua,
+        },
     )
 }
 

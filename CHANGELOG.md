@@ -116,6 +116,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `hook` map that callers re-filtered. Drops the `flat-as-strings +
   join_data merge → re-filter for non-strings` round-trip from four
   call sites (`create.rs`, `update.rs`).
+- All five `scaffold/*/generator.rs` Handlebars contexts use typed
+  `#[derive(Serialize)]` structs (`CollectionTemplateContext`,
+  `CrapTomlContext`, `GlobalTemplateContext`, `JobTemplateContext`,
+  plus `CollectionHookContext` / `FieldHookContext` / `AccessHookContext`
+  / `ConditionBooleanContext` / `ConditionTableContext`) instead of
+  ad-hoc `json!({...})`.
+- MCP write tool responses use small typed Serialize structs:
+  `DeletedResponse`, `RestoredResponse`, `DeleteManyResponse`,
+  `UpdateManyResponse`, `WrittenResponse`, `ConfigFileEntry`
+  (`#[serde(rename_all = "snake_case")]` enum `ConfigFileKind`),
+  `NotFoundResponse`. All MCP tool serializations standardized on
+  `to_string_pretty` for LLM-consumer readability.
+- `mcp::tools::schema::introspection::exec_cli_reference` now takes
+  `command: Option<&str>` instead of `&Value`. The three
+  `mcp::tools::schema::config_files::exec_*` signatures take
+  `path: &str` / `content: &str` / `subdir: Option<&str>` instead
+  of `&Value`. The MCP dispatcher extracts those fields once at the
+  call site and surfaces "Missing X argument" errors there.
+- `mcp::resources::collections_schema` and `globals_schema` return
+  typed `BTreeMap<String, CollectionSchemaEntry>` /
+  `BTreeMap<String, GlobalSchemaEntry>` instead of `Map<String, Value>`
+  with hand-rolled `json!({...})` per entry. Inner `schema: Value`
+  stays as JSON Schema (KEEP-PROTO).
+- New shared `crate::commands::export::file::ExportFile` struct
+  (`crap_version`, `exported_at`, `collections: Map<String, Value>`)
+  used by `commands::export::export_cmd` (writer) and
+  `import_cmd` (reader) instead of constructing/destructuring an
+  ad-hoc `Value`. Inner per-document payloads stay `Value` (doc
+  fields).
 
 ### Fixed
 

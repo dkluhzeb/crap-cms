@@ -1,7 +1,9 @@
 //! MCP resource definitions and handlers.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
-use serde_json::{Map, Value, json, to_string_pretty, to_value};
+use serde_json::{Value, to_string_pretty, to_value};
 use tracing::error;
 
 use crate::mcp::{
@@ -10,6 +12,26 @@ use crate::mcp::{
     tools::should_include,
 };
 use crate::{config::CrapConfig, core::Registry};
+
+/// Per-collection metadata + schema, keyed by slug in
+/// [`collections_schema`]'s output. The `schema` field is JSON Schema —
+/// stays as `Value` because that's its native shape.
+#[derive(Serialize)]
+struct CollectionSchemaEntry {
+    label: String,
+    timestamps: bool,
+    has_auth: bool,
+    has_upload: bool,
+    has_drafts: bool,
+    schema: Value,
+}
+
+/// Per-global metadata + schema, keyed by slug in [`globals_schema`].
+#[derive(Serialize)]
+struct GlobalSchemaEntry {
+    label: String,
+    schema: Value,
+}
 
 /// List all available MCP resources.
 pub fn list_resources() -> Vec<ResourceDefinition> {
@@ -56,25 +78,27 @@ fn json_resource(uri: &str, text: String) -> ResourceContent {
 }
 
 /// Build the schema map for all visible collections.
-fn collections_schema(registry: &Registry, config: &CrapConfig) -> Map<String, Value> {
-    let mut schemas = Map::new();
+fn collections_schema(
+    registry: &Registry,
+    config: &CrapConfig,
+) -> BTreeMap<String, CollectionSchemaEntry> {
+    let mut schemas = BTreeMap::new();
 
     for (slug, def) in &registry.collections {
         if !should_include(slug, &config.mcp) {
             continue;
         }
 
-        let schema = collection_input_schema(def, CrudOp::Create);
         schemas.insert(
             slug.to_string(),
-            json!({
-                "label": def.display_name(),
-                "timestamps": def.timestamps,
-                "has_auth": def.is_auth_collection(),
-                "has_upload": def.is_upload_collection(),
-                "has_drafts": def.has_drafts(),
-                "schema": schema,
-            }),
+            CollectionSchemaEntry {
+                label: def.display_name().to_string(),
+                timestamps: def.timestamps,
+                has_auth: def.is_auth_collection(),
+                has_upload: def.is_upload_collection(),
+                has_drafts: def.has_drafts(),
+                schema: collection_input_schema(def, CrudOp::Create),
+            },
         );
     }
 
@@ -82,17 +106,16 @@ fn collections_schema(registry: &Registry, config: &CrapConfig) -> Map<String, V
 }
 
 /// Build the schema map for all globals.
-fn globals_schema(registry: &Registry) -> Map<String, Value> {
-    let mut schemas = Map::new();
+fn globals_schema(registry: &Registry) -> BTreeMap<String, GlobalSchemaEntry> {
+    let mut schemas = BTreeMap::new();
 
     for (slug, def) in &registry.globals {
-        let schema = global_input_schema(def, CrudOp::Update);
         schemas.insert(
             slug.to_string(),
-            json!({
-                "label": def.display_name(),
-                "schema": schema,
-            }),
+            GlobalSchemaEntry {
+                label: def.display_name().to_string(),
+                schema: global_input_schema(def, CrudOp::Update),
+            },
         );
     }
 

@@ -3,9 +3,49 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::{cli, scaffold::render::render, typegen::to_pascal_case};
+
+/// Handlebars context for the `hook_collection` template.
+#[derive(Serialize)]
+struct CollectionHookContext<'a> {
+    position: &'a str,
+    collection: &'a str,
+    context_type: String,
+}
+
+/// Handlebars context for the `hook_field` template.
+#[derive(Serialize)]
+struct FieldHookContext<'a> {
+    position: &'a str,
+    collection: &'a str,
+    field: &'a str,
+    context_type: String,
+}
+
+/// Handlebars context for the `hook_access` template.
+#[derive(Serialize)]
+struct AccessHookContext<'a> {
+    position: &'a str,
+    collection: &'a str,
+}
+
+/// Handlebars context for the `hook_condition_boolean` template.
+#[derive(Serialize)]
+struct ConditionBooleanContext<'a> {
+    collection: &'a str,
+    field_name: &'a str,
+    data_type: String,
+}
+
+/// Handlebars context for the `hook_condition_table` template.
+#[derive(Serialize)]
+struct ConditionTableContext<'a> {
+    collection: &'a str,
+    data_type: String,
+    body: String,
+}
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -136,11 +176,11 @@ fn render_collection_hook(opts: &MakeHookOptions) -> Result<String> {
 
     render(
         "hook_collection",
-        &json!({
-            "position": opts.position,
-            "collection": opts.collection,
-            "context_type": context_type,
-        }),
+        &CollectionHookContext {
+            position: opts.position,
+            collection: opts.collection,
+            context_type,
+        },
     )
 }
 
@@ -148,12 +188,12 @@ fn render_collection_hook(opts: &MakeHookOptions) -> Result<String> {
 fn render_field_hook(opts: &MakeHookOptions) -> Result<String> {
     render(
         "hook_field",
-        &json!({
-            "position": opts.position,
-            "collection": opts.collection,
-            "field": opts.field.unwrap_or("?"),
-            "context_type": hook_context_type(opts.collection, opts.is_global, "field_hook"),
-        }),
+        &FieldHookContext {
+            position: opts.position,
+            collection: opts.collection,
+            field: opts.field.unwrap_or("?"),
+            context_type: hook_context_type(opts.collection, opts.is_global, "field_hook"),
+        },
     )
 }
 
@@ -161,10 +201,10 @@ fn render_field_hook(opts: &MakeHookOptions) -> Result<String> {
 fn render_access_hook(opts: &MakeHookOptions) -> Result<String> {
     render(
         "hook_access",
-        &json!({
-            "position": opts.position,
-            "collection": opts.collection,
-        }),
+        &AccessHookContext {
+            position: opts.position,
+            collection: opts.collection,
+        },
     )
 }
 
@@ -178,11 +218,11 @@ fn render_condition_boolean(opts: &MakeHookOptions) -> Result<String> {
 
     render(
         "hook_condition_boolean",
-        &json!({
-            "collection": opts.collection,
-            "field_name": field_name,
-            "data_type": condition_data_type(opts.collection, opts.is_global),
-        }),
+        &ConditionBooleanContext {
+            collection: opts.collection,
+            field_name,
+            data_type: condition_data_type(opts.collection, opts.is_global),
+        },
     )
 }
 
@@ -220,11 +260,11 @@ fn render_condition_table(opts: &MakeHookOptions) -> Result<String> {
 
     render(
         "hook_condition_table",
-        &json!({
-            "collection": opts.collection,
-            "data_type": condition_data_type(opts.collection, opts.is_global),
-            "body": body,
-        }),
+        &ConditionTableContext {
+            collection: opts.collection,
+            data_type: condition_data_type(opts.collection, opts.is_global),
+            body,
+        },
     )
 }
 

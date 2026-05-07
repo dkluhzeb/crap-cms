@@ -3,8 +3,22 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json, to_string_pretty};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 use tracing::info;
+
+/// Shape returned to the MCP client for a `delete_many` tool call.
+///
+/// The internal `DeleteManyResult` also carries `upload_fields_to_clean`
+/// (per-row upload-field maps the caller uses to delete files post-commit);
+/// that's deliberately excluded from the wire response.
+#[derive(Serialize)]
+struct DeleteManyResponse<'a> {
+    hard_deleted: i64,
+    soft_deleted: i64,
+    skipped: i64,
+    deleted_ids: &'a [String],
+}
 
 use crate::{
     config::CrapConfig,
@@ -72,10 +86,10 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         slug, result.hard_deleted, result.soft_deleted, result.skipped
     );
 
-    Ok(to_string_pretty(&json!({
-        "hard_deleted": result.hard_deleted,
-        "soft_deleted": result.soft_deleted,
-        "skipped": result.skipped,
-        "deleted_ids": result.deleted_ids,
-    }))?)
+    Ok(to_string_pretty(&DeleteManyResponse {
+        hard_deleted: result.hard_deleted,
+        soft_deleted: result.soft_deleted,
+        skipped: result.skipped,
+        deleted_ids: &result.deleted_ids,
+    })?)
 }

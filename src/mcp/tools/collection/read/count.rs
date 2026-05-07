@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use serde::Serialize;
-use serde_json::{Value, to_string};
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
     core::Registry,
@@ -53,5 +53,5 @@ pub(in crate::mcp::tools) fn exec_count(
 
     let count = count_documents(&ctx, &input).map_err(|e| e.into_anyhow())?;
 
-    Ok(to_string(&CountResponse { count })?)
+    Ok(to_string_pretty(&CountResponse { count })?)
 }

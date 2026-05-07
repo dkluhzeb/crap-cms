@@ -3,12 +3,20 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::cli;
 use crate::scaffold::{
     FieldStub, collection::write_field_lua, render::render, to_title_case, validate_slug,
 };
+
+/// Handlebars context for the `global` template.
+#[derive(Serialize)]
+struct GlobalTemplateContext<'a> {
+    slug: &'a str,
+    label: String,
+    fields_lua: String,
+}
 
 /// Generate a global Lua file at `<config_dir>/globals/<slug>.lua`.
 ///
@@ -63,11 +71,11 @@ fn render_global_lua(slug: &str, fields: Option<&[FieldStub]>) -> Result<String>
 
     render(
         "global",
-        &json!({
-            "slug": slug,
-            "label": label,
-            "fields_lua": fields_lua,
-        }),
+        &GlobalTemplateContext {
+            slug,
+            label,
+            fields_lua,
+        },
     )
 }
 

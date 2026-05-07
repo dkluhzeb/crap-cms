@@ -188,7 +188,7 @@ fn list_field_types_returns_all_types() {
 
 #[test]
 fn cli_reference_all_commands() {
-    let result = exec_cli_reference(&json!({})).unwrap();
+    let result = exec_cli_reference(None).unwrap();
     let parsed: Value = from_str(&result).unwrap();
     let commands = parsed["commands"].as_array().unwrap();
     assert!(commands.len() >= 15);
@@ -204,7 +204,7 @@ fn cli_reference_all_commands() {
 
 #[test]
 fn cli_reference_specific_command() {
-    let result = exec_cli_reference(&json!({ "command": "migrate" })).unwrap();
+    let result = exec_cli_reference(Some("migrate")).unwrap();
     let parsed: Value = from_str(&result).unwrap();
     assert!(parsed.get("subcommands").is_some());
     let subs = parsed["subcommands"].as_array().unwrap();
@@ -218,7 +218,7 @@ fn cli_reference_specific_command() {
 
 #[test]
 fn cli_reference_unknown_command() {
-    let result = exec_cli_reference(&json!({ "command": "nonexistent" })).unwrap();
+    let result = exec_cli_reference(Some("nonexistent")).unwrap();
     let parsed: Value = from_str(&result).unwrap();
     assert!(parsed.get("error").is_some());
 }
@@ -591,34 +591,22 @@ fn exec_describe_collection_excluded_errors() {
 #[test]
 fn exec_read_config_file_success() {
     let dir = tempfile::tempdir().unwrap();
-    // Write a test file
     fs::write(dir.path().join("hello.txt"), "world").unwrap();
-    let args = json!({ "path": "hello.txt" });
-    let result = super::exec_read_config_file(&args, dir.path()).unwrap();
+    let result = super::exec_read_config_file("hello.txt", dir.path()).unwrap();
     assert_eq!(result, "world");
-}
-
-#[test]
-fn exec_read_config_file_missing_path_arg_errors() {
-    let dir = tempfile::tempdir().unwrap();
-    let args = json!({});
-    let err = super::exec_read_config_file(&args, dir.path()).unwrap_err();
-    assert!(err.to_string().contains("path"));
 }
 
 #[test]
 fn exec_read_config_file_nonexistent_file_errors() {
     let dir = tempfile::tempdir().unwrap();
-    let args = json!({ "path": "does_not_exist.txt" });
-    let err = super::exec_read_config_file(&args, dir.path()).unwrap_err();
+    let err = super::exec_read_config_file("does_not_exist.txt", dir.path()).unwrap_err();
     assert!(err.to_string().contains("does_not_exist"));
 }
 
 #[test]
 fn exec_write_config_file_success() {
     let dir = tempfile::tempdir().unwrap();
-    let args = json!({ "path": "output.txt", "content": "hello" });
-    let result = super::exec_write_config_file(&args, dir.path()).unwrap();
+    let result = super::exec_write_config_file("output.txt", "hello", dir.path()).unwrap();
     let parsed: Value = from_str(&result).unwrap();
     assert_eq!(parsed["written"], "output.txt");
     let written = fs::read_to_string(dir.path().join("output.txt")).unwrap();
@@ -628,28 +616,12 @@ fn exec_write_config_file_success() {
 #[test]
 fn exec_write_config_file_creates_parent_dirs() {
     let dir = tempfile::tempdir().unwrap();
-    let args = json!({ "path": "subdir/nested/file.txt", "content": "data" });
-    let result = super::exec_write_config_file(&args, dir.path()).unwrap();
+    let result =
+        super::exec_write_config_file("subdir/nested/file.txt", "data", dir.path()).unwrap();
     let parsed: Value = from_str(&result).unwrap();
     assert_eq!(parsed["written"], "subdir/nested/file.txt");
     let content = fs::read_to_string(dir.path().join("subdir/nested/file.txt")).unwrap();
     assert_eq!(content, "data");
-}
-
-#[test]
-fn exec_write_config_file_missing_path_errors() {
-    let dir = tempfile::tempdir().unwrap();
-    let args = json!({ "content": "data" });
-    let err = super::exec_write_config_file(&args, dir.path()).unwrap_err();
-    assert!(err.to_string().contains("path"));
-}
-
-#[test]
-fn exec_write_config_file_missing_content_errors() {
-    let dir = tempfile::tempdir().unwrap();
-    let args = json!({ "path": "file.txt" });
-    let err = super::exec_write_config_file(&args, dir.path()).unwrap_err();
-    assert!(err.to_string().contains("content"));
 }
 
 #[test]
@@ -659,8 +631,7 @@ fn exec_list_config_files_root() {
     fs::write(dir.path().join("b.lua"), "").unwrap();
     fs::create_dir(dir.path().join("sub")).unwrap();
 
-    let args = json!({});
-    let result = super::exec_list_config_files(&args, dir.path()).unwrap();
+    let result = super::exec_list_config_files(None, dir.path()).unwrap();
     let files: Vec<Value> = from_str(&result).unwrap();
     assert!(files.len() >= 3);
     let names: Vec<&str> = files
@@ -670,7 +641,6 @@ fn exec_list_config_files_root() {
     assert!(names.contains(&"a.txt"));
     assert!(names.contains(&"b.lua"));
     assert!(names.contains(&"sub"));
-    // Check types
     let sub = files.iter().find(|f| f["name"] == "sub").unwrap();
     assert_eq!(sub["type"], "directory");
     let a = files.iter().find(|f| f["name"] == "a.txt").unwrap();
@@ -683,8 +653,7 @@ fn exec_list_config_files_subdirectory() {
     fs::create_dir(dir.path().join("collections")).unwrap();
     fs::write(dir.path().join("collections/posts.lua"), "").unwrap();
 
-    let args = json!({ "path": "collections" });
-    let result = super::exec_list_config_files(&args, dir.path()).unwrap();
+    let result = super::exec_list_config_files(Some("collections"), dir.path()).unwrap();
     let files: Vec<Value> = from_str(&result).unwrap();
     let names: Vec<&str> = files
         .iter()
@@ -697,9 +666,8 @@ fn exec_list_config_files_subdirectory() {
 fn exec_list_config_files_nonexistent_dir_returns_empty() {
     let dir = tempfile::tempdir().unwrap();
     // Subdir does not exist → safe_config_path succeeds (no traversal),
-    // but the dir is not a directory so files is empty
-    let args = json!({ "path": "nonexistent" });
-    let result = super::exec_list_config_files(&args, dir.path()).unwrap();
+    // but the dir is not a directory so files is empty.
+    let result = super::exec_list_config_files(Some("nonexistent"), dir.path()).unwrap();
     let files: Vec<Value> = from_str(&result).unwrap();
     assert!(files.is_empty());
 }

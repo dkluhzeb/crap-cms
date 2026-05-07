@@ -3,8 +3,16 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+use serde::Serialize;
 use serde_json::{Value, json, to_string_pretty};
 use tracing::info;
+
+/// Shape returned to the MCP client for an `update_many` tool call.
+#[derive(Serialize)]
+struct UpdateManyResponse<'a> {
+    modified: i64,
+    updated_ids: &'a [String],
+}
 
 use crate::{
     config::CrapConfig,
@@ -60,8 +68,8 @@ pub(in crate::mcp::tools) fn exec_update_many(
 
     info!("MCP update_many {}: {} modified", slug, result.modified);
 
-    Ok(to_string_pretty(&json!({
-        "modified": result.modified,
-        "updated_ids": result.updated_ids,
-    }))?)
+    Ok(to_string_pretty(&UpdateManyResponse {
+        modified: result.modified,
+        updated_ids: &result.updated_ids,
+    })?)
 }

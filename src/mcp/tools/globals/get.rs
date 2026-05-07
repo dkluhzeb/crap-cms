@@ -43,7 +43,7 @@ pub(in crate::mcp::tools) fn exec_read_global(
             });
 
             if is_missing {
-                Ok(json!({}).to_string())
+                Ok(to_string_pretty(&json!({}))?)
             } else {
                 Err(e).context(format!("Failed to read global '{}'", slug))
             }

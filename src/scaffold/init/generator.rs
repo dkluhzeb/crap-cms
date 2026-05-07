@@ -3,9 +3,21 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::scaffold::render::render;
+
+/// Handlebars context for the `crap_toml` template.
+#[derive(Serialize)]
+struct CrapTomlContext<'a> {
+    version: &'static str,
+    admin_port: u16,
+    grpc_port: u16,
+    auth_secret: &'a str,
+    has_locales: bool,
+    default_locale: &'a str,
+    locales_str: String,
+}
 
 // ── Static files (compiled in, no templating needed) ─────────────────────
 
@@ -120,15 +132,15 @@ fn render_crap_toml(opts: &InitOptions) -> Result<String> {
 
     render(
         "crap_toml",
-        &json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "admin_port": opts.admin_port,
-            "grpc_port": opts.grpc_port,
-            "auth_secret": opts.auth_secret,
-            "has_locales": !opts.locales.is_empty(),
-            "default_locale": opts.default_locale,
-            "locales_str": locales_str,
-        }),
+        &CrapTomlContext {
+            version: env!("CARGO_PKG_VERSION"),
+            admin_port: opts.admin_port,
+            grpc_port: opts.grpc_port,
+            auth_secret: &opts.auth_secret,
+            has_locales: !opts.locales.is_empty(),
+            default_locale: &opts.default_locale,
+            locales_str,
+        },
     )
 }
 

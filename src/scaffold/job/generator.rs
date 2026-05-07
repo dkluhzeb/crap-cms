@@ -3,11 +3,30 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::cli;
 use crate::scaffold::{render::render, to_title_case, validate_slug};
 use crate::typegen::to_pascal_case;
+
+/// Handlebars context for the `job` template. Optional fields are skipped via
+/// `#[serde(skip_serializing_if = "Option::is_none")]` so `{{#if}}` blocks
+/// in the template behave as before — `Some("default")` queue or
+/// `Some(60)` timeout were already filtered upstream.
+#[derive(Serialize)]
+struct JobTemplateContext<'a> {
+    label: String,
+    slug: &'a str,
+    pascal: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retries: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout: Option<u64>,
+}
 
 /// Options for `make_job()`.
 pub struct MakeJobOptions<'a> {
@@ -63,15 +82,15 @@ fn render_job_lua(opts: &MakeJobOptions) -> Result<String> {
 
     render(
         "job",
-        &json!({
-            "label": label,
-            "slug": opts.slug,
-            "pascal": pascal,
-            "schedule": opts.schedule,
-            "queue": queue,
-            "retries": retries,
-            "timeout": timeout,
-        }),
+        &JobTemplateContext {
+            label,
+            slug: opts.slug,
+            pascal,
+            schedule: opts.schedule,
+            queue,
+            retries,
+            timeout,
+        },
     )
 }
 

@@ -7,9 +7,13 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use chrono::Utc;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
-use crate::{cli, commands::load_config_and_sync, db::query};
+use crate::{
+    cli,
+    commands::{export::file::ExportFile, load_config_and_sync},
+    db::query,
+};
 
 /// Export collection data to JSON.
 #[cfg(not(tarpaulin_include))]
@@ -57,15 +61,15 @@ pub fn export(
         collections_data.insert(slug.clone(), Value::Array(docs_json));
     }
 
-    let output_json = json!({
-        "crap_version": env!("CARGO_PKG_VERSION"),
-        "exported_at": Utc::now().to_rfc3339(),
-        "collections": collections_data,
-    });
+    let output_file = ExportFile {
+        crap_version: env!("CARGO_PKG_VERSION").to_string(),
+        exported_at: Utc::now().to_rfc3339(),
+        collections: collections_data,
+    };
 
     match output {
         Some(path) => {
-            let content = serde_json::to_string_pretty(&output_json)?;
+            let content = serde_json::to_string_pretty(&output_file)?;
 
             fs::write(&path, content)
                 .with_context(|| format!("Failed to write {}", path.display()))?;
@@ -77,7 +81,7 @@ pub fn export(
             ));
         }
         None => {
-            println!("{}", serde_json::to_string_pretty(&output_json)?);
+            println!("{}", serde_json::to_string_pretty(&output_file)?);
         }
     }
 

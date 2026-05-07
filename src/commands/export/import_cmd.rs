@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     cli,
-    commands::load_config_and_sync,
+    commands::{export::file::ExportFile, load_config_and_sync},
     config::CrapConfig,
     core::{CollectionDefinition, FieldDefinition, FieldType},
     db::{DbConnection, DbValue, query},
@@ -216,32 +216,26 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
     let content =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
 
-    let data: Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
+    let export_file: ExportFile = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
-    if let Some(export_version) = data.get("crap_version").and_then(|v| v.as_str()) {
-        let current = env!("CARGO_PKG_VERSION");
-
-        if let Some(warning) = CrapConfig::check_version_against(Some(export_version), current) {
-            cli::warning(&warning.replace("config requires", "export file was created with"));
-        }
+    let current = env!("CARGO_PKG_VERSION");
+    if let Some(warning) =
+        CrapConfig::check_version_against(Some(&export_file.crap_version), current)
+    {
+        cli::warning(&warning.replace("config requires", "export file was created with"));
     }
-
-    let collections_obj = data
-        .get("collections")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| anyhow!("Expected top-level \"collections\" object in JSON"))?;
 
     let reg = registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
-        if !collections_obj.contains_key(slug) {
+        if !export_file.collections.contains_key(slug) {
             bail!("Collection '{}' not found in import file", slug);
         }
         vec![slug.clone()]
     } else {
-        collections_obj.keys().cloned().collect()
+        export_file.collections.keys().cloned().collect()
     };
 
     let mut total_imported = 0usize;
@@ -254,7 +248,8 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
             )
         })?;
 
-        let docs_array = collections_obj
+        let docs_array = export_file
+            .collections
             .get(slug)
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow!("Expected array for collection '{}'", slug))?;

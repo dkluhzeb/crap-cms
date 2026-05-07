@@ -8,7 +8,7 @@
 
 use std::{path::Path, sync::Arc};
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
 use crate::{
@@ -396,15 +396,36 @@ pub fn execute_tool(
         "list_collections" => return exec_list_collections(registry, &config.mcp),
         "describe_collection" => return exec_describe_collection(args, registry, &config.mcp),
         "list_field_types" => return exec_list_field_types(),
-        "cli_reference" => return exec_cli_reference(args),
+        "cli_reference" => {
+            return exec_cli_reference(args.get("command").and_then(Value::as_str));
+        }
         "read_config_file" | "write_config_file" | "list_config_files" => {
             if !config.mcp.config_tools {
                 bail!("Config tools are not enabled. Set config_tools = true in [mcp] config.");
             }
             return match name {
-                "read_config_file" => exec_read_config_file(args, config_dir),
-                "write_config_file" => exec_write_config_file(args, config_dir),
-                "list_config_files" => exec_list_config_files(args, config_dir),
+                "read_config_file" => {
+                    let path = args
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .context("Missing 'path' argument")?;
+                    exec_read_config_file(path, config_dir)
+                }
+                "write_config_file" => {
+                    let path = args
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .context("Missing 'path' argument")?;
+                    let content = args
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .context("Missing 'content' argument")?;
+                    exec_write_config_file(path, content, config_dir)
+                }
+                "list_config_files" => {
+                    let subdir = args.get("path").and_then(Value::as_str);
+                    exec_list_config_files(subdir, config_dir)
+                }
                 _ => unreachable!(),
             };
         }

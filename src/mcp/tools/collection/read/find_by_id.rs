@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json, to_string_pretty};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 
 use crate::{
     config::CrapConfig,
@@ -13,6 +14,12 @@ use crate::{
     mcp::tools::collection::helpers::doc_to_json,
     service::{FindByIdInput, RunnerReadHooks, ServiceContext, find_document_by_id},
 };
+
+/// Soft "not found" reply for `find_by_id` — distinct from a tool error.
+#[derive(Serialize)]
+struct NotFoundResponse {
+    error: &'static str,
+}
 
 /// Execute `find_by_id` — single document lookup with population.
 pub(in crate::mcp::tools) fn exec_find_by_id(
@@ -60,6 +67,8 @@ pub(in crate::mcp::tools) fn exec_find_by_id(
 
     match doc {
         Some(d) => Ok(to_string_pretty(&doc_to_json(&d))?),
-        None => Ok(json!({ "error": "Document not found" }).to_string()),
+        None => Ok(to_string_pretty(&NotFoundResponse {
+            error: "Document not found",
+        })?),
     }
 }

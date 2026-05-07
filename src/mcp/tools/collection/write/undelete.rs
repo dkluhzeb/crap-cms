@@ -3,8 +3,14 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 use tracing::info;
+
+#[derive(Serialize)]
+struct RestoredResponse<'a> {
+    restored: &'a str,
+}
 
 use crate::{
     core::{Registry, cache::SharedCache, event::SharedEventTransport},
@@ -44,5 +50,5 @@ pub(in crate::mcp::tools) fn exec_undelete(
 
     info!("MCP undelete {}: {}", slug, id);
 
-    Ok(json!({ "restored": id }).to_string())
+    Ok(to_string_pretty(&RestoredResponse { restored: id })?)
 }

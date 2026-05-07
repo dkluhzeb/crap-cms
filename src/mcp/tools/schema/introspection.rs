@@ -1404,9 +1404,7 @@ pub(in crate::mcp::tools) fn exec_list_field_types() -> Result<String> {
 }
 
 /// Return CLI reference documentation, optionally filtered by command name.
-pub(in crate::mcp::tools) fn exec_cli_reference(args: &Value) -> Result<String> {
-    let command = args.get("command").and_then(|v| v.as_str());
-
+pub(in crate::mcp::tools) fn exec_cli_reference(command: Option<&str>) -> Result<String> {
     match command {
         None => {
             let overview = CliOverview {

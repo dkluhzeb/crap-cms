@@ -3,8 +3,14 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{Value, to_string_pretty};
 use tracing::info;
+
+#[derive(Serialize)]
+struct DeletedResponse<'a> {
+    deleted: &'a str,
+}
 
 use crate::{
     core::{
@@ -50,5 +56,5 @@ pub(in crate::mcp::tools) fn exec_delete(
 
     info!("MCP delete {}: {}", slug, id);
 
-    Ok(json!({ "deleted": id }).to_string())
+    Ok(to_string_pretty(&DeletedResponse { deleted: id })?)
 }
