@@ -1,10 +1,32 @@
 //! Helper functions for the populate subsystem.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::core::{Document, cache::CacheBackend};
 use crate::db::query::populate::Singleflight;
+
+/// The shape `document_to_json` emits — a populated relationship reference
+/// embedded in a parent document's `fields`. `id` and `collection` are the
+/// envelope; the document's user-defined fields flatten alongside them.
+///
+/// Wire-format equivalent to the previous manual `Map::new() + insert` loop —
+/// `#[serde(flatten)]` over `HashMap<String, Value>` reproduces the same
+/// key set in the same order.
+#[derive(Serialize)]
+struct PopulatedRef<'a> {
+    id: &'a str,
+    collection: &'a str,
+    #[serde(flatten)]
+    fields: &'a HashMap<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<&'a str>,
+}
 
 /// Try to get a cached document from the cache backend.
 pub(super) fn cache_get_doc(cache: &dyn CacheBackend, key: &str) -> Result<Option<Document>> {
@@ -89,27 +111,16 @@ pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
 
 /// Convert a Document into a JSON Value for embedding in a parent's fields.
 pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
-    let mut map = Map::new();
+    let id = doc.id.as_ref();
+    let populated = PopulatedRef {
+        id,
+        collection,
+        fields: &doc.fields,
+        created_at: doc.created_at.as_deref(),
+        updated_at: doc.updated_at.as_deref(),
+    };
 
-    map.insert("id".to_string(), Value::String(doc.id.to_string()));
-    map.insert(
-        "collection".to_string(),
-        Value::String(collection.to_string()),
-    );
-
-    for (k, v) in &doc.fields {
-        map.insert(k.clone(), v.clone());
-    }
-
-    if let Some(ref ts) = doc.created_at {
-        map.insert("created_at".to_string(), Value::String(ts.clone()));
-    }
-
-    if let Some(ref ts) = doc.updated_at {
-        map.insert("updated_at".to_string(), Value::String(ts.clone()));
-    }
-
-    Value::Object(map)
+    serde_json::to_value(&populated).expect("PopulatedRef serializes")
 }
 
 #[cfg(test)]

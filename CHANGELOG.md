@@ -86,6 +86,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `CliReferenceError`). Output bytes unchanged — verified with a
   before/after dump comparison across all 24 commands plus their
   alias forms.
+- `db::query::populate::helpers::document_to_json` now builds its
+  output through a typed `PopulatedRef` struct with
+  `#[serde(flatten)]` over the document's fields. Replaces the manual
+  `Map::new() + insert(Value::String(...))` chain. Wire format
+  identical (existing tests pass unchanged).
+- `db::query::populate::batch::dispatch::join_key_from_value` replaces
+  an `other.to_string().trim_matches('"')` hack with a typed match
+  over `Value::{String, Number, Bool}`. **Behavior change**: arrays
+  and objects, which previously produced garbage keys like `"[1,2]"`
+  that never matched a parent ID, are now skipped explicitly. Pinned
+  by 6 unit tests in a new pure `join_key_tests` mod.
+- `db::query::join::blocks::split_block_row` extracts the duplicated
+  `_block_type` + `data_json` build pattern from the locale and
+  non-locale `set_block_rows` branches into a single helper.
+- `db::query::fts::prosemirror` adds a typed `ProseMirrorNode<'a>`
+  borrow view over the `{type, text, attrs, content}` shape used by
+  the FTS extractor. Replaces inline `.get(...).and_then(Value::as_*)`
+  chains; pure clarity refactor with no behavior change.
 
 ### Fixed
 

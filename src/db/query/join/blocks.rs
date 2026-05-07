@@ -8,6 +8,27 @@ use crate::db::{DbConnection, DbValue};
 
 use super::helpers::delete_junction_rows;
 
+/// Split a block row into `(_block_type, data_json)` for INSERT.
+///
+/// `_block_type` and `id` are stored in dedicated SQL columns; the
+/// remainder of the row's keys are serialized to the `data` column as
+/// JSON. Errors when `_block_type` is missing or non-string.
+fn split_block_row(row: &Value, order: usize) -> Result<(String, String)> {
+    let block_type = row
+        .get("_block_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Block row at index {} is missing '_block_type'", order))?
+        .to_string();
+
+    let mut data_map = row.as_object().cloned().unwrap_or_default();
+    data_map.remove("_block_type");
+    data_map.remove("id");
+
+    let data_json = Value::Object(data_map).to_string();
+
+    Ok((block_type, data_json))
+}
+
 /// Set block rows for a blocks field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
 /// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
@@ -41,21 +62,9 @@ pub fn set_block_rows(
             table_name
         );
         for (order, row) in rows.iter().enumerate() {
+            let (block_type, data_json) = split_block_row(row, order)?;
             let id = nanoid::nanoid!();
-            let block_type = row
-                .get("_block_type")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
-                })?
-                .to_string();
-            let mut data_map = match row.as_object() {
-                Some(m) => m.clone(),
-                None => Map::new(),
-            };
-            data_map.remove("_block_type");
-            data_map.remove("id");
-            let data_json = Value::Object(data_map).to_string();
+
             conn.execute(
                 &sql,
                 &[
@@ -81,21 +90,9 @@ pub fn set_block_rows(
             table_name
         );
         for (order, row) in rows.iter().enumerate() {
+            let (block_type, data_json) = split_block_row(row, order)?;
             let id = nanoid::nanoid!();
-            let block_type = row
-                .get("_block_type")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Block row at index {} is missing '_block_type'", order)
-                })?
-                .to_string();
-            let mut data_map = match row.as_object() {
-                Some(m) => m.clone(),
-                None => Map::new(),
-            };
-            data_map.remove("_block_type");
-            data_map.remove("id");
-            let data_json = Value::Object(data_map).to_string();
+
             conn.execute(
                 &sql,
                 &[

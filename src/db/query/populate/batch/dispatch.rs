@@ -17,6 +17,22 @@ use crate::db::{
 use super::super::single::{nested, populate_relationships_cached};
 use super::{nonpoly, poly};
 
+/// Coerce a doc-field `Value` to the string form used as a join-key bucket
+/// label. Strings, numbers, and bools all become valid scalar keys; missing
+/// values, arrays, and objects are non-scalar and cannot identify a single
+/// parent row, so they are dropped.
+///
+/// Replaces an earlier `other.to_string().trim_matches('"')` hack that
+/// silently produced garbage (e.g. `"[1,2]"`) for non-scalar inputs.
+fn join_key_from_value(v: Option<&Value>) -> Option<String> {
+    match v? {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
 /// Batch-populate relationship fields across a slice of documents.
 ///
 /// Collects all referenced IDs across all documents per field, batch-fetches them
@@ -326,10 +342,8 @@ fn populate_join_fields(
         // (the `on` column is a scalar foreign-key field).
         let mut buckets: HashMap<String, Vec<Value>> = HashMap::new();
         for matched_doc in &prepared {
-            let key = match matched_doc.fields.get(&jc.on) {
-                Some(Value::String(s)) => s.clone(),
-                Some(other) => other.to_string().trim_matches('"').to_string(),
-                None => continue,
+            let Some(key) = join_key_from_value(matched_doc.fields.get(&jc.on)) else {
+                continue;
             };
             buckets
                 .entry(key)
@@ -344,6 +358,60 @@ fn populate_join_fields(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod join_key_tests {
+    use serde_json::json;
+
+    use super::join_key_from_value;
+
+    #[test]
+    fn string_passes_through() {
+        assert_eq!(
+            join_key_from_value(Some(&json!("abc"))),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn integer_stringifies_without_quotes() {
+        assert_eq!(
+            join_key_from_value(Some(&json!(42))),
+            Some("42".to_string())
+        );
+    }
+
+    #[test]
+    fn float_stringifies_without_quotes() {
+        // Note: this exists mainly to pin behavior; floats as join keys are
+        // a usage smell, but we mirror what the legacy code produced.
+        let key = join_key_from_value(Some(&json!(1.5)));
+        assert_eq!(key.as_deref(), Some("1.5"));
+    }
+
+    #[test]
+    fn bool_stringifies() {
+        assert_eq!(
+            join_key_from_value(Some(&json!(true))),
+            Some("true".to_string())
+        );
+    }
+
+    /// Regression: arrays and objects are not scalar join keys. The earlier
+    /// `other.to_string().trim_matches('"')` produced strings like `"[1,2]"`
+    /// that would never match a parent ID. Skip them instead.
+    #[test]
+    fn array_and_object_are_rejected() {
+        assert_eq!(join_key_from_value(Some(&json!([1, 2]))), None);
+        assert_eq!(join_key_from_value(Some(&json!({"k": "v"}))), None);
+    }
+
+    #[test]
+    fn null_and_missing_are_rejected() {
+        assert_eq!(join_key_from_value(Some(&json!(null))), None);
+        assert_eq!(join_key_from_value(None), None);
+    }
 }
 
 #[cfg(all(test, feature = "sqlite"))]

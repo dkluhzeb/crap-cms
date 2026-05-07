@@ -2,7 +2,37 @@
 
 use std::collections::HashMap;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+/// Borrow view over one ProseMirror node. The wire format is intentionally
+/// open-ended (custom node types add arbitrary attrs), but the four fields
+/// used by the FTS extractor — `type`, `text`, `attrs`, `content` — are
+/// well-defined. This view returns `None` for any field the underlying
+/// JSON object lacks, leaving the rest of the call site free of
+/// `.get(...).and_then(...)` chains.
+struct ProseMirrorNode<'a> {
+    node_type: &'a str,
+    text: Option<&'a str>,
+    attrs: Option<&'a Map<String, Value>>,
+    content: Option<&'a [Value]>,
+}
+
+impl<'a> ProseMirrorNode<'a> {
+    /// Read a node out of a JSON value. Returns `None` when `value` is not
+    /// an object.
+    fn from_value(value: &'a Value) -> Option<Self> {
+        let obj = value.as_object()?;
+        Some(Self {
+            node_type: obj.get("type").and_then(Value::as_str).unwrap_or(""),
+            text: obj.get("text").and_then(Value::as_str),
+            attrs: obj.get("attrs").and_then(Value::as_object),
+            content: obj
+                .get("content")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice),
+        })
+    }
+}
 
 /// Extract plain text from a ProseMirror JSON document.
 ///
@@ -29,24 +59,22 @@ pub fn extract_prosemirror_text_with_nodes(
         node_searchable: &HashMap<&str, Vec<&str>>,
         out: &mut Vec<String>,
     ) {
-        let obj = match value.as_object() {
-            Some(o) => o,
-            None => return,
+        let Some(node) = ProseMirrorNode::from_value(value) else {
+            return;
         };
-        let node_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-        if node_type == "text"
-            && let Some(text) = obj.get("text").and_then(|t| t.as_str())
+        if node.node_type == "text"
+            && let Some(text) = node.text
         {
             out.push(text.to_string());
         }
 
-        // Check for custom node with searchable attrs
-        if let Some(searchable) = node_searchable.get(node_type)
-            && let Some(attrs) = obj.get("attrs").and_then(|a| a.as_object())
+        // Custom node with searchable attrs — pull each opted-in attr value.
+        if let Some(searchable) = node_searchable.get(node.node_type)
+            && let Some(attrs) = node.attrs
         {
             for attr_name in searchable {
-                if let Some(val) = attrs.get(*attr_name).and_then(|v| v.as_str())
+                if let Some(val) = attrs.get(*attr_name).and_then(Value::as_str)
                     && !val.is_empty()
                 {
                     out.push(val.to_string());
@@ -54,7 +82,7 @@ pub fn extract_prosemirror_text_with_nodes(
             }
         }
 
-        if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
+        if let Some(content) = node.content {
             for child in content {
                 collect_text_with_nodes(child, node_searchable, out);
             }
