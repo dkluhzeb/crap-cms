@@ -20,7 +20,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Runs the full lifecycle: access check -> field stripping -> before-write hooks ->
 /// partial persist -> after-write hooks -> hydrate -> read-denied stripping.
 /// Does NOT manage transactions — caller must open/commit.
-pub fn update_many_single_core(
+pub(crate) fn update_many_single_in_conn(
     ctx: &ServiceContext,
     id: &str,
     mut input: WriteInput<'_>,
@@ -29,7 +29,7 @@ pub fn update_many_single_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access =
         write_hooks.check_access(def.access.update.as_deref(), ctx.user, Some(id), None)?;

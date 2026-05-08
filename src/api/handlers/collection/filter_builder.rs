@@ -6,7 +6,7 @@ use crate::{
     api::handlers::convert::parse_where_json,
     core::FieldDefinition,
     db::{AccessResult, Filter, FilterClause, FilterOp, query::filter::normalize_filter_fields},
-    service::read::{validate_access_constraints, validate_user_filters},
+    service::{validate_access_constraints, validate_user_filters},
 };
 
 /// Builder for constructing filter clauses from a gRPC request's `where` JSON,

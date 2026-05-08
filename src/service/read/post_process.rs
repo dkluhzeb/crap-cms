@@ -47,7 +47,9 @@ pub(crate) fn post_process_single(
         Some(h) => h,
         None => return,
     };
-    let def = ctx.collection_def();
+    let Ok(def) = ctx.collection_def() else {
+        return;
+    };
     let slug = ctx.slug;
     let user = ctx.user;
 
@@ -153,7 +155,9 @@ pub(crate) fn post_process_docs(
         Some(h) => h,
         None => return,
     };
-    let def = ctx.collection_def();
+    let Ok(def) = ctx.collection_def() else {
+        return;
+    };
     let slug = ctx.slug;
     let user = ctx.user;
 

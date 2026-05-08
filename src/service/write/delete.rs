@@ -15,7 +15,7 @@ use super::ServiceError;
 type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Result of a delete operation.
-pub struct DeleteResult {
+pub(crate) struct DeleteResult {
     /// Request-scoped context returned by after-delete hooks.
     pub context: ReqContext,
     /// Upload file fields from the deleted document (for post-commit cleanup).
@@ -27,7 +27,7 @@ pub struct DeleteResult {
 /// Runs the full lifecycle: ref count check -> before-delete hooks -> delete -> cleanup -> after-delete hooks.
 /// Does NOT manage transactions — caller must open/commit.
 /// Upload file cleanup is returned as `upload_doc_fields` for the caller to handle after commit.
-pub fn delete_document_core(
+pub(crate) fn delete_document_in_conn(
     ctx: &ServiceContext,
     id: &str,
     locale_config: Option<&LocaleConfig>,
@@ -35,7 +35,7 @@ pub fn delete_document_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     // Collection-level access check — use trash access for soft delete, delete for hard
     let access_ref = if def.soft_delete {
@@ -299,7 +299,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_core(&ctx, "u1", None).expect("delete");
+        let _ = delete_document_in_conn(&ctx, "u1", None).expect("delete");
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
             .await
@@ -328,7 +328,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_core(&ctx, "u1", None).expect("soft delete");
+        let _ = delete_document_in_conn(&ctx, "u1", None).expect("soft delete");
 
         // No publish must have happened — poll briefly and assert timeout.
         let recv_result =
@@ -370,7 +370,7 @@ mod tests {
             .invalidation_transport(Some(transport))
             .build();
 
-        let _ = delete_document_core(&ctx, "p1", None).expect("delete");
+        let _ = delete_document_in_conn(&ctx, "p1", None).expect("delete");
 
         let recv_result =
             tokio::time::timeout(std::time::Duration::from_millis(150), rx.recv()).await;

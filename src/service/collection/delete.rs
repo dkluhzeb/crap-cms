@@ -12,7 +12,9 @@ use crate::{
         upload::{self, StorageBackend},
     },
     hooks::LuaCrudInfra,
-    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core, flush_queue},
+    service::{
+        RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
+    },
 };
 
 type Result<T> = std::result::Result<T, ServiceError>;
@@ -44,7 +46,7 @@ fn delete_document_pool(
 ) -> Result<ReqContext> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -71,7 +73,7 @@ fn delete_document_pool(
         .event_queue(queue.clone())
         .build();
 
-    let result = delete_document_core(&inner_ctx, id, locale_config)?;
+    let result = delete_document_in_conn(&inner_ctx, id, locale_config)?;
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
@@ -98,8 +100,8 @@ fn delete_document_conn(
     storage: Option<&dyn StorageBackend>,
     locale_config: Option<&LocaleConfig>,
 ) -> Result<ReqContext> {
-    let def = ctx.collection_def();
-    let result = delete_document_core(ctx, id, locale_config)?;
+    let def = ctx.collection_def()?;
+    let result = delete_document_in_conn(ctx, id, locale_config)?;
 
     ctx.clear_cache();
 

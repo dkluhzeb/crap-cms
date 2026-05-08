@@ -15,7 +15,7 @@ use crate::{
     },
     core::DocumentFields,
     db::LocaleContext,
-    service::{self, EmailContext, ServiceContext, ServiceError, WriteInput},
+    service::{self, ServiceContext, ServiceError, WriteInput},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -56,11 +56,7 @@ impl ContentService {
         let cache = Some(self.cache.clone());
         let collection = req.collection.clone();
         let def_owned = def;
-        let email_ctx = Some(EmailContext {
-            email_config: self.email_config.clone(),
-            email_renderer: self.email_renderer.clone(),
-            server_config: self.server_config.clone(),
-        });
+        let email_ctx = Some(self.email_context());
 
         let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool

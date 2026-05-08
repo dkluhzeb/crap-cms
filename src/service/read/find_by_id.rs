@@ -21,7 +21,7 @@ pub fn find_document_by_id(
     let resolved = ctx.resolve_conn()?;
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access_ref = if input.include_deleted {
         def.access.resolve_trash()

@@ -25,7 +25,7 @@ use crate::{
     },
     core::{CollectionDefinition, Document, DocumentFields, auth::AuthUser, upload},
     db::query::{LocaleContext, LocaleMode},
-    service::{self, EmailContext, ServiceError},
+    service::{self, ServiceError},
 };
 
 /// Handle post-create success: commit upload and enqueue conversions.
@@ -95,11 +95,7 @@ async fn spawn_create(
     let runner = state.hook_runner.clone();
     let event_transport = state.event_transport.clone();
     let cache = state.cache.clone();
-    let email_ctx = Some(EmailContext {
-        email_config: state.config.email.clone(),
-        email_renderer: state.email_renderer.clone(),
-        server_config: state.config.server.clone(),
-    });
+    let email_ctx = Some(state.email_context());
     let slug_owned = slug.to_string();
     let def_owned = def.clone();
     let user_doc = get_user_doc(auth_user).cloned();
@@ -162,7 +158,7 @@ pub async fn create_action(
         .get("X-Inline-Create")
         .is_some_and(|v| v == "1");
 
-    // Collection-level access check is handled inside service::create_document_core.
+    // Collection-level access check is handled inside service::create_document_in_conn.
 
     let (mut form_data, file) = match parse_form(request, &state, &def).await {
         Ok(result) => result,
@@ -197,7 +193,7 @@ pub async fn create_action(
         }
     }
 
-    // Field write access is now checked inside service::create_document_core.
+    // Field write access is now checked inside service::create_document_in_conn.
 
     let password = match extract_and_validate_password(&state, &def, &mut form_data) {
         Ok(pw) => pw,

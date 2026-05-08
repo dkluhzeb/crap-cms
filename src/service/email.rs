@@ -17,7 +17,7 @@ use crate::{
 // Excluded from coverage: async tokio task that requires SMTP email transport,
 // DB pool, and email renderer — cannot be unit tested without external services.
 #[cfg(not(tarpaulin_include))]
-pub fn send_verification_email(
+pub(crate) fn send_verification_email(
     pool: DbPool,
     email_config: EmailConfig,
     email_renderer: Arc<EmailRenderer>,

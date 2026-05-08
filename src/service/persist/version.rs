@@ -18,7 +18,7 @@ pub fn persist_draft_version(
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let slug = ctx.slug;
 
     let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx, false)?
@@ -42,10 +42,10 @@ pub fn persist_draft_version(
 pub fn persist_unpublish(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let slug = ctx.slug;
 
-    // Same reasoning as `unpublish_document_core`: when the def has localized
+    // Same reasoning as `unpublish_document_in_conn`: when the def has localized
     // fields and locales are enabled, the bare-column fallback in
     // `find_by_id_raw` references columns that don't exist (`title` instead
     // of `title__en` / `title__de`). Build a default LocaleContext from the

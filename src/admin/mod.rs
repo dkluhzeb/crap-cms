@@ -38,6 +38,7 @@ use crate::{
     },
     db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,
+    service::EmailContext,
 };
 
 /// Shared state for all admin handlers.
@@ -113,5 +114,15 @@ impl AdminState {
         self.handlebars
             .render(template, data)
             .map_err(|e| format!("Template error: {}", e))
+    }
+
+    /// Bundle the email config + renderer + server config into an
+    /// `EmailContext` for verification email flows.
+    pub(crate) fn email_context(&self) -> EmailContext {
+        EmailContext {
+            email_config: self.config.email.clone(),
+            email_renderer: self.email_renderer.clone(),
+            server_config: self.config.server.clone(),
+        }
     }
 }

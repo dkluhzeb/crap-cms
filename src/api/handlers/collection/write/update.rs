@@ -70,7 +70,7 @@ impl ContentService {
             let auth_user =
                 ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
 
-            // Field write access is now checked inside service::update_document_core
+            // Field write access is now checked inside service::update_document_in_conn
             // via WriteHooks::field_write_denied (using the transaction connection).
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());

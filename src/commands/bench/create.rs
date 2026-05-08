@@ -12,7 +12,7 @@ use crate::{
     core::SharedRegistry,
     db::DbPool,
     hooks::HookRunner,
-    service::{RunnerWriteHooks, ServiceContext, WriteInput, create_document_core},
+    service::{RunnerWriteHooks, ServiceContext, WriteInput, create_document_in_conn},
 };
 
 use super::helpers::{self, format_duration, timing_stats};
@@ -104,7 +104,7 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
         let input = WriteInput::builder(values_from_strings(data_str)).build();
 
         let start = Instant::now();
-        let result = create_document_core(&ctx, input);
+        let result = create_document_in_conn(&ctx, input);
         let elapsed = start.elapsed();
 
         durations.push(elapsed);

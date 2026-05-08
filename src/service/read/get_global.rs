@@ -16,7 +16,7 @@ pub fn get_global_document(ctx: &ServiceContext, input: &GetGlobalInput) -> Resu
     let resolved = ctx.resolve_conn()?;
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
 
     let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
 

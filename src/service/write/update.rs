@@ -19,7 +19,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
 /// Handles draft-only version saves when `input.draft` is true.
 /// Does NOT manage transactions — caller must open/commit.
-pub fn update_document_core(
+pub(crate) fn update_document_in_conn(
     ctx: &ServiceContext,
     id: &str,
     mut input: WriteInput<'_>,
@@ -27,7 +27,7 @@ pub fn update_document_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     // Collection-level access check
     let access =
@@ -71,15 +71,13 @@ pub fn update_document_core(
     let doc = if is_draft && def.has_versions() {
         persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
     } else {
-        let mut update_builder = PersistOptions::builder()
+        let opts = PersistOptions::builder()
             .password(input.password)
-            .locale_ctx(input.locale_ctx);
+            .locale_ctx(input.locale_ctx)
+            .locale_config(input.locale_ctx.map(|c| &c.config))
+            .build();
 
-        if let Some(lctx) = input.locale_ctx {
-            update_builder = update_builder.locale_config(&lctx.config);
-        }
-
-        persist_update(ctx, id, &final_data, &update_builder.build())?
+        persist_update(ctx, id, &final_data, &opts)?
     };
 
     let after_ctx = run_after_change_hooks(

@@ -19,7 +19,7 @@ pub fn count_documents(ctx: &ServiceContext, input: &CountDocumentsInput) -> Res
     let resolved = ctx.resolve_conn()?;
     let conn = resolved.as_ref();
     let hooks = ctx.read_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access = hooks.check_access(def.access.read.as_deref(), ctx.user, None, None)?;
 

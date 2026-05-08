@@ -30,7 +30,7 @@ use crate::{
         query::{self, SharedPopulateSingleflight, Singleflight},
     },
     hooks::HookRunner,
-    service::{self, ServiceContext},
+    service::{self, EmailContext, ServiceContext},
 };
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
@@ -84,6 +84,16 @@ impl ContentService {
     /// Get a clone of the shared cache handle (for periodic clearing).
     pub fn cache_handle(&self) -> SharedCache {
         self.cache.clone()
+    }
+
+    /// Bundle the email config + renderer + server config into an
+    /// `EmailContext` for verification email flows.
+    pub(in crate::api::handlers) fn email_context(&self) -> EmailContext {
+        EmailContext {
+            email_config: self.email_config.clone(),
+            email_renderer: self.email_renderer.clone(),
+            server_config: self.server_config.clone(),
+        }
     }
 
     pub(in crate::api::handlers) fn get_collection_def(

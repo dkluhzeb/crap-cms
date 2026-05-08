@@ -11,7 +11,7 @@ use crap_cms::service::{
     GetGlobalInput, ListVersionsInput, RunnerReadHooks, RunnerWriteHooks, SearchDocumentsInput,
     ServiceContext, WriteInput, get_global_document,
     jobs::{QueueJobInput, queue_job},
-    list_versions, restore_collection_version, search_documents, update_global_core,
+    list_versions, restore_collection_version, search_documents, update_global_in_conn,
 };
 use serde_json::{Value, json};
 
@@ -880,8 +880,8 @@ fn access_hook_filter_table_on_global_update_is_rejected() {
     data.insert("site_name".to_string(), json!("Hacked"));
     let input = WriteInput::builder(data).build();
 
-    let err =
-        update_global_core(&ctx, input).expect_err("Constrained on global update must be rejected");
+    let err = update_global_in_conn(&ctx, input)
+        .expect_err("Constrained on global update must be rejected");
     let msg = err.to_string();
     assert!(msg.contains("site_settings"), "got: {msg}");
     assert!(msg.contains("filter table"), "got: {msg}");

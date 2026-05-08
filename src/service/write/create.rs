@@ -18,14 +18,14 @@ type Result<T> = std::result::Result<T, ServiceError>;
 ///
 /// Runs the full lifecycle: before-write hooks -> persist -> after-write hooks.
 /// Does NOT manage transactions — caller must open/commit.
-pub fn create_document_core(
+pub fn create_document_in_conn(
     ctx: &ServiceContext,
     mut input: WriteInput<'_>,
 ) -> Result<WriteResult> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     // Collection-level access check
     let access = write_hooks.check_access(def.access.create.as_deref(), ctx.user, None, None)?;
@@ -69,16 +69,14 @@ pub fn create_document_core(
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
     let final_data = final_ctx.to_value_map(&def.fields);
 
-    let mut persist_builder = PersistOptions::builder()
+    let opts = PersistOptions::builder()
         .password(input.password)
         .locale_ctx(input.locale_ctx)
-        .draft(is_draft);
+        .locale_config(input.locale_ctx.map(|c| &c.config))
+        .draft(is_draft)
+        .build();
 
-    if let Some(lctx) = input.locale_ctx {
-        persist_builder = persist_builder.locale_config(&lctx.config);
-    }
-
-    let doc = persist_create(ctx, &final_data, &persist_builder.build())?;
+    let doc = persist_create(ctx, &final_data, &opts)?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,

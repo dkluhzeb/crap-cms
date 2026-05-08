@@ -159,7 +159,7 @@ impl<'a> LuaReadHooksBuilder<'a> {
 
 /// Adapter that lets `populate` invoke a `ReadHooks` as a [`JoinAccessCheck`]
 /// for join-field target-collection access enforcement (SEC-G).
-pub struct ReadHooksJoinGuard<'a> {
+pub(crate) struct ReadHooksJoinGuard<'a> {
     hooks: &'a dyn ReadHooks,
 }
 

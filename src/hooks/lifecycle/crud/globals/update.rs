@@ -40,7 +40,7 @@ fn globals_update_inner(
     let ui_locale = hook_ui_locale(lua);
     let def = resolve_global(reg, &slug)?;
 
-    // Collection-level access check is handled inside service::update_global_core
+    // Collection-level access check is handled inside service::update_global_in_conn
     // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
     // The Lua table yields two views of the same fields. The stringified view
@@ -54,7 +54,7 @@ fn globals_update_inner(
         .collect();
     data.extend(composite_data);
 
-    // Field write access is now checked inside service::update_global_core
+    // Field write access is now checked inside service::update_global_in_conn
     // via WriteHooks::field_write_denied.
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &slug, "update");

@@ -51,7 +51,7 @@ pub fn create_upload(
     ui_locale: Option<String>,
     upload_max_file_size: u64,
 ) -> Result<UploadCreateResult, ServiceError> {
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let upload_config = def
         .upload
@@ -135,7 +135,7 @@ pub fn update_upload(
     let ui_locale = input.ui_locale;
     let locale_config = input.locale_config;
     let upload_max_file_size = input.upload_max_file_size;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let locale_ctx = LocaleContext::from_locale_string(None, locale_config)?;
 
     // Load old document for file cleanup (before processing new file)

@@ -111,7 +111,7 @@ pub(crate) fn enforce_access_constraints(
 
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let mut filters: Vec<FilterClause> = extra.clone();
     filters.push(FilterClause::Single(Filter {

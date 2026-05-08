@@ -34,7 +34,7 @@ fn delete_document_lua(
     let mut def = resolve_collection(reg, &collection)?;
 
     // `force_hard_delete` on a soft-delete collection must flip the def so
-    // `delete_document_core` treats it as a hard delete. Mirrors the pattern
+    // `delete_document_in_conn` treats it as a hard delete. Mirrors the pattern
     // in gRPC handlers and Lua bulk `delete_many`. Without this, the option
     // was silently ignored and rows were soft-deleted regardless.
     if force_hard_delete && def.soft_delete {

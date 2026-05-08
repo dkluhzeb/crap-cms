@@ -14,7 +14,7 @@ use crate::{
     core::{DocumentFields, event::EventOperation},
     hooks::LuaCrudInfra,
     service::{
-        RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, create_document_core,
+        RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, create_document_in_conn,
         flush_queue, flush_verification_queue,
     },
 };
@@ -77,7 +77,7 @@ fn create_many_pooled(
     opts: &CreateManyOptions,
 ) -> Result<CreateManyResult> {
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let mut created = 0i64;
     let mut documents = Vec::with_capacity(items.len());
@@ -116,7 +116,7 @@ fn create_many_pooled(
                 .draft(opts.draft)
                 .build();
 
-            let (doc, _after_ctx) = create_document_core(&inner_ctx, input)?;
+            let (doc, _after_ctx) = create_document_in_conn(&inner_ctx, input)?;
             documents.push(doc);
             created += 1;
         }
@@ -151,7 +151,7 @@ fn create_many_on_conn(
             .draft(opts.draft)
             .build();
 
-        let (doc, _after_ctx) = create_document_core(ctx, input)?;
+        let (doc, _after_ctx) = create_document_in_conn(ctx, input)?;
 
         ctx.publish_mutation_event(EventOperation::Create, &doc.id, &doc.fields);
         ctx.maybe_send_verification(&doc);

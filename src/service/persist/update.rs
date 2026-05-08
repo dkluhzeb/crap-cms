@@ -19,7 +19,7 @@ pub fn persist_update(
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let slug = ctx.slug;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
@@ -75,7 +75,7 @@ pub fn persist_update(
 ///
 /// Handles: partial update -> join data -> ref count adjustment -> FTS sync -> version snapshot.
 /// Used by both gRPC UpdateMany and Lua update_many to avoid duplicating per-doc persistence logic.
-pub fn persist_bulk_update(
+pub(crate) fn persist_bulk_update(
     ctx: &ServiceContext,
     id: &str,
     data: &DocumentFields,
@@ -84,7 +84,7 @@ pub fn persist_bulk_update(
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
 

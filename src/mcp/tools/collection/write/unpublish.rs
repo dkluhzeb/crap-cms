@@ -49,7 +49,7 @@ pub(in crate::mcp::tools) fn exec_unpublish(p: UnpublishParams<'_>) -> Result<St
         .override_access(true)
         .event_transport(p.event_transport)
         .cache(p.cache)
-        // Required so the raw read inside `unpublish_document_core` builds
+        // Required so the raw read inside `unpublish_document_in_conn` builds
         // a default `LocaleContext` for collections with localized fields.
         // Without this, the SELECT references bare column names that
         // don't exist when locales are enabled.

@@ -22,11 +22,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Runs the full lifecycle: access check -> before-hooks -> set draft status ->
 /// after-hooks -> hydrate -> strip read-denied fields.
 /// Does NOT manage transactions — caller must open/commit.
-pub fn unpublish_document_core(ctx: &ServiceContext, id: &str) -> Result<Document> {
+fn unpublish_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access =
         write_hooks.check_access(def.access.update.as_deref(), ctx.user, Some(id), None)?;
@@ -104,7 +104,7 @@ pub fn unpublish_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
 fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -131,7 +131,7 @@ fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
         .locale_config(ctx.locale_config)
         .build();
 
-    let doc = unpublish_document_core(&inner_ctx, id)?;
+    let doc = unpublish_document_in_conn(&inner_ctx, id)?;
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
@@ -145,7 +145,7 @@ fn unpublish_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
 }
 
 fn unpublish_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let doc = unpublish_document_core(ctx, id)?;
+    let doc = unpublish_document_in_conn(ctx, id)?;
 
     ctx.clear_cache();
 

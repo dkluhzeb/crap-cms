@@ -12,9 +12,7 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
-    service::{
-        self, CreateManyItem, CreateManyOptions, EmailContext, ServiceContext, ServiceError,
-    },
+    service::{self, CreateManyItem, CreateManyOptions, ServiceContext, ServiceError},
 };
 
 #[cfg(not(tarpaulin_include))]
@@ -50,11 +48,7 @@ impl ContentService {
         let def_owned = def;
         let event_transport = self.event_transport.clone();
         let cache = Some(self.cache.clone());
-        let email_ctx = Some(EmailContext {
-            email_config: self.email_config.clone(),
-            email_renderer: self.email_renderer.clone(),
-            server_config: self.server_config.clone(),
-        });
+        let email_ctx = Some(self.email_context());
 
         let result = task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool

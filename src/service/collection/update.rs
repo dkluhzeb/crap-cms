@@ -9,7 +9,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult, flush_queue,
-        update_document_core,
+        update_document_in_conn,
     },
 };
 
@@ -55,7 +55,7 @@ fn update_document_pool(
         wh = wh.with_override_access();
     }
 
-    let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def())
+    let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def()?)
         .conn(&tx)
         .write_hooks(&wh)
         .user(ctx.user)
@@ -65,7 +65,7 @@ fn update_document_pool(
         .event_queue(queue.clone())
         .build();
 
-    let result = update_document_core(&inner_ctx, id, input)?;
+    let result = update_document_in_conn(&inner_ctx, id, input)?;
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
@@ -84,7 +84,7 @@ fn update_document_conn(
     id: &str,
     input: WriteInput<'_>,
 ) -> Result<WriteResult> {
-    let result = update_document_core(ctx, id, input)?;
+    let result = update_document_in_conn(ctx, id, input)?;
 
     ctx.clear_cache();
 

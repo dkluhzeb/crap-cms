@@ -11,7 +11,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, flush_queue,
-        update_many_single_core,
+        update_many_single_in_conn,
     },
 };
 
@@ -70,7 +70,7 @@ fn update_many_pool(
 ) -> Result<UpdateManyResult> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     // Phase 1: Find all matching doc IDs in a single read transaction.
     // Unlike DeleteMany (which re-queries because deleted docs leave the
@@ -134,7 +134,7 @@ fn update_many_pool(
                 .ui_locale(opts.ui_locale.clone())
                 .build();
 
-            let (doc, _) = update_many_single_core(&inner_ctx, doc_id, input, locale_config)?;
+            let (doc, _) = update_many_single_in_conn(&inner_ctx, doc_id, input, locale_config)?;
 
             chunk_results.push((doc_id.to_string(), doc.fields.clone()));
             ids.push(doc_id.to_string());
@@ -168,7 +168,7 @@ fn update_many_conn(
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let find_query = FindQuery::builder().filters(filters).build();
 
@@ -188,7 +188,7 @@ fn update_many_conn(
             .ui_locale(opts.ui_locale.clone())
             .build();
 
-        let (updated_doc, _) = update_many_single_core(ctx, &doc.id, input, locale_config)?;
+        let (updated_doc, _) = update_many_single_in_conn(ctx, &doc.id, input, locale_config)?;
 
         ctx.publish_mutation_event(EventOperation::Update, &doc.id, &updated_doc.fields);
         updated_ids.push(doc.id.to_string());

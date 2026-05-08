@@ -41,7 +41,7 @@ pub fn authenticate_local(
 ) -> Result<AuthResult, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let user = match query::find_by_email(conn, ctx.slug, def, email)? {
         Some(u) => u,
@@ -87,7 +87,7 @@ pub fn generate_reset_token(
 ) -> Result<Option<ResetTokenResult>, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let user = match query::find_by_email(conn, ctx.slug, def, email)? {
         Some(u) => u,
@@ -115,7 +115,7 @@ pub fn consume_reset_token(
 ) -> Result<(), ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let (user, exp) = query::find_by_reset_token(conn, ctx.slug, def, token)?.ok_or(
         ServiceError::InvalidToken {
@@ -154,7 +154,7 @@ pub fn consume_reset_token(
 pub fn consume_verification_token(ctx: &ServiceContext, token: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let (user, exp) = match query::find_by_verification_token(conn, ctx.slug, def, token)? {
         Some(pair) => pair,
@@ -246,7 +246,7 @@ pub fn user_exists(ctx: &ServiceContext, id: &str) -> Result<bool, ServiceError>
 pub fn find_by_reset_token(ctx: &ServiceContext, token: &str) -> Result<bool, ServiceError> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     Ok(query::find_by_reset_token(conn, ctx.slug, def, token)?.is_some())
 }

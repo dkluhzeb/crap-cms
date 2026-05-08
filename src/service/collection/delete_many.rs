@@ -9,7 +9,9 @@ use crate::{
     core::{DocumentFields, event::EventOperation},
     db::{FilterClause, FindQuery, query},
     hooks::LuaCrudInfra,
-    service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core, flush_queue},
+    service::{
+        RunnerWriteHooks, ServiceContext, ServiceError, delete_document_in_conn, flush_queue,
+    },
 };
 
 const BATCH_SIZE: i64 = 500;
@@ -73,7 +75,7 @@ fn delete_many_pool(
 ) -> Result<DeleteManyResult> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let mut hard_count = 0i64;
     let mut soft_count = 0i64;
@@ -129,7 +131,7 @@ fn delete_many_pool(
         let mut batch_deleted = 0usize;
 
         for doc in &docs {
-            match delete_document_core(&inner_ctx, &doc.id, Some(locale_config)) {
+            match delete_document_in_conn(&inner_ctx, &doc.id, Some(locale_config)) {
                 Ok(result) => {
                     if def.soft_delete {
                         soft_count += 1;
@@ -185,7 +187,7 @@ fn delete_many_conn(
     locale_config: &LocaleConfig,
     opts: &DeleteManyOptions,
 ) -> Result<DeleteManyResult> {
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let find_query = FindQuery::builder()
         .filters(filters)
@@ -205,7 +207,7 @@ fn delete_many_conn(
     let mut deleted_ids = Vec::new();
 
     for doc in &docs {
-        match delete_document_core(ctx, &doc.id, Some(locale_config)) {
+        match delete_document_in_conn(ctx, &doc.id, Some(locale_config)) {
             Ok(result) => {
                 if def.soft_delete {
                     soft_count += 1;

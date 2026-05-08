@@ -15,7 +15,7 @@ use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service::{
     GetGlobalInput, RunnerReadHooks, RunnerWriteHooks, ServiceContext, WriteInput,
-    get_global_document, update_global_core,
+    get_global_document, update_global_in_conn,
 };
 use serde_json::{Value, json};
 
@@ -89,7 +89,7 @@ fn global_before_validate_hook_fires() {
         .build();
 
     let input = WriteInput::builder(data).build();
-    let (doc, _after) = update_global_core(&ctx, input).expect("update should succeed");
+    let (doc, _after) = update_global_in_conn(&ctx, input).expect("update should succeed");
     tx.commit().unwrap();
 
     // before_validate trimmed the title.
@@ -122,7 +122,7 @@ fn global_before_change_hook_fires() {
 
     let input = WriteInput::builder(data).build();
     let err =
-        update_global_core(&ctx, input).expect_err("before_change hook should abort the update");
+        update_global_in_conn(&ctx, input).expect_err("before_change hook should abort the update");
     let msg = err.to_string();
     assert!(
         msg.contains("aborted by before_change hook")
@@ -229,7 +229,7 @@ fn global_update_access_denied_for_non_admin() {
     let input = WriteInput::builder(data).build();
 
     let err =
-        update_global_core(&ctx, input).expect_err("non-admin should be denied update access");
+        update_global_in_conn(&ctx, input).expect_err("non-admin should be denied update access");
     let msg = err.to_string();
     assert!(
         msg.to_lowercase().contains("access denied") || msg.to_lowercase().contains("denied"),

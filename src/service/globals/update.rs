@@ -34,7 +34,7 @@ pub fn update_global_document(ctx: &ServiceContext, input: WriteInput<'_>) -> Re
 fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -60,7 +60,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
         .event_queue(queue.clone())
         .build();
 
-    let result = update_global_core(&inner_ctx, input)?;
+    let result = update_global_in_conn(&inner_ctx, input)?;
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
@@ -74,7 +74,7 @@ fn update_global_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 }
 
 fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let result = update_global_core(ctx, input)?;
+    let result = update_global_in_conn(ctx, input)?;
 
     ctx.clear_cache();
 
@@ -84,11 +84,14 @@ fn update_global_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<Wri
 }
 
 /// Core logic for global update — accepts ServiceContext for hook abstraction.
-pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Result<WriteResult> {
+pub fn update_global_in_conn(
+    ctx: &ServiceContext,
+    mut input: WriteInput<'_>,
+) -> Result<WriteResult> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
 
     let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
     if matches!(access, AccessResult::Denied) {

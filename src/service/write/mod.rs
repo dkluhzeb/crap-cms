@@ -13,8 +13,8 @@ mod validate;
 
 use crate::service::ServiceError;
 
-pub use create::create_document_core;
-pub use delete::{DeleteResult, delete_document_core};
-pub use update::update_document_core;
-pub use update_many_single::update_many_single_core;
+pub use create::create_document_in_conn;
+pub(crate) use delete::delete_document_in_conn;
+pub(crate) use update::update_document_in_conn;
+pub(crate) use update_many_single::update_many_single_in_conn;
 pub use validate::{ValidateContext, validate_document};

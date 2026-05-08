@@ -6,58 +6,54 @@
 
 pub mod auth;
 mod collection;
-pub mod document_info;
+pub(crate) mod document_info;
 mod email;
 mod error;
 mod globals;
-pub mod helpers;
-pub mod hooks;
+pub(crate) mod helpers;
+pub(crate) mod hooks;
 pub mod jobs;
 mod persist;
-pub mod read;
+pub(crate) mod read;
 mod types;
 pub mod upload;
-pub mod user_settings;
+pub(crate) mod user_settings;
 pub(crate) mod versions;
-pub mod write;
+pub(crate) mod write;
 
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, CountDocumentsInputBuilder, Def, EmailContext, EventQueue, FindByIdInput,
-    FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
-    ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
-    SearchDocumentsInput, ServiceContext, ServiceContextBuilder, VerificationQueue, WriteInput,
-    WriteInputBuilder, WriteResult, flush_queue, flush_verification_queue, values_from_strings,
+    CountDocumentsInput, Def, EmailContext, EventQueue, FindByIdInput, FindDocumentsInput,
+    GetGlobalInput, ListVersionsInput, PaginatedResult, PersistOptions, SearchDocumentsInput,
+    ServiceContext, VerificationQueue, WriteInput, WriteResult, values_from_strings,
 };
+pub(crate) use types::{flush_queue, flush_verification_queue};
 
 pub use collection::{
     CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
-    delete_many, undelete_document, undelete_document_core, unpublish_document,
-    unpublish_document_core, update_document, update_many,
+    delete_many, undelete_document, unpublish_document, update_document, update_many,
 };
-pub use email::send_verification_email;
-pub use globals::{unpublish_global_document, update_global_core, update_global_document};
+pub(crate) use email::send_verification_email;
+pub use globals::{unpublish_global_document, update_global_document, update_global_in_conn};
 pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
-    LuaReadHooks, LuaReadHooksBuilder, LuaWriteHooks, LuaWriteHooksBuilder, ReadHooks,
-    ReadHooksJoinGuard, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
+    LuaReadHooks, LuaWriteHooks, ReadHooks, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
 };
-pub use persist::{
-    persist_bulk_update, persist_create, persist_draft_version, persist_unpublish, persist_update,
-};
+pub(crate) use persist::persist_bulk_update;
+pub use persist::{persist_create, persist_draft_version, persist_unpublish, persist_update};
 pub use read::{
-    ReadOptions, ReadOptionsBuilder, count_documents, find_document_by_id, find_documents,
-    get_global_document, search_documents, validate_access_constraints, validate_user_filters,
+    count_documents, find_document_by_id, find_documents, get_global_document, search_documents,
+    validate_access_constraints, validate_user_filters,
 };
-pub use versions::unpublish_with_snapshot;
+pub(crate) use versions::unpublish_with_snapshot;
 pub use versions::{
     find_version_by_id, list_versions, restore_collection_version, restore_global_version,
 };
-pub use write::{
-    DeleteResult, ValidateContext, create_document_core, delete_document_core,
-    update_document_core, update_many_single_core, validate_document,
+pub use write::{ValidateContext, create_document_in_conn, validate_document};
+pub(crate) use write::{
+    delete_document_in_conn, update_document_in_conn, update_many_single_in_conn,
 };
 
 #[cfg(all(test, feature = "sqlite"))]

@@ -42,8 +42,8 @@ impl<'a> PersistOptionsBuilder<'a> {
         self
     }
 
-    pub fn locale_config(mut self, locale_config: &'a LocaleConfig) -> Self {
-        self.locale_config = Some(locale_config);
+    pub fn locale_config(mut self, locale_config: Option<&'a LocaleConfig>) -> Self {
+        self.locale_config = locale_config;
         self
     }
 

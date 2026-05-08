@@ -151,7 +151,7 @@ fn restore_collection_version_pool(
 ) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -208,7 +208,7 @@ pub(crate) fn restore_collection_version_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(
         def.access.update.as_deref(),
@@ -270,7 +270,7 @@ pub fn restore_global_version(
 ) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -312,7 +312,7 @@ pub(crate) fn restore_global_version_core(
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.global_def();
+    let def = ctx.global_def()?;
 
     let access = write_hooks.check_access(def.access.update.as_deref(), ctx.user, None, None)?;
 

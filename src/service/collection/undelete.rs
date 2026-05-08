@@ -16,11 +16,11 @@ type Result<T> = std::result::Result<T, ServiceError>;
 /// Core undelete logic on an existing connection: access check + restore row + FTS re-sync.
 ///
 /// Does NOT manage transactions — caller must open/commit.
-pub fn undelete_document_core(ctx: &ServiceContext, id: &str) -> Result<Document> {
+fn undelete_document_in_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
     let conn = conn.as_ref();
     let write_hooks = ctx.write_hooks()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
 
     let access = write_hooks.check_access(def.access.resolve_trash(), ctx.user, Some(id), None)?;
 
@@ -74,7 +74,7 @@ pub fn undelete_document(ctx: &ServiceContext, id: &str) -> Result<Document> {
 fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
     let pool = ctx.pool.context("pool required")?;
     let runner = ctx.runner()?;
-    let def = ctx.collection_def();
+    let def = ctx.collection_def()?;
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
@@ -100,7 +100,7 @@ fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
         .event_queue(queue.clone())
         .build();
 
-    let doc = undelete_document_core(&inner_ctx, id)?;
+    let doc = undelete_document_in_conn(&inner_ctx, id)?;
     drop(inner_ctx);
 
     tx.commit()?;
@@ -115,7 +115,7 @@ fn undelete_document_pool(ctx: &ServiceContext, id: &str) -> Result<Document> {
 
 /// Conn-based undelete: uses existing connection (Lua CRUD path).
 fn undelete_document_conn(ctx: &ServiceContext, id: &str) -> Result<Document> {
-    let doc = undelete_document_core(ctx, id)?;
+    let doc = undelete_document_in_conn(ctx, id)?;
 
     ctx.clear_cache();
 

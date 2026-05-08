@@ -196,7 +196,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         }
     }
 
-    // Field write access is now checked inside service::update_document_core.
+    // Field write access is now checked inside service::update_document_in_conn.
 
     let password = if def.is_auth_collection() {
         form_data.remove("password")

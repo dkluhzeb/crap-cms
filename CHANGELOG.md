@@ -473,6 +473,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `crate::db::query::*::test_helpers` form for consistency
   with the earlier ref_count split. Zero `super::super::`
   paths now anywhere in `src/db/`.
+- `src/service/` module audit per the alpha.9 playbook.
+  Already-clean axes (zero `#[allow(...)]`, zero
+  `super::super::` chains, zero inline-use in fn bodies, all
+  files < 1000 LOC, builders colocated with types, no `>4`-arg
+  fns) verified untouched. Active changes:
+  - `service/types/service_context.rs` (702 LOC, 7 types)
+    split per axis 3 into `email_context.rs` (`EmailContext`),
+    `pending_event.rs` (`PendingEvent` + `EventQueue` +
+    `flush_queue`), `pending_verification.rs`
+    (`PendingVerification` + `VerificationQueue` +
+    `flush_verification_queue`), and a slimmed
+    `service_context.rs` (614 LOC, holds `Def` +
+    `ServiceContext` + `ServiceContextBuilder` +
+    `ResolvedConn`).
+  - Dead `crate::service::ReadOptions` /
+    `ReadOptionsBuilder` (zero call sites, never constructed
+    or passed as a parameter) and the entire `read/options.rs`
+    file deleted.
+  - Axis 6 fix: `PersistOptionsBuilder.locale_config` takes
+    `Option<&'a LocaleConfig>` (was `&'a LocaleConfig`),
+    matching the `Option<&...>` shape on the other
+    optional-attachment methods. The two callers in
+    `service/write/{create,update}.rs` lost their `if let
+    Some(lctx) = ...` wrappers in favor of inline
+    `.locale_config(input.locale_ctx.map(|c| &c.config))`.
+  - Axis 7 cleanup: `*Builder` types (`WriteInputBuilder`,
+    `ServiceContextBuilder`, `PersistOptionsBuilder`,
+    `Find{ById,Documents}InputBuilder`,
+    `CountDocumentsInputBuilder`, `LuaReadHooksBuilder`,
+    `LuaWriteHooksBuilder`) dropped from
+    `crate::service::*` re-exports. Builders are now
+    accessed only via `Type::builder()` per the playbook;
+    no external caller imported them by name.
+  - Axes 16/17/18: visibility tightening across `service/`.
+    Modules `document_info`, `helpers`, `hooks`,
+    `user_settings`, `write`, `read` demoted from `pub mod`
+    to `pub(crate) mod` (zero deep-path external users —
+    one `service::read::{validate_*}` call site in
+    `api/handlers/collection/filter_builder.rs` rewritten
+    to use the existing top-level re-export). Functions
+    only used inside `service/` demoted to `pub(crate)` at
+    their definition: `delete_document_in_conn`,
+    `update_document_in_conn`, `update_many_single_in_conn`,
+    `persist_bulk_update`, `unpublish_with_snapshot`,
+    `send_verification_email`, plus the `DeleteResult`
+    return type that they expose. The matching
+    `pub(crate) use` re-exports from `service/mod.rs` follow
+    suit. `undelete_document_in_conn` and
+    `unpublish_document_in_conn` go further — only called
+    inside their own files, so they become plain `fn`. The
+    stale `pub use` re-exports for them in
+    `collection/mod.rs` are deleted.
+  - Extras (beyond playbook):
+    1. `ServiceContext::flush_event_queue` deleted — defined
+       and documented but never called; all 9 callers use the
+       free `flush_queue(ctx, &queue)` function instead.
+       (Clippy doesn't catch this kind of dead `pub fn`
+       because it's reachable from a `pub` parent and could be
+       used by downstream crates.)
+    2. New `EmailContext::send_verification(pool, slug,
+       doc_id, email)` method dedups two identical 7-arg
+       `send_verification_email` calls (one in
+       `ServiceContext::maybe_send_verification`, one in
+       `flush_verification_queue`).
+    3. New `ContentService::email_context()` helper in
+       `api/handlers/content_service.rs` and
+       `AdminState::email_context()` in `admin/mod.rs`
+       collapse three identical 3-clone `EmailContext { ... }`
+       construction sites (gRPC `create` + `create_many`,
+       admin `create_action`).
+    4. `_core` suffix on transaction-agnostic functions
+       renamed to `_in_conn` (more self-documenting:
+       "operates on the connection in `ctx`"):
+       `create_document_core` → `create_document_in_conn`,
+       `update_document_core` → `update_document_in_conn`,
+       `delete_document_core` → `delete_document_in_conn`,
+       `update_many_single_core` → `update_many_single_in_conn`,
+       `update_global_core` → `update_global_in_conn`,
+       and the (now-private) `undelete_document_in_conn` /
+       `unpublish_document_in_conn`. Doc comments and bench
+       caller updated.
+    5. Panic-on-wrong-variant accessors converted to
+       `Result<&_, ServiceError>`:
+       `ServiceContext::collection_def()` /
+       `global_def()` / `fields()` now return
+       `Result<&CollectionDefinition, _>` /
+       `Result<&GlobalDefinition, _>` /
+       `Result<&[FieldDefinition], _>` so misuse surfaces as
+       `ServiceError::Internal` instead of crashing the
+       process. All 46 call sites across `service/` updated
+       to propagate with `?`; the two `post_process` helpers
+       (which return `()`) use `let Ok(def) = ... else {
+       return };` to skip cleanly when the wrong def variant
+       is wired up.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

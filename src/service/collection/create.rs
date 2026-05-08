@@ -9,7 +9,7 @@ use crate::{
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult,
-        create_document_core, flush_queue, flush_verification_queue,
+        create_document_in_conn, flush_queue, flush_verification_queue,
     },
 };
 
@@ -52,7 +52,7 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
         wh = wh.with_override_access();
     }
 
-    let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def())
+    let inner_ctx = ServiceContext::collection(ctx.slug, ctx.collection_def()?)
         .conn(&tx)
         .write_hooks(&wh)
         .user(ctx.user)
@@ -64,7 +64,7 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
         .email_ctx(ctx.email_ctx.clone())
         .build();
 
-    let result = create_document_core(&inner_ctx, input)?;
+    let result = create_document_in_conn(&inner_ctx, input)?;
     drop(inner_ctx);
 
     tx.commit().context("Commit transaction")?;
@@ -81,7 +81,7 @@ fn create_document_pool(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<W
 
 /// Conn-based create: uses existing connection (Lua CRUD path).
 fn create_document_conn(ctx: &ServiceContext, input: WriteInput<'_>) -> Result<WriteResult> {
-    let result = create_document_core(ctx, input)?;
+    let result = create_document_in_conn(ctx, input)?;
 
     ctx.clear_cache();
 

@@ -169,7 +169,7 @@ pub async fn update_action(
         LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
             .unwrap_or(None);
 
-    // Field write access is now checked inside service::update_global_core.
+    // Field write access is now checked inside service::update_global_in_conn.
 
     transform_select_has_many(&mut form_data, &def.fields);
     let join_data = extract_join_data_from_form(&form_data, &def.fields);

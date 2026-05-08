@@ -32,7 +32,7 @@ impl ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let def_owned = def.clone();
-        // Required by `unpublish_document_core` to build a default
+        // Required by `unpublish_document_in_conn` to build a default
         // `LocaleContext` for the raw read — without this, collections
         // with `localized = true` fields fail with `no such column: <name>`
         // because the SELECT references bare names instead of `__en`/`__de`.

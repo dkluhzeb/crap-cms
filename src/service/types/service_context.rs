@@ -1,19 +1,16 @@
 //! Service context — calling environment for all service operations.
 
-use std::{borrow::Cow, cell::RefCell, rc::Rc};
+use std::borrow::Cow;
 
 use anyhow::{Context as _, anyhow};
 use tracing::warn;
 
-use std::sync::Arc;
-
 use crate::{
-    config::{EmailConfig, LocaleConfig, ServerConfig},
+    config::LocaleConfig,
     core::{
         CollectionDefinition, Document, DocumentFields, FieldDefinition,
         cache::SharedCache,
-        collection::{GlobalDefinition, Hooks, LiveMode, LiveSetting},
-        email::EmailRenderer,
+        collection::{GlobalDefinition, LiveMode},
         event::{
             EventOperation, EventTarget, EventUser, SharedEventTransport,
             SharedInvalidationTransport,
@@ -25,86 +22,9 @@ use crate::{
     service::{
         ServiceError,
         hooks::{ReadHooks, WriteHooks},
+        types::{EmailContext, EventQueue, PendingEvent, PendingVerification, VerificationQueue},
     },
 };
-
-/// Bundled email configuration for verification emails.
-/// Cloning is cheap (configs are small, renderer is Arc).
-#[derive(Clone)]
-pub struct EmailContext {
-    pub email_config: EmailConfig,
-    pub email_renderer: Arc<EmailRenderer>,
-    pub server_config: ServerConfig,
-}
-
-/// A mutation event waiting to be published after transaction commit.
-pub struct PendingEvent {
-    pub target: EventTarget,
-    pub operation: EventOperation,
-    pub collection: String,
-    pub document_id: String,
-    pub data: DocumentFields,
-    pub edited_by: Option<EventUser>,
-    pub hooks: Hooks,
-    pub live: Option<LiveSetting>,
-}
-
-/// Shared queue for events accumulated during a transaction.
-/// Cloning is cheap (Rc + RefCell).
-pub type EventQueue = Rc<RefCell<Vec<PendingEvent>>>;
-
-/// A verification email waiting to be sent after transaction commit.
-pub struct PendingVerification {
-    pub slug: String,
-    pub doc_id: String,
-    pub email: String,
-}
-
-/// Shared queue for verification emails accumulated during a transaction.
-pub type VerificationQueue = Rc<RefCell<Vec<PendingVerification>>>;
-
-/// Flush all events from a queue, publishing each via the given context's runner + transport.
-pub fn flush_queue(ctx: &ServiceContext, queue: &EventQueue) {
-    let Some(runner) = ctx.runner else { return };
-
-    let events: Vec<PendingEvent> = queue.borrow_mut().drain(..).collect();
-
-    for pending in events {
-        runner.publish_event(
-            &ctx.event_transport,
-            &pending.hooks,
-            pending.live.as_ref(),
-            PublishEventInput::builder(pending.target, pending.operation)
-                .collection(pending.collection)
-                .document_id(pending.document_id)
-                .data(pending.data)
-                .edited_by(pending.edited_by)
-                .build(),
-        );
-    }
-}
-
-/// Flush all queued verification emails, sending each via the parent's pool + email context.
-pub fn flush_verification_queue(ctx: &ServiceContext, queue: &VerificationQueue) {
-    let Some(pool) = ctx.pool else { return };
-    let Some(ref email_ctx) = ctx.email_ctx else {
-        return;
-    };
-
-    let pending: Vec<PendingVerification> = queue.borrow_mut().drain(..).collect();
-
-    for v in pending {
-        crate::service::send_verification_email(
-            pool.clone(),
-            email_ctx.email_config.clone(),
-            email_ctx.email_renderer.clone(),
-            email_ctx.server_config.clone(),
-            v.slug,
-            v.doc_id,
-            v.email,
-        );
-    }
-}
 
 /// The target definition for a service operation.
 pub enum Def<'a> {
@@ -247,19 +167,27 @@ impl<'a> ServiceContext<'a> {
         })
     }
 
-    /// Get the definition as a `CollectionDefinition`. Panics if not a collection.
-    pub fn collection_def(&self) -> &CollectionDefinition {
+    /// Get the definition as a `CollectionDefinition`. Errors if the context
+    /// was built with `Def::Global` or `Def::None`.
+    pub fn collection_def(&self) -> Result<&CollectionDefinition, ServiceError> {
         match &self.def {
-            Def::Collection(d) => d,
-            _ => panic!("expected Def::Collection, got {:?}", self.def_variant()),
+            Def::Collection(d) => Ok(d),
+            _ => Err(ServiceError::Internal(anyhow!(
+                "expected Def::Collection, got {}",
+                self.def_variant()
+            ))),
         }
     }
 
-    /// Get the definition as a `GlobalDefinition`. Panics if not a global.
-    pub fn global_def(&self) -> &GlobalDefinition {
+    /// Get the definition as a `GlobalDefinition`. Errors if the context was
+    /// built with `Def::Collection` or `Def::None`.
+    pub fn global_def(&self) -> Result<&GlobalDefinition, ServiceError> {
         match &self.def {
-            Def::Global(d) => d,
-            _ => panic!("expected Def::Global, got {:?}", self.def_variant()),
+            Def::Global(d) => Ok(d),
+            _ => Err(ServiceError::Internal(anyhow!(
+                "expected Def::Global, got {}",
+                self.def_variant()
+            ))),
         }
     }
 
@@ -280,19 +208,18 @@ impl<'a> ServiceContext<'a> {
         }
     }
 
-    /// Get field definitions from either collection or global def.
-    /// Panics if `Def::None`.
-    pub fn fields(&self) -> &[FieldDefinition] {
+    /// Get field definitions from either collection or global def. Errors
+    /// if the context was built with `Def::None`.
+    pub fn fields(&self) -> Result<&[FieldDefinition], ServiceError> {
         match &self.def {
-            Def::Collection(d) => &d.fields,
-            Def::Global(d) => &d.fields,
-            Def::None => panic!("fields() called on Def::None"),
+            Def::Collection(d) => Ok(&d.fields),
+            Def::Global(d) => Ok(&d.fields),
+            Def::None => Err(ServiceError::Internal(anyhow!(
+                "fields() called on Def::None"
+            ))),
         }
     }
 
-    /// Publish a mutation event to all Subscribe/SSE clients.
-    ///
-    /// Fire-and-forget: spawns a background task for hooks + broadcast.
     /// Send a verification email if this is an auth collection with
     /// `verify_email` enabled and the document has an email field.
     /// No-op when email context is not attached.
@@ -313,13 +240,9 @@ impl<'a> ServiceContext<'a> {
             return;
         };
 
-        // Pool mode: send immediately.
         if let (Some(pool), Some(email_ctx)) = (self.pool, &self.email_ctx) {
-            crate::service::send_verification_email(
+            email_ctx.send_verification(
                 pool.clone(),
-                email_ctx.email_config.clone(),
-                email_ctx.email_renderer.clone(),
-                email_ctx.server_config.clone(),
                 self.slug.to_string(),
                 doc.id.to_string(),
                 email.to_string(),
@@ -327,7 +250,6 @@ impl<'a> ServiceContext<'a> {
             return;
         }
 
-        // Conn mode: queue for the parent to send after commit.
         if let Some(ref queue) = self.verification_queue {
             queue.borrow_mut().push(PendingVerification {
                 slug: self.slug.to_string(),
@@ -368,8 +290,6 @@ impl<'a> ServiceContext<'a> {
             Def::None => return,
         };
 
-        // Only clone document data for Full mode — Metadata mode subscribers
-        // ignore it, so cloning fields would be wasted work.
         let data = if live_mode == LiveMode::Full {
             data.clone()
         } else {
@@ -397,13 +317,11 @@ impl<'a> ServiceContext<'a> {
             live,
         };
 
-        // If inside a transaction, queue for later flush.
         if let Some(ref queue) = self.event_queue {
             queue.borrow_mut().push(pending);
             return;
         }
 
-        // Otherwise publish immediately (post-commit path).
         let Some(runner) = self.runner else { return };
         runner.publish_event(
             &self.event_transport,
@@ -418,34 +336,10 @@ impl<'a> ServiceContext<'a> {
         );
     }
 
-    /// Flush all queued events (call after transaction commit).
-    pub fn flush_event_queue(&self) {
-        let Some(ref queue) = self.event_queue else {
-            return;
-        };
-        let Some(runner) = self.runner else { return };
-
-        let events: Vec<PendingEvent> = queue.borrow_mut().drain(..).collect();
-
-        for pending in events {
-            runner.publish_event(
-                &self.event_transport,
-                &pending.hooks,
-                pending.live.as_ref(),
-                PublishEventInput::builder(pending.target, pending.operation)
-                    .collection(pending.collection)
-                    .document_id(pending.document_id)
-                    .data(pending.data)
-                    .edited_by(pending.edited_by)
-                    .build(),
-            );
-        }
-    }
-
     /// Publish a user-invalidation signal if an invalidation transport is
     /// configured. Fire-and-forget — no-op when no transport is attached.
     ///
-    /// Called from the service layer (e.g. `lock_user`, `delete_document_core`
+    /// Called from the service layer (e.g. `lock_user`, `delete_document_in_conn`
     /// for hard-delete of auth collections) so every surface that routes
     /// through the service layer gets live-stream tear-down for free.
     pub fn publish_user_invalidation(&self, user_id: &str) {
@@ -668,7 +562,6 @@ mod tests {
         let def = CollectionDefinition::new("users");
         let ctx = ServiceContext::collection("users", &def).build();
 
-        // No transport attached — must not panic and must complete silently.
         ctx.publish_user_invalidation("user-123");
         assert!(ctx.invalidation_transport.is_none());
     }
