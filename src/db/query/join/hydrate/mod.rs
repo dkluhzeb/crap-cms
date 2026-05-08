@@ -86,17 +86,15 @@ mod tests {
 
     use crate::core::DocumentFields;
 
-    use super::{
-        super::{
-            arrays::{find_array_rows, set_array_rows},
-            blocks::{find_block_rows, set_block_rows},
-            relationships::{set_polymorphic_related, set_related_ids},
-        },
-        test_helpers::{array_sub_fields, posts_def_with_joins, setup_join_db},
-        *,
-    };
+    use super::test_helpers::{array_sub_fields, posts_def_with_joins, setup_join_db};
+    use super::*;
     use crate::config::CrapConfig;
     use crate::core::{Document, field::*};
+    use crate::db::query::join::{
+        arrays::{find_array_rows, set_array_rows},
+        blocks::{find_block_rows, set_block_rows},
+        relationships::{set_polymorphic_related, set_related_ids},
+    };
     use crate::db::{BoxedConnection, DbConnection, pool};
     use tempfile::TempDir;
 
@@ -236,8 +234,6 @@ mod tests {
     #[test]
     fn save_and_hydrate_blocks_inside_tabs() {
         // Regression: blocks nested inside a Tabs field were lost on save and invisible on read
-        use super::save::save_join_table_data;
-        use crate::core::field::FieldTab;
         let (_dir, conn) = setup_join_db();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
@@ -281,7 +277,6 @@ mod tests {
     #[test]
     fn save_and_hydrate_array_inside_row() {
         // Regression: arrays nested inside a Row field were lost on save and invisible on read
-        use super::save::save_join_table_data;
         let (_dir, conn) = setup_join_db();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)
@@ -428,7 +423,6 @@ mod tests {
             INSERT INTO posts (id, config__label) VALUES ('p1', 'My Config');",
         );
 
-        use super::super::relationships::set_related_ids;
         let tag_ids = vec!["t1".to_string(), "t2".to_string()];
         set_related_ids(&conn, "posts", "config__tags", "p1", &tag_ids, None).unwrap();
 
@@ -532,7 +526,6 @@ mod tests {
     #[test]
     fn save_and_hydrate_blocks_inside_collapsible() {
         // Regression: blocks nested inside a Collapsible field were lost
-        use super::save::save_join_table_data;
         let (_dir, conn) = setup_join_db();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();

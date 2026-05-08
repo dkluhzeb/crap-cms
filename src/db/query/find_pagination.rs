@@ -70,7 +70,11 @@ impl FindPagination {
 ///
 /// Returns `Err(String)` for invalid combinations (e.g., cursor + page,
 /// both after and before cursors). Callers wrap in their own error type.
-pub fn validate_find_pagination(
+///
+/// Private — external callers route through [`PaginationCtx::validate`]
+/// to avoid duplicating the (default_limit, max_limit, cursor_enabled)
+/// triple at every call site.
+fn validate_find_pagination(
     req_limit: Option<i64>,
     req_page: Option<i64>,
     req_after_cursor: Option<&str>,

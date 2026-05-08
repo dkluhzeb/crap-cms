@@ -1,6 +1,6 @@
 //! Shared paginated result type for all multi-result service functions.
 
-use crate::db::query::PaginationResult;
+use crate::db::PaginationResult;
 
 /// Paginated result — returned by all multi-result service functions.
 ///

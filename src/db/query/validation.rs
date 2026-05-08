@@ -274,6 +274,10 @@ pub(crate) fn validate_filter_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{
+        CollectionDefinition,
+        field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig},
+    };
 
     #[test]
     fn is_valid_identifier_accepts_valid() {
@@ -420,11 +424,6 @@ mod tests {
     /// so Array/Blocks fields inside Row/Tabs/Collapsible were rejected as invalid.
     #[test]
     fn filter_paths_include_array_inside_layout_wrappers() {
-        use crate::core::{
-            CollectionDefinition,
-            field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig},
-        };
-
         // Array inside a Row
         let def = CollectionDefinition::builder("test")
             .fields(vec![

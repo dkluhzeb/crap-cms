@@ -236,13 +236,7 @@ fn query_existing_ids(
     match conn.query_all(&sql, &params) {
         Ok(rows) => rows
             .into_iter()
-            .filter_map(|row| {
-                if let Some(DbValue::Text(s)) = row.get_value(0) {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|row| row.opt_text_at(0))
             .collect(),
         Err(e) => {
             tracing::debug!("Missing relations check skipping {}: {}", collection, e);

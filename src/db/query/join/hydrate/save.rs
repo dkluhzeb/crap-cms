@@ -187,14 +187,15 @@ fn save_join_data_inner(
 mod tests {
     use serde_json::json;
 
-    use super::super::super::blocks::find_block_rows;
-    use super::super::super::relationships::{
-        find_polymorphic_related, find_related_ids, set_related_ids,
-    };
-    use super::super::test_helpers::{posts_def_with_joins, setup_join_db};
     use super::*;
     use crate::config::CrapConfig;
     use crate::core::field::*;
+    use crate::db::query::join::arrays::find_array_rows;
+    use crate::db::query::join::blocks::find_block_rows;
+    use crate::db::query::join::hydrate::test_helpers::{posts_def_with_joins, setup_join_db};
+    use crate::db::query::join::relationships::{
+        find_polymorphic_related, find_related_ids, set_related_ids,
+    };
     use crate::db::{BoxedConnection, pool};
     use tempfile::TempDir;
 
@@ -359,8 +360,6 @@ mod tests {
 
     #[test]
     fn save_group_array_data() {
-        use super::super::super::arrays::find_array_rows;
-
         let (_dir, conn) = setup_conn(
             "CREATE TABLE posts (id TEXT PRIMARY KEY);
              CREATE TABLE posts_config__items (
@@ -442,8 +441,6 @@ mod tests {
 
     #[test]
     fn save_group_relationship_data() {
-        use super::super::super::relationships::find_related_ids;
-
         let (_dir, conn) = setup_conn(
             "CREATE TABLE posts (id TEXT PRIMARY KEY);
              CREATE TABLE posts_config__tags (
@@ -476,8 +473,6 @@ mod tests {
 
     #[test]
     fn save_group_group_array_data() {
-        use super::super::super::arrays::find_array_rows;
-
         let (_dir, conn) = setup_conn(
             "CREATE TABLE posts (id TEXT PRIMARY KEY);
              CREATE TABLE posts_outer__inner__items (

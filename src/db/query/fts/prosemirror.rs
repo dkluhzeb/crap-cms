@@ -41,7 +41,7 @@ impl<'a> ProseMirrorNode<'a> {
 /// Returns an empty string for invalid input.
 ///
 /// Shorthand for [`extract_prosemirror_text_with_nodes`] with no custom nodes.
-pub fn extract_prosemirror_text(json_str: &str) -> String {
+pub(crate) fn extract_prosemirror_text(json_str: &str) -> String {
     extract_prosemirror_text_with_nodes(json_str, &HashMap::new())
 }
 
@@ -50,7 +50,7 @@ pub fn extract_prosemirror_text(json_str: &str) -> String {
 /// `node_searchable` maps node type names to their searchable attribute names.
 /// When a node matches, its attr values are extracted as text in addition to
 /// walking children.
-pub fn extract_prosemirror_text_with_nodes(
+pub(crate) fn extract_prosemirror_text_with_nodes(
     json_str: &str,
     node_searchable: &HashMap<&str, Vec<&str>>,
 ) -> String {

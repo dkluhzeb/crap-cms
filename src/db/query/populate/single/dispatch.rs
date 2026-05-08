@@ -13,7 +13,7 @@ use super::{join, nested, nonpoly, poly};
 ///
 /// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
 /// Uses a shared `cache` to avoid redundant fetches within the same request.
-pub fn populate_relationships_cached(
+pub(crate) fn populate_relationships_cached(
     ctx: &PopulateContext<'_>,
     doc: &mut Document,
     visited: &mut HashSet<(String, String)>,

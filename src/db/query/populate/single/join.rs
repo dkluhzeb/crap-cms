@@ -138,11 +138,11 @@ mod tests {
     use anyhow::Result as AnyResult;
     use serde_json::json;
 
-    use super::super::super::test_helpers::*;
-    use super::super::super::{JoinAccessCheck, PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
     use crate::core::cache::NoneCache;
     use crate::core::{Document, Registry};
+    use crate::db::query::populate::test_helpers::*;
+    use crate::db::query::populate::{JoinAccessCheck, PopulateContext, PopulateOpts};
     use crate::db::{AccessResult, Filter, FilterClause, FilterOp};
     use std::collections::HashSet;
 

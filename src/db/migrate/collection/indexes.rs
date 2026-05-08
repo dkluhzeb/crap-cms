@@ -193,11 +193,11 @@ pub(super) fn sync_indexes(
 
 #[cfg(test)]
 mod tests {
-    use super::super::create::create_collection_table;
-    use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldType};
+    use crate::db::migrate::collection::create::create_collection_table;
+    use crate::db::migrate::collection::test_helpers::*;
     use crate::db::{DbConnection, DbValue};
 
     fn get_indexes(conn: &dyn DbConnection, table: &str) -> HashSet<String> {

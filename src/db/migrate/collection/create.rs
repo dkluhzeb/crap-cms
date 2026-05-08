@@ -45,7 +45,7 @@ fn build_column_def(col_name: &str, col_type: &str, constraints: &ColumnConstrai
     col
 }
 
-pub fn create_collection_table(
+pub(crate) fn create_collection_table(
     conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
@@ -164,7 +164,7 @@ fn collect_system_columns(
 
 /// Append a DEFAULT value clause to a column definition string.
 #[cfg(test)]
-pub fn append_default_value(
+pub(crate) fn append_default_value(
     col: &mut String,
     default_value: &Option<Value>,
     field_type: &FieldType,
@@ -173,7 +173,7 @@ pub fn append_default_value(
 }
 
 /// Append a DEFAULT clause. Uses `0`/`1` for booleans (INTEGER on all backends).
-pub fn append_default_value_for(
+pub(crate) fn append_default_value_for(
     col: &mut String,
     default_value: &Option<Value>,
     field_type: &FieldType,
@@ -219,10 +219,10 @@ fn warn_default_type_mismatch(default: &Value, field_type: &FieldType) {
 mod tests {
     use serde_json::json;
 
-    use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
 
     /// Create a collection table and return its column names.

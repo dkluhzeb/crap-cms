@@ -95,6 +95,7 @@ mod tests {
     use crate::config::CrapConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use crate::db::query::auth::get_session_version;
     use crate::db::{BoxedConnection, DbConnection, pool};
 
     fn setup() -> (TempDir, BoxedConnection) {
@@ -194,8 +195,6 @@ mod tests {
 
     #[test]
     fn update_password_increments_session_version() {
-        use crate::db::query::auth::get_session_version;
-
         let (_dir, conn) = setup();
         assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 0);
         update_password(&conn, "users", "user1", "pass1").unwrap();
@@ -206,8 +205,6 @@ mod tests {
 
     #[test]
     fn update_password_increments_from_null() {
-        use crate::db::query::auth::get_session_version;
-
         let (_dir, conn) = setup();
         conn.execute(
             "UPDATE users SET _session_version = NULL WHERE id = 'user1'",

@@ -8,7 +8,6 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::types::Value as SqliteValue;
 use tracing::warn;
 
 use crate::core::FieldType;
@@ -595,17 +594,6 @@ fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[Str
     DbRow::new(col_names.to_vec(), values)
 }
 
-/// Convert a `rusqlite::types::Value` to a `DbValue`.
-pub fn from_sqlite_value(val: &SqliteValue) -> DbValue {
-    match val {
-        SqliteValue::Null => DbValue::Null,
-        SqliteValue::Integer(i) => DbValue::Integer(*i),
-        SqliteValue::Real(f) => DbValue::Real(*f),
-        SqliteValue::Text(s) => DbValue::Text(s.clone()),
-        SqliteValue::Blob(b) => DbValue::Blob(b.clone()),
-    }
-}
-
 /// Thin wrapper around `rusqlite::Connection` that implements `DbConnection`.
 /// Used in unit tests to create in-memory connections without an r2d2 pool.
 #[cfg(test)]
@@ -763,27 +751,6 @@ mod tests {
             Some(&DbValue::Blob(vec![1, 2, 3]))
         );
         assert_eq!(rows[0].get_named("empty"), Some(&DbValue::Null));
-    }
-
-    #[test]
-    fn from_sqlite_value_converts() {
-        assert_eq!(from_sqlite_value(&SqliteValue::Null), DbValue::Null);
-        assert_eq!(
-            from_sqlite_value(&SqliteValue::Integer(42)),
-            DbValue::Integer(42)
-        );
-        assert_eq!(
-            from_sqlite_value(&SqliteValue::Real(3.15)),
-            DbValue::Real(3.15)
-        );
-        assert_eq!(
-            from_sqlite_value(&SqliteValue::Text("hi".into())),
-            DbValue::Text("hi".into())
-        );
-        assert_eq!(
-            from_sqlite_value(&SqliteValue::Blob(vec![1])),
-            DbValue::Blob(vec![1])
-        );
     }
 
     #[test]

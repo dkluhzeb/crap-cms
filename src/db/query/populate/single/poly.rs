@@ -222,11 +222,11 @@ pub(super) fn populate_poly_has_one(
 mod tests {
     use serde_json::json;
 
-    use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateContext, PopulateOpts, populate_cache_key};
     use super::populate_relationships_cached;
     use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::{Document, Registry, field::*};
+    use crate::db::query::populate::test_helpers::*;
+    use crate::db::query::populate::{PopulateContext, PopulateOpts, populate_cache_key};
     use crate::db::{DbConnection, query::join};
     use std::collections::HashSet;
 

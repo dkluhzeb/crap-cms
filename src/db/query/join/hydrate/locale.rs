@@ -51,15 +51,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{
-        config::LocaleConfig,
-        core::field::{FieldDefinition, FieldType, RelationshipConfig},
-        db::query::{LocaleContext, LocaleMode},
-    };
+    use crate::config::LocaleConfig;
+    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::db::query::join::arrays::set_array_rows;
+    use crate::db::query::join::hydrate::hydrate_document;
+    use crate::db::query::join::relationships::{find_related_ids, set_related_ids};
+    use crate::db::query::{LocaleContext, LocaleMode};
     use rusqlite::Connection;
-
-    use super::super::super::relationships::{find_related_ids, set_related_ids};
-    use super::super::hydrate_document;
 
     fn localized_tags_field() -> FieldDefinition {
         FieldDefinition::builder("tags", FieldType::Relationship)
@@ -305,8 +303,6 @@ mod tests {
 
     #[test]
     fn hydrate_group_array_locale_fallback() {
-        use super::super::super::arrays::set_array_rows;
-
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (id TEXT PRIMARY KEY, config__label TEXT);

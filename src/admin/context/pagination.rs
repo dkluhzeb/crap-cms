@@ -7,7 +7,7 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::db::query::PaginationResult;
+use crate::db::PaginationResult;
 
 /// Pagination metadata for list views.
 #[derive(Serialize, JsonSchema)]

@@ -25,7 +25,7 @@ pub(super) fn table_exists(conn: &dyn DbConnection, name: &str) -> bool {
 /// with `:*` for prefix matching, and joined with ` & ` (AND).
 ///
 /// Empty/whitespace-only input returns an empty string.
-pub fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String {
+pub(crate) fn sanitize_fts_query(conn: &dyn DbConnection, input: &str) -> String {
     let raw_tokens: Vec<&str> = input.split_whitespace().filter(|t| !t.is_empty()).collect();
 
     if raw_tokens.is_empty() {
@@ -108,13 +108,7 @@ pub fn fts_search(
 
     let ids = rows
         .into_iter()
-        .filter_map(|row| {
-            if let Some(DbValue::Text(s)) = row.get_value(0) {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
+        .filter_map(|row| row.opt_text_at(0))
         .collect();
 
     Ok(ids)
@@ -124,7 +118,7 @@ pub fn fts_search(
 ///
 /// Returns `None` if the FTS table doesn't exist or search is empty.
 /// Returns `Some((clause_fragment, sanitized_query))` to be appended to a WHERE.
-pub fn fts_where_clause(
+pub(crate) fn fts_where_clause(
     conn: &dyn DbConnection,
     slug: &str,
     search: &str,
@@ -348,13 +342,7 @@ mod tests {
         let rows = conn.query_all(&sql, &[DbValue::Text(query)]).unwrap();
         let ids: Vec<String> = rows
             .into_iter()
-            .filter_map(|row| {
-                if let Some(DbValue::Text(s)) = row.get_value(0) {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|row| row.opt_text_at(0))
             .collect();
 
         assert_eq!(ids, vec!["1", "3"]);

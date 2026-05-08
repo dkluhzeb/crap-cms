@@ -51,10 +51,9 @@ pub(super) fn reconstruct_group_fields(
 mod tests {
     use super::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::query::join::hydrate::hydrate_document;
     use rusqlite::Connection;
     use serde_json::json;
-
-    use super::super::hydrate_document;
 
     #[test]
     fn hydrate_group_fields() {

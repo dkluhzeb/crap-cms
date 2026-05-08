@@ -4,6 +4,8 @@
 //! access constraints without DB queries. Evaluates the same `FilterClause`
 //! types that `Find` uses as SQL WHERE clauses.
 
+use std::cmp::Ordering;
+
 use serde_json::Value;
 
 use crate::core::DocumentFields;
@@ -42,21 +44,21 @@ fn matches_filter(data: &DocumentFields, filter: &Filter) -> bool {
         FilterOp::Contains(needle) => value_str.contains(needle.as_str()),
         FilterOp::Like(pattern) => matches_like(&value_str, pattern),
         FilterOp::GreaterThan(expected) => {
-            compare_values(&value_str, expected) == Some(std::cmp::Ordering::Greater)
+            compare_values(&value_str, expected) == Some(Ordering::Greater)
         }
         FilterOp::LessThan(expected) => {
-            compare_values(&value_str, expected) == Some(std::cmp::Ordering::Less)
+            compare_values(&value_str, expected) == Some(Ordering::Less)
         }
         FilterOp::GreaterThanOrEqual(expected) => {
             matches!(
                 compare_values(&value_str, expected),
-                Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                Some(Ordering::Greater | Ordering::Equal)
             )
         }
         FilterOp::LessThanOrEqual(expected) => {
             matches!(
                 compare_values(&value_str, expected),
-                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                Some(Ordering::Less | Ordering::Equal)
             )
         }
         FilterOp::In(values) => values.contains(&value_str),
@@ -85,7 +87,7 @@ fn value_to_string(v: &Value) -> String {
 }
 
 /// Compare two string values, trying numeric comparison first.
-fn compare_values(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+fn compare_values(a: &str, b: &str) -> Option<Ordering> {
     if let (Ok(na), Ok(nb)) = (a.parse::<f64>(), b.parse::<f64>()) {
         na.partial_cmp(&nb)
     } else {

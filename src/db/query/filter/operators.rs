@@ -183,7 +183,7 @@ pub(super) fn build_op_condition(
 /// Defense-in-depth: rejects field names that are not valid SQL identifiers
 /// (alphanumeric + underscore), even though higher-level validation should
 /// have caught them already.
-pub fn build_filter_condition(
+pub(crate) fn build_filter_condition(
     conn: &dyn DbConnection,
     f: &Filter,
     field_type: Option<&FieldType>,

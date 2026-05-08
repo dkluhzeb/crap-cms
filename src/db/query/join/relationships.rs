@@ -120,13 +120,7 @@ pub fn find_related_ids(
     let rows = conn.query_all(&sql, &params)?;
     let ids = rows
         .into_iter()
-        .filter_map(|row| {
-            if let Some(DbValue::Text(s)) = row.get_value(0) {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
+        .filter_map(|row| row.opt_text_at(0))
         .collect();
     Ok(ids)
 }
@@ -249,19 +243,7 @@ pub fn find_polymorphic_related(
     let rows = conn.query_all(&sql, &params)?;
     let items = rows
         .into_iter()
-        .filter_map(|row| {
-            let col = if let Some(DbValue::Text(s)) = row.get_value(0) {
-                s.clone()
-            } else {
-                return None;
-            };
-            let id = if let Some(DbValue::Text(s)) = row.get_value(1) {
-                s.clone()
-            } else {
-                return None;
-            };
-            Some((col, id))
-        })
+        .filter_map(|row| Some((row.opt_text_at(0)?, row.opt_text_at(1)?)))
         .collect();
     Ok(items)
 }

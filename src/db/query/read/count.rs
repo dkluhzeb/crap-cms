@@ -169,10 +169,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::{CrapConfig, DatabaseConfig};
+    use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
     use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use crate::db::query::fts;
     use crate::db::{DbPool, pool};
     use crate::db::{Filter, FilterClause, FilterOp, query::write::create};
     use tempfile::TempDir;
@@ -407,9 +408,6 @@ mod tests {
 
     #[test]
     fn count_with_search_no_other_filters() {
-        use crate::config::LocaleConfig;
-        use crate::db::query::fts;
-
         let (_tmp, pool) = setup_db();
         let conn = pool.get().unwrap();
         let def = test_def();

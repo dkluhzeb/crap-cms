@@ -14,7 +14,8 @@ use crate::db::{
     query::{hydrate_document, read},
 };
 
-use super::super::single::{nested, populate_relationships_cached};
+use crate::db::query::populate::single::{nested, populate_relationships_cached};
+
 use super::{nonpoly, poly};
 
 /// Coerce a doc-field `Value` to the string form used as a join-key bucket
@@ -37,7 +38,7 @@ fn join_key_from_value(v: Option<&Value>) -> Option<String> {
 ///
 /// Collects all referenced IDs across all documents per field, batch-fetches them
 /// with a single query per target collection, then distributes the results back.
-pub fn populate_relationships_batch_cached(
+pub(crate) fn populate_relationships_batch_cached(
     ctx: &PopulateContext<'_>,
     docs: &mut [Document],
     opts: &PopulateOpts<'_>,
@@ -418,12 +419,14 @@ mod join_key_tests {
 mod tests {
     use serde_json::json;
 
-    use super::super::super::test_helpers::{
-        make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
-    };
     use super::*;
     use crate::core::Registry;
     use crate::core::cache::NoneCache;
+    use crate::db::AccessResult;
+    use crate::db::query::populate::JoinAccessCheck;
+    use crate::db::query::populate::test_helpers::{
+        make_authors_def_with_join, make_posts_def_for_join, setup_join_db,
+    };
 
     /// Regression for the join-field N+1: batch populate across N parent docs
     /// must produce correct per-parent buckets. Before this change, the code
@@ -556,8 +559,6 @@ mod tests {
     /// leave every parent with an empty array, not an unfiltered fetch.
     #[test]
     fn batch_join_field_denies_for_all_parents_when_target_read_denied() {
-        use crate::db::AccessResult;
-        use crate::db::query::populate::JoinAccessCheck;
         use anyhow::Result as AnyResult;
 
         struct DenyAll;

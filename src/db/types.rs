@@ -65,6 +65,35 @@ impl DbRow {
             .and_then(|idx| self.values.get(idx))
     }
 
+    /// Borrow the text value at a column index. Returns `None` if the column
+    /// is missing, NULL, or not a `DbValue::Text`. Use the by-name [`get_string`]
+    /// when working with named columns.
+    ///
+    /// [`get_string`]: Self::get_string
+    pub fn text_at(&self, idx: usize) -> Option<&str> {
+        match self.get_value(idx) {
+            Some(DbValue::Text(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Owned variant of [`text_at`] — returns `Option<String>` for sites
+    /// that need to assign into a `String` / `Option<String>` field.
+    ///
+    /// [`text_at`]: Self::text_at
+    pub fn opt_text_at(&self, idx: usize) -> Option<String> {
+        self.text_at(idx).map(str::to_string)
+    }
+
+    /// Read an integer value at a column index. Returns `None` if the column
+    /// is missing, NULL, or not a `DbValue::Integer`.
+    pub fn i64_at(&self, idx: usize) -> Option<i64> {
+        match self.get_value(idx) {
+            Some(DbValue::Integer(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Get an i64 by column name.
     pub fn get_i64(&self, name: &str) -> Result<i64> {
         match self.get_named(name) {

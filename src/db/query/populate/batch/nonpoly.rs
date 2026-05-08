@@ -199,12 +199,12 @@ pub(super) fn batch_fetch_single_collection(
 mod tests {
     use serde_json::json;
 
-    use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateContext, PopulateOpts, populate_cache_key};
-    use super::super::populate_relationships_batch_cached;
     use crate::core::cache::{CacheBackend, MemoryCache, NoneCache};
     use crate::core::field::*;
     use crate::core::{Document, Registry};
+    use crate::db::query::populate::batch::populate_relationships_batch_cached;
+    use crate::db::query::populate::test_helpers::*;
+    use crate::db::query::populate::{PopulateContext, PopulateOpts, populate_cache_key};
     use rusqlite::Connection;
 
     // ── Non-polymorphic has-one: shared refs ──────────────────────────────────

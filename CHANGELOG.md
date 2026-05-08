@@ -304,6 +304,175 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   the form-input path (HTML forms genuinely produce strings; this
   wraps each value in `Value::String`). Lives in
   `service/types/write_input.rs` next to `WriteInput`.
+- Removed every `#[allow(...)]` escape hatch from `db/`, continuing
+  the alpha.9 audit playbook into the next module. The two
+  `too_many_arguments` markers in `db/query/filter/resolve.rs` are
+  gone: `resolve_array_filter`, `resolve_blocks_filter`, and
+  `resolve_relationship_filter` now share a single typed
+  `SubFilterCtx<'_>` input struct built once in `resolve_filter`.
+  The 8-arg `entry()` test helper in `db/query/images.rs` is replaced
+  with a `default_entry()` returning `NewImageEntry<'static>`, with
+  per-test overrides via struct-update syntax. The
+  `cfg_attr(not(feature = "postgres"), allow(dead_code))` on
+  `DbPool::from_backend` is replaced with a real `cfg(feature =
+  "postgres")` since the function only compiles for that backend.
+  The stale `cfg_attr(not(test), allow(dead_code))` on
+  `rebuild_junction_table_for_polymorphic` is gone — the function is
+  reached from `sync_relationship_table` in production builds, the
+  marker was a leftover.
+- Qualified-path cleanup in `db/`: every `super::super::` chain (16
+  occurrences across `migrate/collection/`, `query/populate/single/`,
+  `query/populate/batch/`, `query/join/hydrate/`) replaced with the
+  shortest available `crate::db::*` path per CLAUDE.md. Inline `use`
+  statements inside fn bodies (test helpers in `migrate/global.rs`,
+  `migrate/collection/alter.rs`, `query/auth/password.rs`,
+  `query/fts/sync.rs`, `query/read/find.rs`, `query/read/count.rs`,
+  `query/validation.rs`, `query/join/hydrate/{mod,save,locale,group}.rs`,
+  `query/populate/batch/dispatch.rs`) lifted to the `mod tests`
+  preamble. No public-API change.
+- `db/query/ref_count.rs` (1939 LOC) split into a `ref_count/`
+  module with one concept per file: `outgoing_ref.rs` (the
+  `OutgoingRef` newtype + `push_ref` helper), `api.rs` (public
+  orchestrators — `get_ref_count`, `after_create`,
+  `after_create_from_data`, `after_update`, `before_hard_delete`,
+  `snapshot_outgoing_refs`, `data_touches_refs`,
+  `lock_ref_targets_from_data`), `read.rs` (DB read path —
+  `read_outgoing_refs` + `collect_*` helpers), `compute.rs`
+  (data-driven path — `compute_refs_from_data` + helpers),
+  `delta.rs` (`to_delta_map` + `apply_deltas` + `find_missing_ids`).
+  `mod.rs` is declarations + re-exports only — no business logic.
+  Tests live next to the functions they exercise (api.rs holds the
+  orchestrator integration tests + `after_create_from_data` tests;
+  delta.rs holds the delta-map and apply-deltas tests; read.rs
+  holds the lone direct read test). Shared test fixtures
+  (`setup_db`, `no_locale`, `insert_doc`, etc.) live in
+  `test_helpers.rs`. Largest split file is 928 LOC (api.rs incl.
+  ~640 LOC of tests); all others well under the soft 1000-line
+  limit.
+- `db/query/read/find.rs` (1889 LOC) split into a `read/find/`
+  module: `runner.rs` (the public `find` entrypoint plus the
+  small SELECT/limit/map helpers — `build_select`, `apply_fts`,
+  `apply_soft_delete`, `apply_limit_offset`, `map_rows`),
+  `cursor.rs` (`SortInfo` + `apply_cursor_keyset` +
+  `inner_keyset_clause`), `sort.rs` (`resolve_sort` +
+  `apply_order_by` + `is_valid_sort_column`). `mod.rs` is
+  declarations + `pub use runner::find;` only. Tests live next to
+  the functions they exercise: cursor pagination tests in
+  cursor.rs (14), sort-validation tests in sort.rs (7), basic
+  find / soft-delete / drafts / edge-case tests in runner.rs
+  (14). Shared `test_def` and `setup_db` fixtures in
+  `test_helpers.rs`. Largest split file is 831 LOC (runner.rs).
+- `db/migrate/helpers/join_tables.rs` (1360 LOC) split into a
+  `join_tables/` module by table type: `orchestrator.rs`
+  (`sync_join_tables` + the recursive walker that dispatches each
+  field to the per-type sync helper), `relationship.rs` (junction
+  tables for has-many relationships, including the polymorphic
+  rebuild path with its 8 tests), `array.rs` (array join tables
+  with create/alter helpers and 13 tests), `blocks.rs` (blocks
+  tables with create / locale-column-add and 8 tests). `mod.rs`
+  is declarations + the `pub(in crate::db::migrate)` re-export of
+  `sync_join_tables` only. The previously `pub(super)`
+  `rebuild_junction_table_for_polymorphic` is now private — its
+  tests live in the same file. Largest split file is 513 LOC
+  (relationship.rs).
+- `db/query/jobs.rs` (1281 LOC) split into a `jobs/` module by
+  operation type: `lifecycle.rs` (insert/complete/fail with retry
+  backoff, heartbeat, mark-stale + 9 tests), `claim.rs`
+  (`claim_pending_jobs` with sqlite + postgres backends +
+  `parse_job_row` + 5 tests), `query.rs` (read-only queries:
+  count_*, list_*, get_*, last_*, find_stale_jobs + the wide
+  `row_to_job_run` parser + 9 tests), `bulk.rs`
+  (`cancel_pending_jobs` + `purge_old_jobs` + 2 tests),
+  `cron.rs` (`try_claim_cron_window`). `mod.rs` is declarations
+  + `pub use` re-exports only. Shared `setup_db` test fixture in
+  `test_helpers.rs`. Largest split file is 452 LOC (query.rs).
+- `db/query/filter/resolve.rs` (1278 LOC) split into a
+  `filter/resolve/` module by responsibility: `types.rs`
+  (`ResolvedFilter` + `SubqueryCondition` + `BlockWalkResult`
+  filter shapes), `lookup.rs` (`find_field_recursive` +
+  `lookup_column_field_type` + group-path walker — shared
+  field-tree traversal), `normalize.rs`
+  (`normalize_filter_fields` rewriting Group dot-notation to
+  flat `__`-joined column names + 8 tests), `path.rs`
+  (`resolve_filter` + `SubFilterCtx` + per-type resolvers for
+  Array/Blocks/Relationship + 14 tests), `blocks.rs`
+  (`walk_block_fields` + `build_block_type_expr` +
+  `build_json_each_source` for JSON-extract path building + 13
+  tests). `mod.rs` is declarations + re-exports only. Shared
+  test fixtures (`make_field`/`make_array_field`/etc.,
+  `test_conn`) in `test_helpers.rs`. The previously
+  filter-private types are now `pub(in crate::db::query::filter)`
+  so the WHERE-clause builder still sees them. Largest split
+  file is 471 LOC (path.rs).
+- `db/query/read/back_references.rs` (1092 LOC) split into a
+  `read/back_references/` module by scan target: `types.rs`
+  (`BackReference` result + `BackRefScan` invariant context),
+  `scan.rs` (the public `find_back_references` orchestrator +
+  `scan_fields` recursive walker + `scan_relationship` +
+  `query_has_one`/`query_has_many` + 12 integration tests),
+  `sub_fields.rs` (`scan_array_sub_fields` + `scan_blocks` for
+  the join-table scanners + 3 tests), `helpers.rs` (`query_ids`
+  + `query_ids_simple`/`_simple_params` self-ref-filtering
+  helpers + the cross-module `field_display_label` shared with
+  `missing_relations`). `mod.rs` is declarations + re-exports
+  only. Shared test fixtures in `test_helpers.rs`.
+  `field_display_label` is now `pub(in crate::db::query::read)`
+  so the missing-relations sibling continues to import it via
+  `use super::back_references::field_display_label`. Largest
+  split file is 636 LOC (scan.rs).
+- `db/query/fts/sync.rs` (1007 LOC) split into a `fts/sync/`
+  module by operation phase: `helpers.rs`
+  (`get_fts_table_columns` introspection, shared between
+  migration and runtime upsert), `migration.rs`
+  (`sync_fts_table` + `bulk_populate_fast` /
+  `bulk_populate_slow` for the migration-time
+  drop-and-rebuild path + 8 tests), `upsert.rs` (per-document
+  `fts_upsert` / `fts_upsert_with_registry` +
+  `resolve_logical_columns` + `extract_field_texts` + Postgres
+  vs SQLite upsert backends + 10 tests), `delete.rs`
+  (`fts_delete` + 2 tests). `mod.rs` is declarations +
+  `pub use` re-exports only. Shared test fixtures
+  (`setup_db`, `simple_def`, `text_field`, `localized_text_field`,
+  `insert_post`, `locale_config_en_de`) live in
+  `test_helpers.rs`. Largest split file is 469 LOC
+  (migration.rs).
+- Removed pure-ceremony `AlterCtxBuilder` in
+  `db/migrate/collection/alter.rs` (3 panic-on-missing
+  required fields, single call site) — replaced with plain
+  struct-literal construction of `AlterCtx`. Per the alpha.9
+  audit playbook: builders that exist solely to enforce
+  required fields lose to plain struct literals when the
+  struct is constructed in one place.
+- `crate::db::PaginationResult` and `crate::db::Singleflight`
+  promoted to top-level db re-exports (each used >= 2 times
+  externally via the longer `db::query::` path). The five
+  external call sites in admin/, service/types/, and test
+  modules updated to import via `crate::db::*`. Per playbook
+  axis 7 (top-level re-export consistency).
+- `db/migrate/backfill_ref_counts.rs` arg-count cleanup per
+  playbook axis 5: introduced `BackfillCtx { conn,
+  locale_config }` invariant context threaded through every
+  helper. `backfill_has_one` shrinks from 7 args to 4 (now
+  takes `&FieldDefinition` and extracts `default_collection`/
+  `is_polymorphic`/`is_localized` internally). `backfill_has_many`
+  takes `&RelationshipConfig` instead of separate `default_collection
+  + is_polymorphic`. `backfill_column_refs` likewise takes
+  `&RelationshipConfig`. All private helpers now ≤ 4 args.
+- `validate_find_pagination` privatized — it had a public
+  `pub use` re-export but zero external callers; only
+  `PaginationCtx::validate` invoked it. The shorter
+  `PaginationCtx::validate(req_limit, req_page,
+  req_after_cursor, req_before_cursor)` is the single public
+  entrypoint.
+- Final `super::super::*` chain pass: 10 chains in the
+  `read/find/{cursor,sort,runner}.rs`,
+  `read/back_references/{scan,sub_fields}.rs`,
+  `filter/resolve/{path,blocks}.rs`, and
+  `fts/sync/{migration,upsert,delete}.rs` test modules
+  introduced by my own splits all converted to the
+  `crate::db::query::*::test_helpers` form for consistency
+  with the earlier ref_count split. Zero `super::super::`
+  paths now anywhere in `src/db/`.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

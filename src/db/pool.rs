@@ -73,7 +73,7 @@ impl DbPool {
     }
 
     /// Create from an `Arc<dyn PoolBackend>` (used by backend-specific pool constructors).
-    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    #[cfg(feature = "postgres")]
     pub(crate) fn from_backend(backend: Arc<dyn PoolBackend>) -> Self {
         Self { inner: backend }
     }

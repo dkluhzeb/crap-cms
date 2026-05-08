@@ -253,7 +253,7 @@ pub fn resolve_filters(
 ///   default locale from config is used.
 ///
 /// Non-localized fields (or disabled locale config) pass through unchanged.
-pub fn resolve_filter_column(
+pub(crate) fn resolve_filter_column(
     field_name: &str,
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,

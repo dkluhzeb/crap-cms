@@ -10,7 +10,7 @@ use crate::core::Document;
 /// composite `(_status, sort_col, id)` order regardless of caller-provided
 /// `select`). For group fields: selecting `"seo"` includes all `seo__*`
 /// sub-columns.
-pub fn apply_select_filter(
+pub(super) fn apply_select_filter(
     select_exprs: Vec<String>,
     result_names: Vec<String>,
     select: Option<&Vec<String>>,

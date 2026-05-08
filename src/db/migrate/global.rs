@@ -252,7 +252,7 @@ fn add_system_column(
 mod tests {
     use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
 
     fn simple_global(slug: &str, fields: Vec<FieldDefinition>) -> GlobalDefinition {
@@ -465,7 +465,6 @@ mod tests {
 
     #[test]
     fn global_table_tabs_promotes_flat() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -485,7 +484,6 @@ mod tests {
 
     #[test]
     fn global_table_tabs_with_group_creates_prefixed_columns() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -528,7 +526,6 @@ mod tests {
 
     #[test]
     fn global_table_alter_adds_tabs_with_group() {
-        use crate::core::field::FieldTab;
         let def1 = simple_global("settings", vec![text_field("name")]);
         let def2 = simple_global(
             "settings",
@@ -554,7 +551,6 @@ mod tests {
 
     #[test]
     fn global_deeply_nested_layout() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -601,7 +597,6 @@ mod tests {
 
     #[test]
     fn global_group_containing_tabs() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![
@@ -624,7 +619,6 @@ mod tests {
 
     #[test]
     fn global_group_tabs_group_three_levels() {
-        use crate::core::field::FieldTab;
         let def = simple_global(
             "settings",
             vec![

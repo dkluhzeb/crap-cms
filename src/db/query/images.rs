@@ -5,59 +5,37 @@ use nanoid::nanoid;
 
 use crate::db::{DbConnection, DbRow, DbValue};
 
-/// Extract a text value from a row by column index, returning empty string on mismatch/missing.
-fn get_text(row: &DbRow, idx: usize) -> String {
-    match row.get_value(idx) {
-        Some(DbValue::Text(s)) => s.clone(),
-        _ => String::new(),
-    }
-}
-
-/// Extract an optional text value from a row by column index.
-fn get_opt_text(row: &DbRow, idx: usize) -> Option<String> {
-    match row.get_value(idx) {
-        Some(DbValue::Text(s)) => Some(s.clone()),
-        _ => None,
-    }
-}
-
-/// Extract an integer count from a single-column query result.
-fn extract_count(row: &DbRow) -> i64 {
-    match row.get_value(0) {
-        Some(DbValue::Integer(n)) => *n,
-        _ => 0,
-    }
+/// Borrow text from a row by index, defaulting to empty when missing/non-text.
+fn text(row: &DbRow, idx: usize) -> String {
+    row.text_at(idx).unwrap_or("").to_string()
 }
 
 /// Map a row (from the full 9-column SELECT) to an `ImageQueueEntry`.
 fn row_to_queue_entry(row: &DbRow) -> ImageQueueEntry {
     ImageQueueEntry {
-        id: get_text(row, 0),
-        collection: get_text(row, 1),
-        document_id: get_text(row, 2),
-        source_path: get_text(row, 3),
-        target_path: get_text(row, 4),
-        format: get_text(row, 5),
-        quality: match row.get_value(6) {
-            Some(DbValue::Integer(n)) => *n as u8,
-            _ => 0,
-        },
-        url_column: get_text(row, 7),
-        url_value: get_text(row, 8),
+        id: text(row, 0),
+        collection: text(row, 1),
+        document_id: text(row, 2),
+        source_path: text(row, 3),
+        target_path: text(row, 4),
+        format: text(row, 5),
+        quality: row.i64_at(6).unwrap_or(0) as u8,
+        url_column: text(row, 7),
+        url_value: text(row, 8),
     }
 }
 
 /// Map a row (from the 8-column list SELECT) to an `ImageQueueListEntry`.
 fn row_to_list_entry(row: &DbRow) -> ImageQueueListEntry {
     ImageQueueListEntry {
-        id: get_text(row, 0),
-        collection: get_text(row, 1),
-        document_id: get_text(row, 2),
-        format: get_text(row, 3),
-        status: get_text(row, 4),
-        error: get_opt_text(row, 5),
-        created_at: get_opt_text(row, 6),
-        completed_at: get_opt_text(row, 7),
+        id: text(row, 0),
+        collection: text(row, 1),
+        document_id: text(row, 2),
+        format: text(row, 3),
+        status: text(row, 4),
+        error: row.opt_text_at(5),
+        created_at: row.opt_text_at(6),
+        completed_at: row.opt_text_at(7),
     }
 }
 
@@ -166,7 +144,7 @@ pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec
     let p1 = conn.placeholder(1);
 
     for row in &id_rows {
-        let id = get_text(row, 0);
+        let id = text(row, 0);
         let updated = conn.execute(
             &format!(
                 "UPDATE _crap_image_queue SET status = 'processing'
@@ -246,18 +224,6 @@ pub fn recover_stale_images(conn: &dyn DbConnection) -> Result<i64> {
     Ok(updated as i64)
 }
 
-/// Count pending entries in the queue.
-pub fn count_pending_images(conn: &dyn DbConnection) -> Result<i64> {
-    let row = conn
-        .query_one(
-            "SELECT COUNT(*) FROM _crap_image_queue WHERE status = 'pending'",
-            &[],
-        )?
-        .context("Expected a count row")?;
-
-    Ok(extract_count(&row))
-}
-
 /// Count entries by status.
 pub fn count_image_entries_by_status(conn: &dyn DbConnection, status: &str) -> Result<i64> {
     let p1 = conn.placeholder(1);
@@ -268,7 +234,7 @@ pub fn count_image_entries_by_status(conn: &dyn DbConnection, status: &str) -> R
         )?
         .context("Expected a count row")?;
 
-    Ok(extract_count(&row))
+    Ok(row.i64_at(0).unwrap_or(0))
 }
 
 /// List queue entries with optional status filter and limit.
@@ -398,46 +364,25 @@ mod tests {
         (dir, conn)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn entry<'a>(
-        collection: &'a str,
-        document_id: &'a str,
-        source_path: &'a str,
-        target_path: &'a str,
-        format: &'a str,
-        quality: u8,
-        url_column: &'a str,
-        url_value: &'a str,
-    ) -> NewImageEntry<'a> {
+    /// Default test entry. Tests override individual fields via struct update
+    /// syntax: `NewImageEntry { document_id: "d1", ..default_entry() }`.
+    fn default_entry() -> NewImageEntry<'static> {
         NewImageEntry {
-            collection,
-            document_id,
-            source_path,
-            target_path,
-            format,
-            quality,
-            url_column,
-            url_value,
+            collection: "media",
+            document_id: "doc",
+            source_path: "/src",
+            target_path: "/dst",
+            format: "webp",
+            quality: 80,
+            url_column: "url_col",
+            url_value: "url_val",
         }
     }
 
     #[test]
     fn insert_and_claim() {
         let (_dir, conn) = setup_db();
-        let id = insert_image_queue_entry(
-            &conn,
-            &entry(
-                "media",
-                "doc1",
-                "/tmp/src.jpg",
-                "/tmp/dst.webp",
-                "webp",
-                80,
-                "thumb_webp_url",
-                "/uploads/media/thumb.webp",
-            ),
-        )
-        .unwrap();
+        let id = insert_image_queue_entry(&conn, &default_entry()).unwrap();
         assert!(!id.is_empty());
 
         let entries = claim_pending_images(&conn, 10).unwrap();
@@ -453,10 +398,22 @@ mod tests {
     #[test]
     fn claim_twice_no_overlap() {
         let (_dir, conn) = setup_db();
-        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-            .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
-            .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
+        )
+        .unwrap();
 
         let first = claim_pending_images(&conn, 10).unwrap();
         let second = claim_pending_images(&conn, 10).unwrap();
@@ -471,12 +428,18 @@ mod tests {
         let (_dir, conn) = setup_db();
         let id1 = insert_image_queue_entry(
             &conn,
-            &entry("media", "d1", "/a", "/b", "webp", 80, "col", "url"),
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
         )
         .unwrap();
         let id2 = insert_image_queue_entry(
             &conn,
-            &entry("media", "d2", "/c", "/d", "avif", 60, "col", "url"),
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
         )
         .unwrap();
 
@@ -490,11 +453,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        let status1 = if let Some(DbValue::Text(s)) = row1.get_value(0) {
-            s.clone()
-        } else {
-            String::new()
-        };
+        let status1 = row1.opt_text_at(0).unwrap_or_default();
         assert_eq!(status1, "completed");
 
         let row2 = conn
@@ -504,27 +463,8 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        let status2 = if let Some(DbValue::Text(s)) = row2.get_value(0) {
-            s.clone()
-        } else {
-            String::new()
-        };
+        let status2 = row2.opt_text_at(0).unwrap_or_default();
         assert_eq!(status2, "failed");
-    }
-
-    #[test]
-    fn count_pending() {
-        let (_dir, conn) = setup_db();
-        assert_eq!(count_pending_images(&conn).unwrap(), 0);
-
-        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-            .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
-            .unwrap();
-        assert_eq!(count_pending_images(&conn).unwrap(), 2);
-
-        claim_pending_images(&conn, 1).unwrap();
-        assert_eq!(count_pending_images(&conn).unwrap(), 1);
     }
 
     #[test]
@@ -532,10 +472,22 @@ mod tests {
         let (_dir, conn) = setup_db();
         assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 0);
 
-        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-            .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
-            .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
+        )
+        .unwrap();
         assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 2);
 
         let claimed = claim_pending_images(&conn, 1).unwrap();
@@ -550,10 +502,22 @@ mod tests {
     #[test]
     fn list_entries_all() {
         let (_dir, conn) = setup_db();
-        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-            .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
-            .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
+        )
+        .unwrap();
 
         let entries = list_image_entries(&conn, None, 100).unwrap();
         assert_eq!(entries.len(), 2);
@@ -562,11 +526,22 @@ mod tests {
     #[test]
     fn list_entries_filtered() {
         let (_dir, conn) = setup_db();
-        let id =
-            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-                .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
-            .unwrap();
+        let id = insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
+        )
+        .unwrap();
 
         complete_image_entry(&conn, &id).unwrap();
 
@@ -580,9 +555,7 @@ mod tests {
     #[test]
     fn retry_single_entry() {
         let (_dir, conn) = setup_db();
-        let id =
-            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-                .unwrap();
+        let id = insert_image_queue_entry(&conn, &default_entry()).unwrap();
         fail_image_entry(&conn, &id, "test error").unwrap();
 
         assert!(retry_image_entry(&conn, &id).unwrap());
@@ -593,9 +566,7 @@ mod tests {
     #[test]
     fn retry_non_failed_returns_false() {
         let (_dir, conn) = setup_db();
-        let id =
-            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-                .unwrap();
+        let id = insert_image_queue_entry(&conn, &default_entry()).unwrap();
         // Still pending, not failed
         assert!(!retry_image_entry(&conn, &id).unwrap());
     }
@@ -603,14 +574,30 @@ mod tests {
     #[test]
     fn retry_all_failed() {
         let (_dir, conn) = setup_db();
-        let id1 =
-            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-                .unwrap();
-        let id2 =
-            insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
-                .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d3", "/e", "/f", "webp", 80, "c", "u"))
-            .unwrap();
+        let id1 = insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        let id2 = insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d3",
+                ..default_entry()
+            },
+        )
+        .unwrap();
 
         fail_image_entry(&conn, &id1, "err1").unwrap();
         fail_image_entry(&conn, &id2, "err2").unwrap();
@@ -624,9 +611,7 @@ mod tests {
     #[test]
     fn purge_old_entries() {
         let (_dir, conn) = setup_db();
-        let id =
-            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-                .unwrap();
+        let id = insert_image_queue_entry(&conn, &default_entry()).unwrap();
         complete_image_entry(&conn, &id).unwrap();
 
         // Set completed_at to 2 days ago
@@ -647,12 +632,20 @@ mod tests {
         // Insert two entries and claim them (moves to processing)
         insert_image_queue_entry(
             &conn,
-            &entry("m", "d1", "/a", "/b", "avif", 60, "og_avif_url", "/u1"),
+            &NewImageEntry {
+                document_id: "d1",
+                url_column: "og_avif_url",
+                ..default_entry()
+            },
         )
         .unwrap();
         insert_image_queue_entry(
             &conn,
-            &entry("m", "d1", "/a", "/c", "avif", 60, "hero_avif_url", "/u2"),
+            &NewImageEntry {
+                document_id: "d1",
+                url_column: "hero_avif_url",
+                ..default_entry()
+            },
         )
         .unwrap();
 
@@ -661,14 +654,14 @@ mod tests {
         assert_eq!(claimed.len(), 2);
 
         // Nothing pending anymore
-        assert_eq!(count_pending_images(&conn).unwrap(), 0);
+        assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 0);
 
         // Recover stale entries — should move both back to pending
         let recovered = recover_stale_images(&conn).unwrap();
         assert_eq!(recovered, 2);
 
         // Now they're claimable again
-        assert_eq!(count_pending_images(&conn).unwrap(), 2);
+        assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 2);
         let reclaimed = claim_pending_images(&conn, 10).unwrap();
         assert_eq!(reclaimed.len(), 2);
     }
@@ -681,12 +674,30 @@ mod tests {
         let (_dir, conn) = setup_db();
 
         // Insert 3 pending entries
-        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
-            .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "webp", 80, "c", "u"))
-            .unwrap();
-        insert_image_queue_entry(&conn, &entry("m", "d3", "/e", "/f", "webp", 80, "c", "u"))
-            .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d1",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d2",
+                ..default_entry()
+            },
+        )
+        .unwrap();
+        insert_image_queue_entry(
+            &conn,
+            &NewImageEntry {
+                document_id: "d3",
+                ..default_entry()
+            },
+        )
+        .unwrap();
 
         // First caller claims 2
         let first = claim_pending_images(&conn, 2).unwrap();

@@ -28,7 +28,7 @@ pub trait JoinAccessCheck {
 /// Build a cache key for a populated document.
 ///
 /// Format: `populate:{collection}:{id}` or `populate:{collection}:{id}:{locale}`
-pub fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
+pub(crate) fn populate_cache_key(collection: &str, id: &str, locale: Option<&str>) -> String {
     match locale {
         Some(l) => format!("populate:{}:{}:{}", collection, id, l),
         None => format!("populate:{}:{}", collection, id),

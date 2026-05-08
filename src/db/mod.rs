@@ -16,6 +16,7 @@ pub use connection::{BoxedConnection, BoxedTransaction, DbConnection};
 pub use pool::DbPool;
 pub use query::{
     AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, LocaleMode,
+    PaginationResult, Singleflight,
 };
 pub use types::{DbRow, DbValue};
 

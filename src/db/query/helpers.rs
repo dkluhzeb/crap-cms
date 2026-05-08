@@ -33,7 +33,7 @@ pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_l
 /// - Time only (`14:30`) → passthrough
 /// - Month only (`2026-01`) → passthrough
 /// - Anything else → passthrough (validation catches garbage)
-pub fn normalize_date_value(value: &str) -> String {
+pub(crate) fn normalize_date_value(value: &str) -> String {
     // Time only: HH:MM or HH:MM:SS
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         return value.to_string();
@@ -83,7 +83,7 @@ pub fn normalize_date_value(value: &str) -> String {
 /// Normalize a date value using a specific IANA timezone.
 /// The input is treated as local time in the given timezone, then converted to UTC.
 /// If the input already has a timezone offset (RFC 3339), it is converted directly.
-pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
+fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
     let tz: Tz = tz_str
         .parse()
         .map_err(|_| anyhow!("Invalid timezone: {}", tz_str))?;

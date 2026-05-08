@@ -5,23 +5,23 @@ use crate::core::{
     field::{FieldDefinition, FieldTab, FieldType},
 };
 
-pub fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
+pub(crate) fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, field_type).build()
 }
 
-pub fn make_localized_field(name: &str, field_type: FieldType) -> FieldDefinition {
+pub(crate) fn make_localized_field(name: &str, field_type: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, field_type)
         .localized(true)
         .build()
 }
 
-pub fn make_group_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
+pub(crate) fn make_group_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
     FieldDefinition::builder(name, FieldType::Group)
         .fields(sub_fields)
         .build()
 }
 
-pub fn make_collection_def(
+pub(crate) fn make_collection_def(
     slug: &str,
     fields: Vec<FieldDefinition>,
     timestamps: bool,
@@ -32,7 +32,7 @@ pub fn make_collection_def(
     def
 }
 
-pub fn make_locale_config() -> crate::config::LocaleConfig {
+pub(crate) fn make_locale_config() -> crate::config::LocaleConfig {
     crate::config::LocaleConfig {
         default_locale: "en".to_string(),
         locales: vec!["en".to_string(), "de".to_string()],
@@ -40,19 +40,22 @@ pub fn make_locale_config() -> crate::config::LocaleConfig {
     }
 }
 
-pub fn make_row_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
+pub(crate) fn make_row_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
     FieldDefinition::builder(name, FieldType::Row)
         .fields(sub_fields)
         .build()
 }
 
-pub fn make_collapsible_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
+pub(crate) fn make_collapsible_field(
+    name: &str,
+    sub_fields: Vec<FieldDefinition>,
+) -> FieldDefinition {
     FieldDefinition::builder(name, FieldType::Collapsible)
         .fields(sub_fields)
         .build()
 }
 
-pub fn make_tabs_field(name: &str, tabs: Vec<FieldTab>) -> FieldDefinition {
+pub(crate) fn make_tabs_field(name: &str, tabs: Vec<FieldTab>) -> FieldDefinition {
     FieldDefinition::builder(name, FieldType::Tabs)
         .tabs(tabs)
         .build()

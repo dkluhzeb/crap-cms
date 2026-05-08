@@ -18,7 +18,9 @@ use crate::{
 
 use super::create::{append_default_value_for, create_collection_table};
 
-/// Shared context for ALTER TABLE operations.
+/// Shared context for ALTER TABLE operations. All fields are required and
+/// the struct is constructed in one place (`alter_collection_table`); plain
+/// struct-literal construction is preferred over a panic-on-missing builder.
 struct AlterCtx<'a> {
     conn: &'a dyn DbConnection,
     slug: &'a str,
@@ -26,54 +28,6 @@ struct AlterCtx<'a> {
     existing: &'a HashSet<String>,
     /// Column name -> DB type (from PRAGMA table_info) for type mismatch detection.
     column_types: &'a HashMap<String, String>,
-}
-
-impl<'a> AlterCtx<'a> {
-    fn builder(conn: &'a dyn DbConnection, slug: &'a str) -> AlterCtxBuilder<'a> {
-        AlterCtxBuilder {
-            conn,
-            slug,
-            def: None,
-            existing: None,
-            column_types: None,
-        }
-    }
-}
-
-/// Builder for [`AlterCtx`].
-struct AlterCtxBuilder<'a> {
-    conn: &'a dyn DbConnection,
-    slug: &'a str,
-    def: Option<&'a CollectionDefinition>,
-    existing: Option<&'a HashSet<String>>,
-    column_types: Option<&'a HashMap<String, String>>,
-}
-
-impl<'a> AlterCtxBuilder<'a> {
-    fn def(mut self, v: &'a CollectionDefinition) -> Self {
-        self.def = Some(v);
-        self
-    }
-
-    fn existing(mut self, v: &'a HashSet<String>) -> Self {
-        self.existing = Some(v);
-        self
-    }
-
-    fn column_types(mut self, v: &'a HashMap<String, String>) -> Self {
-        self.column_types = Some(v);
-        self
-    }
-
-    fn build(self) -> AlterCtx<'a> {
-        AlterCtx {
-            conn: self.conn,
-            slug: self.slug,
-            def: self.def.expect("AlterCtx requires def"),
-            existing: self.existing.expect("AlterCtx requires existing"),
-            column_types: self.column_types.expect("AlterCtx requires column_types"),
-        }
-    }
 }
 
 /// Warn if an existing column's DB type differs from the expected type.
@@ -319,11 +273,13 @@ pub(super) fn alter_collection_table(
     let needs_rebuild =
         def.soft_delete && !existing.contains("_deleted_at") && def.fields.iter().any(|f| f.unique);
 
-    let ctx = AlterCtx::builder(conn, slug)
-        .def(def)
-        .existing(&existing)
-        .column_types(&column_types)
-        .build();
+    let ctx = AlterCtx {
+        conn,
+        slug,
+        def,
+        existing: &existing,
+        column_types: &column_types,
+    };
 
     add_field_columns(&ctx, locale_config)?;
     add_system_columns(&ctx)?;
@@ -414,10 +370,11 @@ fn rebuild_without_inline_unique(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::DbValue;
+    use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;
 
     #[test]
@@ -726,8 +683,6 @@ mod tests {
 
     #[test]
     fn alter_rebuilds_table_to_remove_inline_unique_on_soft_delete_transition() {
-        use crate::db::DbValue;
-
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 

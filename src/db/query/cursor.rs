@@ -134,7 +134,7 @@ impl From<&SortValue> for DbValue {
 /// the two sides disagree the keyset references a column the ORDER BY
 /// doesn't tiebreak on, and prev/next stops being symmetric. Sharing
 /// one predicate keeps them locked together.
-pub fn cursor_status_active(has_drafts: bool, sort_col: &str) -> bool {
+pub(crate) fn cursor_status_active(has_drafts: bool, sort_col: &str) -> bool {
     has_drafts && sort_col != "_status"
 }
 
@@ -195,7 +195,7 @@ impl CursorData {
 /// composite `(_status, sort_col, id)` order. The caller (`find_documents`
 /// / `find_globals`) passes this consistently with what
 /// `apply_order_by` does for the same query.
-pub fn build_cursors(
+pub(crate) fn build_cursors(
     docs: &[Document],
     sort_col: &str,
     sort_dir: SortDirection,
