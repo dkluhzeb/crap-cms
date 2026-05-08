@@ -1,7 +1,5 @@
 //! Shared helpers for upload API handlers: auth, JSON responses, error classification.
 
-use std::collections::HashMap;
-
 use axum::{
     http::{
         HeaderMap, StatusCode,
@@ -10,13 +8,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
-use serde_json::Value;
 use tracing::{error, warn};
 
 use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
-        CollectionDefinition, Document,
+        CollectionDefinition, Document, DocumentFields,
         auth::{self, AuthUser},
         event::{EventOperation, EventTarget, EventUser},
     },
@@ -178,7 +175,7 @@ pub fn publish_upload_event(
     collection: impl Into<String>,
     doc_id: impl Into<String>,
     operation: EventOperation,
-    data: Option<HashMap<String, Value>>,
+    data: Option<DocumentFields>,
     auth_user: &Option<AuthUser>,
 ) {
     let edited_by = auth_user

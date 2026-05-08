@@ -10,11 +10,11 @@
 //! `src/core/event/redis_transport.rs`. Real-world operators are expected to
 //! smoke-test Redis fanout against their deployment.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crap_cms::config::LiveConfig;
 use crap_cms::core::{
-    DocumentId, Slug,
+    DocumentFields, DocumentId, Slug,
     event::{
         EventOperation, EventTarget, InProcessEventBus, InProcessInvalidationBus,
         InvalidationTransport, MutationEventInput, RecvError, SharedEventTransport,
@@ -28,7 +28,7 @@ fn sample_input() -> MutationEventInput {
         operation: EventOperation::Create,
         collection: Slug::new("posts"),
         document_id: DocumentId::new("doc-1"),
-        data: HashMap::new(),
+        data: DocumentFields::new(),
         edited_by: None,
     }
 }

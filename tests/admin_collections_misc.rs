@@ -2,6 +2,7 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+use serde_json::json;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -14,6 +15,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -182,10 +184,11 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -413,11 +416,12 @@ async fn search_uses_configured_searchable_fields() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Unique Title XYZ".to_string()),
-        ("body".to_string(), "Some body text".to_string()),
-        ("category".to_string(), "tech".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("Unique Title XYZ")),
+        ("body".to_string(), json!("Some body text")),
+        ("category".to_string(), json!("tech")),
+    ])
+    .into();
     let doc = query::create(&tx, "sposts", &def, &data, None).unwrap();
     query::fts::fts_upsert(&tx, "sposts", &doc, Some(&def)).unwrap();
     tx.commit().unwrap();
@@ -456,8 +460,8 @@ async fn update_localized_collection_redirects_with_locale() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Update Locale".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Update Locale"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -561,8 +565,8 @@ async fn list_items_uses_title_field() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "My Custom Title".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("My Custom Title"))]).into();
     query::create(&tx, "posts", &real_def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -727,8 +731,8 @@ async fn post_with_method_delete_deletes_document() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Method Delete".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Method Delete"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -834,7 +838,8 @@ async fn restore_version_nonversioned_redirects() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "NV Restore".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("NV Restore"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -923,8 +928,8 @@ async fn edit_form_with_non_default_locale() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Locale Edit Test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Locale Edit Test"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -962,8 +967,8 @@ async fn update_action_with_locale() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Update Locale Test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Update Locale Test"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1463,8 +1468,8 @@ async fn delete_confirm_page_returns_200() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "To Confirm Delete".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("To Confirm Delete"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1497,7 +1502,8 @@ async fn delete_confirm_page_with_schema_mismatch_returns_200() {
         reg.get_collection("posts").unwrap().clone()
     };
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Broken Doc".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Broken Doc"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 

@@ -3,13 +3,13 @@
 use std::collections::HashMap;
 
 use axum::{Extension, response::Response};
-use serde_json::Value;
 use tokio::task;
 use tracing::error;
 
 use crate::{
     admin::AdminState,
     core::{
+        DocumentFields,
         auth::AuthUser,
         collection::CollectionDefinition,
         upload::{
@@ -25,7 +25,7 @@ use super::{render_edit_upload_error, render_upload_error};
 pub(in crate::admin::handlers::collections) struct UploadResult {
     pub queued_conversions: Vec<QueuedConversion>,
     pub guard: CleanupGuard,
-    pub old_doc_fields: Option<HashMap<String, Value>>,
+    pub old_doc_fields: Option<DocumentFields>,
 }
 
 /// Parameters for upload processing.

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -60,7 +60,7 @@ fn seed_items(
 
     let mut ids = Vec::new();
     for (title, owner, status, notes) in rows {
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".into(), title.into());
         data.insert("owner".into(), owner.into());
         data.insert("status".into(), status.into());

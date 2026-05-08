@@ -2,11 +2,13 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, Document, FieldDefinition, collection::GlobalDefinition},
+    core::{
+        CollectionDefinition, Document, DocumentFields, FieldDefinition,
+        collection::GlobalDefinition,
+    },
     db::{
         DbConnection, DbValue,
         query::{
@@ -159,7 +161,7 @@ fn restore_locale_and_join_data(
     }
 
     // Restore join table data from snapshot
-    let mut join_data: HashMap<String, Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
     collect_join_data_from_snapshot(fields, obj, &mut join_data);
 
     if !join_data.is_empty() {

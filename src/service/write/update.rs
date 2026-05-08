@@ -4,7 +4,7 @@ use crate::{
     db::{AccessResult, query},
     hooks::{HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult, build_hook_data,
+        AfterChangeInput, PersistOptions, ServiceContext, WriteInput, WriteResult,
         persist_draft_version, persist_update, run_after_change_hooks,
     },
 };
@@ -46,9 +46,9 @@ pub fn update_document_core(
 
     // Strip write-denied fields before hook processing
     let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
-    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+    strip_denied_fields(&denied, &mut input.data);
 
-    let hook_data = build_hook_data(&input.data, &join_data);
+    let hook_data = input.data.clone();
 
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(hook_data)
@@ -66,7 +66,7 @@ pub fn update_document_core(
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
-    let final_data = final_ctx.to_string_map(&def.fields);
+    let final_data = final_ctx.to_value_map(&def.fields);
 
     let doc = if is_draft && def.has_versions() {
         persist_draft_version(ctx, id, &final_ctx.data, input.locale_ctx)?
@@ -79,13 +79,7 @@ pub fn update_document_core(
             update_builder = update_builder.locale_config(&lctx.config);
         }
 
-        persist_update(
-            ctx,
-            id,
-            &final_data,
-            &final_ctx.data,
-            &update_builder.build(),
-        )?
+        persist_update(ctx, id, &final_data, &update_builder.build())?
     };
 
     let after_ctx = run_after_change_hooks(

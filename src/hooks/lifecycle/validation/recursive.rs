@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use mlua::Lua;
 use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, FieldType, validate::FieldError},
+    core::{DocumentFields, FieldDefinition, FieldType, validate::FieldError},
     db::{LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
     hooks::ValidationCtx,
 };
@@ -21,7 +19,7 @@ use super::{
 pub(super) fn validate_fields_recursive(
     lua: &Lua,
     fields: &[FieldDefinition],
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
     ctx: &ValidationCtx,
     prefix: &str,
     inherited_localized: bool,
@@ -80,7 +78,7 @@ pub(super) fn validate_fields_recursive(
 fn validate_scalar_field(
     lua: &Lua,
     field: &FieldDefinition,
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
     ctx: &ValidationCtx,
     prefix: &str,
     inherited_localized: bool,
@@ -238,13 +236,13 @@ fn validate_scalar_field(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::config::LocaleConfig;
+    use crate::core::DocumentFields;
     use crate::core::field::{FieldAdmin, FieldDefinition, FieldTab, FieldType, JoinConfig};
     use crate::core::registry::Registry;
     use crate::core::richtext::RichtextNodeDef;
     use crate::db::{InMemoryConn, LocaleContext, LocaleMode};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_group_subfield_required() {
@@ -260,7 +258,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("seo__title".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -287,7 +285,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("notes".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -316,7 +314,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("body".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -349,7 +347,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("seo__title".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -379,7 +377,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("seo__title".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -404,7 +402,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("publish_date".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(
             &lua,
@@ -436,7 +434,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("taken"));
         let result = validate_fields_inner(
             &lua,
@@ -478,7 +476,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("body".to_string(), json!("bad"));
         let result = validate_fields_inner(
             &lua,
@@ -519,7 +517,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("og__title".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -551,7 +549,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("body".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -585,7 +583,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("meta__title".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -615,7 +613,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("seo__robots".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -651,7 +649,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("settings__theme".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -688,7 +686,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("outer__inner__deep".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -727,7 +725,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("config__slug".to_string(), json!("taken"));
         let result = validate_fields_inner(
             &lua,
@@ -758,7 +756,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("meta__date".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(
             &lua,
@@ -788,7 +786,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("meta__title".to_string(), json!("Valid Title"));
         let result = validate_fields_inner(
             &lua,
@@ -810,7 +808,7 @@ mod tests {
                 .join(JoinConfig::new("posts", "author"))
                 .build(),
         ];
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let result = validate_fields_inner(
             &lua,
             &fields,
@@ -841,7 +839,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("outer__inner__field".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -868,7 +866,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("pub_date".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(
             &lua,
@@ -895,7 +893,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("event_date".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(
             &lua,
@@ -945,7 +943,7 @@ mod tests {
 
         let json_content =
             r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("content".to_string(), json!(json_content));
 
         let result = validate_fields_inner(
@@ -994,7 +992,7 @@ mod tests {
 
         let json_content =
             r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click me"}}]}"#;
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("content".to_string(), json!(json_content));
 
         let result = validate_fields_inner(
@@ -1028,7 +1026,7 @@ mod tests {
 
         // Content with invalid data, but no registry provided
         let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("content".to_string(), json!(json_content));
 
         let result = validate_fields_inner(
@@ -1076,7 +1074,7 @@ mod tests {
         ];
 
         let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!(""));
         data.insert("content".to_string(), json!(json_content));
 
@@ -1128,7 +1126,7 @@ mod tests {
             config: locale_config,
         };
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("taken"));
 
         let result = validate_fields_inner(

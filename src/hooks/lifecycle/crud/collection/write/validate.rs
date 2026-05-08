@@ -1,19 +1,13 @@
 //! Registration of `crap.collections.validate` Lua function.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
     core::SharedRegistry,
     db::LocaleContext,
-    hooks::lifecycle::{
-        converters::{flatten_lua_groups, lua_table_to_hashmap, lua_table_to_json_map},
-        crud::{get_tx_conn, helpers::*},
-    },
+    hooks::lifecycle::crud::{get_tx_conn, helpers::*},
     service::{LuaWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
 };
 
@@ -40,19 +34,7 @@ fn validate_inner(
     let exclude_id = get_opt_string(&opts, "id")?;
     let def = resolve_collection(reg, &collection)?;
 
-    let mut data = lua_table_to_hashmap(&data_table)?;
-    flatten_lua_groups(&data_table, &def.fields, &mut data)?;
-
-    let password = if def.is_auth_collection() {
-        data.remove("password")
-    } else {
-        None
-    };
-
-    let join_data: HashMap<String, Value> = lua_table_to_json_map(lua, &data_table)?
-        .into_iter()
-        .filter(|(_, v)| !matches!(v, Value::String(_)))
-        .collect();
+    let ExtractedData { data, password } = extract_data(lua, &data_table, &def)?;
 
     let r = reg
         .read()
@@ -81,7 +63,7 @@ fn validate_inner(
         soft_delete: def.has_soft_delete(),
     };
 
-    let input = WriteInput::builder(data, &join_data)
+    let input = WriteInput::builder(data)
         .password(password.as_deref())
         .locale_ctx(locale_ctx.as_ref())
         .locale(locale_str)

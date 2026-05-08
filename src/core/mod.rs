@@ -5,6 +5,7 @@ pub mod cache;
 pub mod collection;
 pub mod condition;
 pub mod document;
+pub mod document_fields;
 pub mod document_id;
 pub mod email;
 pub mod event;
@@ -23,6 +24,7 @@ pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError};
 pub use collection::{CollectionDefinition, GlobalDefinition};
 pub use condition::{ConditionExpr, ConditionOp, ConditionRow};
 pub use document::Document;
+pub use document_fields::DocumentFields;
 pub use document_id::DocumentId;
 pub use field::{
     BlockDefinition, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldTab, FieldType,

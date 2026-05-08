@@ -325,7 +325,7 @@ mod tests {
         let sub = vec![FieldDefinition::builder("name", FieldType::Text).build()];
         let rows = vec![std::collections::HashMap::from([(
             "name".to_string(),
-            "FallbackItem".to_string(),
+            json!("FallbackItem"),
         )])];
         set_array_rows(
             &conn,

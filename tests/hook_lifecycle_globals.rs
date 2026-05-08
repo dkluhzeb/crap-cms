@@ -5,10 +5,11 @@
 //! paths against a globals-only fixture and asserts each phase fires and
 //! affects the observable result.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -16,7 +17,7 @@ use crap_cms::service::{
     GetGlobalInput, RunnerReadHooks, RunnerWriteHooks, ServiceContext, WriteInput,
     get_global_document, update_global_core,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/globals_hook_tests")
@@ -58,8 +59,8 @@ fn seed_global_tagline(
     let def = reg.get_global(slug).expect("global not found").clone();
     drop(reg);
 
-    let mut data = HashMap::new();
-    data.insert("tagline".to_string(), tagline.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("tagline".to_string(), json!(tagline));
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
@@ -76,9 +77,8 @@ fn global_before_validate_hook_fires() {
     let def = reg.get_global("site_settings").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "  Padded Title  ".to_string());
-    let join_data = HashMap::new();
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("  Padded Title  "));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -88,7 +88,7 @@ fn global_before_validate_hook_fires() {
         .write_hooks(&wh)
         .build();
 
-    let input = WriteInput::builder(data, &join_data).build();
+    let input = WriteInput::builder(data).build();
     let (doc, _after) = update_global_core(&ctx, input).expect("update should succeed");
     tx.commit().unwrap();
 
@@ -109,9 +109,8 @@ fn global_before_change_hook_fires() {
     let def = reg.get_global("site_settings").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "POISON".to_string());
-    let join_data = HashMap::new();
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("POISON"));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -121,7 +120,7 @@ fn global_before_change_hook_fires() {
         .write_hooks(&wh)
         .build();
 
-    let input = WriteInput::builder(data, &join_data).build();
+    let input = WriteInput::builder(data).build();
     let err =
         update_global_core(&ctx, input).expect_err("before_change hook should abort the update");
     let msg = err.to_string();
@@ -173,9 +172,9 @@ fn global_read_access_denied_for_non_admin() {
     drop(reg);
 
     // Editor user (not admin) — admin_only returns false.
-    let mut editor_fields = HashMap::new();
+    let mut editor_fields = DocumentFields::new();
     editor_fields.insert("role".to_string(), serde_json::json!("editor"));
-    let editor = crap_cms::core::Document {
+    let editor = Document {
         id: "editor-1".into(),
         fields: editor_fields,
         created_at: None,
@@ -207,9 +206,9 @@ fn global_update_access_denied_for_non_admin() {
     let def = reg.get_global("restricted").unwrap().clone();
     drop(reg);
 
-    let mut editor_fields = HashMap::new();
+    let mut editor_fields = DocumentFields::new();
     editor_fields.insert("role".to_string(), serde_json::json!("editor"));
-    let editor = crap_cms::core::Document {
+    let editor = Document {
         id: "editor-1".into(),
         fields: editor_fields,
         created_at: None,
@@ -225,10 +224,9 @@ fn global_update_access_denied_for_non_admin() {
         .user(Some(&editor))
         .build();
 
-    let mut data = HashMap::new();
-    data.insert("secret_value".to_string(), "Hacked".to_string());
-    let join_data = HashMap::new();
-    let input = WriteInput::builder(data, &join_data).build();
+    let mut data = DocumentFields::new();
+    data.insert("secret_value".to_string(), json!("Hacked"));
+    let input = WriteInput::builder(data).build();
 
     let err =
         update_global_core(&ctx, input).expect_err("non-admin should be denied update access");

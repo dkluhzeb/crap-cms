@@ -1,7 +1,5 @@
 //! DB-access enrichment logic for field contexts.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::{
@@ -13,7 +11,7 @@ use crate::{
         },
     },
     core::{
-        Registry,
+        DocumentFields, Registry,
         field::{FieldDefinition, RelationshipConfig},
     },
     db::{
@@ -35,7 +33,7 @@ fn parse_composite_ref(s: &str) -> Option<(String, String)> {
 
 /// Extract polymorphic "collection/id" refs from a field value.
 fn extract_polymorphic_refs(
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     field_name: &str,
     has_many: bool,
 ) -> Vec<(String, String)> {
@@ -92,7 +90,7 @@ fn resolve_polymorphic_ref(
 pub fn enrich_polymorphic_selected(
     rc: &RelationshipConfig,
     field_name: &str,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     reg: &Registry,
     conn: &dyn DbConnection,
     locale_ctx: Option<&LocaleContext>,
@@ -108,7 +106,7 @@ pub fn enrich_polymorphic_selected(
 fn enrich_single_field(
     fc: &mut FieldContext,
     field_def: &FieldDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     state: &AdminState,
     opts: &EnrichOptions,
     enrich_ctx: &EnrichCtx,
@@ -174,7 +172,7 @@ fn enrich_single_field(
 fn enrich_tabs(
     tf: &mut TabsField,
     field_def: &FieldDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     state: &AdminState,
     opts: &EnrichOptions,
 ) {
@@ -199,7 +197,7 @@ fn enrich_tabs(
 pub fn enrich_field_contexts(
     fields: &mut [FieldContext],
     field_defs: &[FieldDefinition],
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     state: &AdminState,
     opts: &EnrichOptions,
 ) {

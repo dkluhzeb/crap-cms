@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::browser;
 use crate::helpers::*;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
@@ -39,7 +40,7 @@ fn create_list_post(app: &TestApp, title: &str) {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = HashMap::from([("title".to_string(), title.to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
     query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 }
@@ -73,7 +74,7 @@ fn create_post_with_system_status(app: &TestApp, title: &str, system_status: &st
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = HashMap::from([("title".to_string(), title.to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     if system_status != "published" {
         tx.execute(
@@ -95,10 +96,11 @@ fn create_list_post_with_status(app: &TestApp, title: &str, status: &str) {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = HashMap::from([
-        ("title".to_string(), title.to_string()),
-        ("status".to_string(), status.to_string()),
-    ]);
+    let data: DocumentFields = HashMap::from([
+        ("title".to_string(), json!(title)),
+        ("status".to_string(), json!(status)),
+    ])
+    .into();
     query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 }

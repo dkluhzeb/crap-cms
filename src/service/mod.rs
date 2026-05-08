@@ -28,7 +28,7 @@ pub use types::{
     FindByIdInputBuilder, FindDocumentsInput, FindDocumentsInputBuilder, GetGlobalInput,
     ListVersionsInput, PaginatedResult, PersistOptions, PersistOptionsBuilder,
     SearchDocumentsInput, ServiceContext, ServiceContextBuilder, VerificationQueue, WriteInput,
-    WriteInputBuilder, WriteResult, flush_queue, flush_verification_queue,
+    WriteInputBuilder, WriteResult, flush_queue, flush_verification_queue, values_from_strings,
 };
 
 pub use collection::{
@@ -39,7 +39,7 @@ pub use collection::{
 };
 pub use email::send_verification_email;
 pub use globals::{unpublish_global_document, update_global_core, update_global_document};
-pub(crate) use helpers::{build_hook_data, run_after_change_hooks};
+pub(crate) use helpers::run_after_change_hooks;
 pub use hooks::{
     LuaReadHooks, LuaReadHooksBuilder, LuaWriteHooks, LuaWriteHooksBuilder, ReadHooks,
     ReadHooksJoinGuard, RunnerReadHooks, RunnerWriteHooks, WriteHooks,
@@ -63,10 +63,11 @@ pub use write::{
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use rusqlite::Connection;
-    use std::collections::HashMap;
+    use serde_json::json;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -94,14 +95,14 @@ mod tests {
     fn persist_create_basic() {
         let conn = setup_db();
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Hello".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello"));
 
         let ctx = ServiceContext::collection("posts", &def)
             .conn(&conn)
             .build();
 
-        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
+        let doc = persist_create(&ctx, &data, &PersistOptions::default()).unwrap();
         assert!(!doc.id.is_empty());
         assert_eq!(doc.get_str("title"), Some("Hello"));
     }
@@ -110,27 +111,20 @@ mod tests {
     fn persist_update_basic() {
         let conn = setup_db();
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Original".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Original"));
 
         let ctx = ServiceContext::collection("posts", &def)
             .conn(&conn)
             .build();
 
-        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
+        let doc = persist_create(&ctx, &data, &PersistOptions::default()).unwrap();
         let id = doc.id.clone();
 
-        let mut update_data = HashMap::new();
-        update_data.insert("title".to_string(), "Updated".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("title".to_string(), json!("Updated"));
 
-        let updated = persist_update(
-            &ctx,
-            &id,
-            &update_data,
-            &HashMap::new(),
-            &PersistOptions::default(),
-        )
-        .unwrap();
+        let updated = persist_update(&ctx, &id, &update_data, &PersistOptions::default()).unwrap();
         assert_eq!(updated.get_str("title"), Some("Updated"));
     }
 
@@ -188,23 +182,20 @@ mod tests {
         )
         .unwrap();
 
-        let mut data = HashMap::new();
-        data.insert("alt".to_string(), "Test Image".to_string());
-        data.insert("filename".to_string(), "abc123_test.jpg".to_string());
-        data.insert("mime_type".to_string(), "image/jpeg".to_string());
-        data.insert("filesize".to_string(), "12345".to_string());
-        data.insert("width".to_string(), "1920".to_string());
-        data.insert("height".to_string(), "1080".to_string());
-        data.insert(
-            "url".to_string(),
-            "/uploads/media/abc123_test.jpg".to_string(),
-        );
+        let mut data = DocumentFields::new();
+        data.insert("alt".to_string(), json!("Test Image"));
+        data.insert("filename".to_string(), json!("abc123_test.jpg"));
+        data.insert("mime_type".to_string(), json!("image/jpeg"));
+        data.insert("filesize".to_string(), json!("12345"));
+        data.insert("width".to_string(), json!("1920"));
+        data.insert("height".to_string(), json!("1080"));
+        data.insert("url".to_string(), json!("/uploads/media/abc123_test.jpg"));
 
         let ctx = ServiceContext::collection("media", &def)
             .conn(&conn)
             .build();
 
-        let doc = persist_create(&ctx, &data, &HashMap::new(), &PersistOptions::default()).unwrap();
+        let doc = persist_create(&ctx, &data, &PersistOptions::default()).unwrap();
 
         assert_eq!(doc.get_str("filename"), Some("abc123_test.jpg"));
         assert_eq!(

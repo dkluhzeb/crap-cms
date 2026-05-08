@@ -1,13 +1,13 @@
 //! Collection document deletion.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Context as _;
 
 use crate::{
     config::LocaleConfig,
     core::{
-        ReqContext,
+        DocumentFields, ReqContext,
         event::EventOperation,
         upload::{self, StorageBackend},
     },
@@ -78,7 +78,7 @@ fn delete_document_pool(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
+    ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
     flush_queue(ctx, &queue);
 
     // Clean up upload files after successful commit (skip for soft-delete to allow restore)
@@ -103,7 +103,7 @@ fn delete_document_conn(
 
     ctx.clear_cache();
 
-    ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
+    ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
 
     if !def.soft_delete
         && let (Some(s), Some(fields)) = (storage, result.upload_doc_fields)

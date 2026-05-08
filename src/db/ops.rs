@@ -2,10 +2,10 @@
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
-use std::collections::HashMap;
 
 use crate::core::{
-    CollectionDefinition, Document, collection::GlobalDefinition, document::DocumentBuilder,
+    CollectionDefinition, Document, DocumentFields, collection::GlobalDefinition,
+    document::DocumentBuilder,
 };
 use crate::db::{
     DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
@@ -116,7 +116,7 @@ pub fn find_by_id_full(p: FindByIdFullParams<'_>) -> Result<Option<Document>> {
 /// Reconstruct a Document from a version snapshot JSON object.
 fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
     let obj = snapshot.as_object()?;
-    let mut fields: HashMap<String, Value> = obj.clone().into_iter().collect();
+    let mut fields: DocumentFields = obj.clone().into_iter().collect();
 
     let created_at = fields
         .remove("created_at")

@@ -45,17 +45,13 @@ pub(in crate::mcp::tools) fn exec_create_many(
     let items: Vec<CreateManyItem> = documents_arr
         .iter()
         .map(|doc_val| {
-            let (data, join_data) = extract_data_from_args(doc_val, &["password"]);
+            let data = extract_data_from_args(doc_val, &["password"]);
             let password = doc_val
                 .get("password")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            CreateManyItem {
-                data,
-                join_data,
-                password,
-            }
+            CreateManyItem { data, password }
         })
         .collect();
 

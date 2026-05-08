@@ -66,11 +66,11 @@ pub(crate) fn check_unique(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::config::LocaleConfig;
+    use crate::core::DocumentFields;
     use crate::core::field::{FieldDefinition, FieldType};
     use crate::db::query::LocaleContext;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_unique_check() {
@@ -86,7 +86,7 @@ mod tests {
                 .unique(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("taken@test.com"));
         let result = validate_fields_inner(
             &lua,
@@ -112,7 +112,7 @@ mod tests {
                 .unique(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("me@test.com"));
         let result = validate_fields_inner(
             &lua,
@@ -139,7 +139,7 @@ mod tests {
                 .unique(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -167,7 +167,7 @@ mod tests {
                 .unique(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("rank".to_string(), json!(42));
         let result = validate_fields_inner(
             &lua,
@@ -193,7 +193,7 @@ mod tests {
                 .unique(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("items".to_string(), json!(["a", "b"]));
         let result = validate_fields_inner(
             &lua,
@@ -230,7 +230,7 @@ mod tests {
         let locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
 
         // Duplicate value in the en column should fail
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("taken-en"));
         let result = validate_fields_inner(
             &lua,
@@ -247,7 +247,7 @@ mod tests {
         assert!(result.unwrap_err().errors[0].message.contains("unique"));
 
         // Non-duplicate value should pass
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("fresh"));
         let result = validate_fields_inner(
             &lua,
@@ -290,7 +290,7 @@ mod tests {
         };
         let locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("seo__slug".to_string(), json!("taken"));
         let result = validate_fields_inner(
             &lua,
@@ -306,7 +306,7 @@ mod tests {
         );
         assert!(result.unwrap_err().errors[0].message.contains("unique"));
         // Error field should use the data key, not the DB column
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("seo__slug".to_string(), json!("taken"));
         let result = validate_fields_inner(
             &lua,
@@ -335,7 +335,7 @@ mod tests {
         ];
 
         // With soft_delete=true, the soft-deleted row should be excluded from the unique check
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("taken"));
         let result = validate_fields_inner(
             &lua,
@@ -351,7 +351,7 @@ mod tests {
         );
 
         // With soft_delete=false (the old default), the same value would fail
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("taken"));
         let result = validate_fields_inner(
             &lua,
@@ -383,7 +383,7 @@ mod tests {
                 .localized(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("slug".to_string(), json!("taken"));
         // No locale_ctx → falls back to bare column
         let result = validate_fields_inner(
@@ -410,7 +410,7 @@ mod tests {
                 .unique(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("any@test.com"));
         let result = validate_fields_inner(
             &lua,

@@ -4,10 +4,10 @@
 //! 1. Library function tests — direct Rust calls with temp dirs.
 //! 2. Binary invocation tests — `std::process::Command` for clap parsing.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, pool, query};
 use crap_cms::hooks;
@@ -65,10 +65,10 @@ fn create_user(
     password: &str,
     extra_fields: &[(&str, &str)],
 ) -> crap_cms::core::Document {
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), email.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!(email.to_string()));
     for (k, v) in extra_fields {
-        data.insert(k.to_string(), v.to_string());
+        data.insert(k.to_string(), json!(v.to_string()));
     }
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -766,8 +766,11 @@ fn status_collection_counts() {
 
     // Create 3 posts
     for i in 0..3 {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), format!("Post {}", i));
+        let mut data = DocumentFields::new();
+        data.insert(
+            "title".to_string(),
+            serde_json::json!(format!("Post {}", i)),
+        );
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "posts", def, &data, None).unwrap();
@@ -1036,17 +1039,17 @@ fn export_all() {
 
     // Seed data
     {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Hello".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello".to_string()));
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
     {
-        let mut data = HashMap::new();
-        data.insert("email".to_string(), "export@example.com".to_string());
-        data.insert("name".to_string(), "Exporter".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("export@example.com".to_string()));
+        data.insert("name".to_string(), json!("Exporter".to_string()));
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "users", users_def, &data, None).unwrap();
@@ -1079,8 +1082,8 @@ fn export_filtered() {
     let posts_def = reg.get_collection("posts").unwrap();
 
     {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Filtered".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Filtered".to_string()));
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "posts", posts_def, &data, None).unwrap();

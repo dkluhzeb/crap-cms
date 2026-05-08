@@ -1,12 +1,9 @@
 //! DB write phase for draft version saves and unpublish operations.
 
-use std::collections::HashMap;
-
 use anyhow::{Result, anyhow};
-use serde_json::Value;
 
 use crate::{
-    core::Document,
+    core::{Document, DocumentFields},
     db::{LocaleContext, query},
     service::{ServiceContext, versions},
 };
@@ -16,7 +13,7 @@ use crate::{
 pub fn persist_draft_version(
     ctx: &ServiceContext,
     id: &str,
-    hook_data: &HashMap<String, Value>,
+    hook_data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;

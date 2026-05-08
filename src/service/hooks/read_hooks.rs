@@ -3,12 +3,8 @@
 
 use anyhow::Result;
 
-use std::collections::HashMap;
-
-use serde_json::Value;
-
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
+    core::{Document, DocumentFields, FieldDefinition, collection::Hooks},
     db::{AccessResult, DbConnection, query::JoinAccessCheck},
     hooks::{
         HookRunner,
@@ -46,7 +42,7 @@ pub trait ReadHooks {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
     ) -> Result<AccessResult>;
 
     /// Return field names denied by read access control.
@@ -71,7 +67,7 @@ impl<'a> RunnerReadHooks<'a> {
 impl ReadHooks for RunnerReadHooks<'_> {
     fn before_read(&self, hooks: &Hooks, slug: &str, operation: &str) -> Result<()> {
         self.runner
-            .fire_before_read(hooks, slug, operation, HashMap::new())
+            .fire_before_read(hooks, slug, operation, DocumentFields::new())
     }
 
     fn after_read_one(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
@@ -87,7 +83,7 @@ impl ReadHooks for RunnerReadHooks<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
     ) -> Result<AccessResult> {
         self.runner
             .check_access(access_ref, user, id, data, self.conn)
@@ -189,7 +185,7 @@ impl ReadHooks for LuaReadHooks<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
     ) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);

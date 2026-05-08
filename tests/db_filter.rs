@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, Labels};
 use crap_cms::core::field::{
@@ -69,9 +70,9 @@ fn seed_posts() -> (
     ];
 
     for (title, status) in &rows {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
-        data.insert("status".to_string(), status.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        data.insert("status".to_string(), json!(status));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -445,8 +446,8 @@ fn contains_filter_escapes_percent() {
     // Create two documents: one with "50% off" and one with "100 items"
     let titles = vec!["50% off", "100 items"];
     for title in &titles {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -483,8 +484,8 @@ fn contains_filter_escapes_underscore() {
     // Create two documents: "a_b" and "axb"
     let titles = vec!["a_b", "axb"];
     for title in &titles {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
         let mut conn = pool.get().expect("DB connection");
         let tx = conn.transaction().expect("Start transaction");
         query::create(&tx, "posts", &def, &data, None).expect("Create failed");
@@ -652,24 +653,21 @@ fn seed_filterable_products(
     // Product 1: "Widget" with red variant, text block, tagged "sale"
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data1 = HashMap::new();
-    data1.insert("name".to_string(), "Widget".to_string());
-    data1.insert("seo__meta_title".to_string(), "Buy Widget".to_string());
-    data1.insert(
-        "seo__meta_description".to_string(),
-        "Best widget".to_string(),
-    );
+    let mut data1 = DocumentFields::new();
+    data1.insert("name".to_string(), json!("Widget"));
+    data1.insert("seo__meta_title".to_string(), json!("Buy Widget"));
+    data1.insert("seo__meta_description".to_string(), json!("Best widget"));
     let doc1 = query::create(&tx, "products", def, &data1, None).unwrap();
     let id1 = doc1.id.to_string();
 
     // Array rows for product 1
     let rows1 = vec![HashMap::from([
-        ("sku".to_string(), "W-001".to_string()),
-        ("color".to_string(), "red".to_string()),
-        ("size".to_string(), "large".to_string()),
+        ("sku".to_string(), json!("W-001")),
+        ("color".to_string(), json!("red")),
+        ("size".to_string(), json!("large")),
         (
             "dimensions".to_string(),
-            r#"{"width":"10","height":"20"}"#.to_string(),
+            json!(r#"{"width":"10","height":"20"}"#),
         ),
     ])];
     query::set_array_rows(
@@ -706,23 +704,20 @@ fn seed_filterable_products(
     // Product 2: "Gadget" with blue variant, section block, tagged "new"
     let mut conn2 = pool.get().unwrap();
     let tx2 = conn2.transaction().unwrap();
-    let mut data2 = HashMap::new();
-    data2.insert("name".to_string(), "Gadget".to_string());
-    data2.insert("seo__meta_title".to_string(), "Buy Gadget".to_string());
-    data2.insert(
-        "seo__meta_description".to_string(),
-        "Cool gadget".to_string(),
-    );
+    let mut data2 = DocumentFields::new();
+    data2.insert("name".to_string(), json!("Gadget"));
+    data2.insert("seo__meta_title".to_string(), json!("Buy Gadget"));
+    data2.insert("seo__meta_description".to_string(), json!("Cool gadget"));
     let doc2 = query::create(&tx2, "products", def, &data2, None).unwrap();
     let id2 = doc2.id.to_string();
 
     let rows2 = vec![HashMap::from([
-        ("sku".to_string(), "G-001".to_string()),
-        ("color".to_string(), "blue".to_string()),
-        ("size".to_string(), "small".to_string()),
+        ("sku".to_string(), json!("G-001")),
+        ("color".to_string(), json!("blue")),
+        ("size".to_string(), json!("small")),
         (
             "dimensions".to_string(),
-            r#"{"width":"5","height":"15"}"#.to_string(),
+            json!(r#"{"width":"5","height":"15"}"#),
         ),
     ])];
     query::set_array_rows(
@@ -1072,9 +1067,9 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         ("thousand", "1000"),
     ];
     for (label, val) in &rows {
-        let mut data = HashMap::new();
-        data.insert("label".to_string(), label.to_string());
-        data.insert("value".to_string(), val.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("label".to_string(), json!(label));
+        data.insert("value".to_string(), json!(val));
         let mut conn = pool.get().expect("conn");
         let tx = conn.transaction().expect("tx");
         query::create(&tx, "scores", &def, &data, None).expect("create");
@@ -1178,29 +1173,29 @@ fn filter_localized_field_in_array_routes_to_locale_column() {
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data_a = HashMap::new();
-    data_a.insert("slug_field".to_string(), "a".to_string());
+    let mut data_a = DocumentFields::new();
+    data_a.insert("slug_field".to_string(), json!("a"));
     let doc_a = query::create(&tx, "l10n_articles", &def, &data_a, None).expect("create a");
 
-    let mut data_b = HashMap::new();
-    data_b.insert("slug_field".to_string(), "b".to_string());
+    let mut data_b = DocumentFields::new();
+    data_b.insert("slug_field".to_string(), json!("b"));
     let doc_b = query::create(&tx, "l10n_articles", &def, &data_b, None).expect("create b");
 
     let a_en = vec![HashMap::from([
-        ("url".to_string(), "https://a-en".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://a-en")),
+        ("label".to_string(), json!("Shared")),
     ])];
     let a_de = vec![HashMap::from([
-        ("url".to_string(), "https://a-de".to_string()),
-        ("label".to_string(), "A-German-Only".to_string()),
+        ("url".to_string(), json!("https://a-de")),
+        ("label".to_string(), json!("A-German-Only")),
     ])];
     let b_en = vec![HashMap::from([
-        ("url".to_string(), "https://b-en".to_string()),
-        ("label".to_string(), "B-English-Only".to_string()),
+        ("url".to_string(), json!("https://b-en")),
+        ("label".to_string(), json!("B-English-Only")),
     ])];
     let b_de = vec![HashMap::from([
-        ("url".to_string(), "https://b-de".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://b-de")),
+        ("label".to_string(), json!("Shared")),
     ])];
 
     query::set_array_rows(
@@ -1304,29 +1299,29 @@ fn seed_l10n_articles_fixture() -> (
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
 
-    let mut data_a = HashMap::new();
-    data_a.insert("slug_field".to_string(), "a".to_string());
+    let mut data_a = DocumentFields::new();
+    data_a.insert("slug_field".to_string(), json!("a"));
     let doc_a = query::create(&tx, "l10n_articles", &def, &data_a, None).expect("create a");
 
-    let mut data_b = HashMap::new();
-    data_b.insert("slug_field".to_string(), "b".to_string());
+    let mut data_b = DocumentFields::new();
+    data_b.insert("slug_field".to_string(), json!("b"));
     let doc_b = query::create(&tx, "l10n_articles", &def, &data_b, None).expect("create b");
 
     let a_en = vec![HashMap::from([
-        ("url".to_string(), "https://a-en".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://a-en")),
+        ("label".to_string(), json!("Shared")),
     ])];
     let a_de = vec![HashMap::from([
-        ("url".to_string(), "https://a-de".to_string()),
-        ("label".to_string(), "A-German-Only".to_string()),
+        ("url".to_string(), json!("https://a-de")),
+        ("label".to_string(), json!("A-German-Only")),
     ])];
     let b_en = vec![HashMap::from([
-        ("url".to_string(), "https://b-en".to_string()),
-        ("label".to_string(), "B-English-Only".to_string()),
+        ("url".to_string(), json!("https://b-en")),
+        ("label".to_string(), json!("B-English-Only")),
     ])];
     let b_de = vec![HashMap::from([
-        ("url".to_string(), "https://b-de".to_string()),
-        ("label".to_string(), "Shared".to_string()),
+        ("url".to_string(), json!("https://b-de")),
+        ("label".to_string(), json!("Shared")),
     ])];
 
     let seed_rows = [

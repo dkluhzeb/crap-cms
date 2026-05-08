@@ -1,12 +1,10 @@
 //! Core delete operation for collections.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::ReqContext,
+    core::{DocumentFields, ReqContext},
     db::{AccessResult, LocaleContext, query},
     hooks::{HookContext, HookEvent},
     service::{ServiceContext, helpers::enforce_access_constraints},
@@ -21,7 +19,7 @@ pub struct DeleteResult {
     /// Request-scoped context returned by after-delete hooks.
     pub context: ReqContext,
     /// Upload file fields from the deleted document (for post-commit cleanup).
-    pub upload_doc_fields: Option<HashMap<String, Value>>,
+    pub upload_doc_fields: Option<DocumentFields>,
 }
 
 /// Delete a document on an existing connection/transaction.
@@ -90,8 +88,8 @@ pub fn delete_document_core(
     }
 
     // Before-delete hooks
-    let mut hook_data: HashMap<String, Value> =
-        [("id".to_string(), Value::String(id.to_string()))].into();
+    let mut hook_data = DocumentFields::new();
+    hook_data.insert("id".to_string(), Value::String(id.to_string()));
 
     if def.soft_delete {
         hook_data.insert("soft_delete".to_string(), Value::Bool(true));
@@ -233,7 +231,7 @@ mod tests {
             _access_ref: Option<&str>,
             _user: Option<&Document>,
             _id: Option<&str>,
-            _data: Option<&HashMap<String, Value>>,
+            _data: Option<&DocumentFields>,
         ) -> anyhow::Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -250,7 +248,7 @@ mod tests {
         fn validate_fields(
             &self,
             _fields: &[FieldDefinition],
-            _data: &HashMap<String, Value>,
+            _data: &DocumentFields,
             _ctx: &ValidationCtx,
         ) -> std::result::Result<(), ValidationError> {
             Ok(())

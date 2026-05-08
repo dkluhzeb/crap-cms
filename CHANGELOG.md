@@ -210,6 +210,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   chains, no `crate::core::field::FieldTab`-style re-export
   re-traversals, no inline `use` statements inside function bodies.
   All imports use the shortest available path per CLAUDE.md.
+- Typed `serde_json::Value` write pipeline end-to-end. Previously,
+  scalar write data was stringified at every entry point
+  (`prost_struct_to_hashmap` for gRPC, form parsers for admin) and
+  re-parsed back into `DbValue` at the DB layer — losing precision
+  for typed numeric inputs (gRPC `int64` rounded through `f64`) and
+  conflating `null` with empty string. Now typed values flow from
+  every entry boundary (`prost_struct_to_json_map` for gRPC,
+  `service::values_from_strings` adapter at the form/admin boundary,
+  Lua's already-typed bridge, MCP's `extract_data_from_args`) all
+  the way through `WriteInput`, `service::persist::*`,
+  `query::create`/`update`/`update_global`, `set_array_rows`, and
+  `coerce_json_value`. The dead `prost_struct_to_hashmap` shim is
+  deleted.
+- `core::db::query::coerce_json_value` rewritten to dispatch on
+  `field_type` first (was: dispatch on `Value` variant first). The
+  old shape produced `Integer(1)` for a `Bool(true)` reaching a
+  `Text` field — the typed-pipeline rework caught this; covered by
+  16 cross-type tests in `core::db::query::helpers::tests`. The
+  function is now live (called from every typed write); its
+  `#[allow(dead_code)]` is gone.
+- `WriteInput.data` and `WriteInput.join_data` merged into a single
+  `data: DocumentFields` field. The split was historical — `data` was
+  stringified columns, `join_data` was typed arrays/blocks/has-many.
+  Now both flow through one typed map; the internal dispatch by
+  `field.field_type` (column vs join table) happens inside
+  `query::create`/`save_join_table_data`.
+  `service::persist::create`/`persist_update`/`persist_bulk_update`
+  signatures simplified — single `data` arg replaces the
+  `(final_data, hook_data)` pair. `build_hook_data` helper deleted
+  (the merge it performed is now upstream). `strip_denied_fields`
+  reduced from `(denied, &mut data, join_data) -> Cow<...>` to
+  `(denied, &mut data)` — pure mutation, no return.
+- New `crate::core::DocumentFields` newtype around the
+  `HashMap<String, Value>` shape that user-defined document fields
+  travel through. Distinct at the type level from the
+  identically-shaped `ReqContext` (per-request hook scratchpad), so
+  the two can no longer be mixed up at boundaries even though they
+  serialize the same way. Replaces `HashMap<String, Value>` in
+  `Document.fields`, `WriteInput.data`, `HookContext.data`,
+  `MutationEvent.data` / `MutationEventInput.data` /
+  `PendingEvent.data`, `DocumentRef.data`, the `query::create` /
+  `query::update` / `update_global` write APIs, the persist layer
+  (`persist_create` / `persist_update` / `persist_version`),
+  collection bulk service ops (`CreateManyItem.data`, `update_many`,
+  `delete` via empty payload), the read-write hook runner
+  (`PublishEventInput.data`, `run_before_broadcast`,
+  `fire_before_read`, `apply_after_read_for_event`,
+  `check_access`/`check_live_setting`), the reference-count helpers
+  (`ref_count::after_create_from_data`, `data_touches_refs`,
+  `lock_ref_targets_from_data`, `compute_refs_from_data`), the
+  version-snapshot extractor (`extract_snapshot_data`,
+  `collect_join_data_from_snapshot`), the join-save writer
+  (`save_join_table_data`), the upload helpers
+  (`delete_upload_files`, `publish_upload_event`), the admin
+  `validate` handler (`ValidateRequest.data`,
+  `flatten_document_values`), `extract_join_data_from_form`, the
+  `field_context::enrich/*` doc-field params, the API
+  `extract_auth_password` helper, the bench helpers
+  (`resolve_bench_data` return, `to_string_map`,
+  `randomize_unique_fields`, `generate_synthetic_data`), the
+  in-memory `FilterClause` evaluator
+  (`filter::memory::matches_constraints` /
+  `matches_filter`, used by SSE + gRPC Subscribe), the after-read
+  field-hook execution path (`run_field_hooks_inner` /
+  `run_field_hooks_recursive` / `run_single_field_hook` /
+  `call_field_hook_ref`), and the populate-cache view
+  (`PopulatedRef.fields`). Derives `Default`, `Serialize`,
+  `Deserialize`, and `JsonSchema` with `#[serde(transparent)]` +
+  `#[schemars(transparent)]` so wire format and OpenAPI/MCP schemas
+  are byte-identical to the prior `HashMap`. Implements `Deref` /
+  `DerefMut` to `HashMap<String, Value>`, `From<HashMap>` /
+  `Into<HashMap>`, `IntoIterator` / `FromIterator` / `Extend`, plus
+  `get_str` / `get_bool` / `get_i64` / `get_f64` typed accessors.
+  Builders accept `impl Into<DocumentFields>` so existing call sites
+  that already had a `HashMap` keep compiling. Sites that are
+  semantically *not* document fields — richtext node attrs (Prosemirror
+  `data-attrs`), array/blocks sub-rows in join tables, the generic
+  `lua_table_to_json_map` Lua→JSON adapter, the generic
+  `hashmap_to_lua` marshaller (called for both `DocumentFields` and
+  `ReqContext` via Deref), the protobuf wire-format
+  `prost_struct_to_json_map` boundary, and the 3-context
+  `run_validate_function_inner` validator helper (richtext / sub-row
+  / doc) — stay as `HashMap` to preserve their genuine shape
+  ambiguity.
+- `core::db::query::helpers::extract_snapshot_data` returns
+  `DocumentFields` (was `String`). Version-restore path preserves
+  typed precision now. `snapshot_val_to_string` helper deleted —
+  was only used to flatten typed snapshot values into strings before
+  reparse.
+- `service::types::values_from_strings(map: HashMap<String, String>)
+  -> HashMap<String, Value>` is the canonical boundary adapter for
+  the form-input path (HTML forms genuinely produce strings; this
+  wraps each value in `Value::String`). Lives in
+  `service/types/write_input.rs` next to `WriteInput`.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

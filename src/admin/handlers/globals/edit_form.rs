@@ -6,7 +6,7 @@ use axum::{
     http::HeaderMap,
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::task;
 use tracing::error;
 
@@ -26,7 +26,7 @@ use crate::{
         },
     },
     core::{
-        Document,
+        Document, DocumentFields,
         auth::{AuthUser, Claims},
         collection::GlobalDefinition,
     },
@@ -67,7 +67,7 @@ fn read_global_document(params: ReadParams) -> Result<Document, ServiceError> {
 fn prepare_edit_fields(
     state: &AdminState,
     def: &GlobalDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     editor_locale: Option<&str>,
     denied_read_fields: &[String],
 ) -> (Vec<FieldContext>, Vec<FieldContext>) {

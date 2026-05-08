@@ -4,6 +4,7 @@
 //! commit guard -> clean up old files -> enqueue conversions. Surfaces only handle
 //! multipart parsing, auth, and response formatting.
 
+use crate::service::values_from_strings;
 use std::collections::HashMap;
 
 use anyhow::anyhow;
@@ -83,9 +84,12 @@ pub fn create_upload(
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
 
+    let mut data = values_from_strings(form_data);
+    data.extend(join_data);
+
     let (doc, req_context) = create_document(
         ctx,
-        WriteInput::builder(form_data, &join_data)
+        WriteInput::builder(data)
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
@@ -179,10 +183,13 @@ pub fn update_upload(
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
 
+    let mut data = values_from_strings(form_data);
+    data.extend(join_data);
+
     let (doc, req_context) = update_document(
         ctx,
         id,
-        WriteInput::builder(form_data, &join_data)
+        WriteInput::builder(data)
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)

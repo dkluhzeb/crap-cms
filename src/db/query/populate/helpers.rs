@@ -1,12 +1,10 @@
 //! Helper functions for the populate subsystem.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::{Document, cache::CacheBackend};
+use crate::core::{Document, DocumentFields, cache::CacheBackend};
 use crate::db::query::populate::Singleflight;
 
 /// The shape `document_to_json` emits — a populated relationship reference
@@ -14,14 +12,14 @@ use crate::db::query::populate::Singleflight;
 /// envelope; the document's user-defined fields flatten alongside them.
 ///
 /// Wire-format equivalent to the previous manual `Map::new() + insert` loop —
-/// `#[serde(flatten)]` over `HashMap<String, Value>` reproduces the same
-/// key set in the same order.
+/// `#[serde(flatten)]` over `DocumentFields` (transparent over `HashMap`)
+/// reproduces the same key set in the same order.
 #[derive(Serialize)]
 struct PopulatedRef<'a> {
     id: &'a str,
     collection: &'a str,
     #[serde(flatten)]
-    fields: &'a HashMap<String, Value>,
+    fields: &'a DocumentFields,
     #[serde(skip_serializing_if = "Option::is_none")]
     created_at: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]

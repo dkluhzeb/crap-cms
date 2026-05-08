@@ -10,7 +10,7 @@ use crate::{
     hooks::{HookContext, LuaCrudInfra, ValidationCtx},
     service::{
         AfterChangeInput, RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, WriteResult,
-        build_hook_data, flush_queue, helpers as svc_helpers, run_after_change_hooks,
+        flush_queue, helpers as svc_helpers, run_after_change_hooks,
         versions::{self, VersionSnapshotCtx},
         write::helpers::strip_denied_fields,
     },
@@ -107,9 +107,9 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
     let ui_locale = input.ui_locale.as_deref();
 
     let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
-    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+    strip_denied_fields(&denied, &mut input.data);
 
-    let hook_data = build_hook_data(&input.data, &join_data);
+    let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(hook_data)
         .locale(input.locale.clone())
@@ -125,7 +125,7 @@ pub fn update_global_core(ctx: &ServiceContext, mut input: WriteInput<'_>) -> Re
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
-    let final_data = final_ctx.to_string_map(&def.fields);
+    let final_data = final_ctx.to_value_map(&def.fields);
 
     let doc = if is_draft && def.has_versions() {
         let existing_doc = query::get_global(conn, ctx.slug, def, input.locale_ctx)?;

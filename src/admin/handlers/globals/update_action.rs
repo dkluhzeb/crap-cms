@@ -26,8 +26,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        Document, ReqContext, auth::AuthUser, cache::SharedCache, collection::GlobalDefinition,
-        event::SharedEventTransport, validate::ValidationError,
+        Document, DocumentFields, ReqContext, auth::AuthUser, cache::SharedCache,
+        collection::GlobalDefinition, event::SharedEventTransport, validate::ValidationError,
     },
     db::{
         DbPool,
@@ -46,7 +46,7 @@ struct UpdateParams {
     slug: String,
     def: GlobalDefinition,
     form_data: HashMap<String, String>,
-    join_data: HashMap<String, Value>,
+    join_data: DocumentFields,
     locale_ctx: Option<LocaleContext>,
     locale: Option<String>,
     locale_config: LocaleConfig,
@@ -74,12 +74,18 @@ fn execute_update(params: UpdateParams) -> Result<(Document, ReqContext), Servic
     } else {
         service::update_global_document(
             &ctx,
-            service::WriteInput::builder(params.form_data, &params.join_data)
-                .locale_ctx(params.locale_ctx.as_ref())
-                .locale(params.locale)
-                .draft(params.draft)
-                .ui_locale(params.ui_locale)
-                .build(),
+            service::WriteInput::builder({
+                let mut __m = service::values_from_strings(params.form_data);
+                for (k, v) in params.join_data.iter() {
+                    __m.insert(k.clone(), v.clone());
+                }
+                __m
+            })
+            .locale_ctx(params.locale_ctx.as_ref())
+            .locale(params.locale)
+            .draft(params.draft)
+            .ui_locale(params.ui_locale)
+            .build(),
         )
     }
 }
@@ -89,7 +95,7 @@ fn render_validation_error(
     state: &AdminState,
     def: &GlobalDefinition,
     form_data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
+    join_data: &DocumentFields,
     ve: &ValidationError,
     auth_user: &Option<Extension<AuthUser>>,
 ) -> Response {
@@ -103,7 +109,7 @@ fn render_validation_error(
 
     let mut fields = build_field_contexts(&def.fields, form_data, &error_map, false, false);
 
-    let doc_fields: HashMap<String, Value> = form_data
+    let doc_fields: DocumentFields = form_data
         .iter()
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .chain(join_data.iter().map(|(k, v)| (k.clone(), v.clone())))

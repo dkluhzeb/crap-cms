@@ -9,11 +9,9 @@ use super::helpers::build_bulk_filters;
 use crate::{
     api::{
         content,
-        handlers::{
-            ContentService,
-            convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
-        },
+        handlers::{ContentService, convert::prost_struct_to_json_map},
     },
+    core::DocumentFields,
     db::{AccessResult, LocaleContext},
     service::{self, ServiceContext, ServiceError, UpdateManyOptions},
 };
@@ -30,16 +28,11 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let mut join_data = req
+        let mut data: DocumentFields = req
             .data
-            .as_ref()
-            .map(prost_struct_to_json_map)
-            .unwrap_or_default();
-
-        let mut data = req
-            .data
-            .map(|s| prost_struct_to_hashmap(&s))
-            .unwrap_or_default();
+            .map(|s| prost_struct_to_json_map(&s))
+            .unwrap_or_default()
+            .into();
 
         if def.is_auth_collection() && data.contains_key("password") {
             return Err(Status::invalid_argument(
@@ -49,7 +42,6 @@ impl ContentService {
 
         if def.is_auth_collection() {
             data.remove("password");
-            join_data.remove("password");
         }
 
         let locale_ctx =
@@ -118,15 +110,8 @@ impl ContentService {
                 ui_locale: None,
             };
 
-            let result = service::update_many(
-                &ctx,
-                filters,
-                data,
-                &join_data,
-                &locale_config,
-                &update_opts,
-            )
-            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
+            let result = service::update_many(&ctx, filters, data, &locale_config, &update_opts)
+                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
 
             Ok(result.modified)
         })

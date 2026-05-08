@@ -3,9 +3,8 @@
 //! Tests the query layer and service layer together: soft-delete, restore,
 //! find filtering, count filtering, FTS cleanup, and auto-purge.
 
-use std::collections::HashMap;
-
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::upload::create_storage;
@@ -61,9 +60,9 @@ fn insert_doc(
     def: &CollectionDefinition,
     data: &[(&str, &str)],
 ) -> String {
-    let map: HashMap<String, String> = data
+    let map: DocumentFields = data
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
         .collect();
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -567,9 +566,9 @@ fn empty_trash_skips_referenced_documents() {
 
     // Create a post referencing m1
     let conn = pool.get().unwrap();
-    let post_data: HashMap<String, String> = [("title", "My Post"), ("image", m1.as_str())]
+    let post_data: DocumentFields = [("title", "My Post"), ("image", m1.as_str())]
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
         .collect();
     let post_doc = query::create(&conn, "posts", &posts_def, &post_data, None).unwrap();
 

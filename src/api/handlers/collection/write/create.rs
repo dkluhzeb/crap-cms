@@ -10,9 +10,10 @@ use crate::{
         handlers::{
             ContentService,
             collection::helpers::extract_auth_password,
-            convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
+            convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
+    core::DocumentFields,
     db::LocaleContext,
     service::{self, EmailContext, ServiceContext, ServiceError, WriteInput},
 };
@@ -29,16 +30,11 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let join_data = req
+        let mut data: DocumentFields = req
             .data
-            .as_ref()
-            .map(prost_struct_to_json_map)
-            .unwrap_or_default();
-
-        let mut data = req
-            .data
-            .map(|s| prost_struct_to_hashmap(&s))
-            .unwrap_or_default();
+            .map(|s| prost_struct_to_json_map(&s))
+            .unwrap_or_default()
+            .into();
 
         let password = extract_auth_password(
             &mut data,
@@ -89,7 +85,7 @@ impl ContentService {
 
             let (doc, _req_context) = service::create_document(
                 &ctx,
-                WriteInput::builder(data, &join_data)
+                WriteInput::builder(data)
                     .password(password.as_deref())
                     .locale_ctx(locale_ctx.as_ref())
                     .draft(req.draft.unwrap_or(false))

@@ -9,7 +9,7 @@ use crate::{
         content,
         handlers::{
             ContentService,
-            convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
+            convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
     service::{
@@ -32,15 +32,9 @@ impl ContentService {
         let items: Vec<CreateManyItem> = req
             .documents
             .iter()
-            .map(|s| {
-                let data = prost_struct_to_hashmap(s);
-                let join_data = prost_struct_to_json_map(s);
-
-                CreateManyItem {
-                    data,
-                    join_data,
-                    password: None,
-                }
+            .map(|s| CreateManyItem {
+                data: prost_struct_to_json_map(s).into(),
+                password: None,
             })
             .collect();
 

@@ -4,11 +4,10 @@
 //! run_before_render, run_system_hooks, run_hooks (no conn), run_migration,
 //! run_job_handler, and related standalone lifecycle tests.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::{ConditionExpr, ConditionOp, ReqContext};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
@@ -48,7 +47,7 @@ fn setup() -> (
 fn create_article(
     pool: &crap_cms::db::DbPool,
     registry: &crap_cms::core::SharedRegistry,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
 ) -> crap_cms::core::Document {
     let reg = registry.read().unwrap();
     let def = reg
@@ -64,79 +63,13 @@ fn create_article(
     doc
 }
 
-fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
-    FieldDefinition::builder(name, field_type).build()
-}
-
-// ── 6K. HookContext::to_string_map ──────────────────────────────────────────
-
-#[test]
-fn to_string_map_basic() {
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), json!("Hello"));
-    data.insert("count".to_string(), json!(42));
-
-    let ctx = HookContext::builder("test", "create").data(data).build();
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        make_field("count", FieldType::Number),
-    ];
-
-    let map = ctx.to_string_map(&fields);
-    assert_eq!(map.get("title").unwrap(), "Hello");
-    assert_eq!(map.get("count").unwrap(), "42");
-}
-
-#[test]
-fn to_string_map_flattens_groups() {
-    let mut data = HashMap::new();
-    let mut seo = serde_json::Map::new();
-    seo.insert("meta_title".to_string(), json!("SEO Title"));
-    seo.insert("meta_desc".to_string(), json!("Description"));
-    data.insert("seo".to_string(), serde_json::Value::Object(seo));
-    data.insert("title".to_string(), json!("Normal Title"));
-
-    let ctx = HookContext::builder("test", "create").data(data).build();
-
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![
-                make_field("meta_title", FieldType::Text),
-                make_field("meta_desc", FieldType::Text),
-            ])
-            .build(),
-    ];
-
-    let map = ctx.to_string_map(&fields);
-    assert_eq!(map.get("title").unwrap(), "Normal Title");
-    assert_eq!(map.get("seo__meta_title").unwrap(), "SEO Title");
-    assert_eq!(map.get("seo__meta_desc").unwrap(), "Description");
-    assert!(
-        !map.contains_key("seo"),
-        "Group key itself should not be in the map"
-    );
-}
-
-#[test]
-fn to_string_map_group_as_string_falls_through() {
-    // When group value is already a string (e.g. from form data), it should be kept as-is
-    let mut data = HashMap::new();
-    data.insert("seo".to_string(), json!("already-a-string"));
-
-    let ctx = HookContext::builder("test", "create").data(data).build();
-
-    let fields = vec![
-        FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![make_field("meta_title", FieldType::Text)])
-            .build(),
-    ];
-
-    let map = ctx.to_string_map(&fields);
-    // When not an object, falls through to string insertion
-    assert_eq!(map.get("seo").unwrap(), "already-a-string");
-}
+// ── 6K. HookContext::to_value_map ──────────────────────────────────────────
+//
+// Unit tests live in `src/hooks/lifecycle/context/hook_context.rs` —
+// the integration-test duplicates were removed in alpha.9 when
+// `to_string_map` was replaced by `to_value_map`. The unit tests
+// already cover all the cases that lived here (typed values flowing
+// through, group flattening, non-object groups, nested groups).
 
 // ── 6L. evaluate_condition_table ─────────────────────────────────────────────
 //
@@ -305,7 +238,7 @@ fn run_hooks_no_conn_fires_collection_and_registered() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
 
     let ctx = HookContext {

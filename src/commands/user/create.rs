@@ -2,12 +2,13 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use dialoguer::{Input, Password};
+use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::{
     cli::{self, crap_theme},
     config::PasswordPolicy,
-    core::SharedRegistry,
+    core::{DocumentFields, SharedRegistry},
     db::{DbPool, query},
     hooks::lifecycle::is_valid_email_format,
 };
@@ -52,10 +53,16 @@ pub fn user_create(
 
     prompt_required_fields(&def, &mut data)?;
 
+    let typed_data: DocumentFields = data
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+
     let mut conn = pool.get().context("Failed to get database connection")?;
     let tx = conn.transaction().context("Failed to begin transaction")?;
 
-    let doc = query::create(&tx, collection, &def, &data, None).context("Failed to create user")?;
+    let doc =
+        query::create(&tx, collection, &def, &typed_data, None).context("Failed to create user")?;
 
     query::update_password(&tx, collection, &doc.id, &password)
         .context("Failed to set password")?;

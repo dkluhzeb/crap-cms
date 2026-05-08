@@ -49,7 +49,7 @@ pub(in crate::mcp::tools) fn exec_update(
         config.auth.password_policy.validate(pw)?;
     }
 
-    let (data, join_data) = extract_data_from_args(args, &["id", "password"]);
+    let data = extract_data_from_args(args, &["id", "password"]);
 
     let ctx = ServiceContext::collection(slug, def)
         .pool(pool)
@@ -62,7 +62,7 @@ pub(in crate::mcp::tools) fn exec_update(
     let (doc, _ctx) = update_document(
         &ctx,
         id,
-        WriteInput::builder(data, &join_data)
+        WriteInput::builder(data)
             .password(password.as_deref())
             .build(),
     )?;

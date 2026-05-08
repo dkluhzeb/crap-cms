@@ -4,16 +4,16 @@
 //!
 //! Split from cli_integration.rs for faster parallel compilation.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 use crap_cms::typegen;
-use serde_json::json;
+use serde_json::{Value, json};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -93,9 +93,12 @@ fn roundtrip_data_preserved() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Roundtrip Post {}", i));
-            data.insert("status".to_string(), "published".to_string());
+            let mut data = DocumentFields::new();
+            data.insert(
+                "title".to_string(),
+                Value::String(format!("Roundtrip Post {}", i)),
+            );
+            data.insert("status".to_string(), json!("published"));
             query::create(&tx, "posts", def, &data, None).unwrap();
         }
         tx.commit().unwrap();
@@ -178,13 +181,13 @@ fn roundtrip_multiple_collections() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Multi Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Multi Post"));
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
 
-        let mut udata = HashMap::new();
-        udata.insert("email".to_string(), "multi@test.com".to_string());
-        udata.insert("name".to_string(), "Multi User".to_string());
+        let mut udata = DocumentFields::new();
+        udata.insert("email".to_string(), json!("multi@test.com"));
+        udata.insert("name".to_string(), json!("Multi User"));
         query::create(&tx, "users", users_def, &udata, None).unwrap();
 
         tx.commit().unwrap();
@@ -420,8 +423,8 @@ fn migrate_fresh() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Pre-fresh".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Pre-fresh"));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -458,8 +461,8 @@ fn backup_snapshot() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Backup test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Backup test"));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -864,8 +867,8 @@ fn cmd_restore_roundtrip() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Restore Test Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Restore Test Post"));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1379,8 +1382,8 @@ fn fts_excludes_container_fields_from_searchable() {
     // Verify we can create a document (full roundtrip)
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Hello FTS".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Hello FTS"));
     query::create(&tx, "test_fts", def, &data, None).unwrap();
     tx.commit().unwrap();
 }
@@ -1544,9 +1547,9 @@ fn init_no_input_full_roundtrip() {
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("email".to_string(), "test@example.com".to_string());
-        data.insert("password".to_string(), "secret123".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("test@example.com"));
+        data.insert("password".to_string(), json!("secret123"));
         query::create(&tx, "users", users_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1569,10 +1572,10 @@ fn init_no_input_full_roundtrip() {
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("filename".to_string(), "test.png".to_string());
-        data.insert("mime_type".to_string(), "image/png".to_string());
-        data.insert("size".to_string(), "1024".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("filename".to_string(), json!("test.png"));
+        data.insert("mime_type".to_string(), json!("image/png"));
+        data.insert("size".to_string(), json!("1024"));
         query::create(&tx, "media", media_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1677,8 +1680,8 @@ fn init_scaffold_nested_collection_full_crud() {
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test Article".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test Article"));
         query::create(&tx, "articles", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1694,9 +1697,9 @@ fn init_scaffold_nested_collection_full_crud() {
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("email".to_string(), "admin@test.com".to_string());
-        data.insert("password".to_string(), "password123".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("email".to_string(), json!("admin@test.com"));
+        data.insert("password".to_string(), json!("password123"));
         query::create(&tx, "users", users_def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1754,10 +1757,10 @@ fn init_with_locales_and_nested_localized_crud() {
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("slug".to_string(), "test-page".to_string());
-        data.insert("title__en".to_string(), "Test Page".to_string());
-        data.insert("title__de".to_string(), "Testseite".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("slug".to_string(), json!("test-page"));
+        data.insert("title__en".to_string(), json!("Test Page"));
+        data.insert("title__de".to_string(), json!("Testseite"));
         query::create(&tx, "pages", def, &data, locale_ctx.as_ref()).unwrap();
         tx.commit().unwrap();
     }

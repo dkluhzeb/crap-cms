@@ -37,8 +37,7 @@ pub use validation::{
     validate_field_name, validate_query_fields, validate_slug, validate_template_slug,
 };
 
-#[allow(unused_imports)]
-pub(crate) use helpers::{coerce_json_value, coerce_value};
+pub(crate) use helpers::coerce_json_value;
 pub(crate) use locale::{group_locale_fields, locale_write_column};
 
 pub(super) use columns::collect_column_names;

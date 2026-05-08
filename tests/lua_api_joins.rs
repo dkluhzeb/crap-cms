@@ -2,10 +2,11 @@
 //! hydration, globals with join data, cross-collection hook transactions,
 //! and locale-specific updates.
 
+use serde_json::json;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::{ReqContext, SharedRegistry};
+use crap_cms::core::{DocumentFields, ReqContext, SharedRegistry};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -618,8 +619,6 @@ fn lua_hook_creates_related_document() {
 
 #[test]
 fn lua_hook_error_rolls_back_inner_crud() {
-    use std::collections::HashMap;
-
     use crap_cms::core::collection::Hooks;
     use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
 
@@ -675,10 +674,10 @@ fn lua_hook_error_rolls_back_inner_crud() {
     // Create order in a transaction
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = [("item".to_string(), "Widget".to_string())]
+    let data: DocumentFields = [("item".to_string(), json!("Widget"))]
         .iter()
         .cloned()
-        .collect::<HashMap<_, _>>();
+        .collect();
     let doc = crap_cms::db::query::create(&tx, "orders", &def, &data, None).unwrap();
     let doc_id = doc.id.clone();
 

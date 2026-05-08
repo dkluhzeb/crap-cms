@@ -1,13 +1,11 @@
 //! Registration of `crap.collections.create_many` Lua function.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::{
-    core::SharedRegistry,
+    core::{DocumentFields, SharedRegistry},
     hooks::lifecycle::{
         converters::{document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map},
         crud::{get_tx_conn, helpers::*},
@@ -16,24 +14,26 @@ use crate::{
 };
 
 /// Parse a single Lua table item into a `CreateManyItem`.
+///
+/// Lua tables yield two views of the same fields: `lua_table_to_hashmap`
+/// stringifies every leaf (form-input style), `lua_table_to_json_map`
+/// preserves typed shapes (arrays/objects). We start with the stringified
+/// view, replace any composite leaves with their typed counterparts, and
+/// peel off `password` so the WriteInput.password channel can carry it.
 fn parse_item(lua: &Lua, item_table: &Table) -> mlua::Result<CreateManyItem> {
-    let data = lua_table_to_hashmap(item_table)?;
+    let mut data = service::values_from_strings(lua_table_to_hashmap(item_table)?);
 
-    let join_data: HashMap<String, JsonValue> = lua_table_to_json_map(lua, item_table)?
+    let composite_data: DocumentFields = lua_table_to_json_map(lua, item_table)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, JsonValue::String(_)))
         .collect();
+    data.extend(composite_data);
 
-    let password = data.get("password").cloned();
+    let password = data
+        .remove("password")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-    let mut data = data;
-    data.remove("password");
-
-    Ok(CreateManyItem {
-        data,
-        join_data,
-        password,
-    })
+    Ok(CreateManyItem { data, password })
 }
 
 /// Bulk create multiple documents from an array of data tables.

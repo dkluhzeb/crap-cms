@@ -3,11 +3,12 @@
 //! Tests for command library functions (sections 18-30):
 //! direct Rust calls without invoking the binary.
 
-use std::collections::HashMap;
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::db::{DbPool, migrate, pool, query};
 use crap_cms::hooks;
@@ -59,10 +60,10 @@ fn create_user(
     password: &str,
     extra_fields: &[(&str, &str)],
 ) -> crap_cms::core::Document {
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), email.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!(email.to_string()));
     for (k, v) in extra_fields {
-        data.insert(k.to_string(), v.to_string());
+        data.insert(k.to_string(), json!(v.to_string()));
     }
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -110,8 +111,8 @@ fn cmd_export_all() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Export Post {}", i));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), json!(format!("Export Post {}", i)));
             query::create(&tx, "posts", def, &data, None).unwrap();
         }
         tx.commit().unwrap();
@@ -153,13 +154,13 @@ fn cmd_export_collection_filter() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Filtered Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Filtered Post".to_string()));
         query::create(&tx, "posts", posts_def, &data, None).unwrap();
 
-        let mut udata = HashMap::new();
-        udata.insert("email".to_string(), "filter@example.com".to_string());
-        udata.insert("name".to_string(), "Filter User".to_string());
+        let mut udata = DocumentFields::new();
+        udata.insert("email".to_string(), json!("filter@example.com".to_string()));
+        udata.insert("name".to_string(), json!("Filter User".to_string()));
         query::create(&tx, "users", users_def, &udata, None).unwrap();
 
         tx.commit().unwrap();
@@ -220,9 +221,9 @@ fn cmd_import_roundtrip() {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Roundtrip {}", i));
-            data.insert("status".to_string(), "published".to_string());
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), json!(format!("Roundtrip {}", i)));
+            data.insert("status".to_string(), json!("published"));
             let doc = query::create(&tx, "posts", def, &data, None).unwrap();
             original_ids.push(doc.id.clone());
         }
@@ -494,8 +495,8 @@ fn cmd_backup_creates_snapshot() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Backup Test Post".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Backup Test Post".to_string()));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }

@@ -1,6 +1,6 @@
 //! `import` command — load collection data from JSON.
 
-use std::{collections::HashMap, fs, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Map, Value};
@@ -9,7 +9,7 @@ use crate::{
     cli,
     commands::{export::file::ExportFile, load_config_and_sync},
     config::CrapConfig,
-    core::{CollectionDefinition, FieldDefinition, FieldType},
+    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
     db::{DbConnection, DbValue, query},
 };
 
@@ -17,7 +17,7 @@ use crate::{
 struct ImportRow {
     parent_cols: Vec<String>,
     parent_vals: Vec<DbValue>,
-    join_data: HashMap<String, Value>,
+    join_data: DocumentFields,
 }
 
 /// Convert a JSON value to a typed DbValue based on the field type.
@@ -57,7 +57,7 @@ fn collect_field_columns(
     doc_obj: &Map<String, Value>,
     parent_cols: &mut Vec<String>,
     parent_vals: &mut Vec<DbValue>,
-    join_data: &mut HashMap<String, Value>,
+    join_data: &mut DocumentFields,
 ) {
     match field.field_type {
         FieldType::Group => {
@@ -141,7 +141,7 @@ fn collect_import_columns(
 ) -> ImportRow {
     let mut parent_cols: Vec<String> = vec!["id".to_string()];
     let mut parent_vals: Vec<DbValue> = vec![DbValue::Text(id.to_string())];
-    let mut join_data: HashMap<String, Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
 
     if def.timestamps {
         if let Some(v) = doc_obj.get("created_at").and_then(|v| v.as_str()) {

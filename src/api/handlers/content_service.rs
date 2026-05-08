@@ -1,12 +1,10 @@
 //! `ContentService` struct definition and its impl blocks.
 
 use std::{
-    collections::HashMap,
     pin::Pin,
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, metadata::MetadataMap};
 use tracing::error;
@@ -18,7 +16,7 @@ use crate::{
     },
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, JwtSecret, Registry,
+        AuthUser, CollectionDefinition, DocumentFields, JwtSecret, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider, TokenProvider},
         cache::SharedCache,
         collection::GlobalDefinition,
@@ -228,7 +226,7 @@ impl ContentService {
         access_ref: Option<&str>,
         auth_user: &Option<AuthUser>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
         hook_runner: &HookRunner,
         conn: &mut BoxedConnection,
     ) -> Result<AccessResult, Status> {

@@ -2,6 +2,7 @@
 //!
 //! Covers: collection CRUD, search/filter/sort, validation, versioning, uploads (API).
 
+use serde_json::json;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -14,6 +15,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -182,10 +184,11 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -405,12 +408,12 @@ async fn list_items_url_status_filter_narrows_drafts_only() {
     // `persist::create_document` does internally when `is_draft = true`,
     // we just skip the service wrapper here to keep the test focused on
     // the filter pipeline.
-    let mut data1 = std::collections::HashMap::new();
-    data1.insert("title".to_string(), "Live Article".to_string());
+    let mut data1 = DocumentFields::new();
+    data1.insert("title".to_string(), json!("Live Article"));
     query::create(&tx, "posts", &def, &data1, None).expect("publish create ok");
 
-    let mut data2 = std::collections::HashMap::new();
-    data2.insert("title".to_string(), "Pending Draft".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("Pending Draft"));
     let draft_doc = query::create(&tx, "posts", &def, &data2, None).expect("draft create ok");
     use crap_cms::db::DbConnection;
     use crap_cms::db::DbValue;
@@ -566,8 +569,8 @@ async fn list_items_or_clause_widens_results() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     for title in ["Alpha", "Bravo", "Charlie"] {
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), title.to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
         query::create(&tx, "posts", &def, &data, None).unwrap();
     }
     tx.commit().unwrap();
@@ -675,13 +678,13 @@ async fn list_items_url_filter_narrows_results() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data1 = std::collections::HashMap::new();
-    data1.insert("title".to_string(), "Draft Post".to_string());
-    data1.insert("status".to_string(), "draft".to_string());
+    let mut data1 = DocumentFields::new();
+    data1.insert("title".to_string(), json!("Draft Post"));
+    data1.insert("status".to_string(), json!("draft"));
     query::create(&tx, "posts", &def, &data1, None).unwrap();
-    let mut data2 = std::collections::HashMap::new();
-    data2.insert("title".to_string(), "Published Post".to_string());
-    data2.insert("status".to_string(), "published".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("Published Post"));
+    data2.insert("status".to_string(), json!("published"));
     query::create(&tx, "posts", &def, &data2, None).unwrap();
     tx.commit().unwrap();
     drop(conn);
@@ -823,7 +826,8 @@ async fn edit_form_returns_200() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Edit Me".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Edit Me"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -852,7 +856,8 @@ async fn update_action_updates_document() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Original".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Original"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -888,7 +893,8 @@ async fn delete_action_removes_document() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Delete Me".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Delete Me"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -945,7 +951,8 @@ async fn list_items_with_search() {
     for title in &["Zebra Unique Alpha", "Beta Common", "Gamma Common"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        let data: DocumentFields =
+            std::collections::HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1009,8 +1016,8 @@ async fn delete_action_returns_redirect() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "To Delete Redir".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("To Delete Redir"))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1145,7 +1152,9 @@ async fn collection_list_pagination_multi_page_shows_nav() {
     for i in 0..5 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        let data: DocumentFields =
+            std::collections::HashMap::from([("title".to_string(), json!(format!("Post {}", i)))])
+                .into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1229,7 +1238,9 @@ async fn collection_list_pagination_single_page_no_nav() {
     for i in 0..3 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        let data: DocumentFields =
+            std::collections::HashMap::from([("title".to_string(), json!(format!("Post {}", i)))])
+                .into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1290,9 +1301,9 @@ async fn localized_collection_list_shows_documents() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Hello World".to_string());
-        data.insert("body".to_string(), "Page body".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Hello World"));
+        data.insert("body".to_string(), json!("Page body"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1360,9 +1371,9 @@ async fn localized_collection_edit_page_returns_200() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Editable Page".to_string());
-        data.insert("body".to_string(), "Content".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Editable Page"));
+        data.insert("body".to_string(), json!("Content"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1403,8 +1414,8 @@ async fn localized_collection_delete_succeeds() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "To Delete".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("To Delete"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1446,8 +1457,8 @@ async fn localized_collection_search_returns_200() {
             mode: query::LocaleMode::Single("en".to_string()),
             config: make_locale_config(),
         };
-        let mut data = std::collections::HashMap::new();
-        data.insert("title".to_string(), "Searchable Page".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Searchable Page"));
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         query::create(&tx, "pages", &def, &data, Some(&locale_ctx)).unwrap();
@@ -1481,10 +1492,11 @@ async fn collection_versions_page_returns_200() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Versioned Article".to_string()),
-        ("body".to_string(), "Content".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("Versioned Article")),
+        ("body".to_string(), json!("Content")),
+    ])
+    .into();
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1545,7 +1557,9 @@ async fn list_items_with_pagination_renders_docs() {
     for i in 0..25 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        let data: DocumentFields =
+            std::collections::HashMap::from([("title".to_string(), json!(format!("Post {}", i)))])
+                .into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1603,10 +1617,11 @@ async fn list_items_with_search_and_pagination() {
     for i in 0..5 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([(
+        let data: DocumentFields = std::collections::HashMap::from([(
             "title".to_string(),
-            format!("Searchable Item {}", i),
-        )]);
+            json!(format!("Searchable Item {}", i)),
+        )])
+        .into();
         let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
         query::fts::fts_upsert(&tx, "posts", &doc, Some(&def)).unwrap();
         tx.commit().unwrap();

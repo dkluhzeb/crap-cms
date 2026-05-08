@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::browser;
 use crate::helpers::*;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
@@ -31,7 +32,7 @@ fn create_post(app: &TestApp, title: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = HashMap::from([("title".to_string(), title.to_string())]);
+    let data: DocumentFields = HashMap::from([("title".to_string(), json!(title))]).into();
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
     doc.id.to_string()

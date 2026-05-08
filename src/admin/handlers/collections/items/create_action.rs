@@ -5,7 +5,6 @@ use axum::{
     extract::{Path, Request, State},
     response::Response,
 };
-use serde_json::Value;
 use tokio::task;
 use tracing::{error, warn};
 
@@ -24,7 +23,7 @@ use crate::{
             },
         },
     },
-    core::{CollectionDefinition, Document, auth::AuthUser, upload},
+    core::{CollectionDefinition, Document, DocumentFields, auth::AuthUser, upload},
     db::query::{LocaleContext, LocaleMode},
     service::{self, EmailContext, ServiceError},
 };
@@ -78,7 +77,7 @@ fn extract_and_validate_password(
 /// Prepared form data for creating a document.
 struct CreateInput {
     form_data: HashMap<String, String>,
-    join_data: HashMap<String, Value>,
+    join_data: DocumentFields,
     password: Option<String>,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
@@ -122,13 +121,19 @@ async fn spawn_create(
 
         service::create_document(
             &ctx,
-            service::WriteInput::builder(input.form_data, &input.join_data)
-                .password(input.password.as_deref())
-                .locale_ctx(input.locale_ctx.as_ref())
-                .locale(locale)
-                .draft(input.draft)
-                .ui_locale(ui_locale)
-                .build(),
+            service::WriteInput::builder({
+                let mut __m = service::values_from_strings(input.form_data);
+                for (k, v) in input.join_data.iter() {
+                    __m.insert(k.clone(), v.clone());
+                }
+                __m
+            })
+            .password(input.password.as_deref())
+            .locale_ctx(input.locale_ctx.as_ref())
+            .locale(locale)
+            .draft(input.draft)
+            .ui_locale(ui_locale)
+            .build(),
         )
     })
     .await

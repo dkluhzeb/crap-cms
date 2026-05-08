@@ -44,7 +44,7 @@ pub(in crate::mcp::tools) fn exec_create(
         config.auth.password_policy.validate(pw)?;
     }
 
-    let (data, join_data) = extract_data_from_args(args, &["password"]);
+    let data = extract_data_from_args(args, &["password"]);
 
     let ctx = ServiceContext::collection(slug, def)
         .pool(pool)
@@ -56,7 +56,7 @@ pub(in crate::mcp::tools) fn exec_create(
 
     let (doc, _ctx) = create_document(
         &ctx,
-        WriteInput::builder(data, &join_data)
+        WriteInput::builder(data)
             .password(password.as_deref())
             .build(),
     )?;

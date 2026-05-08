@@ -11,7 +11,10 @@ use tracing::{debug, trace};
 
 use crate::{
     config::LocaleConfig,
-    core::{BlockDefinition, FieldDefinition, FieldType, field::flatten_array_sub_fields},
+    core::{
+        BlockDefinition, DocumentFields, FieldDefinition, FieldType,
+        field::flatten_array_sub_fields,
+    },
     db::{
         DbConnection, DbValue,
         query::{
@@ -115,30 +118,25 @@ fn get_ref_count_inner(
 /// When an update doesn't touch any ref-bearing fields, the entire ref_count
 /// dance (snapshot before, read after, apply deltas) can be skipped — saving
 /// 10+ queries on the hot path.
-pub fn data_touches_refs(
-    fields: &[FieldDefinition],
-    flat_data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
-    prefix: &str,
-) -> bool {
+pub fn data_touches_refs(fields: &[FieldDefinition], data: &DocumentFields, prefix: &str) -> bool {
     for field in fields {
         match field.field_type {
             FieldType::Group => {
                 let new_prefix = prefixed_name(prefix, &field.name);
-                if data_touches_refs(&field.fields, flat_data, join_data, &new_prefix) {
+                if data_touches_refs(&field.fields, data, &new_prefix) {
                     return true;
                 }
             }
 
             FieldType::Row | FieldType::Collapsible
-                if data_touches_refs(&field.fields, flat_data, join_data, prefix) =>
+                if data_touches_refs(&field.fields, data, prefix) =>
             {
                 return true;
             }
 
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    if data_touches_refs(&tab.fields, flat_data, join_data, prefix) {
+                    if data_touches_refs(&tab.fields, data, prefix) {
                         return true;
                     }
                 }
@@ -147,7 +145,7 @@ pub fn data_touches_refs(
             FieldType::Relationship | FieldType::Upload => {
                 let col = prefixed_name(prefix, &field.name);
 
-                if flat_data.contains_key(&col) || join_data.contains_key(&col) {
+                if data.contains_key(&col) {
                     return true;
                 }
             }
@@ -155,7 +153,7 @@ pub fn data_touches_refs(
             FieldType::Array => {
                 let col = prefixed_name(prefix, &field.name);
 
-                if join_data.contains_key(&col) {
+                if data.contains_key(&col) {
                     // Flatten through Row/Collapsible/Tabs wrappers to find
                     // nested relationship sub-fields (mirrors compute_array_refs_from_data).
                     let flat = flatten_array_sub_fields(&field.fields);
@@ -172,7 +170,7 @@ pub fn data_touches_refs(
             FieldType::Blocks => {
                 let col = prefixed_name(prefix, &field.name);
 
-                if join_data.contains_key(&col) {
+                if data.contains_key(&col) {
                     let has_ref_sub = field.blocks.iter().any(|b| {
                         let flat = flatten_array_sub_fields(&b.fields);
                         flat.iter().any(|f| {
@@ -210,12 +208,10 @@ pub fn data_touches_refs(
 ///
 /// SQLite has always been a no-op here (`IMMEDIATE` transactions serialize
 /// all writers at the DB level), so SQLite behavior is unchanged.
-#[allow(clippy::ptr_arg)]
 pub fn lock_ref_targets_from_data(
     _conn: &dyn DbConnection,
     _fields: &[FieldDefinition],
-    _data: &HashMap<String, String>,
-    _join_data: &HashMap<String, Value>,
+    _data: &DocumentFields,
     _locale_config: &LocaleConfig,
 ) -> Result<()> {
     Ok(())
@@ -244,20 +240,12 @@ pub fn after_create(
 pub fn after_create_from_data(
     conn: &dyn DbConnection,
     fields: &[FieldDefinition],
-    flat_data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
+    data: &DocumentFields,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let mut new_refs = Vec::new();
 
-    compute_refs_from_data(
-        fields,
-        flat_data,
-        join_data,
-        locale_config,
-        "",
-        &mut new_refs,
-    );
+    compute_refs_from_data(fields, data, locale_config, "", &mut new_refs);
 
     let deltas = to_delta_map(&[], &new_refs);
 
@@ -650,8 +638,7 @@ fn collect_blocks_refs(
 /// redundant SELECTs of just-written data.
 fn compute_refs_from_data(
     fields: &[FieldDefinition],
-    flat_data: &HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
+    data: &DocumentFields,
     locale_config: &LocaleConfig,
     prefix: &str,
     refs: &mut Vec<OutgoingRef>,
@@ -660,37 +647,16 @@ fn compute_refs_from_data(
         match field.field_type {
             FieldType::Group => {
                 let new_prefix = prefixed_name(prefix, &field.name);
-                compute_refs_from_data(
-                    &field.fields,
-                    flat_data,
-                    join_data,
-                    locale_config,
-                    &new_prefix,
-                    refs,
-                );
+                compute_refs_from_data(&field.fields, data, locale_config, &new_prefix, refs);
             }
 
             FieldType::Row | FieldType::Collapsible => {
-                compute_refs_from_data(
-                    &field.fields,
-                    flat_data,
-                    join_data,
-                    locale_config,
-                    prefix,
-                    refs,
-                );
+                compute_refs_from_data(&field.fields, data, locale_config, prefix, refs);
             }
 
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    compute_refs_from_data(
-                        &tab.fields,
-                        flat_data,
-                        join_data,
-                        locale_config,
-                        prefix,
-                        refs,
-                    );
+                    compute_refs_from_data(&tab.fields, data, locale_config, prefix, refs);
                 }
             }
 
@@ -701,11 +667,11 @@ fn compute_refs_from_data(
                 let col = prefixed_name(prefix, &field.name);
 
                 if !field.has_parent_column() {
-                    // Has-many: read from join_data.
+                    // Has-many: read structured value from the unified data map.
                     // Deduplicate to match the DB path's SELECT DISTINCT —
                     // junction tables can have duplicate rows, and parse_id_list
                     // preserves them. Without dedup, duplicates inflate _ref_count.
-                    if let Some(val) = join_data.get(&col) {
+                    if let Some(val) = data.get(&col) {
                         if rc.is_polymorphic() {
                             let mut seen = HashSet::new();
 
@@ -725,7 +691,7 @@ fn compute_refs_from_data(
                         }
                     }
                 } else {
-                    // Has-one: read from flat_data
+                    // Has-one: read scalar value from the unified data map.
                     let columns = if field.localized && locale_config.is_enabled() {
                         locale_config
                             .locales
@@ -737,7 +703,7 @@ fn compute_refs_from_data(
                     };
 
                     for col_name in &columns {
-                        if let Some(value) = flat_data.get(col_name) {
+                        if let Some(value) = data.get(col_name).and_then(Value::as_str) {
                             push_ref(refs, value, rc.is_polymorphic(), &rc.collection);
                         }
                     }
@@ -746,14 +712,14 @@ fn compute_refs_from_data(
 
             FieldType::Array => {
                 let col = prefixed_name(prefix, &field.name);
-                if let Some(Value::Array(rows)) = join_data.get(&col) {
+                if let Some(Value::Array(rows)) = data.get(&col) {
                     compute_array_refs_from_data(rows, &field.fields, refs);
                 }
             }
 
             FieldType::Blocks => {
                 let col = prefixed_name(prefix, &field.name);
-                if let Some(Value::Array(rows)) = join_data.get(&col) {
+                if let Some(Value::Array(rows)) = data.get(&col) {
                     compute_blocks_refs_from_data(rows, &field.blocks, refs);
                 }
             }
@@ -965,6 +931,8 @@ fn find_missing_ids(conn: &dyn DbConnection, collection: &str, ids: &[&str]) -> 
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
     use crate::core::collection::*;
@@ -1768,11 +1736,21 @@ mod tests {
 
         insert_doc(&conn, "media", "m1");
 
-        let mut flat_data = HashMap::new();
-        flat_data.insert("image".to_string(), "m1".to_string());
-        let join_data = HashMap::new();
+        let mut flat_data = DocumentFields::new();
+        flat_data.insert("image".to_string(), json!("m1"));
+        let join_data = DocumentFields::new();
 
-        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+        after_create_from_data(
+            &conn,
+            &fields,
+            &{
+                let mut d = flat_data.clone();
+                d.extend(join_data.clone());
+                d
+            },
+            &no_locale(),
+        )
+        .unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 1);
     }
@@ -1794,11 +1772,21 @@ mod tests {
         insert_doc(&conn, "tags", "t1");
         insert_doc(&conn, "tags", "t2");
 
-        let flat_data = HashMap::new();
-        let mut join_data = HashMap::new();
+        let flat_data = DocumentFields::new();
+        let mut join_data = DocumentFields::new();
         join_data.insert("tags".to_string(), serde_json::json!(["t1", "t2"]));
 
-        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+        after_create_from_data(
+            &conn,
+            &fields,
+            &{
+                let mut d = flat_data.clone();
+                d.extend(join_data.clone());
+                d
+            },
+            &no_locale(),
+        )
+        .unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "tags", "t1"), 1);
         assert_eq!(get_ref_count_val(&conn, "tags", "t2"), 1);
@@ -1824,14 +1812,24 @@ mod tests {
         insert_doc(&conn, "articles", "a1");
         insert_doc(&conn, "pages", "pg1");
 
-        let flat_data = HashMap::new();
-        let mut join_data = HashMap::new();
+        let flat_data = DocumentFields::new();
+        let mut join_data = DocumentFields::new();
         join_data.insert(
             "refs".to_string(),
             serde_json::json!(["articles/a1", "pages/pg1"]),
         );
 
-        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+        after_create_from_data(
+            &conn,
+            &fields,
+            &{
+                let mut d = flat_data.clone();
+                d.extend(join_data.clone());
+                d
+            },
+            &no_locale(),
+        )
+        .unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "articles", "a1"), 1);
         assert_eq!(get_ref_count_val(&conn, "pages", "pg1"), 1);
@@ -1850,11 +1848,21 @@ mod tests {
         insert_doc(&conn, "media", "m1");
 
         // Empty string = no ref
-        let mut flat_data = HashMap::new();
-        flat_data.insert("image".to_string(), String::new());
-        let join_data = HashMap::new();
+        let mut flat_data = DocumentFields::new();
+        flat_data.insert("image".to_string(), json!(""));
+        let join_data = DocumentFields::new();
 
-        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+        after_create_from_data(
+            &conn,
+            &fields,
+            &{
+                let mut d = flat_data.clone();
+                d.extend(join_data.clone());
+                d
+            },
+            &no_locale(),
+        )
+        .unwrap();
 
         assert_eq!(get_ref_count_val(&conn, "media", "m1"), 0);
     }
@@ -1878,12 +1886,22 @@ mod tests {
 
         insert_doc(&conn, "tags", "t1");
 
-        let flat_data = HashMap::new();
-        let mut join_data = HashMap::new();
+        let flat_data = DocumentFields::new();
+        let mut join_data = DocumentFields::new();
         // Duplicate "t1" — must count as 1, not 2
         join_data.insert("tags".to_string(), serde_json::json!(["t1", "t1", "t1"]));
 
-        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale()).unwrap();
+        after_create_from_data(
+            &conn,
+            &fields,
+            &{
+                let mut d = flat_data.clone();
+                d.extend(join_data.clone());
+                d
+            },
+            &no_locale(),
+        )
+        .unwrap();
 
         assert_eq!(
             get_ref_count_val(&conn, "tags", "t1"),
@@ -1902,11 +1920,20 @@ mod tests {
         let (_tmp, pool, _) = setup_db(&[media, posts], &no_locale());
         let conn = pool.get().unwrap();
 
-        let mut flat_data = HashMap::new();
-        flat_data.insert("image".to_string(), "m_missing".to_string());
-        let join_data = HashMap::new();
+        let mut flat_data = DocumentFields::new();
+        flat_data.insert("image".to_string(), json!("m_missing"));
+        let join_data = DocumentFields::new();
 
-        after_create_from_data(&conn, &fields, &flat_data, &join_data, &no_locale())
-            .expect_err("should fail when target doesn't exist");
+        after_create_from_data(
+            &conn,
+            &fields,
+            &{
+                let mut d = flat_data.clone();
+                d.extend(join_data.clone());
+                d
+            },
+            &no_locale(),
+        )
+        .expect_err("should fail when target doesn't exist");
     }
 }

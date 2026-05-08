@@ -5,7 +5,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, ReqContext},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, ReqContext},
     hooks::{
         api,
         lifecycle::{HookDepth, converters::document_to_lua_table},
@@ -19,7 +19,7 @@ use super::HookContextBuilder;
 pub struct HookContext {
     pub collection: String,
     pub operation: String,
-    pub data: HashMap<String, JsonValue>,
+    pub data: DocumentFields,
     pub locale: Option<String>,
     /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
     pub draft: Option<bool>,
@@ -70,28 +70,29 @@ impl HookContext {
         Ok(tbl)
     }
 
-    /// Convert data to a string map for query functions.
+    /// Convert data to a typed-value map for `query::create`/`query::update`.
     ///
     /// Only includes fields that have parent table columns (skips array/has-many).
     /// Group fields are flattened from `{ "seo": { "meta_title": "X" } }` to
     /// `{ "seo__meta_title": "X" }` so `query::create/update` can find them.
-    pub fn to_string_map(&self, fields: &[FieldDefinition]) -> HashMap<String, String> {
-        let mut map = HashMap::new();
+    /// Typed values (Number, Bool, etc.) flow through unchanged so the DB
+    /// coercion path can preserve precision via `coerce_json_value`.
+    pub fn to_value_map(&self, fields: &[FieldDefinition]) -> DocumentFields {
+        let mut map = DocumentFields::new();
 
-        for (k, v) in &self.data {
+        for (k, v) in self.data.as_map() {
             // Check if this key is a group field that needs flattening
             let is_group = fields
                 .iter()
                 .any(|f| f.name == *k && f.field_type == FieldType::Group);
 
             if is_group && let Some(obj) = v.as_object() {
-                flatten_group_to_map(k, obj, &mut map);
+                flatten_group_to_value_map(k, obj, &mut map);
 
                 continue;
             }
 
-            // If the value is already a string (e.g. from form data), fall through
-            map.insert(k.clone(), json_val_to_string(v));
+            map.insert(k.clone(), v.clone());
         }
 
         map
@@ -122,27 +123,19 @@ fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Tabl
     Ok(tbl)
 }
 
-/// Convert a JSON value to its string representation for the string map.
-fn json_val_to_string(v: &JsonValue) -> String {
-    match v {
-        JsonValue::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// Recursively flatten a group object into `prefix__key` pairs for the string map.
-fn flatten_group_to_map(
+/// Recursively flatten a group object into `prefix__key` typed pairs.
+fn flatten_group_to_value_map(
     prefix: &str,
     obj: &JsonMap<String, JsonValue>,
-    map: &mut HashMap<String, String>,
+    map: &mut DocumentFields,
 ) {
     for (sub_key, sub_val) in obj {
         let flat_key = format!("{}__{}", prefix, sub_key);
 
         if let JsonValue::Object(nested) = sub_val {
-            flatten_group_to_map(&flat_key, nested, map);
+            flatten_group_to_value_map(&flat_key, nested, map);
         } else {
-            map.insert(flat_key, json_val_to_string(sub_val));
+            map.insert(flat_key, sub_val.clone());
         }
     }
 }
@@ -236,10 +229,12 @@ mod tests {
             FieldDefinition::builder("active", FieldType::Checkbox).build(),
         ];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("title").unwrap(), "Hello World");
-        assert_eq!(map.get("count").unwrap(), "42");
-        assert_eq!(map.get("active").unwrap(), "true");
+        let map = ctx.to_value_map(&fields);
+        // Typed values flow through unchanged so coerce_json_value can
+        // preserve precision per field_type.
+        assert_eq!(map.get("title"), Some(&json!("Hello World")));
+        assert_eq!(map.get("count"), Some(&json!(42)));
+        assert_eq!(map.get("active"), Some(&json!(true)));
     }
 
     #[test]
@@ -261,10 +256,13 @@ mod tests {
             FieldDefinition::builder("title", FieldType::Text).build(),
         ];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("seo__meta_title").unwrap(), "My Title");
-        assert_eq!(map.get("seo__meta_description").unwrap(), "My Description");
-        assert_eq!(map.get("title").unwrap(), "Hello");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("seo__meta_title"), Some(&json!("My Title")));
+        assert_eq!(
+            map.get("seo__meta_description"),
+            Some(&json!("My Description"))
+        );
+        assert_eq!(map.get("title"), Some(&json!("Hello")));
         assert!(!map.contains_key("seo"));
     }
 
@@ -277,8 +275,8 @@ mod tests {
 
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group).build()];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("seo").unwrap(), "plain-string");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("seo"), Some(&json!("plain-string")));
     }
 
     #[test]
@@ -300,9 +298,9 @@ mod tests {
 
         let fields = vec![FieldDefinition::builder("address", FieldType::Group).build()];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("address__geo__lat").unwrap(), "40.7128");
-        assert_eq!(map.get("address__geo__lng").unwrap(), "-74.0060");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("address__geo__lat"), Some(&json!("40.7128")));
+        assert_eq!(map.get("address__geo__lng"), Some(&json!("-74.0060")));
         assert!(!map.contains_key("address"));
         assert!(!map.contains_key("address__geo"));
     }
@@ -322,8 +320,8 @@ mod tests {
 
         let fields = vec![FieldDefinition::builder("metrics", FieldType::Group).build()];
 
-        let map = ctx.to_string_map(&fields);
-        assert_eq!(map.get("metrics__views").unwrap(), "100");
-        assert_eq!(map.get("metrics__likes").unwrap(), "42");
+        let map = ctx.to_value_map(&fields);
+        assert_eq!(map.get("metrics__views"), Some(&json!(100)));
+        assert_eq!(map.get("metrics__likes"), Some(&json!(42)));
     }
 }

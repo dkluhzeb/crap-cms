@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::browser;
 use crate::helpers::*;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::{DbConnection, query};
@@ -56,7 +57,7 @@ fn create_category(app: &TestApp, name: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = HashMap::from([("name".to_string(), name.to_string())]);
+    let data: DocumentFields = HashMap::from([("name".to_string(), json!(name))]).into();
     let doc = query::create(&tx, "categories", &def, &data, None).unwrap();
     tx.commit().unwrap();
     doc.id.to_string()

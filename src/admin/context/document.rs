@@ -1,12 +1,9 @@
 //! Document context — the typed shape of `{{document.*}}` for edit/delete pages.
 
-use std::collections::HashMap;
-
 use schemars::JsonSchema;
 use serde::Serialize;
-use serde_json::Value;
 
-use crate::core::Document;
+use crate::core::{Document, DocumentFields};
 
 /// A document reference exposed at `{{document.*}}`. The `data` map carries the
 /// document's field values (untyped — typing field values is part of 1.C.2).
@@ -20,7 +17,7 @@ pub struct DocumentRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<HashMap<String, Value>>,
+    pub data: Option<DocumentFields>,
 }
 
 impl DocumentRef {

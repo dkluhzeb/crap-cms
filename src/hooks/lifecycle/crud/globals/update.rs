@@ -2,10 +2,13 @@
 
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
+use serde_json::Value;
+
+use crate::service::values_from_strings;
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::{DocumentFields, SharedRegistry},
     db::LocaleContext,
     hooks::lifecycle::{
         converters::*,
@@ -40,8 +43,16 @@ fn globals_update_inner(
     // Collection-level access check is handled inside service::update_global_core
     // via WriteHooks::check_access (respects override_access on LuaWriteHooks).
 
-    let data = lua_table_to_hashmap(&data_table)?;
-    let join_data = lua_table_to_json_map(lua, &data_table)?;
+    // The Lua table yields two views of the same fields. The stringified view
+    // (`lua_table_to_hashmap`) supplies scalar columns; the typed view
+    // (`lua_table_to_json_map`) supplies composite values that need to land
+    // intact in arrays/blocks join tables.
+    let mut data = values_from_strings(lua_table_to_hashmap(&data_table)?);
+    let composite_data: DocumentFields = lua_table_to_json_map(lua, &data_table)?
+        .into_iter()
+        .filter(|(_, v)| !matches!(v, Value::String(_)))
+        .collect();
+    data.extend(composite_data);
 
     // Field write access is now checked inside service::update_global_core
     // via WriteHooks::field_write_denied.
@@ -59,7 +70,7 @@ fn globals_update_inner(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    let write_input = WriteInput::builder(data, &join_data)
+    let write_input = WriteInput::builder(data)
         .locale_ctx(locale_ctx.as_ref())
         .locale(locale_str)
         .ui_locale(ui_locale.clone())

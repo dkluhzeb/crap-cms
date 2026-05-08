@@ -4,10 +4,9 @@
 //! access constraints without DB queries. Evaluates the same `FilterClause`
 //! types that `Find` uses as SQL WHERE clauses.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
+use crate::core::DocumentFields;
 use crate::db::{Filter, FilterClause, FilterOp};
 
 /// Evaluate filter clauses against in-memory document data.
@@ -15,7 +14,7 @@ use crate::db::{Filter, FilterClause, FilterOp};
 /// Returns `true` if all clauses match (AND semantics, same as SQL WHERE).
 /// Returns `false` (fail-closed) if a referenced field is missing from data.
 /// Returns `true` for empty constraints (no filters = no restrictions).
-pub fn matches_constraints(data: &HashMap<String, Value>, constraints: &[FilterClause]) -> bool {
+pub fn matches_constraints(data: &DocumentFields, constraints: &[FilterClause]) -> bool {
     if constraints.is_empty() {
         return true;
     }
@@ -29,7 +28,7 @@ pub fn matches_constraints(data: &HashMap<String, Value>, constraints: &[FilterC
 }
 
 /// Evaluate a single filter against document data.
-fn matches_filter(data: &HashMap<String, Value>, filter: &Filter) -> bool {
+fn matches_filter(data: &DocumentFields, filter: &Filter) -> bool {
     let value = match data.get(&filter.field) {
         Some(v) => v,
         None => return matches_missing_field(&filter.op),
@@ -109,7 +108,7 @@ mod tests {
 
     use super::*;
 
-    fn data(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+    fn data(pairs: &[(&str, Value)]) -> DocumentFields {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -134,7 +133,7 @@ mod tests {
 
     #[test]
     fn empty_constraints_always_match() {
-        assert!(matches_constraints(&HashMap::new(), &[]));
+        assert!(matches_constraints(&DocumentFields::new(), &[]));
         assert!(matches_constraints(&data(&[("x", json!("y"))]), &[]));
     }
 

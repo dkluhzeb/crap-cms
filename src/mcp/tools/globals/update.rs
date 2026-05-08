@@ -26,7 +26,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
 ) -> Result<String> {
     let def = registry.globals.get(slug).context("Global not found")?;
 
-    let (data, join_data) = extract_data_from_args(args, &[]);
+    let data = extract_data_from_args(args, &[]);
 
     let ctx = ServiceContext::global(slug, def)
         .pool(pool)
@@ -36,7 +36,7 @@ pub(in crate::mcp::tools) fn exec_update_global(
         .cache(cache)
         .build();
 
-    let (doc, _ctx) = update_global_document(&ctx, WriteInput::builder(data, &join_data).build())?;
+    let (doc, _ctx) = update_global_document(&ctx, WriteInput::builder(data).build())?;
 
     info!("MCP update global: {}", slug);
 

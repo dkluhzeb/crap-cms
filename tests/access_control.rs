@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{DbConnection, FindQuery};
 use crap_cms::db::{DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
@@ -13,7 +13,7 @@ use crap_cms::service::{
     jobs::{QueueJobInput, queue_job},
     list_versions, restore_collection_version, search_documents, update_global_core,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn setup() -> (
     tempfile::TempDir,
@@ -285,10 +285,10 @@ fn constrained_find_filters_results() {
         ("Delta Post", "delta-post", "published"),
     ];
     for (title, slug, status) in &post_data {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), title.to_string());
-        data.insert("slug".to_string(), slug.to_string());
-        data.insert("excerpt".to_string(), "Test excerpt".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!(title));
+        data.insert("slug".to_string(), json!(slug));
+        data.insert("excerpt".to_string(), json!("Test excerpt"));
 
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -329,10 +329,13 @@ fn access_check_plus_db_query_end_to_end() {
 
     // Create some posts
     for (i, slug) in ["e2e-post-1", "e2e-post-2"].iter().enumerate() {
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), format!("E2E Post {}", i + 1));
-        data.insert("slug".to_string(), slug.to_string());
-        data.insert("excerpt".to_string(), "Test excerpt".to_string());
+        let mut data = DocumentFields::new();
+        data.insert(
+            "title".to_string(),
+            Value::String(format!("E2E Post {}", i + 1)),
+        );
+        data.insert("slug".to_string(), json!(slug));
+        data.insert("excerpt".to_string(), json!("Test excerpt"));
 
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -596,9 +599,9 @@ fn seed_article(
     let def = reg.get_collection(slug).unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), title.to_string());
-    data.insert("author_id".to_string(), author_id.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!(title));
+    data.insert("author_id".to_string(), json!(author_id));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -873,10 +876,9 @@ fn access_hook_filter_table_on_global_update_is_rejected() {
         .user(Some(&user_a))
         .build();
 
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "Hacked".to_string());
-    let join_data = HashMap::new();
-    let input = WriteInput::builder(data, &join_data).build();
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("Hacked"));
+    let input = WriteInput::builder(data).build();
 
     let err =
         update_global_core(&ctx, input).expect_err("Constrained on global update must be rejected");
@@ -897,9 +899,9 @@ fn seed_versioned_article(
     let def = reg.get_collection("versioned_articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), title.to_string());
-    data.insert("author_id".to_string(), author_id.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!(title));
+    data.insert("author_id".to_string(), json!(author_id));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -1021,9 +1023,9 @@ fn restore_collection_version_rejects_snapshot_violating_required_field() {
     drop(reg);
 
     // Seed a valid live row so restore has a target.
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Original".to_string());
-    data.insert("author_id".to_string(), "user_b".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Original"));
+    data.insert("author_id".to_string(), json!("user_b"));
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let doc = query::create(&tx, "versioned_articles", &def, &data, None).unwrap();
@@ -1117,9 +1119,9 @@ fn seed_versioned_article_with_status(
     let def = reg.get_collection("versioned_articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), title.to_string());
-    data.insert("author_id".to_string(), author_id.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!(title));
+    data.insert("author_id".to_string(), json!(author_id));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();

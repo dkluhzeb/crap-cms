@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        Document,
+        Document, DocumentFields,
         upload::{CollectionUpload, ProcessedUpload, QueuedConversion, storage::StorageBackend},
     },
     db::{
@@ -142,8 +142,8 @@ pub fn inject_upload_metadata(
 /// Delete all files associated with an upload document.
 /// Reads the url and per-size url fields to determine which files to remove.
 /// Extracts storage keys from `/uploads/{key}` URLs and deletes via the storage backend.
-pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &HashMap<String, Value>) {
-    for (key, value) in doc_fields {
+pub fn delete_upload_files(storage: &dyn StorageBackend, doc_fields: &DocumentFields) {
+    for (key, value) in doc_fields.as_map() {
         if (key == "url" || key.ends_with("_url"))
             && key != "image_url"
             && let Value::String(url) = value
@@ -502,7 +502,7 @@ mod tests {
             .put("media/test.png", b"fake image data", "image/png")
             .unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/test.png"));
 
         delete_upload_files(&storage, &doc_fields);
@@ -516,7 +516,7 @@ mod tests {
     fn delete_upload_files_handles_missing_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/nonexistent.png"));
 
         // Should not panic even if file doesn't exist
@@ -527,7 +527,7 @@ mod tests {
     fn delete_upload_files_skips_non_upload_urls() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("https://external.com/image.png"));
         doc_fields.insert("website_url".into(), json!("https://example.com"));
 
@@ -548,7 +548,7 @@ mod tests {
             .put("media/orig_thumb.webp", b"webp", "image/webp")
             .unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/media/orig.png"));
         doc_fields.insert("thumb_url".into(), json!("/uploads/media/orig_thumb.png"));
         doc_fields.insert(
@@ -570,7 +570,7 @@ mod tests {
             .put("media/keep.png", b"keep me", "image/png")
             .unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("image_url".into(), json!("/uploads/media/keep.png"));
 
         delete_upload_files(&storage, &doc_fields);
@@ -593,7 +593,7 @@ mod tests {
             .unwrap();
         storage.put("media/keep.png", b"keep", "image/png").unwrap();
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("hero_image_url".into(), json!("/uploads/media/hero.png"));
         doc_fields.insert(
             "banner_image_url".into(),
@@ -622,7 +622,7 @@ mod tests {
     fn delete_upload_files_skips_non_string_values() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!(42));
         doc_fields.insert("thumb_url".into(), json!(null));
 
@@ -638,7 +638,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let storage = test_storage(&tmp);
 
-        let mut doc_fields = HashMap::new();
+        let mut doc_fields = DocumentFields::new();
         doc_fields.insert("url".into(), json!("/uploads/../secret.txt"));
 
         // Should not panic — storage.delete handles non-existent keys gracefully

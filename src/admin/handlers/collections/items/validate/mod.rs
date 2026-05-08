@@ -12,7 +12,6 @@ pub mod validate_update;
 use std::collections::HashMap;
 
 use axum::{Extension, response::Response};
-use serde_json::Value;
 
 use crate::{
     admin::{
@@ -22,14 +21,14 @@ use crate::{
             validate::{ValidateRequest, values_to_string_map},
         },
     },
-    core::{CollectionDefinition, auth::AuthUser},
+    core::{CollectionDefinition, DocumentFields, auth::AuthUser},
 };
 
 pub use validate_create::validate_create;
 pub use validate_update::validate_update;
 
 /// Prepared form data and extracted join data, ready for validation.
-type PreparedFormData = (HashMap<String, String>, HashMap<String, Value>);
+type PreparedFormData = (HashMap<String, String>, DocumentFields);
 
 /// Prepare form data for validation: strip denied fields, remove password,
 /// transform selects, extract join data, and inject upload placeholders.

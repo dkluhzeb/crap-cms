@@ -172,10 +172,10 @@ fn check_count_bounds(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use crate::core::DocumentFields;
     use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_has_many_select_valid() {
@@ -192,7 +192,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["red","blue"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -218,7 +218,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["red","invalid"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -249,7 +249,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("[]"));
         let result = validate_fields_inner(
             &lua,
@@ -274,7 +274,7 @@ mod tests {
                 .has_many(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["rust","lua","python"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -297,7 +297,7 @@ mod tests {
                 .min_length(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["rust","ab"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -325,7 +325,7 @@ mod tests {
                 .max_rows(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -352,7 +352,7 @@ mod tests {
                 .has_many(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10","20","30"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -375,7 +375,7 @@ mod tests {
                 .max(50.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10","75"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -399,7 +399,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("[]"));
         let result = validate_fields_inner(
             &lua,
@@ -423,7 +423,7 @@ mod tests {
                 .required(true)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["rust"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -446,7 +446,7 @@ mod tests {
                 .max_length(10)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["abcdefgh","abcdefgh"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -472,7 +472,7 @@ mod tests {
                 .min_rows(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a","b"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -499,7 +499,7 @@ mod tests {
                 .min_rows(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -526,7 +526,7 @@ mod tests {
                 .min(5.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["10","2"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -553,7 +553,7 @@ mod tests {
                 .max_length(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["ab","toolong"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -588,7 +588,7 @@ mod tests {
                 .min_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["ab","cd","ef"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -620,7 +620,7 @@ mod tests {
                 .max(10.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("scores".to_string(), json!(r#"["20","30"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -654,7 +654,7 @@ mod tests {
                 .max_length(4)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["café"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -671,7 +671,7 @@ mod tests {
                 .min_length(2)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["你好"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -702,7 +702,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -735,7 +735,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
         let result = validate_fields_inner(
             &lua,
@@ -768,7 +768,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("sizes".to_string(), json!(r#"["s"]"#));
         let result = validate_fields_inner(
             &lua,

@@ -403,17 +403,17 @@ fn inner_keyset_clause(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig};
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{
         DbPool, Filter, FilterClause, FilterOp, FindQuery, pool,
         query::{SortValue, cursor::build_cursors, write::create},
     };
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     fn test_def() -> CollectionDefinition {
@@ -468,14 +468,14 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut data1 = HashMap::new();
-        data1.insert("title".to_string(), "Post A".to_string());
-        data1.insert("status".to_string(), "draft".to_string());
+        let mut data1 = DocumentFields::new();
+        data1.insert("title".to_string(), json!("Post A"));
+        data1.insert("status".to_string(), json!("draft"));
         create(&conn, "posts", &def, &data1, None).unwrap();
 
-        let mut data2 = HashMap::new();
-        data2.insert("title".to_string(), "Post B".to_string());
-        data2.insert("status".to_string(), "published".to_string());
+        let mut data2 = DocumentFields::new();
+        data2.insert("title".to_string(), json!("Post B"));
+        data2.insert("status".to_string(), json!("published"));
         create(&conn, "posts", &def, &data2, None).unwrap();
 
         let query = FindQuery::builder()
@@ -497,8 +497,8 @@ mod tests {
         let def = test_def();
 
         for i in 1..=3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {i}"));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), Value::String(format!("Post {i}")));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -519,16 +519,16 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut data_a = HashMap::new();
-        data_a.insert("title".to_string(), "Alpha".to_string());
+        let mut data_a = DocumentFields::new();
+        data_a.insert("title".to_string(), json!("Alpha"));
         create(&conn, "posts", &def, &data_a, None).unwrap();
 
-        let mut data_c = HashMap::new();
-        data_c.insert("title".to_string(), "Charlie".to_string());
+        let mut data_c = DocumentFields::new();
+        data_c.insert("title".to_string(), json!("Charlie"));
         create(&conn, "posts", &def, &data_c, None).unwrap();
 
-        let mut data_b = HashMap::new();
-        data_b.insert("title".to_string(), "Bravo".to_string());
+        let mut data_b = DocumentFields::new();
+        data_b.insert("title".to_string(), json!("Bravo"));
         create(&conn, "posts", &def, &data_b, None).unwrap();
 
         // DESC order by title
@@ -578,8 +578,8 @@ mod tests {
 
         // Insert 5 rows with deterministic titles
         for i in 1..=5 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -638,8 +638,8 @@ mod tests {
         let def = test_def();
 
         for i in 1..=4 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -700,8 +700,8 @@ mod tests {
         let def = test_def();
 
         for i in 1..=5 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -757,8 +757,8 @@ mod tests {
         let def = test_def();
 
         for i in 1..=4 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -1057,9 +1057,9 @@ mod tests {
 
         // Insert some docs
         for i in 1..=3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
-            data.insert("status".to_string(), "active".to_string());
+            let mut data = DocumentFields::new();
+            data.insert("title".to_string(), Value::String(format!("Post {:02}", i)));
+            data.insert("status".to_string(), json!("active"));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -1137,12 +1137,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "A".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("A"));
         create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let mut d2 = HashMap::new();
-        d2.insert("title".to_string(), "B".to_string());
+        let mut d2 = DocumentFields::new();
+        d2.insert("title".to_string(), json!("B"));
         create(&conn, "posts", &def, &d2, None).unwrap();
 
         // Sorting by "id" should use single ORDER BY clause (not the tiebreaker form)
@@ -1866,12 +1866,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "A".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("A"));
         create(&conn, "posts", &def, &data, None).unwrap();
 
-        let mut data2 = HashMap::new();
-        data2.insert("title".to_string(), "B".to_string());
+        let mut data2 = DocumentFields::new();
+        data2.insert("title".to_string(), json!("B"));
         create(&conn, "posts", &def, &data2, None).unwrap();
 
         let query = FindQuery::builder()

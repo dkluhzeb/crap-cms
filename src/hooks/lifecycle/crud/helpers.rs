@@ -3,8 +3,6 @@
 //! Extracts duplicated patterns from the registration closures (opts parsing,
 //! user/locale extraction, registry lookup, hook depth checking, data extraction).
 
-use std::collections::HashMap;
-
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 use serde_json::Value;
 use tracing::warn;
@@ -12,8 +10,8 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, SharedRegistry, collection::GlobalDefinition,
-        event::SharedInvalidationTransport,
+        CollectionDefinition, Document, DocumentFields, SharedRegistry,
+        collection::GlobalDefinition, event::SharedInvalidationTransport,
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
@@ -188,23 +186,24 @@ pub(crate) fn enforce_access(
 
 /// Extracted data from a Lua data table for create/update/validate operations.
 ///
-/// `flat` is the scalar-string column map (with group fields flattened to
-/// `parent__child` keys). `join_data` is the relations / has-many / arrays /
-/// blocks subset — non-string entries from the original Lua table that go
-/// into join tables, not the parent row's columns. `password` is split off
-/// from both maps for auth collections so it can be hashed before insert.
+/// `data` is the merged typed-pipeline view: scalar columns (with group fields
+/// flattened to `parent__child` keys) plus relations / has-many / arrays /
+/// blocks. The service layer routes each entry to a column write or join-table
+/// write based on the field's type. `password` is split off for auth
+/// collections so it can be hashed before insert.
 pub(crate) struct ExtractedData {
-    pub(crate) flat: HashMap<String, String>,
-    pub(crate) join_data: HashMap<String, Value>,
+    pub(crate) data: DocumentFields,
     pub(crate) password: Option<String>,
 }
 
-/// Extract scalar columns, join data, and password from a Lua data table.
+/// Extract a merged typed data map and password from a Lua data table.
 ///
-/// Shared by `create`, `update`, and `validate`: flattens group fields,
-/// separates the password for auth collections, and partitions the
-/// remainder into scalar `flat` (one DB row column per key) and `join_data`
-/// (rows for join tables — relations, arrays, blocks).
+/// Shared by `create`, `update`, and `validate`: flattens group fields and
+/// separates the password for auth collections. The Lua table yields two
+/// views — `lua_table_to_hashmap` stringifies every leaf, while
+/// `lua_table_to_json_map` preserves typed shapes — so the merged map starts
+/// with the stringified view (wrapped via `values_from_strings`) and then
+/// overrides composite leaves with their typed counterparts.
 pub(crate) fn extract_data(
     lua: &Lua,
     data_table: &Table,
@@ -219,23 +218,19 @@ pub(crate) fn extract_data(
         None
     };
 
-    // `lua_table_to_json_map` returns every Lua value as JSON; `flat`
-    // already captured the scalar-string subset. Filter out strings so
-    // `join_data` carries only the structurally rich values (objects,
-    // arrays, numbers, bools) that go into join tables.
-    let mut join_data: HashMap<String, Value> = lua_table_to_json_map(lua, data_table)?
+    let mut data = crate::service::values_from_strings(flat);
+
+    let composite_data: DocumentFields = lua_table_to_json_map(lua, data_table)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, Value::String(_)))
         .collect();
+    data.extend(composite_data);
+
     if def.is_auth_collection() {
-        join_data.remove("password");
+        data.remove("password");
     }
 
-    Ok(ExtractedData {
-        flat,
-        join_data,
-        password,
-    })
+    Ok(ExtractedData { data, password })
 }
 
 #[cfg(test)]

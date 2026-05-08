@@ -6,13 +6,12 @@
 //! **Conn mode** (`ctx.conn` set, Lua path): creates all documents on the
 //! existing connection. Events are queued for later flush by the caller.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Context as _;
-use serde_json::Value;
 
 use crate::{
-    core::event::EventOperation,
+    core::{DocumentFields, event::EventOperation},
     hooks::LuaCrudInfra,
     service::{
         RunnerWriteHooks, ServiceContext, ServiceError, WriteInput, create_document_core,
@@ -26,8 +25,7 @@ type Result<T> = std::result::Result<T, ServiceError>;
 
 /// Input for a single document in a bulk create.
 pub struct CreateManyItem {
-    pub data: HashMap<String, String>,
-    pub join_data: HashMap<String, Value>,
+    pub data: DocumentFields,
     pub password: Option<String>,
 }
 
@@ -113,7 +111,7 @@ fn create_many_pooled(
             .build();
 
         for item in chunk {
-            let input = WriteInput::builder(item.data.clone(), &item.join_data)
+            let input = WriteInput::builder(item.data.clone())
                 .password(item.password.as_deref())
                 .draft(opts.draft)
                 .build();
@@ -148,7 +146,7 @@ fn create_many_on_conn(
     let mut documents = Vec::with_capacity(items.len());
 
     for item in &items {
-        let input = WriteInput::builder(item.data.clone(), &item.join_data)
+        let input = WriteInput::builder(item.data.clone())
             .password(item.password.as_deref())
             .draft(opts.draft)
             .build();

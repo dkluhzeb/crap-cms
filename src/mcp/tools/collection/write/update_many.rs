@@ -43,7 +43,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
     let filters = parse_where_filters(args);
 
     let data_obj = args.get("data").cloned().unwrap_or(json!({}));
-    let (data, join_data) = extract_data_from_args(&data_obj, &[]);
+    let data = extract_data_from_args(&data_obj, &[]);
 
     let run_hooks = args.get("hooks").and_then(|v| v.as_bool()).unwrap_or(true);
 
@@ -64,7 +64,7 @@ pub(in crate::mcp::tools) fn exec_update_many(
         ui_locale: None,
     };
 
-    let result = service::update_many(&ctx, filters, data, &join_data, &config.locale, &opts)?;
+    let result = service::update_many(&ctx, filters, data, &config.locale, &opts)?;
 
     info!("MCP update_many {}: {} modified", slug, result.modified);
 

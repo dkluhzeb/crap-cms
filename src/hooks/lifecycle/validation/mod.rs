@@ -9,13 +9,10 @@ mod sub_fields;
 // Re-export public API
 pub use checks::is_valid_email_format;
 
-use std::collections::HashMap;
-
 use mlua::Lua;
-use serde_json::Value;
 
 use crate::{
-    core::{FieldDefinition, registry::Registry, validate::ValidationError},
+    core::{DocumentFields, FieldDefinition, registry::Registry, validate::ValidationError},
     db::{DbConnection, LocaleContext},
 };
 
@@ -106,7 +103,7 @@ impl<'a> ValidationCtxBuilder<'a> {
 pub(crate) fn validate_fields_inner(
     lua: &Lua,
     fields: &[FieldDefinition],
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
     ctx: &ValidationCtx,
 ) -> Result<(), ValidationError> {
     let mut errors = Vec::new();

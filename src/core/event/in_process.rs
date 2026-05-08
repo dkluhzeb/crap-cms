@@ -94,10 +94,9 @@ impl InvalidationTransport for InProcessInvalidationBus {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use crate::core::event::{EventOperation, EventTarget, EventUser, RecvError};
-    use crate::core::{DocumentId, Slug};
+    use crate::core::{DocumentFields, DocumentId, Slug};
 
     use super::*;
 
@@ -109,7 +108,7 @@ mod tests {
             operation: EventOperation::Create,
             collection: Slug::new("posts"),
             document_id: DocumentId::new("id1"),
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             edited_by: None,
         }
     }
@@ -131,7 +130,7 @@ mod tests {
                 operation: EventOperation::Create,
                 collection: Slug::new("posts"),
                 document_id: DocumentId::new("id1"),
-                data: HashMap::new(),
+                data: DocumentFields::new(),
                 edited_by: Some(EventUser::new("u1", "test@example.com")),
             })
             .expect("should publish with subscriber");

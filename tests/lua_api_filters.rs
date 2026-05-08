@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::{DocumentFields, SharedRegistry};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
@@ -658,7 +658,7 @@ fn lua_validate_fields_with_custom_validator() {
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
 
-    let mut data = std::collections::HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid Article"));
     data.insert("word_count".to_string(), json!("100"));
 
@@ -673,7 +673,7 @@ fn lua_validate_fields_with_custom_validator() {
     );
 
     // Invalid: negative number should fail
-    let mut bad_data = std::collections::HashMap::new();
+    let mut bad_data = DocumentFields::new();
     bad_data.insert("title".to_string(), json!("Invalid Article"));
     bad_data.insert("word_count".to_string(), json!("-5"));
 

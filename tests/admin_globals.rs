@@ -3,6 +3,7 @@
 //! Covers: global CRUD, versioning, locale, drafts, upload serving,
 //! static assets, dashboard, CSRF, CORS, access gate.
 
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -251,12 +253,13 @@ fn create_test_user_with_role(
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
+    let mut data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+    ])
+    .into();
     if let Some(r) = role {
-        data.insert("role".to_string(), r.to_string());
+        data.insert("role".to_string(), json!(r));
     }
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
@@ -843,7 +846,8 @@ async fn dashboard_renders_collection_counts() {
     for title in &["Post A", "Post B"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        let data: DocumentFields =
+            std::collections::HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -971,7 +975,7 @@ fn global_read_admin_via_service_layer_allowed() {
     admin_fields.insert("email".to_string(), serde_json::json!("admin@test.com"));
     let admin = Document {
         id: "admin-1".into(),
-        fields: admin_fields,
+        fields: admin_fields.into(),
         created_at: None,
         updated_at: None,
     };

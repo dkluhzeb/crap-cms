@@ -119,9 +119,9 @@ pub fn validate_timezone(tz: &str) -> bool {
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use crate::core::DocumentFields;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     // --- is_valid_date_format tests ---
 
@@ -216,7 +216,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("d", FieldType::Date).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("d".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(
             &lua,
@@ -235,7 +235,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("d", FieldType::Date).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("d".to_string(), json!("2024-01-15"));
         let result = validate_fields_inner(
             &lua,
@@ -257,7 +257,7 @@ mod tests {
                 .min_date("2024-01-01")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("start_date".to_string(), json!("2024-06-15T12:00:00.000Z"));
         let result = validate_fields_inner(
             &lua,
@@ -279,7 +279,7 @@ mod tests {
                 .min_date("2024-06-01")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("start_date".to_string(), json!("2024-01-15T12:00:00.000Z"));
         let result = validate_fields_inner(
             &lua,
@@ -306,7 +306,7 @@ mod tests {
                 .max_date("2025-12-31")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("end_date".to_string(), json!("2026-03-15T12:00:00.000Z"));
         let result = validate_fields_inner(
             &lua,
@@ -334,7 +334,7 @@ mod tests {
                 .max_date("2025-12-31")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("d".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -359,7 +359,7 @@ mod tests {
                 .min_date("2024-06")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("d".to_string(), json!("2024-01"));
         let result = validate_fields_inner(
             &lua,
@@ -391,7 +391,7 @@ mod tests {
                 .min_date("2024-01-01")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         // Multi-byte string that would panic with &s[..10] byte slicing
         data.insert(
             "d".to_string(),
@@ -421,7 +421,7 @@ mod tests {
                 .max_date("2024-06")
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("d".to_string(), json!("2024-12"));
         let result = validate_fields_inner(
             &lua,

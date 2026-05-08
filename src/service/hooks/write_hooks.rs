@@ -1,13 +1,13 @@
 //! `WriteHooks` trait and implementations for abstracting write hook execution
 //! across different API surfaces (pool-based vs inline Lua VM).
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, Registry, collection::Hooks, validate::ValidationError},
+    core::{
+        Document, DocumentFields, FieldDefinition, Registry, collection::Hooks,
+        validate::ValidationError,
+    },
     db::{AccessResult, DbConnection},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
@@ -72,7 +72,7 @@ pub trait WriteHooks {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
     ) -> Result<AccessResult>;
 
     /// Field-level write access: returns denied field names to strip before persistence.
@@ -91,7 +91,7 @@ pub trait WriteHooks {
     fn validate_fields(
         &self,
         fields: &[FieldDefinition],
-        data: &HashMap<String, Value>,
+        data: &DocumentFields,
         ctx: &ValidationCtx,
     ) -> ValidateResult;
 }
@@ -220,7 +220,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
     ) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
@@ -250,7 +250,7 @@ impl WriteHooks for RunnerWriteHooks<'_> {
     fn validate_fields(
         &self,
         fields: &[FieldDefinition],
-        data: &HashMap<String, Value>,
+        data: &DocumentFields,
         ctx: &ValidationCtx,
     ) -> ValidateResult {
         self.runner.validate_fields(fields, data, ctx)
@@ -439,7 +439,7 @@ impl WriteHooks for LuaWriteHooks<'_> {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, Value>>,
+        data: Option<&DocumentFields>,
     ) -> Result<AccessResult> {
         if self.override_access {
             return Ok(AccessResult::Allowed);
@@ -473,7 +473,7 @@ impl WriteHooks for LuaWriteHooks<'_> {
     fn validate_fields(
         &self,
         fields: &[FieldDefinition],
-        data: &HashMap<String, Value>,
+        data: &DocumentFields,
         ctx: &ValidationCtx,
     ) -> ValidateResult {
         validate_fields_inner(self.lua, fields, data, ctx)

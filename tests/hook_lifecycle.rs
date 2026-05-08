@@ -3,13 +3,16 @@ use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::ReqContext;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
-use crap_cms::hooks::lifecycle::{AfterReadCtx, FieldWriteCtx, HookRunner, ValidationCtx};
+use crap_cms::hooks::lifecycle::{
+    AfterReadCtx, FieldWriteCtx, HookContext, HookRunner, ValidationCtx,
+};
 use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
@@ -44,7 +47,7 @@ fn setup() -> (
 fn create_article(
     pool: &crap_cms::db::DbPool,
     registry: &crap_cms::core::SharedRegistry,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
 ) -> Document {
     let reg = registry.read().unwrap();
     let def = reg
@@ -69,11 +72,11 @@ fn before_change_hook_modifies_data() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Test Title  "));
     data.insert("body".to_string(), json!("Content"));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
@@ -114,10 +117,10 @@ fn before_validate_trims_title() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Spaces Around  "));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
@@ -155,7 +158,7 @@ fn field_before_change_transforms_value() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Hello World"));
     // slug intentionally left empty — field hook should auto-generate from title
 
@@ -187,10 +190,10 @@ fn registered_hook_fires_for_all_collections() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
@@ -252,11 +255,11 @@ fn run_before_write_full_lifecycle() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  My Article  "));
     data.insert("body".to_string(), json!("Article body"));
 
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
         data,
@@ -311,12 +314,10 @@ fn run_before_write_fails_on_validation_error() {
     drop(reg);
 
     // Missing required title
-    let data = HashMap::new();
-
-    let ctx = crap_cms::hooks::lifecycle::HookContext {
+    let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
-        data,
+        data: DocumentFields::new(),
         locale: None,
         draft: None,
         context: ReqContext::new(),
@@ -347,8 +348,8 @@ fn eval_lua_crud_in_hook_context() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create an article first
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Lua Test Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Lua Test Article"));
     let _doc = create_article(&pool, &registry, &data);
 
     let conn = pool.get().expect("DB connection");
@@ -457,7 +458,7 @@ fn check_access_with_user_context() {
     let conn = pool.get().expect("DB connection");
 
     // User with admin role should be allowed
-    let mut admin_fields = HashMap::new();
+    let mut admin_fields = DocumentFields::new();
     admin_fields.insert("role".to_string(), json!("admin"));
     let admin_user = Document {
         id: "user-1".into(),
@@ -481,7 +482,7 @@ fn check_access_with_user_context() {
     );
 
     // User without admin role should be denied
-    let mut regular_fields = HashMap::new();
+    let mut regular_fields = DocumentFields::new();
     regular_fields.insert("role".to_string(), json!("editor"));
     let regular_user = Document {
         id: "user-2".into(),
@@ -628,9 +629,9 @@ fn apply_after_read_transforms_doc() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create an article via DB so we have a real doc
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Read Test".to_string());
-    data.insert("body".to_string(), "Some body text".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Read Test"));
+    data.insert("body".to_string(), json!("Some body text"));
     let doc = create_article(&pool, &registry, &data);
 
     let reg = registry.read().unwrap();
@@ -667,12 +668,12 @@ fn apply_after_read_many_transforms_all() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create two articles
-    let mut data1 = HashMap::new();
-    data1.insert("title".to_string(), "Article One".to_string());
+    let mut data1 = DocumentFields::new();
+    data1.insert("title".to_string(), json!("Article One"));
     let doc1 = create_article(&pool, &registry, &data1);
 
-    let mut data2 = HashMap::new();
-    data2.insert("title".to_string(), "Article Two".to_string());
+    let mut data2 = DocumentFields::new();
+    data2.insert("title".to_string(), json!("Article Two"));
     let doc2 = create_article(&pool, &registry, &data2);
 
     let reg = registry.read().unwrap();
@@ -705,8 +706,8 @@ fn apply_after_read_no_hooks_returns_same() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create a document
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Untouched".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Untouched"));
     let doc = create_article(&pool, &registry, &data);
 
     // Use empty hooks (no after_read configured)
@@ -750,7 +751,7 @@ fn fire_before_read_executes() {
 
     // fire_before_read should succeed without error for articles
     // (articles collection does not have before_read hooks, but it should not error)
-    let data = HashMap::new();
+    let data = DocumentFields::new();
     let result = runner.fire_before_read(&def.hooks, "articles", "find", data);
     assert!(
         result.is_ok(),
@@ -765,8 +766,8 @@ fn auth_strategy_returns_user_on_valid_key() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create an article (auth_strategy.lua looks up articles to return a user-like doc)
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Strategy Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Strategy Test"));
     let _doc = create_article(&pool, &registry, &data);
 
     let mut headers = HashMap::new();
@@ -807,7 +808,7 @@ fn auth_strategy_returns_none_on_invalid_key() {
 fn auth_strategy_returns_none_on_missing_header() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let headers = HashMap::new(); // no x-api-key header
+    let headers: HashMap<String, String> = HashMap::new(); // no x-api-key header
 
     let conn = pool.get().expect("DB connection");
     let result = runner
@@ -826,10 +827,10 @@ fn auth_strategy_has_crud_access() {
     let (_tmp, pool, registry, runner) = setup();
 
     // Create two articles for the strategy to find
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "First Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("First Article"));
     let _doc = create_article(&pool, &registry, &data);
-    data.insert("title".to_string(), "Second Article".to_string());
+    data.insert("title".to_string(), json!("Second Article"));
     let _doc = create_article(&pool, &registry, &data);
 
     // The strategy calls crap.collections.find — test that it works
@@ -856,7 +857,7 @@ fn auth_strategy_has_crud_access() {
 #[test]
 fn check_live_setting_none_allows() {
     let (_tmp, _pool, _registry, runner) = setup();
-    let result = runner.check_live_setting(None, "articles", "create", &HashMap::new());
+    let result = runner.check_live_setting(None, "articles", "create", &DocumentFields::new());
     assert!(result.is_ok());
     assert!(result.unwrap(), "None live setting should allow broadcast");
 }

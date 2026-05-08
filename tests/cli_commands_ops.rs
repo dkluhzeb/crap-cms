@@ -3,11 +3,12 @@
 //! Tests for command library functions (sections 18-30):
 //! direct Rust calls without invoking the binary.
 
-use std::collections::HashMap;
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::auth;
 use crap_cms::db::{DbPool, migrate, ops, pool, query};
 use crap_cms::hooks;
@@ -60,10 +61,10 @@ fn create_user(
     password: &str,
     extra_fields: &[(&str, &str)],
 ) -> crap_cms::core::Document {
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), email.to_string());
+    let mut data = DocumentFields::new();
+    data.insert("email".to_string(), json!(email.to_string()));
     for (k, v) in extra_fields {
-        data.insert(k.to_string(), v.to_string());
+        data.insert(k.to_string(), json!(v.to_string()));
     }
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -741,8 +742,8 @@ fn cmd_status_with_data() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Status Test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Status Test".to_string()));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1065,8 +1066,8 @@ fn cmd_migrate_fresh_with_confirm() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Pre-fresh".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Pre-fresh".to_string()));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1103,8 +1104,8 @@ fn cmd_backup_with_output_dir() {
         let def = reg.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Backup Test".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Backup Test".to_string()));
         query::create(&tx, "posts", def, &data, None).unwrap();
         tx.commit().unwrap();
     }

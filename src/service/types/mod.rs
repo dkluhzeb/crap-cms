@@ -26,5 +26,5 @@ pub use service_context::{
     Def, EmailContext, EventQueue, ServiceContext, ServiceContextBuilder, VerificationQueue,
     flush_queue, flush_verification_queue,
 };
-pub use write_input::{WriteInput, WriteInputBuilder};
+pub use write_input::{WriteInput, WriteInputBuilder, values_from_strings};
 pub use write_result::WriteResult;

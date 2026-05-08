@@ -51,11 +51,10 @@ pub(crate) fn stamp_event(input: MutationEventInput, sequence: u64) -> MutationE
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use super::*;
     use crate::core::{
-        DocumentId, Slug,
+        DocumentFields, DocumentId, Slug,
         event::types::{EventOperation, EventTarget},
     };
 
@@ -74,7 +73,7 @@ mod tests {
             operation: EventOperation::Create,
             collection: Slug::new("posts"),
             document_id: DocumentId::new("id1"),
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             edited_by: None,
         };
         let event = stamp_event(input, 42);

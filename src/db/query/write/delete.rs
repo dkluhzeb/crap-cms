@@ -67,11 +67,11 @@ pub fn restore(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     use super::*;
     use crate::config::CrapConfig;
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{BoxedConnection, DbValue, pool, query::write::create};
@@ -107,7 +107,7 @@ mod tests {
     fn delete_basic() {
         let (_dir, conn) = setup_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
@@ -157,7 +157,7 @@ mod tests {
     fn soft_delete_sets_deleted_at() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
@@ -183,7 +183,7 @@ mod tests {
     fn soft_delete_returns_false_for_already_deleted() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
@@ -199,7 +199,7 @@ mod tests {
     fn restore_clears_deleted_at() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
@@ -224,7 +224,7 @@ mod tests {
     fn restore_returns_false_for_non_deleted_doc() {
         let (_dir, conn) = setup_soft_delete_db();
         let def = test_def();
-        let data = HashMap::new();
+        let data = DocumentFields::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
 
         let result = restore(&conn, "posts", &doc.id).unwrap();

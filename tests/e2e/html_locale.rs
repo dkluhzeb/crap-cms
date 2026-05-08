@@ -1,8 +1,10 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use serde_json::json;
 use tower::ServiceExt;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query::LocaleContext;
@@ -312,19 +314,21 @@ async fn edit_in_non_default_locale_shows_localized_values() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Hello".to_string()),
-        ("slug".to_string(), "hello".to_string()),
-        ("body".to_string(), "World".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("Hello")),
+        ("slug".to_string(), json!("hello")),
+        ("body".to_string(), json!("World")),
+    ])
+    .into();
     let doc_record =
         crap_cms::db::query::create(&tx, "articles", &def, &data, en_locale_ctx.as_ref()).unwrap();
     // Write de locale values
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_data = std::collections::HashMap::from([
-        ("title".to_string(), "Hallo".to_string()),
-        ("body".to_string(), "Welt".to_string()),
-    ]);
+    let de_data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("Hallo")),
+        ("body".to_string(), json!("Welt")),
+    ])
+    .into();
     crap_cms::db::query::update(
         &tx,
         "articles",

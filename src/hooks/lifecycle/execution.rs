@@ -1,6 +1,6 @@
 //! Standalone hook execution functions (inner implementations and helpers).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use mlua::{Function as LuaFunction, Lua, Table, Value};
@@ -9,7 +9,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     core::{
-        ConditionExpr, Document, FieldDefinition, FieldType, collection::Hooks,
+        ConditionExpr, Document, DocumentFields, FieldDefinition, FieldType, collection::Hooks,
         document::DocumentBuilder, field::FieldHooks,
     },
     db::query::helpers::prefixed_name,
@@ -45,7 +45,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
         return doc;
     }
 
-    let mut data: HashMap<String, JsonValue> = doc.fields.clone();
+    let mut data = doc.fields.clone();
     data.insert("id".to_string(), JsonValue::String(doc.id.to_string()));
 
     if let Some(ref ts) = doc.created_at {
@@ -415,7 +415,7 @@ pub(crate) fn run_field_hooks_inner(
     lua: &Lua,
     fields: &[FieldDefinition],
     event: &FieldHookEvent,
-    data: &mut HashMap<String, JsonValue>,
+    data: &mut DocumentFields,
     collection: &str,
     operation: &str,
 ) -> Result<()> {
@@ -428,7 +428,7 @@ fn run_field_hooks_recursive(
     lua: &Lua,
     fields: &[FieldDefinition],
     event: &FieldHookEvent,
-    data: &mut HashMap<String, JsonValue>,
+    data: &mut DocumentFields,
     collection: &str,
     operation: &str,
     prefix: &str,
@@ -488,7 +488,7 @@ fn run_single_field_hook(
     lua: &Lua,
     field: &FieldDefinition,
     event: &FieldHookEvent,
-    data: &mut HashMap<String, JsonValue>,
+    data: &mut DocumentFields,
     collection: &str,
     operation: &str,
     prefix: &str,
@@ -580,7 +580,7 @@ pub(crate) fn call_field_hook_ref(
     field_name: &str,
     collection: &str,
     operation: &str,
-    data: &HashMap<String, JsonValue>,
+    data: &DocumentFields,
 ) -> Result<JsonValue> {
     let func = resolve_hook_function(lua, hook_ref)?;
 
@@ -627,7 +627,7 @@ pub(crate) fn call_field_hook_ref(
 /// Read hook result data and context back from a returned Lua table into the HookContext.
 fn read_hook_result(lua: &Lua, ctx: &mut HookContext, tbl: &Table) -> Result<()> {
     if let Ok(data_tbl) = tbl.get::<Table>("data") {
-        let mut new_data = HashMap::new();
+        let mut new_data = DocumentFields::new();
 
         for pair in data_tbl.pairs::<String, Value>() {
             let (k, v) = pair?;
@@ -733,7 +733,6 @@ mod tests {
     use super::*;
     use crate::core::field::{FieldHooks, FieldType};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn apply_after_read_no_hooks_returns_unchanged() {
@@ -846,7 +845,7 @@ mod tests {
         .exec()
         .unwrap();
 
-        let data: HashMap<String, JsonValue> = [("title".to_string(), json!("hello"))]
+        let data: DocumentFields = [("title".to_string(), json!("hello"))]
             .into_iter()
             .collect();
 
@@ -883,7 +882,7 @@ mod tests {
         .exec()
         .unwrap();
 
-        let data: HashMap<String, JsonValue> = HashMap::new();
+        let data = DocumentFields::new();
 
         let result = call_field_hook_ref(
             &lua,
@@ -922,7 +921,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data: HashMap<String, JsonValue> = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("content".to_string(), json!("updated"));
 
         run_field_hooks_inner(
@@ -970,7 +969,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data: HashMap<String, JsonValue> = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
 
         run_field_hooks_inner(
@@ -1000,7 +999,7 @@ mod tests {
         .exec()
         .unwrap();
 
-        let data: HashMap<String, JsonValue> = [("title".to_string(), json!("hello"))]
+        let data: DocumentFields = [("title".to_string(), json!("hello"))]
             .into_iter()
             .collect();
 

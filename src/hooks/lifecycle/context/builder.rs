@@ -1,11 +1,7 @@
 //! Builder for [`HookContext`].
 
-use std::collections::HashMap;
-
-use serde_json::Value;
-
 use crate::{
-    core::{Document, ReqContext},
+    core::{Document, DocumentFields, ReqContext},
     hooks::HookContext,
 };
 
@@ -13,7 +9,7 @@ use crate::{
 pub struct HookContextBuilder {
     collection: String,
     operation: String,
-    data: HashMap<String, Value>,
+    data: DocumentFields,
     locale: Option<String>,
     draft: Option<bool>,
     context: ReqContext,
@@ -26,7 +22,7 @@ impl HookContextBuilder {
         Self {
             collection,
             operation,
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             locale: None,
             draft: None,
             context: ReqContext::new(),
@@ -35,8 +31,8 @@ impl HookContextBuilder {
         }
     }
 
-    pub fn data(mut self, data: HashMap<String, Value>) -> Self {
-        self.data = data;
+    pub fn data(mut self, data: impl Into<DocumentFields>) -> Self {
+        self.data = data.into();
         self
     }
 
@@ -81,6 +77,8 @@ impl HookContextBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;

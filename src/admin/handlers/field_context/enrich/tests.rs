@@ -21,7 +21,7 @@ use crate::{
     },
     config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
-        CollectionDefinition, FieldType, RelationshipConfig,
+        CollectionDefinition, DocumentFields, FieldType, RelationshipConfig,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         email::{EmailRenderer, create_email_provider},
         field::{BlockDefinition, FieldAdmin, FieldDefinition, LocalizedString, SelectOption},
@@ -66,7 +66,7 @@ fn build_enriched_sub_field_context(
 fn enrich_field_contexts(
     fields: &mut Vec<Value>,
     field_defs: &[FieldDefinition],
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     state: &AdminState,
     opts: &EnrichOptions,
 ) {
@@ -1150,7 +1150,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     let mut contexts = build_field_contexts(&field_defs, &values, &errors, false, false);
 
     // Simulate doc_fields with blocks data (as hydrate_document would produce)
-    let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut doc_fields = DocumentFields::new();
     doc_fields.insert(
         "content".to_string(),
         json!([
@@ -1263,7 +1263,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
     let errors = HashMap::new();
     let mut contexts = build_field_contexts(&field_defs, &values, &errors, false, false);
 
-    let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut doc_fields = DocumentFields::new();
     doc_fields.insert(
         "items".to_string(),
         json!([
@@ -1384,7 +1384,7 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
     let errors = HashMap::new();
     let mut contexts = build_field_contexts(&fields, &values, &errors, false, false);
 
-    let mut doc_fields = HashMap::new();
+    let mut doc_fields = DocumentFields::new();
     doc_fields.insert("items".to_string(), row_data);
 
     let state = make_test_state();
@@ -1444,7 +1444,7 @@ fn enriched_sub_field_row_in_array_transparent_names() {
     let errors = HashMap::new();
     let mut contexts = build_field_contexts(&fields, &values, &errors, false, false);
 
-    let mut doc_fields = HashMap::new();
+    let mut doc_fields = DocumentFields::new();
     doc_fields.insert("items".to_string(), row_data);
 
     let state = make_test_state();
@@ -1513,7 +1513,7 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
     let errors = HashMap::new();
     let mut contexts = build_field_contexts(&fields, &values, &errors, false, false);
 
-    let mut doc_fields = HashMap::new();
+    let mut doc_fields = DocumentFields::new();
     doc_fields.insert("team_members".to_string(), row_data);
 
     let state = make_test_state();

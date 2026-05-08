@@ -38,11 +38,7 @@ fn create_document_lua(
     let draft = get_opt_bool(&opts, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ExtractedData {
-        flat,
-        join_data,
-        password,
-    } = extract_data(lua, &data_table, &def)?;
+    let ExtractedData { data, password } = extract_data(lua, &data_table, &def)?;
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "create");
 
@@ -57,7 +53,7 @@ fn create_document_lua(
         .hooks_enabled(hooks_enabled)
         .build();
 
-    let write_input = WriteInput::builder(flat, &join_data)
+    let write_input = WriteInput::builder(data)
         .password(password.as_deref())
         .locale_ctx(locale_ctx.as_ref())
         .locale(locale_str)

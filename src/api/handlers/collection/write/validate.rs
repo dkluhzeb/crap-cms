@@ -9,10 +9,7 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{
-            ContentService,
-            convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
-        },
+        handlers::{ContentService, convert::prost_struct_to_json_map},
     },
     db::LocaleContext,
     service::{self, RunnerWriteHooks, ServiceError, ValidateContext, WriteInput},
@@ -30,15 +27,9 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let join_data = req
-            .data
-            .as_ref()
-            .map(prost_struct_to_json_map)
-            .unwrap_or_default();
-
         let data = req
             .data
-            .map(|s| prost_struct_to_hashmap(&s))
+            .map(|s| prost_struct_to_json_map(&s))
             .unwrap_or_default();
 
         let locale_ctx =
@@ -77,7 +68,7 @@ impl ContentService {
                 soft_delete: def_owned.soft_delete,
             };
 
-            let input = WriteInput::builder(data, &join_data)
+            let input = WriteInput::builder(data)
                 .locale_ctx(locale_ctx.as_ref())
                 .draft(req.draft.unwrap_or(false))
                 .build();

@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use serde_json::json;
 
 use crate::{
     core::{
+        DocumentFields,
         field::{BlockDefinition, FieldAdmin, FieldDefinition, FieldTab, FieldType},
         registry::Registry,
         richtext::RichtextNodeDef,
@@ -26,7 +25,7 @@ fn test_validate_array_sub_field_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"label": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -57,7 +56,7 @@ fn test_validate_blocks_sub_field_required() {
             )])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "content".to_string(),
         json!([{"_block_type": "text", "body": ""}]),
@@ -95,7 +94,7 @@ fn test_validate_nested_array_in_array() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "outer".to_string(),
         json!([
@@ -132,7 +131,7 @@ fn test_validate_group_inside_array() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -163,7 +162,7 @@ fn test_validate_date_inside_array_subfield() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "events".to_string(),
         json!([
@@ -211,7 +210,7 @@ fn test_validate_custom_validate_in_array_subfield() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -249,7 +248,7 @@ fn test_validate_date_in_group_inside_array() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -296,7 +295,7 @@ fn test_validate_custom_function_in_group_inside_array() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "items".to_string(),
         json!([
@@ -332,7 +331,7 @@ fn test_validate_array_sub_field_skipped_for_draft() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"label": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -367,7 +366,7 @@ fn test_validate_blocks_unknown_block_type_rejected() {
             )])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "content".to_string(),
         json!([{"_block_type": "image", "url": ""}]),
@@ -404,7 +403,7 @@ fn test_validate_array_non_object_rows_rejected() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!(["plain-string", 42, null]));
     let result = validate_fields_inner(
         &lua,
@@ -445,7 +444,7 @@ fn test_validate_collapsible_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"note": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -481,7 +480,7 @@ fn test_validate_collapsible_inside_array_date_invalid() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("events".to_string(), json!([{"start": "not-a-date"}]));
     let result = validate_fields_inner(
         &lua,
@@ -518,7 +517,7 @@ fn test_validate_tabs_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"title": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -555,7 +554,7 @@ fn test_validate_tabs_inside_array_date_invalid() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"pub_date": "bad-date"}]));
     let result = validate_fields_inner(
         &lua,
@@ -606,7 +605,7 @@ fn test_validate_tabs_inside_array_custom_validate() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"slug": "bad"}]));
     let result = validate_fields_inner(
         &lua,
@@ -644,7 +643,7 @@ fn test_validate_row_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"label": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -680,7 +679,7 @@ fn test_validate_row_inside_array_date_invalid() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"event_date": "not-a-date"}]));
     let result = validate_fields_inner(
         &lua,
@@ -728,7 +727,7 @@ fn test_validate_row_inside_array_custom_validate() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"code": "forbidden"}]));
     let result = validate_fields_inner(
         &lua,
@@ -769,7 +768,7 @@ fn test_validate_blocks_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "outer".to_string(),
         json!([
@@ -826,7 +825,7 @@ fn test_validate_collapsible_inside_array_custom_validate() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"val": "nope"}]));
     let result = validate_fields_inner(
         &lua,
@@ -860,7 +859,7 @@ fn test_validate_checkbox_inside_array_not_required_when_absent() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{}]));
     let result = validate_fields_inner(
         &lua,
@@ -904,7 +903,7 @@ fn test_validate_row_inside_tabs_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert(
         "team_members".to_string(),
         json!([{"first_name": "", "last_name": ""}]),
@@ -952,7 +951,7 @@ fn test_validate_group_inside_tabs_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"meta": {"title": ""}}]));
     let result = validate_fields_inner(
         &lua,
@@ -998,7 +997,7 @@ fn test_validate_collapsible_inside_tabs_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"note": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -1041,7 +1040,7 @@ fn test_validate_group_inside_row_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"seo": {"title": ""}}]));
     let result = validate_fields_inner(
         &lua,
@@ -1087,7 +1086,7 @@ fn test_validate_tabs_inside_collapsible_inside_array_required() {
             ])
             .build(),
     ];
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"body": ""}]));
     let result = validate_fields_inner(
         &lua,
@@ -1143,7 +1142,7 @@ fn test_validate_richtext_node_attrs_inside_array() {
     ];
 
     let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"body": json_content}]));
 
     let result = validate_fields_inner(
@@ -1197,7 +1196,7 @@ fn test_validate_richtext_node_attrs_inside_array_draft_skips_required() {
     ];
 
     let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"body": json_content}]));
 
     let result = validate_fields_inner(
@@ -1232,7 +1231,7 @@ fn test_validate_array_sub_field_date_format_enforced_in_draft() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("events".to_string(), json!([{"start_date": "not-a-date"}]));
 
     let result = validate_fields_inner(
@@ -1266,7 +1265,7 @@ fn test_validate_array_sub_field_required_skipped_in_draft() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"name": ""}]));
 
     let result = validate_fields_inner(
@@ -1303,7 +1302,7 @@ fn test_array_sub_field_max_length_enforced() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"name": "toolongvalue"}]));
 
     let result = validate_fields_inner(
@@ -1342,7 +1341,7 @@ fn test_array_sub_field_numeric_bounds_enforced() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"score": "-5"}]));
 
     let result = validate_fields_inner(
@@ -1375,7 +1374,7 @@ fn test_array_sub_field_email_format_enforced() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"email": "not-an-email"}]));
 
     let result = validate_fields_inner(
@@ -1394,6 +1393,7 @@ fn test_array_sub_field_email_format_enforced() {
 /// Regression: select option validation was not enforced inside Array sub-fields.
 #[test]
 fn test_array_sub_field_select_option_enforced() {
+    use crate::core::DocumentFields;
     use crate::core::field::{LocalizedString, SelectOption};
 
     let lua = mlua::Lua::new();
@@ -1414,7 +1414,7 @@ fn test_array_sub_field_select_option_enforced() {
             .build(),
     ];
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("items".to_string(), json!([{"color": "invalid_option"}]));
 
     let result = validate_fields_inner(

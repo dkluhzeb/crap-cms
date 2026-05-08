@@ -66,22 +66,6 @@ pub(in crate::api::handlers) fn json_to_prost_value(v: &JsonValue) -> Value {
     }
 }
 
-/// Convert a prost Struct to a flat `HashMap<String, String>`, coercing all values to strings.
-pub(in crate::api::handlers) fn prost_struct_to_hashmap(s: &Struct) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for (k, v) in &s.fields {
-        let value_str = match &v.kind {
-            Some(Kind::StringValue(s)) => s.clone(),
-            Some(Kind::NumberValue(n)) => n.to_string(),
-            Some(Kind::BoolValue(b)) => b.to_string(),
-            Some(Kind::NullValue(_)) => String::new(),
-            _ => String::from("null"),
-        };
-        map.insert(k.clone(), value_str);
-    }
-    map
-}
-
 /// Convert a prost Struct to a JSON Value map, preserving arrays and nested objects.
 /// Used for extracting join table data (has-many relationships and arrays).
 pub(in crate::api::handlers) fn prost_struct_to_json_map(s: &Struct) -> HashMap<String, JsonValue> {
@@ -194,59 +178,6 @@ mod tests {
         let prost_val = Value { kind: None };
         let back = prost_value_to_json(&prost_val);
         assert_eq!(back, json!(null));
-    }
-
-    // ── prost_struct_to_hashmap ────────────────────────────────────────────
-
-    #[test]
-    fn prost_struct_to_hashmap_mixed_types() {
-        let mut fields = BTreeMap::new();
-        fields.insert(
-            "name".to_string(),
-            Value {
-                kind: Some(Kind::StringValue("Alice".to_string())),
-            },
-        );
-        fields.insert(
-            "age".to_string(),
-            Value {
-                kind: Some(Kind::NumberValue(30.0)),
-            },
-        );
-        fields.insert(
-            "active".to_string(),
-            Value {
-                kind: Some(Kind::BoolValue(true)),
-            },
-        );
-        fields.insert(
-            "nothing".to_string(),
-            Value {
-                kind: Some(Kind::NullValue(0)),
-            },
-        );
-        let s = Struct { fields };
-        let map = prost_struct_to_hashmap(&s);
-
-        assert_eq!(map.get("name").unwrap(), "Alice");
-        assert_eq!(map.get("age").unwrap(), "30");
-        assert_eq!(map.get("active").unwrap(), "true");
-        assert_eq!(map.get("nothing").unwrap(), "");
-    }
-
-    #[test]
-    fn prost_struct_to_hashmap_unsupported_kind_returns_null() {
-        let mut fields = BTreeMap::new();
-        // A list value should map to "null" in the hashmap
-        fields.insert(
-            "list".to_string(),
-            Value {
-                kind: Some(Kind::ListValue(prost_types::ListValue { values: vec![] })),
-            },
-        );
-        let s = Struct { fields };
-        let map = prost_struct_to_hashmap(&s);
-        assert_eq!(map.get("list").unwrap(), "null");
     }
 
     // ── prost_struct_to_json_map ───────────────────────────────────────────

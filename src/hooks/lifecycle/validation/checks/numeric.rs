@@ -73,10 +73,10 @@ pub(crate) fn check_numeric_bounds(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use crate::core::DocumentFields;
     use crate::core::field::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_number_min_fails() {
@@ -89,7 +89,7 @@ mod tests {
                 .min(0.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!("-5"));
         let result = validate_fields_inner(
             &lua,
@@ -112,7 +112,7 @@ mod tests {
                 .max(100.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!("150"));
         let result = validate_fields_inner(
             &lua,
@@ -140,7 +140,7 @@ mod tests {
                 .max(100.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!("50"));
         let result = validate_fields_inner(
             &lua,
@@ -162,7 +162,7 @@ mod tests {
                 .min(10.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -185,7 +185,7 @@ mod tests {
                 .max(10.0)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("score".to_string(), json!(15));
         let result = validate_fields_inner(
             &lua,
@@ -217,7 +217,7 @@ mod tests {
         ];
 
         for bad in ["NaN", "Infinity", "-Infinity", "inf", "-inf"] {
-            let mut data = HashMap::new();
+            let mut data = DocumentFields::new();
             data.insert("score".to_string(), json!(bad));
             let result = validate_fields_inner(
                 &lua,
@@ -252,7 +252,7 @@ mod tests {
         ];
 
         for ok in ["0", "50.5", "100", "1e2"] {
-            let mut data = HashMap::new();
+            let mut data = DocumentFields::new();
             data.insert("score".to_string(), json!(ok));
             let result = validate_fields_inner(
                 &lua,

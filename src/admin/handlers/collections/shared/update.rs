@@ -7,7 +7,6 @@ use axum::{
     Extension,
     response::{IntoResponse, Response},
 };
-use serde_json::Value;
 use tokio::task;
 use tracing::{error, warn};
 
@@ -22,7 +21,7 @@ use crate::{
         },
     },
     core::{
-        ReqContext,
+        DocumentFields, ReqContext,
         auth::AuthUser,
         collection::CollectionDefinition,
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
@@ -58,7 +57,7 @@ fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Optio
 /// Prepared update input.
 struct UpdateInput {
     form_data: HashMap<String, String>,
-    join_data: HashMap<String, Value>,
+    join_data: DocumentFields,
     password: Option<String>,
     locked_value: Option<Option<String>>,
     locale_ctx: Option<LocaleContext>,
@@ -113,13 +112,19 @@ async fn spawn_update(
             service::update_document(
                 &ctx,
                 &id_owned,
-                service::WriteInput::builder(input.form_data, &input.join_data)
-                    .password(input.password.as_deref())
-                    .locale_ctx(input.locale_ctx.as_ref())
-                    .locale(locale)
-                    .draft(input.draft)
-                    .ui_locale(ui_locale)
-                    .build(),
+                service::WriteInput::builder({
+                    let mut __m = service::values_from_strings(input.form_data);
+                    for (k, v) in input.join_data.iter() {
+                        __m.insert(k.clone(), v.clone());
+                    }
+                    __m
+                })
+                .password(input.password.as_deref())
+                .locale_ctx(input.locale_ctx.as_ref())
+                .locale(locale)
+                .draft(input.draft)
+                .ui_locale(ui_locale)
+                .build(),
             )
         };
 

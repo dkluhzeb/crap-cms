@@ -1,6 +1,6 @@
 //! Version restore operations for collections and globals.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::Context as _;
 use serde_json::Value;
@@ -8,17 +8,17 @@ use tracing::warn;
 
 use crate::{
     config::LocaleConfig,
-    core::{Document, FieldDefinition, FieldType, event::EventOperation},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, event::EventOperation},
     db::{AccessResult, query, query::helpers::global_table},
     hooks::{LuaCrudInfra, ValidationCtx},
     service::{RunnerWriteHooks, ServiceContext, ServiceError, helpers},
 };
 
-/// Convert a snapshot JSON object into a `HashMap<String, Value>` suitable
+/// Convert a snapshot JSON object into a `DocumentFields` suitable
 /// for `validate_fields`. The snapshot's top-level keys are field names
 /// (group fields appear in either flat `seo__title` or nested `seo: {…}`
 /// form — the validator handles both via the schema walk).
-fn snapshot_to_validation_data(snapshot: &Value) -> HashMap<String, Value> {
+fn snapshot_to_validation_data(snapshot: &Value) -> DocumentFields {
     snapshot
         .as_object()
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())

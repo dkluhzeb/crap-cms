@@ -13,7 +13,8 @@ use tracing::error;
 use crate::{
     admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
     core::{
-        Document, FieldDefinition, auth::AuthUser, collection::Hooks, validate::ValidationError,
+        Document, DocumentFields, FieldDefinition, auth::AuthUser, collection::Hooks,
+        validate::ValidationError,
     },
     db::{DbPool, query::LocaleContext},
     hooks::HookRunner,
@@ -23,7 +24,7 @@ use crate::{
 /// JSON request body for validation endpoints.
 #[derive(Deserialize)]
 pub struct ValidateRequest {
-    pub data: HashMap<String, Value>,
+    pub data: DocumentFields,
     #[serde(default)]
     pub draft: bool,
     pub locale: Option<String>,
@@ -49,12 +50,12 @@ pub fn validation_ok_response() -> Response {
     Json(json!({ "valid": true })).into_response()
 }
 
-/// Convert a `HashMap<String, Value>` into a `HashMap<String, String>` suitable for
+/// Convert a `DocumentFields` into a `HashMap<String, String>` suitable for
 /// the form processing pipeline (transform_select_has_many, extract_join_data_from_form).
 ///
 /// Strings pass through, numbers/bools become their string representation, nulls become
 /// empty strings, and arrays/objects become their JSON serialization.
-pub fn values_to_string_map(data: &HashMap<String, Value>) -> HashMap<String, String> {
+pub fn values_to_string_map(data: &DocumentFields) -> HashMap<String, String> {
     data.iter()
         .map(|(k, v)| {
             let s = match v {
@@ -89,7 +90,7 @@ pub struct RunValidationParams<'a> {
     pub operation: &'a str,
     pub exclude_id: Option<&'a str>,
     pub form_data: &'a HashMap<String, String>,
-    pub join_data: &'a HashMap<String, Value>,
+    pub join_data: &'a DocumentFields,
     pub is_draft: bool,
     pub soft_delete: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
@@ -115,7 +116,10 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
 
     let wh = service::RunnerWriteHooks::new(p.runner).with_conn(&tx);
 
-    let input = service::WriteInput::builder(p.form_data.clone(), p.join_data)
+    let mut data = service::values_from_strings(p.form_data.clone());
+    data.extend(p.join_data.as_map().clone());
+
+    let input = service::WriteInput::builder(data)
         .locale_ctx(p.locale_ctx)
         .locale(locale)
         .draft(p.is_draft)
@@ -174,7 +178,7 @@ mod tests {
 
     #[test]
     fn values_to_string_map_converts_types() {
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
         data.insert("count".to_string(), json!(42));
         data.insert("active".to_string(), json!(true));

@@ -52,10 +52,10 @@ pub(crate) fn check_length_bounds(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use crate::core::DocumentFields;
     use crate::core::field::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_min_length_fails() {
@@ -68,7 +68,7 @@ mod tests {
                 .min_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("ab"));
         let result = validate_fields_inner(
             &lua,
@@ -95,7 +95,7 @@ mod tests {
                 .min_length(3)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("hello"));
         let result = validate_fields_inner(
             &lua,
@@ -117,7 +117,7 @@ mod tests {
                 .max_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("toolongvalue"));
         let result = validate_fields_inner(
             &lua,
@@ -144,7 +144,7 @@ mod tests {
                 .max_length(10)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("short"));
         let result = validate_fields_inner(
             &lua,
@@ -170,7 +170,7 @@ mod tests {
                 .max_length(4)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("café"));
         let result = validate_fields_inner(
             &lua,
@@ -186,7 +186,7 @@ mod tests {
                 .min_length(4)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!("你好世界"));
         let result = validate_fields_inner(
             &lua,
@@ -211,7 +211,7 @@ mod tests {
                 .min_length(5)
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,

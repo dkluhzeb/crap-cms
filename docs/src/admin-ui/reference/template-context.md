@@ -520,7 +520,7 @@ Every page above flattens [BasePageContext](#basepagecontext) (or [AuthBasePageC
 - **`created_at`** (Option<string>) _(optional)_
 - **`updated_at`** (Option<string>) _(optional)_
 - **`status`** (Option<string>) _(optional)_
-- **`data`** (Option<Object>) _(optional)_
+- **`data`** ([DocumentFields](#documentfields) \| null) _(optional)_
 
 ### PaginationContext
 

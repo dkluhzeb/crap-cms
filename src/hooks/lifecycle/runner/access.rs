@@ -4,11 +4,10 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mlua::Value;
-use serde_json::Value as JsonValue;
 use tracing::error;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType, document::DocumentBuilder},
+    core::{Document, DocumentFields, FieldDefinition, FieldType, document::DocumentBuilder},
     db::{AccessResult, DbConnection, query::helpers::prefixed_name},
     hooks::{
         HookRunner, api,
@@ -99,7 +98,7 @@ impl HookRunner {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, JsonValue>>,
+        data: Option<&DocumentFields>,
         conn: &dyn DbConnection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;

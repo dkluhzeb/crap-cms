@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::browser;
 use crate::helpers::*;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
@@ -40,7 +41,8 @@ async fn time_element_renders_formatted() {
 
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = HashMap::from([("title".to_string(), "Time Test Post".to_string())]);
+        let data: DocumentFields =
+            HashMap::from([("title".to_string(), json!("Time Test Post"))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }

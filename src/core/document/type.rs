@@ -1,9 +1,7 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::DocumentId;
+use crate::core::{DocumentFields, DocumentId};
 
 /// A single content document with an ID, user-defined fields, and optional timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,7 +10,7 @@ pub struct Document {
     pub id: DocumentId,
     /// A map of field names to their JSON-serialized values.
     #[serde(flatten)]
-    pub fields: HashMap<String, Value>,
+    pub fields: DocumentFields,
     /// The timestamp when this document was originally created.
     #[serde(default)]
     pub created_at: Option<String>,
@@ -26,7 +24,7 @@ impl Document {
     pub fn new(id: impl Into<DocumentId>) -> Self {
         Self {
             id: id.into(),
-            fields: HashMap::new(),
+            fields: DocumentFields::new(),
             created_at: None,
             updated_at: None,
         }
@@ -44,7 +42,7 @@ impl Document {
 
     /// Get a field value as a string.
     pub fn get_str(&self, key: &str) -> Option<&str> {
-        self.fields.get(key).and_then(|v| v.as_str())
+        self.fields.get_str(key)
     }
 
     /// Strip denied fields by name, handling both flat keys and `__`-separated
@@ -65,7 +63,7 @@ impl Document {
 }
 
 /// Walk into nested objects following `__`-separated segments and remove the leaf.
-fn strip_nested(fields: &mut HashMap<String, Value>, segments: &[&str]) {
+fn strip_nested(fields: &mut DocumentFields, segments: &[&str]) {
     let Some((&first, rest)) = segments.split_first() else {
         return;
     };
@@ -99,7 +97,7 @@ fn strip_nested_value(map: &mut serde_json::Map<String, Value>, segments: &[&str
 /// Builder for [`Document`].
 pub struct DocumentBuilder {
     id: DocumentId,
-    fields: HashMap<String, Value>,
+    fields: DocumentFields,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -109,15 +107,15 @@ impl DocumentBuilder {
     pub fn new(id: impl Into<DocumentId>) -> Self {
         Self {
             id: id.into(),
-            fields: HashMap::new(),
+            fields: DocumentFields::new(),
             created_at: None,
             updated_at: None,
         }
     }
 
     /// Sets the document fields.
-    pub fn fields(mut self, fields: HashMap<String, Value>) -> Self {
-        self.fields = fields;
+    pub fn fields(mut self, fields: impl Into<DocumentFields>) -> Self {
+        self.fields = fields.into();
 
         self
     }
@@ -149,6 +147,8 @@ impl DocumentBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::*;

@@ -1,9 +1,8 @@
 //! Service context — calling environment for all service operations.
 
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 use anyhow::{Context as _, anyhow};
-use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use std::sync::Arc;
 use crate::{
     config::{EmailConfig, LocaleConfig, ServerConfig},
     core::{
-        CollectionDefinition, Document, FieldDefinition,
+        CollectionDefinition, Document, DocumentFields, FieldDefinition,
         cache::SharedCache,
         collection::{GlobalDefinition, Hooks, LiveMode, LiveSetting},
         email::EmailRenderer,
@@ -44,7 +43,7 @@ pub struct PendingEvent {
     pub operation: EventOperation,
     pub collection: String,
     pub document_id: String,
-    pub data: HashMap<String, JsonValue>,
+    pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
     pub hooks: Hooks,
     pub live: Option<LiveSetting>,
@@ -357,7 +356,7 @@ impl<'a> ServiceContext<'a> {
         &self,
         operation: EventOperation,
         doc_id: &str,
-        data: &HashMap<String, JsonValue>,
+        data: &DocumentFields,
     ) {
         if self.event_transport.is_none() {
             return;
@@ -374,7 +373,7 @@ impl<'a> ServiceContext<'a> {
         let data = if live_mode == LiveMode::Full {
             data.clone()
         } else {
-            HashMap::new()
+            DocumentFields::new()
         };
 
         let edited_by = self.user.map(|u| {

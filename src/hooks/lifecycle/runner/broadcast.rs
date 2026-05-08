@@ -1,15 +1,12 @@
 //! HookRunner methods for event broadcasting.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::Value;
-use serde_json::Value as JsonValue;
 use tracing::{debug, warn};
 
 use crate::{
     core::{
-        DocumentId, Slug,
+        DocumentFields, DocumentId, Slug,
         collection::{Hooks, LiveSetting},
         event::{EventOperation, EventTarget, EventUser, MutationEventInput, SharedEventTransport},
     },
@@ -28,7 +25,7 @@ pub struct PublishEventInput {
     pub operation: EventOperation,
     pub collection: Slug,
     pub document_id: DocumentId,
-    pub data: HashMap<String, JsonValue>,
+    pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
 }
 
@@ -57,7 +54,7 @@ pub struct PublishEventInputBuilder {
     operation: EventOperation,
     collection: Option<Slug>,
     document_id: Option<DocumentId>,
-    data: HashMap<String, JsonValue>,
+    data: DocumentFields,
     edited_by: Option<EventUser>,
 }
 
@@ -68,7 +65,7 @@ impl PublishEventInputBuilder {
             operation,
             collection: None,
             document_id: None,
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             edited_by: None,
         }
     }
@@ -83,8 +80,8 @@ impl PublishEventInputBuilder {
         self
     }
 
-    pub fn data(mut self, data: HashMap<String, JsonValue>) -> Self {
-        self.data = data;
+    pub fn data(mut self, data: impl Into<DocumentFields>) -> Self {
+        self.data = data.into();
         self
     }
 
@@ -114,8 +111,8 @@ impl HookRunner {
         hooks: &Hooks,
         collection: &str,
         operation: &str,
-        data: HashMap<String, JsonValue>,
-    ) -> Result<Option<HashMap<String, JsonValue>>> {
+        data: DocumentFields,
+    ) -> Result<Option<DocumentFields>> {
         let hook_refs = get_hook_refs(hooks, &HookEvent::BeforeBroadcast);
 
         // Skip VM acquisition entirely when no work to do
@@ -157,7 +154,7 @@ impl HookRunner {
         live: Option<&LiveSetting>,
         collection: &str,
         operation: &str,
-        data: &HashMap<String, JsonValue>,
+        data: &DocumentFields,
     ) -> Result<bool> {
         match live {
             None => Ok(true), // absent = broadcast all

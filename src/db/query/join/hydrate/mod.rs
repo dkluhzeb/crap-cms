@@ -84,6 +84,8 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::core::DocumentFields;
+
     use super::{
         super::{
             arrays::{find_array_rows, set_array_rows},
@@ -119,8 +121,8 @@ mod tests {
 
         let sub = array_sub_fields();
         let rows = vec![HashMap::from([
-            ("label".to_string(), "Item 1".to_string()),
-            ("value".to_string(), "Val 1".to_string()),
+            ("label".to_string(), json!("Item 1")),
+            ("value".to_string(), json!("Val 1")),
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
 
@@ -167,8 +169,8 @@ mod tests {
         set_related_ids(&conn, "posts", "tags", "p1", &tag_ids, None).unwrap();
         let sub = array_sub_fields();
         let rows = vec![HashMap::from([
-            ("label".to_string(), "Item 1".to_string()),
-            ("value".to_string(), "Val 1".to_string()),
+            ("label".to_string(), json!("Item 1")),
+            ("value".to_string(), json!("Val 1")),
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
 
@@ -247,7 +249,7 @@ mod tests {
             tabs_field,
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "content".to_string(),
             json!([
@@ -293,7 +295,7 @@ mod tests {
             row_field,
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "items".to_string(),
             json!([
@@ -362,7 +364,7 @@ mod tests {
         ];
 
         // Save array rows
-        let array_rows = vec![HashMap::from([("name".to_string(), "Item1".to_string())])];
+        let array_rows = vec![HashMap::from([("name".to_string(), json!("Item1"))])];
         set_array_rows(
             &conn,
             "posts",
@@ -497,7 +499,7 @@ mod tests {
                 .build(),
         ];
 
-        let array_rows = vec![HashMap::from([("name".to_string(), "Item1".to_string())])];
+        let array_rows = vec![HashMap::from([("name".to_string(), json!("Item1"))])];
         set_array_rows(
             &conn,
             "posts",
@@ -542,7 +544,7 @@ mod tests {
             collapsible_field,
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "content".to_string(),
             json!([

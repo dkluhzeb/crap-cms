@@ -1,18 +1,17 @@
 //! Update operation and its helper.
 
-use std::collections::HashMap;
-
 use anyhow::{Context as _, Result, anyhow};
+use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, Document, FieldDefinition, FieldType},
+    core::{CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType},
     db::{
         DbConnection, DbValue, LocaleContext,
         query::{
-            coerce_value,
+            coerce_json_value,
             helpers::{
-                coerce_date_value, prefixed_name, tz_column, utc_now, validate_no_null_byte,
-                walk_leaf_fields,
+                coerce_date_value_json, prefixed_name, tz_column, utc_now,
+                validate_no_null_byte_json, walk_leaf_fields,
             },
             locale_write_column,
             read::find_by_id_raw,
@@ -26,7 +25,7 @@ pub fn update(
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     update_inner(
@@ -47,7 +46,7 @@ pub fn update_partial(
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     update_inner(
@@ -67,7 +66,7 @@ fn update_inner(
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
     mut col: UpdateCollector,
 ) -> Result<Document> {
@@ -137,7 +136,7 @@ impl UpdateCollector {
 /// Collect UPDATE params for a single leaf (scalar) field.
 fn collect_leaf_update(
     field: &FieldDefinition,
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: &Option<&LocaleContext>,
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
@@ -161,18 +160,22 @@ fn collect_leaf_update(
         None
     };
 
-    validate_no_null_byte(&field.field_type, &data_key, value)?;
+    validate_no_null_byte_json(&field.field_type, &data_key, value)?;
 
     let db_val = match tz_key.as_ref() {
-        Some(tk) => coerce_date_value(&field.field_type, value, data.get(tk).map(|s| s.as_str())),
-        None => coerce_value(&field.field_type, value),
+        Some(tk) => coerce_date_value_json(
+            &field.field_type,
+            value,
+            data.get(tk).and_then(Value::as_str),
+        ),
+        None => coerce_json_value(&field.field_type, value),
     };
 
     collector.push(conn, &col_name, db_val);
 
     if let Some(tk) = tz_key {
         let tz_col = locale_write_column(&tk, field, locale_ctx, inherited_localized)?;
-        let tz_val = data.get(&tk).map(|s| s.as_str()).unwrap_or("");
+        let tz_val = data.get(&tk).and_then(Value::as_str).unwrap_or("");
         let db_val = if tz_val.is_empty() {
             DbValue::Null
         } else {
@@ -189,7 +192,7 @@ fn collect_leaf_update(
 /// Uses `walk_leaf_fields` to handle Group/Row/Collapsible/Tabs recursion.
 pub(in crate::db::query) fn collect_update_params(
     fields: &[FieldDefinition],
-    data: &HashMap<String, String>,
+    data: &DocumentFields,
     locale_ctx: &Option<&LocaleContext>,
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
@@ -218,13 +221,15 @@ pub(in crate::db::query) fn collect_update_params(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+    use tempfile::TempDir;
+
     use super::*;
     use crate::config::CrapConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::query::write::create;
     use crate::db::{BoxedConnection, pool};
-    use tempfile::TempDir;
 
     fn setup_db(ddl: &str) -> (TempDir, BoxedConnection) {
         let dir = TempDir::new().unwrap();
@@ -258,14 +263,14 @@ mod tests {
     fn update_basic() {
         let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Original".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Original"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
-        let mut update_data = HashMap::new();
-        update_data.insert("title".to_string(), "Updated".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("title".to_string(), json!("Updated"));
 
         let updated = update(&conn, "posts", &def, &id, &update_data, None).unwrap();
         assert_eq!(updated.get_str("title"), Some("Updated"));
@@ -275,16 +280,16 @@ mod tests {
     fn update_preserves_unset_fields() {
         let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "My Title".to_string());
-        data.insert("status".to_string(), "draft".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("My Title"));
+        data.insert("status".to_string(), json!("draft"));
 
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
         // Update only title, not status
-        let mut update_data = HashMap::new();
-        update_data.insert("title".to_string(), "New Title".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("title".to_string(), json!("New Title"));
 
         let updated = update(&conn, "posts", &def, &id, &update_data, None).unwrap();
         assert_eq!(updated.get_str("title"), Some("New Title"));
@@ -299,8 +304,8 @@ mod tests {
     fn update_nonexistent_id() {
         let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Something".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Something"));
 
         let result = update(&conn, "posts", &def, "nonexistent-id", &data, None);
         assert!(result.is_err(), "Updating non-existent ID should error");
@@ -340,8 +345,8 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("meta__color".to_string(), "green".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("meta__color".to_string(), json!("green"));
 
         let doc = update(&conn, "posts", &def, "p1", &data, None).unwrap();
         assert_eq!(doc.get_str("meta__color"), Some("green"));
@@ -368,8 +373,8 @@ mod tests {
         def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("name".to_string(), "Updated".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("name".to_string(), json!("Updated"));
 
         let doc = update(&conn, "events", &def, "e1", &data, None).unwrap();
         assert_eq!(doc.get_str("name"), Some("Updated"));
@@ -379,15 +384,15 @@ mod tests {
     fn update_empty_data_returns_existing() {
         let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "MyTitle".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("MyTitle"));
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
         // Update with no data and timestamps disabled — should return existing doc
         let mut no_ts_def = test_def();
         no_ts_def.timestamps = false;
-        let empty_data = HashMap::new();
+        let empty_data = DocumentFields::new();
         let result = update(&conn, "posts", &no_ts_def, &id, &empty_data, None).unwrap();
         assert_eq!(result.get_str("title"), Some("MyTitle"));
     }
@@ -442,8 +447,8 @@ mod tests {
         let def = def;
 
         // Only update twitter, leave github and body untouched
-        let mut data = HashMap::new();
-        data.insert("social__twitter".to_string(), "@new".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("social__twitter".to_string(), json!("@new"));
 
         let doc = update(&conn, "posts", &def, "p1", &data, None).unwrap();
         assert_eq!(doc.get_str("social__twitter"), Some("@new"));
@@ -497,8 +502,8 @@ mod tests {
         ];
         let def = def;
 
-        let mut data = HashMap::new();
-        data.insert("meta__title".to_string(), "New Title".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("meta__title".to_string(), json!("New Title"));
 
         let doc = update(&conn, "posts", &def, "abc", &data, None).unwrap();
         assert_eq!(doc.get_str("meta__title"), Some("New Title"));
@@ -534,14 +539,14 @@ mod tests {
     fn update_resets_absent_checkbox_to_zero() {
         let (_dir, conn) = setup_db(checkbox_ddl());
         let def = checkbox_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test".to_string());
-        data.insert("active".to_string(), "1".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test"));
+        data.insert("active".to_string(), json!("1"));
         let doc = create(&conn, "items", &def, &data, None).unwrap();
 
         // Regular update without checkbox field -> should reset to 0
-        let mut update_data = HashMap::new();
-        update_data.insert("title".to_string(), "Updated".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("title".to_string(), json!("Updated"));
         let updated = update(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
         assert_eq!(
             updated.fields.get("active").and_then(|v| v.as_i64()),
@@ -554,14 +559,14 @@ mod tests {
     fn update_partial_preserves_absent_checkbox() {
         let (_dir, conn) = setup_db(checkbox_ddl());
         let def = checkbox_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test".to_string());
-        data.insert("active".to_string(), "1".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test"));
+        data.insert("active".to_string(), json!("1"));
         let doc = create(&conn, "items", &def, &data, None).unwrap();
 
         // Partial update without checkbox field -> should preserve existing value
-        let mut update_data = HashMap::new();
-        update_data.insert("title".to_string(), "Partial".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("title".to_string(), json!("Partial"));
         let updated = update_partial(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
         assert_eq!(
             updated.fields.get("active").and_then(|v| v.as_i64()),
@@ -574,14 +579,14 @@ mod tests {
     fn update_partial_still_sets_provided_checkbox() {
         let (_dir, conn) = setup_db(checkbox_ddl());
         let def = checkbox_def();
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test".to_string());
-        data.insert("active".to_string(), "1".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test"));
+        data.insert("active".to_string(), json!("1"));
         let doc = create(&conn, "items", &def, &data, None).unwrap();
 
         // Partial update WITH checkbox field -> should update it
-        let mut update_data = HashMap::new();
-        update_data.insert("active".to_string(), "0".to_string());
+        let mut update_data = DocumentFields::new();
+        update_data.insert("active".to_string(), json!("0"));
         let updated = update_partial(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
         assert_eq!(
             updated.fields.get("active").and_then(|v| v.as_i64()),
@@ -622,9 +627,9 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert("start_date".to_string(), "2024-06-15T10:00".to_string());
-        data.insert("start_date_tz".to_string(), "America/Chicago".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("start_date".to_string(), json!("2024-06-15T10:00"));
+        data.insert("start_date_tz".to_string(), json!("America/Chicago"));
 
         let doc = update(&conn, "events", &def, "e1", &data, None).unwrap();
 
@@ -662,8 +667,8 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
-        data.insert("start_date".to_string(), "2024-06-15T10:00".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("start_date".to_string(), json!("2024-06-15T10:00"));
         // No tz value
 
         let doc = update(&conn, "events", &def, "e1", &data, None).unwrap();

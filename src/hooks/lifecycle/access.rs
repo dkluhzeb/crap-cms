@@ -1,14 +1,11 @@
 //! Access control checks executed within the Lua VM.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use mlua::{Lua, Value};
-use serde_json::Value as JsonValue;
 use tracing::warn;
 
 use crate::{
-    core::{Document, FieldDefinition, FieldType},
+    core::{Document, DocumentFields, FieldDefinition, FieldType},
     db::{AccessResult, Filter, FilterClause, FilterOp, query::helpers::prefixed_name},
     hooks::{
         api,
@@ -28,7 +25,7 @@ pub(crate) fn check_access_with_lua(
     access_ref: Option<&str>,
     user: Option<&Document>,
     id: Option<&str>,
-    data: Option<&HashMap<String, JsonValue>>,
+    data: Option<&DocumentFields>,
 ) -> Result<AccessResult> {
     let func_ref = match access_ref {
         Some(r) => r,
@@ -305,6 +302,7 @@ mod tests {
     use crate::core::field::{FieldAccess, FieldType};
     use mlua::Lua;
     use serde_json::json;
+    use std::collections::HashMap;
 
     /// Set up a Lua VM with test access functions available via require/package.loaded.
     fn setup_lua() -> Lua {
@@ -700,7 +698,7 @@ mod tests {
     #[test]
     fn access_passes_data_context() {
         let lua = setup_lua();
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("test"));
         let result = check_access_with_lua(
             &lua,
@@ -712,7 +710,7 @@ mod tests {
         .unwrap();
         assert!(matches!(result, AccessResult::Allowed));
 
-        let mut bad_data = HashMap::new();
+        let mut bad_data = DocumentFields::new();
         bad_data.insert("title".to_string(), json!("other"));
         let result = check_access_with_lua(
             &lua,

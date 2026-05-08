@@ -1,11 +1,8 @@
 //! Mutation event payload types.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::core::{DocumentId, Slug};
+use crate::core::{DocumentFields, DocumentId, Slug};
 
 /// The type of entity that was mutated.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -64,7 +61,7 @@ pub struct MutationEvent {
     /// The ID of the document or global name.
     pub document_id: DocumentId,
     /// The data that was changed or the full state.
-    pub data: HashMap<String, Value>,
+    pub data: DocumentFields,
     /// The user who performed the action, if known.
     pub edited_by: Option<EventUser>,
 }
@@ -76,7 +73,7 @@ pub struct MutationEventInput {
     pub operation: EventOperation,
     pub collection: Slug,
     pub document_id: DocumentId,
-    pub data: HashMap<String, Value>,
+    pub data: DocumentFields,
     pub edited_by: Option<EventUser>,
 }
 
@@ -94,7 +91,7 @@ mod tests {
             operation: EventOperation::Update,
             collection: Slug::new("posts"),
             document_id: DocumentId::new("abc"),
-            data: HashMap::new(),
+            data: DocumentFields::new(),
             edited_by: Some(EventUser::new("u1", "u@example.com")),
         };
         let json = serde_json::to_string(&event).unwrap();

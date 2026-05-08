@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::{
-    core::{CollectionDefinition, FieldDefinition, FieldType},
+    core::{CollectionDefinition, DocumentFields, FieldDefinition, FieldType},
     db::{DbConnection, FindQuery, query},
 };
 
@@ -34,11 +34,11 @@ pub fn resolve_bench_data(
     slug: &str,
     def: &CollectionDefinition,
     user_data: Option<&str>,
-) -> Result<(HashMap<String, Value>, DataSource)> {
+) -> Result<(DocumentFields, DataSource)> {
     // 1. User-provided JSON
     if let Some(json_str) = user_data {
         let val: Value = serde_json::from_str(json_str)?;
-        let map = match val {
+        let map: DocumentFields = match val {
             Value::Object(m) => m.into_iter().collect(),
             _ => anyhow::bail!("--data must be a JSON object"),
         };
@@ -62,8 +62,8 @@ pub fn resolve_bench_data(
     Ok((data, DataSource::Synthetic))
 }
 
-/// Convert `HashMap<String, Value>` to `HashMap<String, String>` for WriteInput.
-pub fn to_string_map(data: &HashMap<String, Value>) -> HashMap<String, String> {
+/// Convert document field values to `HashMap<String, String>` for WriteInput.
+pub fn to_string_map(data: &DocumentFields) -> HashMap<String, String> {
     data.iter()
         .filter_map(|(k, v)| {
             let s = match v {
@@ -79,29 +79,31 @@ pub fn to_string_map(data: &HashMap<String, Value>) -> HashMap<String, String> {
 }
 
 /// Append a random suffix to unique fields so benchmarks don't hit uniqueness violations.
-pub fn randomize_unique_fields(data: &mut HashMap<String, Value>, fields: &[FieldDefinition]) {
+pub fn randomize_unique_fields(data: &mut DocumentFields, fields: &[FieldDefinition]) {
     for field in fields {
         if !field.unique {
             continue;
         }
 
-        let Some(val) = data.get(&field.name) else {
+        let Some(s) = data
+            .get(&field.name)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
             continue;
         };
 
-        if let Value::String(s) = val {
-            let suffix = nanoid::nanoid!(8);
-            data.insert(
-                field.name.clone(),
-                Value::String(format!("{s}-bench-{suffix}")),
-            );
-        }
+        let suffix = nanoid::nanoid!(8);
+        data.insert(
+            field.name.clone(),
+            Value::String(format!("{s}-bench-{suffix}")),
+        );
     }
 }
 
 /// Generate plausible synthetic data from a collection's field definitions.
-fn generate_synthetic_data(fields: &[FieldDefinition]) -> HashMap<String, Value> {
-    let mut data = HashMap::new();
+fn generate_synthetic_data(fields: &[FieldDefinition]) -> DocumentFields {
+    let mut data = DocumentFields::new();
 
     for field in fields {
         let value = match field.field_type {
@@ -193,7 +195,7 @@ mod tests {
 
     #[test]
     fn to_string_map_converts_values() {
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("name".into(), Value::String("test".into()));
         data.insert("count".into(), Value::Number(42.into()));
         data.insert("active".into(), Value::Bool(true));

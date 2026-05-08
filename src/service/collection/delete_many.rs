@@ -1,13 +1,12 @@
 //! Bulk delete — delete multiple documents matching a filter.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Context as _;
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::event::EventOperation,
+    core::{DocumentFields, event::EventOperation},
     db::{FilterClause, FindQuery, query},
     hooks::LuaCrudInfra,
     service::{RunnerWriteHooks, ServiceContext, ServiceError, delete_document_core, flush_queue},
@@ -23,7 +22,7 @@ pub struct DeleteManyResult {
     pub soft_deleted: i64,
     pub skipped: i64,
     pub deleted_ids: Vec<String>,
-    pub upload_fields_to_clean: Vec<HashMap<String, Value>>,
+    pub upload_fields_to_clean: Vec<DocumentFields>,
 }
 
 /// Options controlling bulk delete behavior.
@@ -158,7 +157,7 @@ fn delete_many_pool(
 
         // Publish events for this batch after commit.
         for id in deleted_ids.iter().skip(deleted_ids.len() - batch_deleted) {
-            ctx.publish_mutation_event(EventOperation::Delete, id, &HashMap::new());
+            ctx.publish_mutation_event(EventOperation::Delete, id, &DocumentFields::new());
         }
         flush_queue(ctx, &queue);
 

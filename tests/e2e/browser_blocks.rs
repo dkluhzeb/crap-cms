@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::browser;
 use crate::helpers::*;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
@@ -278,7 +279,7 @@ fn create_media(app: &TestApp, filename: &str) -> String {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = HashMap::from([("filename".to_string(), filename.to_string())]);
+    let data: DocumentFields = HashMap::from([("filename".to_string(), json!(filename))]).into();
     let doc = query::create(&tx, "media", &def, &data, None).unwrap();
     tx.commit().unwrap();
     doc.id.to_string()

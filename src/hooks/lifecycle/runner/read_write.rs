@@ -1,14 +1,12 @@
 //! HookRunner methods for CRUD lifecycle orchestration.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 use serde_json::Value;
 
 use super::run::FieldWriteCtx;
 use crate::{
     core::{
-        Document, FieldDefinition, FieldType,
+        Document, DocumentFields, FieldDefinition, FieldType,
         collection::Hooks,
         validate::{FieldError, ValidationError},
     },
@@ -35,7 +33,7 @@ impl HookRunner {
         hooks: &Hooks,
         collection: &str,
         operation: &str,
-        data: HashMap<String, Value>,
+        data: DocumentFields,
     ) -> Result<()> {
         let ctx = HookContext::builder(collection, operation)
             .data(data)
@@ -71,9 +69,9 @@ impl HookRunner {
         hooks: &Hooks,
         fields: &[FieldDefinition],
         document_id: &str,
-        data: &HashMap<String, Value>,
+        data: &DocumentFields,
         user: Option<&Document>,
-    ) -> HashMap<String, Value> {
+    ) -> DocumentFields {
         let has_field_hooks = has_field_hooks_for_event(fields, &FieldHookEvent::AfterRead);
         let has_collection_hooks = !hooks.after_read.is_empty();
         let has_registered = self.has_registered_hooks_for("after_read");
@@ -131,7 +129,7 @@ impl HookRunner {
     ///   field BeforeValidate → collection BeforeValidate → validate_fields →
     ///   field BeforeChange → collection BeforeChange.
     /// Returns the final hook context with validated, hook-processed data.
-    /// Callers use `HookContext::to_string_map()` on the result to get the data for query functions.
+    /// Callers use `HookContext::to_value_map()` on the result to get the data for query functions.
     ///
     /// Field hooks in before-write get full CRUD access (same transaction).
     /// The authenticated user, draft flag, and UI locale are extracted from `ctx`.
@@ -242,7 +240,7 @@ impl HookRunner {
     fn run_richtext_node_attr_before_validate(
         &self,
         fields: &[FieldDefinition],
-        data: &mut HashMap<String, Value>,
+        data: &mut DocumentFields,
         collection: &str,
     ) {
         let richtext_fields = collect_richtext_fields_recursive(fields, "");
@@ -295,7 +293,7 @@ impl HookRunner {
     pub fn validate_fields(
         &self,
         fields: &[FieldDefinition],
-        data: &HashMap<String, Value>,
+        data: &DocumentFields,
         ctx: &ValidationCtx,
     ) -> Result<(), ValidationError> {
         let lua = self

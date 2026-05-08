@@ -2,6 +2,7 @@
 //!
 //! Covers: login/logout, auth middleware, email verification, forgot/reset password.
 
+use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -13,6 +14,7 @@ use http_body_util::BodyExt;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::{
@@ -187,11 +189,12 @@ fn create_test_user_with_role(app: &TestApp, email: &str, password: &str, role: 
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-        ("role".to_string(), role.to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), json!(email)),
+        ("name".to_string(), json!("Test User")),
+        ("role".to_string(), json!(role)),
+    ])
+    .into();
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
@@ -777,10 +780,11 @@ async fn login_unverified_email() {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), "unverified@test.com".to_string()),
-        ("name".to_string(), "Unverified User".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), json!("unverified@test.com")),
+        ("name".to_string(), json!("Unverified User")),
+    ])
+    .into();
     let doc = query::create(&tx, "vusers", &def, &data, None).unwrap();
     query::update_password(&tx, "vusers", &doc.id, "secret123").unwrap();
     tx.commit().unwrap();
@@ -827,10 +831,11 @@ async fn verify_email_with_valid_token() {
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), "toverify@test.com".to_string()),
-        ("name".to_string(), "To Verify".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("email".to_string(), json!("toverify@test.com")),
+        ("name".to_string(), json!("To Verify")),
+    ])
+    .into();
     let doc = query::create(&tx, "vusers", &def, &data, None).unwrap();
     query::update_password(&tx, "vusers", &doc.id, "secret123").unwrap();
     tx.commit().unwrap();

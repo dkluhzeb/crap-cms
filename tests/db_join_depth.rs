@@ -1,8 +1,9 @@
 #![cfg(feature = "sqlite")]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{
@@ -187,15 +188,15 @@ fn global_array_field_save_and_read() {
 
     let rows = vec![
         {
-            let mut m = HashMap::new();
-            m.insert("url".to_string(), "https://example.com".to_string());
-            m.insert("label".to_string(), "Example".to_string());
+            let mut m = std::collections::HashMap::new();
+            m.insert("url".to_string(), json!("https://example.com"));
+            m.insert("label".to_string(), json!("Example"));
             m
         },
         {
-            let mut m = HashMap::new();
-            m.insert("url".to_string(), "https://rust-lang.org".to_string());
-            m.insert("label".to_string(), "Rust".to_string());
+            let mut m = std::collections::HashMap::new();
+            m.insert("url".to_string(), json!("https://rust-lang.org"));
+            m.insert("label".to_string(), json!("Rust"));
             m
         },
     ];
@@ -299,7 +300,7 @@ fn global_save_join_table_data() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
     join_data.insert(
         "links".to_string(),
         json!([
@@ -353,7 +354,7 @@ fn global_join_table_data_replaces_on_update() {
     // First save
     {
         let tx = conn.transaction().expect("Start transaction");
-        let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut join_data = DocumentFields::new();
         join_data.insert(
             "links".to_string(),
             json!([
@@ -375,7 +376,7 @@ fn global_join_table_data_replaces_on_update() {
     // Second save — should replace
     {
         let tx = conn.transaction().expect("Start transaction");
-        let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut join_data = DocumentFields::new();
         join_data.insert(
             "links".to_string(),
             json!([
@@ -412,10 +413,10 @@ fn global_group_field_preserved() {
     // Update global with group sub-field data (expanded columns)
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "My Homepage".to_string());
-    data.insert("seo__meta_title".to_string(), "Home".to_string());
-    data.insert("seo__meta_description".to_string(), "Welcome".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("My Homepage"));
+    data.insert("seo__meta_title".to_string(), json!("Home"));
+    data.insert("seo__meta_description".to_string(), json!("Welcome"));
     query::update_global(&tx, "homepage", &def, &data, None).expect("Update failed");
     tx.commit().expect("Commit");
 
@@ -445,13 +446,13 @@ fn global_mixed_fields_coexist() {
     let tx = conn.transaction().expect("Start transaction");
 
     // Update scalar + group sub-field data
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "Homepage".to_string());
-    data.insert("seo__meta_title".to_string(), "Home".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Homepage"));
+    data.insert("seo__meta_title".to_string(), json!("Home"));
     query::update_global(&tx, "homepage", &def, &data, None).expect("Update failed");
 
     // Save join table data
-    let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut join_data = DocumentFields::new();
     join_data.insert(
         "links".to_string(),
         json!([
@@ -544,8 +545,8 @@ fn global_alter_table_adds_new_columns() {
     // Write data
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
-    let mut data = HashMap::new();
-    data.insert("name".to_string(), "Test".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("name".to_string(), json!("Test"));
     query::update_global(&tx, "evolving", &def_v1, &data, None).expect("Update v1 failed");
     tx.commit().expect("Commit");
 
@@ -625,8 +626,8 @@ fn global_alter_table_adds_join_tables() {
     let tx = conn2.transaction().expect("Start transaction");
     let items_field = def_v2.fields.iter().find(|f| f.name == "items").unwrap();
     let rows = vec![{
-        let mut m = HashMap::new();
-        m.insert("label".to_string(), "First".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("label".to_string(), json!("First"));
         m
     }];
     query::set_array_rows(
@@ -758,15 +759,12 @@ fn global_update_ignores_join_table_field_values() {
 
     // Include both scalar data and array/blocks data in the update map.
     // The array/blocks values should be ignored by update_global (no parent column).
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "My Title".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("My Title"));
     // These should not cause SQL errors even though no column exists:
-    data.insert("links".to_string(), "should be ignored".to_string());
-    data.insert("content".to_string(), "should be ignored".to_string());
-    data.insert(
-        "featured_posts".to_string(),
-        "should be ignored".to_string(),
-    );
+    data.insert("links".to_string(), json!("should be ignored"));
+    data.insert("content".to_string(), json!("should be ignored"));
+    data.insert("featured_posts".to_string(), json!("should be ignored"));
 
     let doc = query::update_global(&tx, "homepage", &def, &data, None)
         .expect("Update should succeed despite join-table field values in data");
@@ -795,8 +793,8 @@ fn collection_alter_adds_group_sub_columns() {
 
     // Write initial data
     let conn = pool.get().unwrap();
-    let mut data = HashMap::new();
-    data.insert("title".to_string(), "My Article".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("My Article"));
     let doc = query::create(&conn, "articles", &def, &data, None).expect("Create");
 
     // Second sync: add a group field
@@ -842,9 +840,9 @@ fn collection_alter_adds_group_sub_columns() {
     assert_eq!(old_doc.get_str("title"), Some("My Article"));
 
     // Write new data with group sub-fields
-    let mut new_data = HashMap::new();
-    new_data.insert("seo__meta_title".to_string(), "SEO Title".to_string());
-    new_data.insert("seo__meta_description".to_string(), "SEO Desc".to_string());
+    let mut new_data = DocumentFields::new();
+    new_data.insert("seo__meta_title".to_string(), json!("SEO Title"));
+    new_data.insert("seo__meta_description".to_string(), json!("SEO Desc"));
     query::update(&conn, "articles", &def, &doc.id, &new_data, None).expect("Update");
 
     let updated = query::find_by_id(&conn, "articles", &def, &doc.id, None)
@@ -886,8 +884,8 @@ fn global_alter_adds_group_sub_columns() {
 
     // Write initial data
     let conn = pool.get().unwrap();
-    let mut data = HashMap::new();
-    data.insert("site_name".to_string(), "My Site".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("site_name".to_string(), json!("My Site"));
     query::update_global(&conn, "settings", &def_v1, &data, None).expect("Update v1");
 
     // Second sync: add a group field
@@ -938,9 +936,9 @@ fn global_alter_adds_group_sub_columns() {
     );
 
     // Write group data
-    let mut new_data = HashMap::new();
-    new_data.insert("seo__meta_title".to_string(), "Global SEO".to_string());
-    new_data.insert("seo__og_image".to_string(), "/og.png".to_string());
+    let mut new_data = DocumentFields::new();
+    new_data.insert("seo__meta_title".to_string(), json!("Global SEO"));
+    new_data.insert("seo__og_image".to_string(), json!("/og.png"));
     query::update_global(&conn, "settings", &def_v2, &new_data, None).expect("Update v2");
 
     let updated = query::get_global(&conn, "settings", &def_v2, None).expect("Get v2");

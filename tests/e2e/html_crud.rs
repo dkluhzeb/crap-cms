@@ -1,7 +1,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use serde_json::json;
 use tower::ServiceExt;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
@@ -133,8 +135,8 @@ async fn update_redirects_with_updated_data() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Original Title".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Original Title"))]).into();
     let doc_record = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -191,8 +193,8 @@ async fn delete_removes_from_list() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data =
-        std::collections::HashMap::from([("title".to_string(), "Delete Me Please".to_string())]);
+    let data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Delete Me Please"))]).into();
     let doc_record = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -250,7 +252,8 @@ async fn list_page_shows_documents() {
     for title in &["Alpha Post", "Beta Post", "Gamma Post"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        let data: DocumentFields =
+            std::collections::HashMap::from([("title".to_string(), json!(title))]).into();
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }

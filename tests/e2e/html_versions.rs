@@ -1,7 +1,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use serde_json::json;
 use tower::ServiceExt;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 
@@ -149,8 +151,8 @@ async fn save_draft_button_carries_formnovalidate() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let mut data = std::collections::HashMap::new();
-    data.insert("title".to_string(), "Edit Me".to_string());
+    let mut data = DocumentFields::new();
+    data.insert("title".to_string(), json!("Edit Me"));
     let created = query::create(&tx, "articles", &def, &data, None).expect("seed doc");
     tx.commit().unwrap();
     drop(conn);
@@ -288,10 +290,11 @@ async fn edit_form_shows_version_sidebar() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Versioned Article".to_string()),
-        ("body".to_string(), "Some body".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("Versioned Article")),
+        ("body".to_string(), json!("Some body")),
+    ])
+    .into();
     let doc_record = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 

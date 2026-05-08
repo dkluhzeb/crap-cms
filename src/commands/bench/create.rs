@@ -1,10 +1,11 @@
 //! `bench create` — time a full document create cycle (rolled back).
 
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use dialoguer::Confirm;
-use serde_json::Value;
+
+use crate::service::values_from_strings;
 
 use crate::{
     cli::{self, crap_theme},
@@ -65,8 +66,6 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
     let (data, source) = helpers::resolve_bench_data(&conn, slug, def, params.user_data)?;
     drop(conn);
 
-    let join_data: HashMap<String, Value> = HashMap::new();
-
     cli::kv("Iterations", &params.iterations.to_string());
     cli::kv("Data source", source.label());
 
@@ -102,7 +101,7 @@ pub fn run(params: &CreateBenchParams) -> Result<()> {
             .override_access(true)
             .build();
 
-        let input = WriteInput::builder(data_str, &join_data).build();
+        let input = WriteInput::builder(values_from_strings(data_str)).build();
 
         let start = Instant::now();
         let result = create_document_core(&ctx, input);

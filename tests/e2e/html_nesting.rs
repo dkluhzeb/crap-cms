@@ -3,6 +3,7 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query::LocaleContext;
@@ -291,11 +292,12 @@ async fn group_group_crud_roundtrip() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("name".to_string(), "Corp".to_string()),
-        ("address__geo__lat".to_string(), "40.7128".to_string()),
-        ("address__geo__lng".to_string(), "-74.0060".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("name".to_string(), json!("Corp")),
+        ("address__geo__lat".to_string(), json!("40.7128")),
+        ("address__geo__lng".to_string(), json!("-74.0060")),
+    ])
+    .into();
     let doc_record = crap_cms::db::query::create(&tx, "companies", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -547,17 +549,18 @@ async fn five_level_group_crud_roundtrip() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("name".to_string(), "Acme".to_string()),
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("name".to_string(), json!("Acme")),
         (
             "org__dept__team__lead__contact__phone".to_string(),
-            "+1-555-0100".to_string(),
+            json!("+1-555-0100"),
         ),
         (
             "org__dept__team__lead__contact__rank".to_string(),
-            "42".to_string(),
+            json!("42"),
         ),
-    ]);
+    ])
+    .into();
     let doc_record = crap_cms::db::query::create(&tx, "orgs", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -814,37 +817,30 @@ async fn nested_groups_locale_roundtrip() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let en_data = std::collections::HashMap::from([
-        ("name".to_string(), "Widget".to_string()),
-        ("details__title".to_string(), "Great Widget".to_string()),
-        (
-            "details__info__tagline".to_string(),
-            "Best in class".to_string(),
-        ),
-        (
-            "details__info__notes".to_string(),
-            "EN notes here".to_string(),
-        ),
-        ("meta__sku".to_string(), "WDG-001".to_string()),
-        ("meta__weight".to_string(), "250".to_string()),
-    ]);
+    let en_data: DocumentFields = std::collections::HashMap::from([
+        ("name".to_string(), json!("Widget")),
+        ("details__title".to_string(), json!("Great Widget")),
+        ("details__info__tagline".to_string(), json!("Best in class")),
+        ("details__info__notes".to_string(), json!("EN notes here")),
+        ("meta__sku".to_string(), json!("WDG-001")),
+        ("meta__weight".to_string(), json!("250")),
+    ])
+    .into();
     let doc_record =
         crap_cms::db::query::create(&tx, "products", &def, &en_data, en_locale_ctx.as_ref())
             .unwrap();
 
     // Update DE locale translations for localized fields
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_data = std::collections::HashMap::from([
-        ("details__title".to_string(), "Tolles Widget".to_string()),
+    let de_data: DocumentFields = std::collections::HashMap::from([
+        ("details__title".to_string(), json!("Tolles Widget")),
         (
             "details__info__tagline".to_string(),
-            "Beste Qualität".to_string(),
+            json!("Beste Qualität"),
         ),
-        (
-            "details__info__notes".to_string(),
-            "DE Notizen hier".to_string(),
-        ),
-    ]);
+        ("details__info__notes".to_string(), json!("DE Notizen hier")),
+    ])
+    .into();
     crap_cms::db::query::update(
         &tx,
         "products",
@@ -1462,15 +1458,16 @@ async fn group_layout_wrappers_crud_roundtrip() {
     // Insert a row with flat column names
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("name".to_string(), "TestWidget".to_string()),
-        ("config__theme".to_string(), "dark".to_string()),
-        ("config__font_size".to_string(), "16".to_string()),
-        ("config__color".to_string(), "blue".to_string()),
-        ("config__nested__level".to_string(), "3".to_string()),
-        ("config__width".to_string(), "800".to_string()),
-        ("config__height".to_string(), "600".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("name".to_string(), json!("TestWidget")),
+        ("config__theme".to_string(), json!("dark")),
+        ("config__font_size".to_string(), json!("16")),
+        ("config__color".to_string(), json!("blue")),
+        ("config__nested__level".to_string(), json!("3")),
+        ("config__width".to_string(), json!("800")),
+        ("config__height".to_string(), json!("600")),
+    ])
+    .into();
     let doc_record = crap_cms::db::query::create(&tx, "widgets", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -2088,15 +2085,16 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let en_data = std::collections::HashMap::from([
-        ("slug".to_string(), "hello".to_string()),
-        ("content__headline".to_string(), "EN Headline".to_string()),
-    ]);
+    let en_data: DocumentFields = std::collections::HashMap::from([
+        ("slug".to_string(), json!("hello")),
+        ("content__headline".to_string(), json!("EN Headline")),
+    ])
+    .into();
     let doc_record =
         crap_cms::db::query::create(&tx, "pages", &def, &en_data, en_locale_ctx.as_ref()).unwrap();
 
     // Save array + block data for EN
-    let en_join_data = std::collections::HashMap::from([
+    let en_join_data: DocumentFields = std::collections::HashMap::from([
         (
             "content__items".to_string(),
             json!([{"label": "EN One"}, {"label": "EN Two"}]),
@@ -2105,7 +2103,8 @@ async fn localized_group_array_blocks_crud_roundtrip() {
             "content__sections".to_string(),
             json!([{"_block_type": "text", "body": "EN body"}]),
         ),
-    ]);
+    ])
+    .into();
     crap_cms::db::query::save_join_table_data(
         &tx,
         "pages",
@@ -2118,10 +2117,11 @@ async fn localized_group_array_blocks_crud_roundtrip() {
 
     // Update DE locale
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_data = std::collections::HashMap::from([(
+    let de_data: DocumentFields = std::collections::HashMap::from([(
         "content__headline".to_string(),
-        "DE Schlagzeile".to_string(),
-    )]);
+        json!("DE Schlagzeile"),
+    )])
+    .into();
     crap_cms::db::query::update(
         &tx,
         "pages",
@@ -2133,13 +2133,14 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     .unwrap();
 
     // Save array + block data for DE
-    let de_join_data = std::collections::HashMap::from([
+    let de_join_data: DocumentFields = std::collections::HashMap::from([
         ("content__items".to_string(), json!([{"label": "DE Eins"}])),
         (
             "content__sections".to_string(),
             json!([{"_block_type": "text", "body": "DE Text"}]),
         ),
-    ]);
+    ])
+    .into();
     crap_cms::db::query::save_join_table_data(
         &tx,
         "pages",
@@ -2380,14 +2381,14 @@ async fn mixed_locale_group_crud_roundtrip() {
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let en_locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_config).unwrap();
-    let en_data =
-        std::collections::HashMap::from([("title".to_string(), "Test Article".to_string())]);
+    let en_data: DocumentFields =
+        std::collections::HashMap::from([("title".to_string(), json!("Test Article"))]).into();
     let doc_record =
         crap_cms::db::query::create(&tx, "articles", &def, &en_data, en_locale_ctx.as_ref())
             .unwrap();
 
     // Save EN tags (localized) + layout blocks (non-localized)
-    let en_join_data = std::collections::HashMap::from([
+    let en_join_data: DocumentFields = std::collections::HashMap::from([
         (
             "meta__tags".to_string(),
             json!([{"tag": "rust"}, {"tag": "wasm"}]),
@@ -2396,7 +2397,8 @@ async fn mixed_locale_group_crud_roundtrip() {
             "meta__layout".to_string(),
             json!([{"_block_type": "widget", "kind": "sidebar"}]),
         ),
-    ]);
+    ])
+    .into();
     crap_cms::db::query::save_join_table_data(
         &tx,
         "articles",
@@ -2409,8 +2411,9 @@ async fn mixed_locale_group_crud_roundtrip() {
 
     // Save DE tags only (layout is non-localized, shared)
     let de_locale_ctx = LocaleContext::from_locale_string(Some("de"), &locale_config).unwrap();
-    let de_join_data =
-        std::collections::HashMap::from([("meta__tags".to_string(), json!([{"tag": "rost"}]))]);
+    let de_join_data: DocumentFields =
+        std::collections::HashMap::from([("meta__tags".to_string(), json!([{"tag": "rost"}]))])
+            .into();
     crap_cms::db::query::save_join_table_data(
         &tx,
         "articles",
@@ -2756,21 +2759,23 @@ async fn double_nested_group_array_crud_roundtrip() {
     // Create via query API
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "Test Report".to_string()),
-        ("outer__summary".to_string(), "A summary".to_string()),
-        ("outer__inner__label".to_string(), "Deep Label".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("Test Report")),
+        ("outer__summary".to_string(), json!("A summary")),
+        ("outer__inner__label".to_string(), json!("Deep Label")),
+    ])
+    .into();
     let doc_record = crap_cms::db::query::create(&tx, "reports", &def, &data, None).unwrap();
 
     // Save array rows
-    let join_data = std::collections::HashMap::from([(
+    let join_data: DocumentFields = std::collections::HashMap::from([(
         "outer__inner__items".to_string(),
         json!([
             {"name": "Item1", "qty": "10"},
             {"name": "Item2", "qty": "20"},
         ]),
-    )]);
+    )])
+    .into();
     crap_cms::db::query::save_join_table_data(
         &tx,
         "reports",

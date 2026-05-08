@@ -8,7 +8,7 @@ use tracing::{error, warn};
 
 use crate::{
     admin::AdminState,
-    core::{AuthUser, Document, FieldDefinition, FieldType},
+    core::{AuthUser, Document, DocumentFields, FieldDefinition, FieldType},
     db::AccessResult,
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
@@ -26,7 +26,7 @@ pub fn check_access_or_forbid(
     access_ref: Option<&str>,
     auth_user: &Option<Extension<AuthUser>>,
     id: Option<&str>,
-    data: Option<&HashMap<String, Value>>,
+    data: Option<&DocumentFields>,
 ) -> Result<AccessResult, Box<axum::response::Response>> {
     if access_ref.is_none() {
         return if state.config.access.default_deny {
@@ -125,7 +125,7 @@ pub fn collect_condition_refs(fields: &[FieldDefinition]) -> HashSet<&str> {
 #[derive(serde::Deserialize)]
 pub struct EvaluateConditionsRequest {
     /// The current form data.
-    pub form_data: HashMap<String, Value>,
+    pub form_data: DocumentFields,
     /// Map of field names to their condition function references.
     pub conditions: HashMap<String, String>,
 }

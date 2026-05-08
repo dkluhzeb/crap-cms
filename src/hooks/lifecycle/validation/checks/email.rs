@@ -57,9 +57,9 @@ pub fn is_valid_email_format(value: &str) -> bool {
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
+    use crate::core::DocumentFields;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_email_format_valid() {
@@ -68,7 +68,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("user@example.com"));
         let result = validate_fields_inner(
             &lua,
@@ -86,7 +86,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("not-an-email"));
         let result = validate_fields_inner(
             &lua,
@@ -109,7 +109,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!("user@"));
         let result = validate_fields_inner(
             &lua,
@@ -127,7 +127,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("email".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,

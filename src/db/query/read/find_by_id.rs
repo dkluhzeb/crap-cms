@@ -190,11 +190,14 @@ pub(crate) fn find_by_id_raw(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use serde_json::json;
+
+    use std::collections::HashSet;
     use tempfile::TempDir;
 
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig};
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{DbPool, pool, query::write::create};
@@ -240,9 +243,9 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut data = HashMap::new();
-        data.insert("title".to_string(), "Test Post".to_string());
-        data.insert("status".to_string(), "draft".to_string());
+        let mut data = DocumentFields::new();
+        data.insert("title".to_string(), json!("Test Post"));
+        data.insert("status".to_string(), json!("draft"));
         let created = create(&conn, "posts", &def, &data, None).unwrap();
 
         let found = find_by_id(&conn, "posts", &def, &created.id, None).unwrap();
@@ -278,16 +281,16 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "First".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("First"));
         let doc1 = create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let mut d2 = HashMap::new();
-        d2.insert("title".to_string(), "Second".to_string());
+        let mut d2 = DocumentFields::new();
+        d2.insert("title".to_string(), json!("Second"));
         let doc2 = create(&conn, "posts", &def, &d2, None).unwrap();
 
-        let mut d3 = HashMap::new();
-        d3.insert("title".to_string(), "Third".to_string());
+        let mut d3 = DocumentFields::new();
+        d3.insert("title".to_string(), json!("Third"));
         create(&conn, "posts", &def, &d3, None).unwrap();
 
         // Fetch only first two
@@ -400,8 +403,8 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "Exists".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("Exists"));
         let doc1 = create(&conn, "posts", &def, &d1, None).unwrap();
 
         let ids = vec![doc1.id.to_string(), "nonexistent-id".to_string()];

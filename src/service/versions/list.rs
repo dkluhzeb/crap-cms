@@ -65,18 +65,16 @@ pub fn list_versions(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     use anyhow::Result;
     use rusqlite::Connection;
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, Document, FieldDefinition,
+            CollectionDefinition, Document, DocumentFields, FieldDefinition,
             collection::{Hooks, VersionsConfig},
             field::FieldType,
             validate::ValidationError,
@@ -107,7 +105,7 @@ mod tests {
             _access_ref: Option<&str>,
             _user: Option<&Document>,
             _id: Option<&str>,
-            _data: Option<&HashMap<String, Value>>,
+            _data: Option<&DocumentFields>,
         ) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -169,7 +167,7 @@ mod tests {
             _access_ref: Option<&str>,
             _user: Option<&Document>,
             _id: Option<&str>,
-            _data: Option<&HashMap<String, Value>>,
+            _data: Option<&DocumentFields>,
         ) -> Result<AccessResult> {
             Ok(AccessResult::Allowed)
         }
@@ -186,7 +184,7 @@ mod tests {
         fn validate_fields(
             &self,
             _fields: &[FieldDefinition],
-            _data: &HashMap<String, Value>,
+            _data: &DocumentFields,
             _ctx: &ValidationCtx,
         ) -> std::result::Result<(), ValidationError> {
             Ok(())

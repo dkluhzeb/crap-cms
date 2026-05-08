@@ -23,7 +23,7 @@ use crate::{
             split_sidebar_fields,
         },
     },
-    core::{AuthUser, Claims, CollectionDefinition},
+    core::{AuthUser, Claims, CollectionDefinition, DocumentFields},
     db::AccessResult,
 };
 
@@ -36,18 +36,12 @@ fn prepare_create_fields(
     let non_default_locale = is_non_default_locale(state, editor_locale);
     let empty: HashMap<String, String> = HashMap::new();
 
-    let mut fields = build_field_contexts(
-        &def.fields,
-        &empty,
-        &HashMap::new(),
-        true,
-        non_default_locale,
-    );
+    let mut fields = build_field_contexts(&def.fields, &empty, &empty, true, non_default_locale);
 
     enrich_field_contexts(
         &mut fields,
         &def.fields,
-        &HashMap::new(),
+        &DocumentFields::new(),
         state,
         &EnrichOptions::builder(&HashMap::new())
             .filter_hidden(true)

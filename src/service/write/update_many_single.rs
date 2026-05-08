@@ -5,8 +5,8 @@ use crate::{
     db::{AccessResult, query},
     hooks::{HookContext, ValidationCtx},
     service::{
-        AfterChangeInput, ServiceContext, WriteInput, WriteResult, build_hook_data,
-        persist_bulk_update, run_after_change_hooks,
+        AfterChangeInput, ServiceContext, WriteInput, WriteResult, persist_bulk_update,
+        run_after_change_hooks,
     },
 };
 
@@ -42,9 +42,9 @@ pub fn update_many_single_core(
     enforce_access_constraints(ctx, id, &access, "Update", false)?;
 
     let denied = write_hooks.field_write_denied(&def.fields, ctx.user, "update");
-    let join_data = strip_denied_fields(&denied, &mut input.data, input.join_data);
+    strip_denied_fields(&denied, &mut input.data);
 
-    let hook_data = build_hook_data(&input.data, &join_data);
+    let hook_data = input.data.clone();
     let hook_ctx = HookContext::builder(ctx.slug, "update")
         .data(hook_data)
         .user(ctx.user)
@@ -57,16 +57,9 @@ pub fn update_many_single_core(
         .build();
 
     let final_ctx = write_hooks.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
-    let final_data = final_ctx.to_string_map(&def.fields);
+    let final_data = final_ctx.to_value_map(&def.fields);
 
-    let doc = persist_bulk_update(
-        ctx,
-        id,
-        &final_data,
-        &final_ctx.data,
-        input.locale_ctx,
-        locale_config,
-    )?;
+    let doc = persist_bulk_update(ctx, id, &final_data, input.locale_ctx, locale_config)?;
 
     let after_ctx = run_after_change_hooks(
         write_hooks,

@@ -4,7 +4,7 @@ use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, SharedRegistry},
+    core::{CollectionDefinition, DocumentFields, SharedRegistry},
     db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::lifecycle::{
         converters::{lua_table_to_find_query, lua_table_to_hashmap, lua_table_to_json_map},
@@ -76,15 +76,20 @@ fn update_many_documents(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "update_many");
 
-    let data = lua_table_to_hashmap(data_table)?;
+    let stringified = lua_table_to_hashmap(data_table)?;
 
-    if def.is_auth_collection() && data.contains_key("password") {
+    if def.is_auth_collection() && stringified.contains_key("password") {
         return Err(RuntimeError(
             "Cannot set password via update_many. Use single update instead.".into(),
         ));
     }
 
-    let join_data = lua_table_to_json_map(lua, data_table)?;
+    let mut data = service::values_from_strings(stringified);
+    let composite_data: DocumentFields = lua_table_to_json_map(lua, data_table)?
+        .into_iter()
+        .filter(|(_, v)| !matches!(v, serde_json::Value::String(_)))
+        .collect();
+    data.extend(composite_data);
 
     let r = reg
         .read()
@@ -114,7 +119,7 @@ fn update_many_documents(
         ui_locale: ui_locale.clone(),
     };
 
-    let svc_result = service::update_many(&ctx, filters, data, &join_data, lc, &update_opts)
+    let svc_result = service::update_many(&ctx, filters, data, lc, &update_opts)
         .map_err(|e| RuntimeError(format!("{e:#}")))?;
 
     let result = lua.create_table()?;

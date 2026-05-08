@@ -1,8 +1,7 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::{ReqContext, SharedRegistry};
+use crap_cms::core::{DocumentFields, ReqContext, SharedRegistry};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -734,7 +733,7 @@ crap.collections.define("items", {
     let reg = registry.read().unwrap();
     let def = reg.get_collection("items").expect("items");
 
-    let mut data = HashMap::new();
+    let mut data = DocumentFields::new();
     data.insert("name".to_string(), json!("test"));
 
     let ctx = HookContext {
@@ -791,7 +790,7 @@ fn context_starts_empty() {
     let ctx = HookContext {
         collection: "test".to_string(),
         operation: "create".to_string(),
-        data: HashMap::new(),
+        data: DocumentFields::new(),
         locale: None,
         draft: None,
         context: ReqContext::new(),
@@ -823,11 +822,12 @@ fn after_hook_has_crud_access() {
     // First, create a document so the after-hook has something to work with
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = [
-        ("title".to_string(), "original".to_string()),
-        ("status".to_string(), "published".to_string()),
+    let data: DocumentFields = [
+        ("title".to_string(), json!("original")),
+        ("status".to_string(), json!("published")),
     ]
-    .into();
+    .into_iter()
+    .collect();
     let doc = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
 
     // Run after_change hooks inside the same transaction
@@ -891,11 +891,12 @@ fn after_hook_error_rolls_back() {
     // Create a document inside a transaction
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = [
-        ("title".to_string(), "should-be-rolled-back".to_string()),
-        ("status".to_string(), "published".to_string()),
+    let data: DocumentFields = [
+        ("title".to_string(), json!("should-be-rolled-back")),
+        ("status".to_string(), json!("published")),
     ]
-    .into();
+    .into_iter()
+    .collect();
     let doc = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
     let doc_id = doc.id.clone();
 
@@ -943,16 +944,16 @@ fn context_flows_to_after_hooks() {
     let tx = conn.transaction().unwrap();
 
     // Simulate a context that was set by before-hooks
-    let mut req_context = HashMap::new();
+    let mut req_context = ReqContext::new();
     req_context.insert("before_marker".to_string(), json!("set-by-before-hook"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
         operation: "create".to_string(),
-        data: HashMap::new(),
+        data: DocumentFields::new(),
         locale: None,
         draft: None,
-        context: req_context.into(),
+        context: req_context,
         user: None,
         ui_locale: None,
     };

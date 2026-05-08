@@ -1,13 +1,12 @@
 //! Bulk update — update multiple documents matching a filter.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Context as _;
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::event::EventOperation,
+    core::{DocumentFields, event::EventOperation},
     db::{FilterClause, FindQuery, LocaleContext, query},
     hooks::LuaCrudInfra,
     service::{
@@ -50,15 +49,14 @@ pub struct UpdateManyOptions<'a> {
 pub fn update_many(
     ctx: &ServiceContext,
     filters: Vec<FilterClause>,
-    data: HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
+    data: DocumentFields,
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
     if ctx.pool.is_some() {
-        update_many_pool(ctx, filters, data, join_data, locale_config, opts)
+        update_many_pool(ctx, filters, data, locale_config, opts)
     } else {
-        update_many_conn(ctx, filters, data, join_data, locale_config, opts)
+        update_many_conn(ctx, filters, data, locale_config, opts)
     }
 }
 
@@ -66,8 +64,7 @@ pub fn update_many(
 fn update_many_pool(
     ctx: &ServiceContext,
     filters: Vec<FilterClause>,
-    data: HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
+    data: DocumentFields,
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
@@ -131,7 +128,7 @@ fn update_many_pool(
         let mut chunk_results = Vec::with_capacity(chunk.len());
 
         for doc_id in chunk {
-            let input = WriteInput::builder(data.clone(), join_data)
+            let input = WriteInput::builder(data.clone())
                 .locale_ctx(opts.locale_ctx)
                 .draft(opts.draft)
                 .ui_locale(opts.ui_locale.clone())
@@ -167,8 +164,7 @@ fn update_many_pool(
 fn update_many_conn(
     ctx: &ServiceContext,
     filters: Vec<FilterClause>,
-    data: HashMap<String, String>,
-    join_data: &HashMap<String, Value>,
+    data: DocumentFields,
     locale_config: &LocaleConfig,
     opts: &UpdateManyOptions<'_>,
 ) -> Result<UpdateManyResult> {
@@ -186,7 +182,7 @@ fn update_many_conn(
     let mut updated_ids = Vec::new();
 
     for doc in &docs {
-        let input = WriteInput::builder(data.clone(), join_data)
+        let input = WriteInput::builder(data.clone())
             .locale_ctx(opts.locale_ctx)
             .draft(opts.draft)
             .ui_locale(opts.ui_locale.clone())

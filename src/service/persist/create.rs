@@ -1,12 +1,9 @@
 //! DB write phase for collection document creation.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::{
-    core::Document,
+    core::{Document, DocumentFields},
     db::query,
     service::{PersistOptions, ServiceContext, versions},
 };
@@ -15,8 +12,7 @@ use crate::{
 /// Performs: insert -> join data -> password -> version snapshot.
 pub fn persist_create(
     ctx: &ServiceContext,
-    final_data: &HashMap<String, String>,
-    hook_data: &HashMap<String, Value>,
+    data: &DocumentFields,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
@@ -29,16 +25,10 @@ pub fn persist_create(
 
     // Lock referenced target rows before INSERT to prevent concurrent deletes
     // from creating dangling references (Postgres only; SQLite serializes via IMMEDIATE).
-    query::ref_count::lock_ref_targets_from_data(
-        conn,
-        &def.fields,
-        final_data,
-        hook_data,
-        &locale_cfg,
-    )?;
+    query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
 
-    let doc = query::create(conn, slug, def, final_data, opts.locale_ctx)?;
-    query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
+    let doc = query::create(conn, slug, def, data, opts.locale_ctx)?;
+    query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
 
     if let Some(pw) = opts.password
         && !pw.is_empty()
@@ -62,13 +52,7 @@ pub fn persist_create(
     // Ref count UPDATE is last: it acquires a row-level lock on the target
     // (e.g. the referenced author), and that lock is held until COMMIT.
     // Doing it last minimizes lock hold time under concurrent writes.
-    query::ref_count::after_create_from_data(
-        conn,
-        &def.fields,
-        final_data,
-        hook_data,
-        &locale_cfg,
-    )?;
+    query::ref_count::after_create_from_data(conn, &def.fields, data, &locale_cfg)?;
 
     Ok(doc)
 }

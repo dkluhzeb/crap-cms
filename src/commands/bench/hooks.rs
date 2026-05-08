@@ -190,7 +190,7 @@ pub fn run(params: &HookBenchParams) -> Result<()> {
             helpers::resolve_bench_data(params.conn, &entry.slug, def, params.user_data)?
         } else {
             // Global — use empty data
-            (std::collections::HashMap::new(), DataSource::Synthetic)
+            (crate::core::DocumentFields::new(), DataSource::Synthetic)
         };
 
         // Build a Hooks struct with only this hook

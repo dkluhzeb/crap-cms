@@ -78,10 +78,10 @@ fn check_has_many_options(
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use crate::core::DocumentFields;
     use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn test_validate_select_option_valid() {
@@ -97,7 +97,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("color".to_string(), json!("red"));
         let result = validate_fields_inner(
             &lua,
@@ -122,7 +122,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("color".to_string(), json!("green"));
         let result = validate_fields_inner(
             &lua,
@@ -152,7 +152,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("color".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -180,7 +180,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("size".to_string(), json!("sm"));
         let result = validate_fields_inner(
             &lua,
@@ -205,7 +205,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("size".to_string(), json!("xl"));
         let result = validate_fields_inner(
             &lua,
@@ -235,7 +235,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("size".to_string(), json!(""));
         let result = validate_fields_inner(
             &lua,
@@ -266,7 +266,7 @@ mod tests {
                 ])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("[invalid json"));
         let result = validate_fields_inner(
             &lua,
@@ -299,7 +299,7 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         // Two invalid options: "invalid1" and "invalid2"
         data.insert(
             "tags".to_string(),
@@ -328,7 +328,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, status TEXT)")
             .unwrap();
         let fields = vec![FieldDefinition::builder("status", FieldType::Select).build()];
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("status".to_string(), json!("anything"));
         let result = validate_fields_inner(
             &lua,

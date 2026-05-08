@@ -6,7 +6,9 @@ use serde_json::{Map, Value};
 
 use crate::{
     admin::Translations,
-    core::{FieldAdmin, FieldDefinition, FieldType, field, validate::ValidationError},
+    core::{
+        DocumentFields, FieldAdmin, FieldDefinition, FieldType, field, validate::ValidationError,
+    },
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, document_info::get_ref_count},
@@ -56,7 +58,7 @@ pub fn compute_row_label(
 /// recursively flattening nested groups (e.g. `address: { geo: { lat: "40" } }` →
 /// `address__geo__lat: "40"`).
 pub fn flatten_document_values(
-    fields: &HashMap<String, Value>,
+    fields: &DocumentFields,
     field_defs: &[FieldDefinition],
 ) -> HashMap<String, String> {
     fields
@@ -207,7 +209,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_simple_fields() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert("title".to_string(), json!("Hello"));
         fields.insert("count".to_string(), json!(42));
 
@@ -223,7 +225,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_group_fields() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert(
             "config".to_string(),
             json!({"label": "My Config", "enabled": true}),
@@ -246,7 +248,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_nested_groups() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert("outer".to_string(), json!({"inner": {"deep": "value"}}));
 
         let defs = vec![
@@ -269,7 +271,7 @@ mod tests {
 
     #[test]
     fn flatten_document_values_group_with_array_value() {
-        let mut fields = HashMap::new();
+        let mut fields = DocumentFields::new();
         fields.insert(
             "meta".to_string(),
             json!({"title": "Test", "tags": ["a", "b"]}),

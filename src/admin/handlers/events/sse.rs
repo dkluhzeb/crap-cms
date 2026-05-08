@@ -477,12 +477,12 @@ pub async fn sse_handler(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value as JsonValue, json};
+    use serde_json::json;
 
     use crate::{
         config::CrapConfig,
         core::{
-            DocumentId,
+            DocumentFields, DocumentId,
             collection::{Access, CollectionDefinition},
             field::{FieldAccess, FieldDefinition, FieldType},
         },
@@ -543,7 +543,7 @@ mod tests {
         def
     }
 
-    fn make_event(slug: &str, data: HashMap<String, JsonValue>) -> MutationEvent {
+    fn make_event(slug: &str, data: DocumentFields) -> MutationEvent {
         MutationEvent {
             sequence: 1,
             timestamp: "2026-01-01T00:00:00Z".to_string(),
@@ -615,7 +615,7 @@ mod tests {
             modes,
         };
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
         data.insert("secret".to_string(), json!("redacted-please"));
         let event = make_event("posts", data);
@@ -657,7 +657,7 @@ mod tests {
             modes,
         };
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("title".to_string(), json!("Hello"));
         data.insert("secret".to_string(), json!("redacted-please"));
         let event = make_event("posts", data);

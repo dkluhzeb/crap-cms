@@ -1,12 +1,9 @@
 //! HookRunner core run methods: collection hooks, field hooks, system hooks.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::{
-    core::{Document, FieldDefinition, collection::Hooks},
+    core::{Document, DocumentFields, FieldDefinition, collection::Hooks},
     db::DbConnection,
     hooks::{
         HookContext, HookEvent, HookRunner,
@@ -177,7 +174,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         event: FieldHookEvent,
-        data: &mut HashMap<String, Value>,
+        data: &mut DocumentFields,
         collection: &str,
         operation: &str,
     ) -> Result<()> {
@@ -199,7 +196,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         event: FieldHookEvent,
-        data: &mut HashMap<String, Value>,
+        data: &mut DocumentFields,
         collection: &str,
         operation: &str,
         wctx: &FieldWriteCtx,

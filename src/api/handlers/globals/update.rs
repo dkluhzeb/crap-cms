@@ -9,7 +9,7 @@ use crate::{
         content,
         handlers::{
             ContentService,
-            convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
+            convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
     db::LocaleContext,
@@ -28,15 +28,9 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
 
-        let join_data = req
-            .data
-            .as_ref()
-            .map(prost_struct_to_json_map)
-            .unwrap_or_default();
-
         let data = req
             .data
-            .map(|s| prost_struct_to_hashmap(&s))
+            .map(|s| prost_struct_to_json_map(&s))
             .unwrap_or_default();
 
         let locale_ctx =
@@ -78,7 +72,7 @@ impl ContentService {
 
             let (doc, _req_context) = service::update_global_document(
                 &ctx,
-                WriteInput::builder(data, &join_data)
+                WriteInput::builder(data)
                     .locale_ctx(locale_ctx.as_ref())
                     .ui_locale(ui_locale)
                     .build(),

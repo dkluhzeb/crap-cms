@@ -1,7 +1,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use serde_json::json;
 use tower::ServiceExt;
 
+use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
@@ -298,12 +300,13 @@ async fn edit_form_populates_values() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("title".to_string(), "My Article".to_string()),
-        ("count".to_string(), "42".to_string()),
-        ("contact".to_string(), "test@example.com".to_string()),
-        ("body".to_string(), "Article body text".to_string()),
-    ]);
+    let data: DocumentFields = std::collections::HashMap::from([
+        ("title".to_string(), json!("My Article")),
+        ("count".to_string(), json!("42")),
+        ("contact".to_string(), json!("test@example.com")),
+        ("body".to_string(), json!("Article body text")),
+    ])
+    .into();
     let doc_record = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 

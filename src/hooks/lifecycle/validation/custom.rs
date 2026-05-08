@@ -14,6 +14,12 @@ use crate::hooks::{
 
 /// Inner implementation of `run_validate_function` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
+///
+/// `data` is the surrounding context map — for top-level field validators this
+/// is the document field map (deref'd from `DocumentFields`); for richtext node
+/// attribute validators it is the node's attribute map; for array sub-fields
+/// it is the array row map. All three pass through opaquely to the user's
+/// Lua function.
 pub(super) fn run_validate_function_inner(
     lua: &Lua,
     func_ref: &str,

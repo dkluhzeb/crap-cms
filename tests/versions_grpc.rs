@@ -4,16 +4,17 @@
 //! service layer (create_document/update_document with draft param),
 //! and gRPC API (draft flag on CRUD RPCs, ListVersions, RestoreVersion).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use prost_types::{Struct, Value, value::Kind};
+use serde_json::json;
 use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
 use crap_cms::api::handlers::{ContentService, ContentServiceDeps};
 use crap_cms::config::*;
+use crap_cms::core::DocumentFields;
 use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -1162,27 +1163,19 @@ fn persist_create_published() {
     let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
     let conn = pool.get().unwrap();
 
-    let final_data: HashMap<String, String> = [
-        ("title".into(), "Persist Published".into()),
-        ("body".into(), "Content".into()),
+    let final_data: DocumentFields = [
+        ("title".into(), json!("Persist Published")),
+        ("body".into(), json!("Content")),
     ]
-    .into();
-    let hook_data: HashMap<String, serde_json::Value> = final_data
-        .iter()
-        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-        .collect();
+    .into_iter()
+    .collect();
 
     let ctx = service::ServiceContext::collection("articles", &def)
         .conn(&conn)
         .build();
 
-    let doc = service::persist_create(
-        &ctx,
-        &final_data,
-        &hook_data,
-        &service::PersistOptions::default(),
-    )
-    .unwrap();
+    let doc =
+        service::persist_create(&ctx, &final_data, &service::PersistOptions::default()).unwrap();
     assert_eq!(doc.get_str("title"), Some("Persist Published"));
 
     // Document should exist in main table
@@ -1205,17 +1198,15 @@ fn persist_create_draft() {
     let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
     let conn = pool.get().unwrap();
 
-    let final_data: HashMap<String, String> = [("title".into(), "Persist Draft".into())].into();
-    let hook_data: HashMap<String, serde_json::Value> = final_data
-        .iter()
-        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+    let final_data: DocumentFields = [("title".into(), json!("Persist Draft"))]
+        .into_iter()
         .collect();
 
     let opts = service::PersistOptions::builder().draft(true).build();
     let ctx = service::ServiceContext::collection("articles", &def)
         .conn(&conn)
         .build();
-    let doc = service::persist_create(&ctx, &final_data, &hook_data, &opts).unwrap();
+    let doc = service::persist_create(&ctx, &final_data, &opts).unwrap();
 
     // Document should exist with _status = "draft"
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
@@ -1234,19 +1225,18 @@ fn persist_update_publishes() {
     let conn = pool.get().unwrap();
 
     // Create a document first
-    let create_data: HashMap<String, String> = [("title".into(), "Before Update".into())].into();
+    let create_data: DocumentFields = [("title".into(), json!("Before Update"))]
+        .into_iter()
+        .collect();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
 
     // Now use persist_update
-    let update_data: HashMap<String, String> = [
-        ("title".into(), "After Update".into()),
-        ("body".into(), "New body".into()),
+    let update_data: DocumentFields = [
+        ("title".into(), json!("After Update")),
+        ("body".into(), json!("New body")),
     ]
-    .into();
-    let hook_data: HashMap<String, serde_json::Value> = update_data
-        .iter()
-        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-        .collect();
+    .into_iter()
+    .collect();
 
     let ctx = service::ServiceContext::collection("articles", &def)
         .conn(&conn)
@@ -1256,7 +1246,6 @@ fn persist_update_publishes() {
         &ctx,
         &doc.id,
         &update_data,
-        &hook_data,
         &service::PersistOptions::default(),
     )
     .unwrap();
@@ -1281,19 +1270,21 @@ fn persist_draft_version_merges_data() {
     let conn = pool.get().unwrap();
 
     // Create a published document
-    let create_data: HashMap<String, String> = [
-        ("title".into(), "Original".into()),
-        ("body".into(), "Original body".into()),
+    let create_data: DocumentFields = [
+        ("title".into(), json!("Original")),
+        ("body".into(), json!("Original body")),
     ]
-    .into();
+    .into_iter()
+    .collect();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
 
     // Call persist_draft_version with modified hook data
-    let hook_data: HashMap<String, serde_json::Value> = [(
+    let hook_data: DocumentFields = [(
         "title".to_string(),
         serde_json::Value::String("Draft Title".to_string()),
     )]
-    .into();
+    .into_iter()
+    .collect();
 
     let ctx = service::ServiceContext::collection("articles", &def)
         .conn(&conn)
@@ -1334,7 +1325,9 @@ fn persist_unpublish_sets_draft_status() {
     let conn = pool.get().unwrap();
 
     // Create a published document
-    let create_data: HashMap<String, String> = [("title".into(), "To Unpublish".into())].into();
+    let create_data: DocumentFields = [("title".into(), json!("To Unpublish"))]
+        .into_iter()
+        .collect();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
     query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
 
@@ -1410,18 +1403,19 @@ fn service_update_draft_uses_locale_context() {
     };
 
     // 1. Create a published document with EN title
-    let data: HashMap<String, String> = [
-        ("title".into(), "English Title".into()),
-        ("body".into(), "Body".into()),
+    let data: DocumentFields = [
+        ("title".into(), json!("English Title")),
+        ("body".into(), json!("Body")),
     ]
-    .into();
+    .into_iter()
+    .collect();
     let ctx = service::ServiceContext::collection("articles", &def)
         .pool(&db_pool)
         .runner(&hook_runner)
         .build();
     let (doc, _) = service::create_document(
         &ctx,
-        service::WriteInput::builder(data, &HashMap::new())
+        service::WriteInput::builder(data)
             .locale_ctx(Some(&en_ctx))
             .locale(Some("en".to_string()))
             .build(),
@@ -1429,19 +1423,22 @@ fn service_update_draft_uses_locale_context() {
     .unwrap();
 
     // 2. Add German translation via direct query
-    let de_data: HashMap<String, String> = [("title".into(), "Deutscher Titel".into())].into();
+    let de_data: DocumentFields = [("title".into(), json!("Deutscher Titel"))]
+        .into_iter()
+        .collect();
     {
         let conn = db_pool.get().unwrap();
         query::update(&conn, "articles", &def, &doc.id, &de_data, Some(&de_ctx)).unwrap();
     }
 
     // 3. Draft update with DE locale, changing the German title
-    let draft_data: HashMap<String, String> =
-        [("title".into(), "Neuer Deutscher Titel".into())].into();
+    let draft_data: DocumentFields = [("title".into(), json!("Neuer Deutscher Titel"))]
+        .into_iter()
+        .collect();
     let (result, _) = service::update_document(
         &ctx,
         &doc.id,
-        service::WriteInput::builder(draft_data, &HashMap::new())
+        service::WriteInput::builder(draft_data)
             .locale_ctx(Some(&de_ctx))
             .locale(Some("de".to_string()))
             .draft(true)

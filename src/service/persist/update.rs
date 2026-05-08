@@ -1,13 +1,10 @@
 //! DB write phase for collection document update and bulk update.
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::Document,
+    core::{Document, DocumentFields},
     db::{LocaleContext, query},
     service::{PersistOptions, ServiceContext, versions},
 };
@@ -17,8 +14,7 @@ use crate::{
 pub fn persist_update(
     ctx: &ServiceContext,
     id: &str,
-    final_data: &HashMap<String, String>,
-    hook_data: &HashMap<String, Value>,
+    data: &DocumentFields,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
     let conn = ctx.resolve_conn()?;
@@ -27,18 +23,12 @@ pub fn persist_update(
     let slug = ctx.slug;
 
     let locale_cfg = opts.locale_config.cloned().unwrap_or_default();
-    let touches_refs = query::ref_count::data_touches_refs(&def.fields, final_data, hook_data, "");
+    let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
 
     // Only snapshot + adjust ref counts when the write data actually changes
     // relationship fields. Skipping saves ~10 queries for non-ref updates.
     let old_refs = if touches_refs {
-        query::ref_count::lock_ref_targets_from_data(
-            conn,
-            &def.fields,
-            final_data,
-            hook_data,
-            &locale_cfg,
-        )?;
+        query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, &locale_cfg)?;
 
         Some(query::ref_count::snapshot_outgoing_refs(
             conn,
@@ -51,8 +41,8 @@ pub fn persist_update(
         None
     };
 
-    let doc = query::update(conn, slug, def, id, final_data, opts.locale_ctx)?;
-    query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
+    let doc = query::update(conn, slug, def, id, data, opts.locale_ctx)?;
+    query::save_join_table_data(conn, slug, &def.fields, &doc.id, data, opts.locale_ctx)?;
 
     if let Some(pw) = opts.password
         && !pw.is_empty()
@@ -88,8 +78,7 @@ pub fn persist_update(
 pub fn persist_bulk_update(
     ctx: &ServiceContext,
     id: &str,
-    final_data: &HashMap<String, String>,
-    hook_data: &HashMap<String, Value>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
     locale_config: &LocaleConfig,
 ) -> Result<Document> {
@@ -97,16 +86,10 @@ pub fn persist_bulk_update(
     let conn = conn.as_ref();
     let def = ctx.collection_def();
 
-    let touches_refs = query::ref_count::data_touches_refs(&def.fields, final_data, hook_data, "");
+    let touches_refs = query::ref_count::data_touches_refs(&def.fields, data, "");
 
     let old_refs = if touches_refs {
-        query::ref_count::lock_ref_targets_from_data(
-            conn,
-            &def.fields,
-            final_data,
-            hook_data,
-            locale_config,
-        )?;
+        query::ref_count::lock_ref_targets_from_data(conn, &def.fields, data, locale_config)?;
 
         Some(query::ref_count::snapshot_outgoing_refs(
             conn,
@@ -119,9 +102,9 @@ pub fn persist_bulk_update(
         None
     };
 
-    let updated = query::update_partial(conn, ctx.slug, def, id, final_data, locale_ctx)?;
+    let updated = query::update_partial(conn, ctx.slug, def, id, data, locale_ctx)?;
 
-    query::save_join_table_data(conn, ctx.slug, &def.fields, id, hook_data, locale_ctx)?;
+    query::save_join_table_data(conn, ctx.slug, &def.fields, id, data, locale_ctx)?;
 
     if def.has_versions() {
         let vs_ctx = versions::VersionSnapshotCtx::builder(ctx.slug, &updated.id)

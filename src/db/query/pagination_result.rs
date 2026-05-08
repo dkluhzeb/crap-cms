@@ -164,13 +164,12 @@ pub fn resolve_sort(order_by: Option<&str>, has_timestamps: bool) -> (String, So
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::DocumentId;
-    use std::collections::HashMap;
+    use crate::core::{DocumentFields, DocumentId};
 
     fn make_doc(id: &str) -> Document {
         Document {
             id: DocumentId::new(id),
-            fields: HashMap::new(),
+            fields: DocumentFields::new(),
             created_at: None,
             updated_at: None,
         }

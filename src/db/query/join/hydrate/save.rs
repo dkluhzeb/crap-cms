@@ -13,7 +13,7 @@ use super::{
     locale::resolve_join_locale,
 };
 use crate::{
-    core::{FieldDefinition, FieldType},
+    core::{DocumentFields, FieldDefinition, FieldType},
     db::{DbConnection, LocaleContext, query::helpers::prefixed_name},
 };
 
@@ -58,23 +58,16 @@ pub(crate) fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Coerce a JSON array of objects into a list of string-keyed HashMaps.
-fn coerce_array_rows(val: &Value) -> Vec<HashMap<String, String>> {
+/// Coerce a JSON array of objects into a list of string-keyed Value HashMaps.
+/// Per-row scalars stay typed (Number, Bool, String, Null) so the join-table
+/// writer's `coerce_json_value` can preserve precision.
+fn coerce_array_rows(val: &Value) -> Vec<HashMap<String, Value>> {
     match val {
         Value::Array(arr) => arr
             .iter()
             .filter_map(|v| {
                 let map = v.as_object()?;
-                let row = map
-                    .iter()
-                    .map(|(k, v)| {
-                        let s = match v {
-                            Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        (k.clone(), s)
-                    })
-                    .collect();
+                let row = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 Some(row)
             })
             .collect(),
@@ -90,7 +83,7 @@ pub fn save_join_table_data(
     slug: &str,
     fields: &[FieldDefinition],
     parent_id: &str,
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     save_join_data_inner(conn, slug, fields, parent_id, data, locale_ctx, "")
@@ -101,7 +94,7 @@ fn save_join_data_inner(
     slug: &str,
     fields: &[FieldDefinition],
     parent_id: &str,
-    data: &HashMap<String, Value>,
+    data: &DocumentFields,
     locale_ctx: Option<&LocaleContext>,
     prefix: &str,
 ) -> Result<()> {
@@ -219,7 +212,7 @@ mod tests {
         let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!("t1, t2, t3"));
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
@@ -233,7 +226,7 @@ mod tests {
         let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(["t1", "t2"]));
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
@@ -249,7 +242,7 @@ mod tests {
 
         set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(""));
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
@@ -263,7 +256,7 @@ mod tests {
         let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "content".to_string(),
             json!([
@@ -287,7 +280,7 @@ mod tests {
 
         set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
 
-        let data = HashMap::new();
+        let data = DocumentFields::new();
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -304,7 +297,7 @@ mod tests {
         let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("content".to_string(), json!("not an array"));
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -317,7 +310,7 @@ mod tests {
         let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("tags".to_string(), json!(42));
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -347,7 +340,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("refs".to_string(), json!("articles/a1,pages/pg1"));
 
         save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
@@ -393,7 +386,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "config__items".to_string(),
             json!([{"label": "A", "value": "1"}]),
@@ -433,7 +426,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "config__content".to_string(),
             json!([{"_block_type": "hero", "heading": "Hi"}]),
@@ -472,7 +465,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert("config__tags".to_string(), json!(["t1", "t2"]));
 
         save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
@@ -512,7 +505,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data = HashMap::new();
+        let mut data = DocumentFields::new();
         data.insert(
             "outer__inner__items".to_string(),
             json!([{"name": "DeepItem"}]),

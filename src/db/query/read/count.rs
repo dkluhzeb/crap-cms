@@ -166,13 +166,15 @@ pub fn count_where_field_eq(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig};
+    use crate::core::DocumentFields;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::{DbPool, pool};
     use crate::db::{Filter, FilterClause, FilterOp, query::write::create};
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     fn test_def() -> CollectionDefinition {
@@ -226,16 +228,16 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("status".to_string(), "draft".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("status".to_string(), json!("draft"));
         create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let mut d2 = HashMap::new();
-        d2.insert("status".to_string(), "published".to_string());
+        let mut d2 = DocumentFields::new();
+        d2.insert("status".to_string(), json!("published"));
         create(&conn, "posts", &def, &d2, None).unwrap();
 
-        let mut d3 = HashMap::new();
-        d3.insert("status".to_string(), "draft".to_string());
+        let mut d3 = DocumentFields::new();
+        d3.insert("status".to_string(), json!("draft"));
         create(&conn, "posts", &def, &d3, None).unwrap();
 
         let filters = vec![FilterClause::Single(Filter {
@@ -253,14 +255,14 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "AAA".to_string());
-        d1.insert("status".to_string(), "draft".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("AAA"));
+        d1.insert("status".to_string(), json!("draft"));
         create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let mut d2 = HashMap::new();
-        d2.insert("title".to_string(), "BBB".to_string());
-        d2.insert("status".to_string(), "draft".to_string());
+        let mut d2 = DocumentFields::new();
+        d2.insert("title".to_string(), json!("BBB"));
+        d2.insert("status".to_string(), json!("draft"));
         let doc2 = create(&conn, "posts", &def, &d2, None).unwrap();
 
         let c = count_where_field_eq(&conn, "posts", "status", "draft", None, false).unwrap();
@@ -413,12 +415,12 @@ mod tests {
         let def = test_def();
 
         // Create some posts
-        let mut d1 = HashMap::new();
-        d1.insert("title".to_string(), "Rust Tutorial".to_string());
+        let mut d1 = DocumentFields::new();
+        d1.insert("title".to_string(), json!("Rust Tutorial"));
         create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let mut d2 = HashMap::new();
-        d2.insert("title".to_string(), "Python Tutorial".to_string());
+        let mut d2 = DocumentFields::new();
+        d2.insert("title".to_string(), json!("Python Tutorial"));
         create(&conn, "posts", &def, &d2, None).unwrap();
 
         // Set up FTS

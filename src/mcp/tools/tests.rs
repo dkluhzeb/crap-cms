@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     config::{CrapConfig, McpConfig},
     core::{
-        CollectionDefinition, DocumentId, Registry, collection::GlobalDefinition,
+        CollectionDefinition, DocumentFields, DocumentId, Registry, collection::GlobalDefinition,
         document::Document,
     },
     db::{migrate, pool, query},
@@ -682,7 +682,7 @@ fn doc_to_json_includes_all_fields() {
     fields.insert("count".to_string(), json!(42));
     let doc = Document {
         id: DocumentId::new("abc123"),
-        fields,
+        fields: fields.into(),
         created_at: Some("2024-01-01T00:00:00Z".to_string()),
         updated_at: Some("2024-06-01T00:00:00Z".to_string()),
     };
@@ -696,10 +696,9 @@ fn doc_to_json_includes_all_fields() {
 
 #[test]
 fn doc_to_json_without_timestamps() {
-    use std::collections::HashMap;
     let doc = Document {
         id: DocumentId::new("xyz"),
-        fields: HashMap::new(),
+        fields: DocumentFields::new(),
         created_at: None,
         updated_at: None,
     };

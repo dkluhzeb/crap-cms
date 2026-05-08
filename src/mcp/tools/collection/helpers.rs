@@ -1,11 +1,12 @@
 //! Shared helpers for collection CRUD tool implementations.
 
-use std::collections::HashMap;
-
 use serde_json::{Map, Value};
 use tracing::warn;
 
-use crate::{core::Document, db::query};
+use crate::{
+    core::{Document, DocumentFields},
+    db::query,
+};
 
 /// Parse JSON `where` object into filter clauses.
 /// Supports `{ field: "value" }` (equals) and `{ field: { op: value } }` (operator-based).
@@ -148,38 +149,19 @@ pub(in crate::mcp::tools) fn doc_to_json(doc: &Document) -> Value {
     Value::Object(obj)
 }
 
-/// Extract flat string data and join data (arrays/objects) from JSON args.
+/// Extract typed field data from JSON args, dropping `skip_keys` and `null` values.
+/// Scalars and structured values both flow through as `Value` — the typed write
+/// pipeline routes them to columns or join tables based on each field's type.
 pub(in crate::mcp::tools) fn extract_data_from_args(
     args: &Value,
     skip_keys: &[&str],
-) -> (HashMap<String, String>, HashMap<String, Value>) {
-    let mut data = HashMap::new();
-    let mut join_data = HashMap::new();
-
+) -> DocumentFields {
     let Some(obj) = args.as_object() else {
-        return (data, join_data);
+        return DocumentFields::new();
     };
 
-    for (k, v) in obj {
-        if skip_keys.contains(&k.as_str()) {
-            continue;
-        }
-        match v {
-            Value::String(s) => {
-                data.insert(k.clone(), s.clone());
-            }
-            Value::Number(n) => {
-                data.insert(k.clone(), n.to_string());
-            }
-            Value::Bool(b) => {
-                data.insert(k.clone(), bool_to_string(*b));
-            }
-            Value::Array(_) | Value::Object(_) => {
-                join_data.insert(k.clone(), v.clone());
-            }
-            Value::Null => {}
-        }
-    }
-
-    (data, join_data)
+    obj.iter()
+        .filter(|(k, v)| !skip_keys.contains(&k.as_str()) && !v.is_null())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }

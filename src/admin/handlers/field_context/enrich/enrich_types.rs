@@ -2,8 +2,6 @@
 //!
 //! Split from `field_types.rs` which contains the `sub_*` helpers for sub-field contexts.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 use tracing::warn;
 
@@ -26,7 +24,7 @@ use crate::{
         },
     },
     core::{
-        Document,
+        Document, DocumentFields,
         collection::CollectionDefinition,
         field::{BlockDefinition, FieldDefinition, FieldType, to_title_case},
         registry::Registry,
@@ -46,7 +44,7 @@ use crate::{
 /// migrated from has_one without a backfill, hand-edited DB row, or a
 /// faulty Lua hook), which would otherwise present as an empty selector
 /// without explanation.
-fn extract_selected_ids(doc_fields: &HashMap<String, Value>, field_name: &str) -> Vec<String> {
+fn extract_selected_ids(doc_fields: &DocumentFields, field_name: &str) -> Vec<String> {
     match doc_fields.get(field_name) {
         Some(Value::Array(arr)) => arr
             .iter()
@@ -133,7 +131,7 @@ fn resolve_has_one_item(
 pub(super) fn enrich_relationship(
     rf: &mut RelationshipField,
     field_def: &FieldDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
@@ -272,7 +270,7 @@ fn build_array_row(
 pub(super) fn enrich_array(
     af: &mut ArrayField,
     field_def: &FieldDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     enrich: &EnrichCtx,
 ) {
     let locale_locked = enrich.non_default_locale && !field_def.localized;
@@ -394,7 +392,7 @@ fn resolve_upload_has_one(
 pub(super) fn enrich_upload(
     uf: &mut UploadField,
     field_def: &FieldDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
@@ -560,7 +558,7 @@ fn build_blocks_row(
 pub(super) fn enrich_blocks(
     bf: &mut BlocksField,
     field_def: &FieldDefinition,
-    doc_fields: &HashMap<String, Value>,
+    doc_fields: &DocumentFields,
     enrich: &EnrichCtx,
 ) {
     let locale_locked = enrich.non_default_locale && !field_def.localized;
