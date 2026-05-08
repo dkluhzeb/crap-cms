@@ -298,10 +298,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use crate::core::event::{EventOperation, EventTarget};
-    use crate::core::{DocumentId, Slug};
+    use crate::core::{DocumentFields, DocumentId, Slug};
 
     use super::*;
 
@@ -315,7 +313,7 @@ mod tests {
                 operation: EventOperation::Create,
                 collection: Slug::new("posts"),
                 document_id: DocumentId::new("doc1"),
-                data: HashMap::new(),
+                data: DocumentFields::new(),
                 edited_by: None,
             },
             1,

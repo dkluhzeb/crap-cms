@@ -9,6 +9,7 @@ use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::query;
 use crap_cms::db::{DbConnection, DbValue};
+use serde_json::json;
 
 fn make_list_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");

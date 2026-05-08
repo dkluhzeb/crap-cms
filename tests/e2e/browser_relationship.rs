@@ -8,6 +8,7 @@ use crap_cms::core::DocumentFields;
 use crap_cms::core::collection::*;
 use crap_cms::core::field::*;
 use crap_cms::db::{DbConnection, query};
+use serde_json::json;
 
 fn make_categories_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("categories");
