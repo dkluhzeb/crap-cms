@@ -101,11 +101,11 @@ pub(super) fn collection_upload_to_lua(
 
 #[cfg(test)]
 mod tests {
-    use super::super::collection::collection_config_to_lua;
     use crate::core::{
         CollectionDefinition,
         upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSizeBuilder},
     };
+    use crate::hooks::api::serializers::collection::collection_config_to_lua;
     use mlua::{self, Value};
 
     #[test]

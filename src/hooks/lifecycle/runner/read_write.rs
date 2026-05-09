@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::run::FieldWriteCtx;
+use super::run::{FieldHooksCall, FieldWriteCtx};
 use crate::{
     core::{
         Document, DocumentFields, FieldDefinition, FieldType,
@@ -145,16 +145,18 @@ impl HookRunner {
         let wctx = FieldWriteCtx::builder(val_ctx.conn)
             .user(ctx.user.as_ref())
             .ui_locale(ctx.ui_locale.as_deref())
+            .infra(infra.clone())
             .build();
 
         self.run_field_hooks_with_conn(
-            fields,
-            FieldHookEvent::BeforeValidate,
             &mut ctx.data,
-            &ctx.collection,
-            &ctx.operation,
-            &wctx,
-            infra.clone(),
+            &FieldHooksCall {
+                fields,
+                event: FieldHookEvent::BeforeValidate,
+                collection: &ctx.collection,
+                operation: &ctx.operation,
+            },
+            wctx,
         )?;
 
         // Run before_validate hooks on richtext node attrs (normalize attr values)
@@ -177,16 +179,18 @@ impl HookRunner {
         let wctx = FieldWriteCtx::builder(val_ctx.conn)
             .user(ctx.user.as_ref())
             .ui_locale(ctx.ui_locale.as_deref())
+            .infra(infra.clone())
             .build();
 
         self.run_field_hooks_with_conn(
-            fields,
-            FieldHookEvent::BeforeChange,
             &mut ctx.data,
-            &ctx.collection,
-            &ctx.operation,
-            &wctx,
-            infra.clone(),
+            &FieldHooksCall {
+                fields,
+                event: FieldHookEvent::BeforeChange,
+                collection: &ctx.collection,
+                operation: &ctx.operation,
+            },
+            wctx,
         )?;
 
         // Collection-level before_change
@@ -215,16 +219,18 @@ impl HookRunner {
                 let wctx = FieldWriteCtx::builder(conn)
                     .user(ctx.user.as_ref())
                     .ui_locale(ctx.ui_locale.as_deref())
+                    .infra(infra.clone())
                     .build();
 
                 self.run_field_hooks_with_conn(
-                    fields,
-                    FieldHookEvent::AfterChange,
                     &mut data,
-                    &ctx.collection,
-                    &ctx.operation,
-                    &wctx,
-                    infra.clone(),
+                    &FieldHooksCall {
+                        fields,
+                        event: FieldHookEvent::AfterChange,
+                        collection: &ctx.collection,
+                        operation: &ctx.operation,
+                    },
+                    wctx,
                 )?;
             }
         }

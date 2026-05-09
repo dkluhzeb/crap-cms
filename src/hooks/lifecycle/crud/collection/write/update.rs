@@ -59,7 +59,7 @@ fn update_document_lua(
         );
     }
 
-    let ExtractedData { data, password } = extract_data(lua, &data_table, &def)?;
+    let ExtractedData { data, password } = extract_data(&data_table, &def)?;
 
     // Field write access is now checked inside service::update_document
     // via WriteHooks::field_write_denied.

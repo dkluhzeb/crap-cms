@@ -80,7 +80,7 @@ fn parse_legacy_relation_to(field_tbl: &Table) -> LuaResult<Option<RelationshipC
 
 #[cfg(test)]
 mod tests {
-    use super::super::fields::parse_fields;
+    use crate::hooks::api::parse::fields::parse_fields;
     use mlua::Lua;
 
     #[test]

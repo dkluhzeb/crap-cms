@@ -59,7 +59,7 @@ fn queue_job_inner(
 
     let data_json = match data {
         Some(tbl) => {
-            let json_val = api::lua_to_json(lua, &Value::Table(tbl))?;
+            let json_val = api::lua_to_json(&Value::Table(tbl))?;
 
             serde_json::to_string(&json_val)
                 .map_err(|e| RuntimeError(format!("JSON error: {e:#}")))?

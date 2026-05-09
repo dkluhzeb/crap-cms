@@ -17,15 +17,26 @@ use crate::{
     service::{LuaWriteHooks, ServiceContext, WriteInput, update_global_document},
 };
 
+/// Decoded `crap.globals.update(slug, data, opts?)` Lua arguments.
+struct GlobalsUpdateInput {
+    slug: String,
+    data_table: Table,
+    opts: Option<Table>,
+}
+
 /// Core logic for `crap.globals.update`.
 fn globals_update_inner(
     lua: &Lua,
     reg: &SharedRegistry,
     lc: &LocaleConfig,
-    slug: String,
-    data_table: Table,
-    opts: Option<Table>,
+    input: GlobalsUpdateInput,
 ) -> mlua::Result<Table> {
+    let GlobalsUpdateInput {
+        slug,
+        data_table,
+        opts,
+    } = input;
+
     // SAFETY: pointer valid for hook call duration — see TxContext pattern
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
@@ -48,7 +59,7 @@ fn globals_update_inner(
     // (`lua_table_to_json_map`) supplies composite values that need to land
     // intact in arrays/blocks join tables.
     let mut data = values_from_strings(lua_table_to_hashmap(&data_table)?);
-    let composite_data: DocumentFields = lua_table_to_json_map(lua, &data_table)?
+    let composite_data: DocumentFields = lua_table_to_json_map(&data_table)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, Value::String(_)))
         .collect();
@@ -104,7 +115,16 @@ pub(crate) fn register_globals_update(
     let lc = locale_config.clone();
     let update_fn = lua.create_function(
         move |lua, (slug, data_table, opts): (String, Table, Option<Table>)| {
-            globals_update_inner(lua, &registry, &lc, slug, data_table, opts)
+            globals_update_inner(
+                lua,
+                &registry,
+                &lc,
+                GlobalsUpdateInput {
+                    slug,
+                    data_table,
+                    opts,
+                },
+            )
         },
     )?;
     table.set("update", update_fn)?;

@@ -18,10 +18,7 @@ use crate::{
 /// Convert a Lua data table to HashMap<String, Value>.
 /// Preserves nested tables (blocks, arrays, has-many IDs) unlike lua_table_to_hashmap
 /// which only handles scalars.
-pub(crate) fn lua_table_to_json_map(
-    lua: &Lua,
-    tbl: &Table,
-) -> LuaResult<HashMap<String, JsonValue>> {
+pub(crate) fn lua_table_to_json_map(tbl: &Table) -> LuaResult<HashMap<String, JsonValue>> {
     let mut map = HashMap::new();
 
     for pair in tbl.pairs::<String, Value>() {
@@ -31,7 +28,7 @@ pub(crate) fn lua_table_to_json_map(
             continue;
         }
 
-        map.insert(k, api::lua_to_json(lua, &v)?);
+        map.insert(k, api::lua_to_json(&v)?);
     }
 
     Ok(map)
@@ -790,7 +787,7 @@ mod tests {
         tbl.set("title", "Hello").unwrap();
         tbl.set("count", 42).unwrap();
         tbl.set("active", true).unwrap();
-        let map = lua_table_to_json_map(&lua, &tbl).unwrap();
+        let map = lua_table_to_json_map(&tbl).unwrap();
         assert_eq!(map.get("title").unwrap(), &json!("Hello"));
         assert_eq!(map.get("count").unwrap(), &json!(42));
         assert_eq!(map.get("active").unwrap(), &json!(true));
@@ -802,7 +799,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("title", "Hello").unwrap();
         // Setting a key to nil removes it from Lua table iteration
-        let map = lua_table_to_json_map(&lua, &tbl).unwrap();
+        let map = lua_table_to_json_map(&tbl).unwrap();
         assert_eq!(map.len(), 1);
     }
 }

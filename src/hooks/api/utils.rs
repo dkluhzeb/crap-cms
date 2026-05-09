@@ -22,7 +22,7 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
     )?;
     t.set("nanoid", lua.create_function(|_, ()| Ok(nanoid!()))?)?;
 
-    let json_encode_fn = lua.create_function(|lua, value: LuaValue| json_encode(lua, &value))?;
+    let json_encode_fn = lua.create_function(|_, value: LuaValue| json_encode(&value))?;
     let json_decode_fn = lua.create_function(|lua, s: String| json_decode(lua, &s))?;
 
     t.set("json_encode", json_encode_fn.clone())?;
@@ -72,8 +72,8 @@ pub(super) fn load_lua_helpers(lua: &Lua) -> Result<()> {
 // ── Helper functions ────────────────────────────────────────────────────
 
 /// Encode a Lua value to JSON string.
-fn json_encode(lua: &Lua, value: &LuaValue) -> LuaResult<String> {
-    let json_value = lua_to_json(lua, value)?;
+fn json_encode(value: &LuaValue) -> LuaResult<String> {
+    let json_value = lua_to_json(value)?;
     serde_json::to_string(&json_value)
         .map_err(|e| RuntimeError(format!("JSON encode error: {e:#}")))
 }

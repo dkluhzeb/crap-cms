@@ -167,13 +167,14 @@ fn field_before_change_transforms_value() {
 
     runner
         .run_field_hooks_with_conn(
-            &def.fields,
-            crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
             &mut data,
-            "articles",
-            "create",
-            &FieldWriteCtx::builder(&tx).build(),
-            None,
+            &crap_cms::hooks::lifecycle::FieldHooksCall {
+                fields: &def.fields,
+                event: crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
+                collection: "articles",
+                operation: "create",
+            },
+            FieldWriteCtx::builder(&tx).build(),
         )
         .expect("Field hook failed");
 

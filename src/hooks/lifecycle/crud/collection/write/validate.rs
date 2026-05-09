@@ -34,7 +34,7 @@ fn validate_inner(
     let exclude_id = get_opt_string(&opts, "id")?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ExtractedData { data, password } = extract_data(lua, &data_table, &def)?;
+    let ExtractedData { data, password } = extract_data(&data_table, &def)?;
 
     let r = reg
         .read()

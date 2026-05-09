@@ -205,7 +205,6 @@ pub(crate) struct ExtractedData {
 /// with the stringified view (wrapped via `values_from_strings`) and then
 /// overrides composite leaves with their typed counterparts.
 pub(crate) fn extract_data(
-    lua: &Lua,
     data_table: &Table,
     def: &CollectionDefinition,
 ) -> LuaResult<ExtractedData> {
@@ -220,7 +219,7 @@ pub(crate) fn extract_data(
 
     let mut data = crate::service::values_from_strings(flat);
 
-    let composite_data: DocumentFields = lua_table_to_json_map(lua, data_table)?
+    let composite_data: DocumentFields = lua_table_to_json_map(data_table)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, Value::String(_)))
         .collect();

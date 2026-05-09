@@ -55,7 +55,7 @@ impl HookRunner {
         match return_val {
             Value::Nil => Ok(None),
             other => {
-                let json_val = api::lua_to_json(&lua, &other)?;
+                let json_val = api::lua_to_json(&other)?;
 
                 Ok(Some(serde_json::to_string(&json_val)?))
             }

@@ -38,7 +38,7 @@ fn create_document_lua(
     let draft = get_opt_bool(&opts, "draft", false)?;
     let def = resolve_collection(reg, &collection)?;
 
-    let ExtractedData { data, password } = extract_data(lua, &data_table, &def)?;
+    let ExtractedData { data, password } = extract_data(&data_table, &def)?;
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "create");
 

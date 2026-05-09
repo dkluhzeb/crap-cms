@@ -99,12 +99,12 @@ impl HookContext {
     }
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
-    pub(crate) fn read_context_back(&mut self, lua: &Lua, tbl: &Table) {
+    pub(crate) fn read_context_back(&mut self, tbl: &Table) {
         if let Ok(context_tbl) = tbl.get::<Table>("context") {
             self.context.clear();
 
             for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
-                if let Ok(json_val) = api::lua_to_json(lua, &v) {
+                if let Ok(json_val) = api::lua_to_json(&v) {
                     self.context.insert(k, json_val);
                 }
             }
@@ -189,7 +189,7 @@ mod tests {
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&lua, &tbl);
+        ctx.read_context_back(&tbl);
 
         assert!(
             !ctx.context.contains_key("old_key"),
@@ -209,7 +209,7 @@ mod tests {
         let mut ctx = HookContext::builder("test", "create")
             .context(ctx_map)
             .build();
-        ctx.read_context_back(&lua, &tbl);
+        ctx.read_context_back(&tbl);
 
         assert!(ctx.context.contains_key("old_key"));
     }

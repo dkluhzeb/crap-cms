@@ -85,7 +85,7 @@ fn update_many_documents(
     }
 
     let mut data = service::values_from_strings(stringified);
-    let composite_data: DocumentFields = lua_table_to_json_map(lua, data_table)?
+    let composite_data: DocumentFields = lua_table_to_json_map(data_table)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, serde_json::Value::String(_)))
         .collect();

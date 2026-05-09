@@ -10,7 +10,8 @@ use crap_cms::core::field::FieldDefinition;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{
-    AfterReadCtx, FieldHookEvent, FieldWriteCtx, HookContext, HookEvent, HookRunner, ValidationCtx,
+    AfterReadCtx, FieldHookEvent, FieldHooksCall, FieldWriteCtx, HookContext, HookEvent,
+    HookRunner, ValidationCtx,
 };
 use serde_json::json;
 
@@ -558,11 +559,13 @@ fn run_field_hooks_without_conn() {
 
     // run_field_hooks for AfterRead doesn't require CRUD access
     let result = runner.run_field_hooks(
-        &def.fields,
-        FieldHookEvent::AfterRead,
         &mut data,
-        "articles",
-        "find",
+        &FieldHooksCall {
+            fields: &def.fields,
+            event: FieldHookEvent::AfterRead,
+            collection: "articles",
+            operation: "find",
+        },
     );
     assert!(result.is_ok());
 
@@ -664,13 +667,14 @@ fn field_before_validate_hook_trims_title() {
 
     runner
         .run_field_hooks_with_conn(
-            &def.fields,
-            FieldHookEvent::BeforeValidate,
             &mut data,
-            "articles",
-            "create",
-            &FieldWriteCtx::builder(&tx).build(),
-            None,
+            &FieldHooksCall {
+                fields: &def.fields,
+                event: FieldHookEvent::BeforeValidate,
+                collection: "articles",
+                operation: "create",
+            },
+            FieldWriteCtx::builder(&tx).build(),
         )
         .expect("Field hook failed");
 
@@ -720,13 +724,14 @@ fn multiple_field_hooks_run_in_sequence() {
     // First: before_validate trims
     runner
         .run_field_hooks_with_conn(
-            &def.fields,
-            FieldHookEvent::BeforeValidate,
             &mut data,
-            "articles",
-            "create",
-            &FieldWriteCtx::builder(&tx).build(),
-            None,
+            &FieldHooksCall {
+                fields: &def.fields,
+                event: FieldHookEvent::BeforeValidate,
+                collection: "articles",
+                operation: "create",
+            },
+            FieldWriteCtx::builder(&tx).build(),
         )
         .expect("before_validate field hook");
 
@@ -735,11 +740,13 @@ fn multiple_field_hooks_run_in_sequence() {
     // Then: after_read uppercases
     runner
         .run_field_hooks(
-            &def.fields,
-            FieldHookEvent::AfterRead,
             &mut data,
-            "articles",
-            "find",
+            &FieldHooksCall {
+                fields: &def.fields,
+                event: FieldHookEvent::AfterRead,
+                collection: "articles",
+                operation: "find",
+            },
         )
         .expect("after_read field hook");
 
@@ -993,13 +1000,14 @@ fn nested_group_field_hooks_execute() {
 
     runner
         .run_field_hooks_with_conn(
-            &def.fields,
-            FieldHookEvent::BeforeChange,
             &mut data,
-            "nested_hooks",
-            "create",
-            &FieldWriteCtx::builder(&tx).build(),
-            None,
+            &FieldHooksCall {
+                fields: &def.fields,
+                event: FieldHookEvent::BeforeChange,
+                collection: "nested_hooks",
+                operation: "create",
+            },
+            FieldWriteCtx::builder(&tx).build(),
         )
         .expect("field hooks failed");
 
@@ -1028,13 +1036,14 @@ fn nested_row_field_hooks_execute() {
 
     runner
         .run_field_hooks_with_conn(
-            &def.fields,
-            FieldHookEvent::BeforeChange,
             &mut data,
-            "nested_hooks",
-            "create",
-            &FieldWriteCtx::builder(&tx).build(),
-            None,
+            &FieldHooksCall {
+                fields: &def.fields,
+                event: FieldHookEvent::BeforeChange,
+                collection: "nested_hooks",
+                operation: "create",
+            },
+            FieldWriteCtx::builder(&tx).build(),
         )
         .expect("field hooks failed");
 
@@ -1058,11 +1067,13 @@ fn nested_group_after_read_hooks_execute() {
 
     runner
         .run_field_hooks(
-            &def.fields,
-            FieldHookEvent::AfterRead,
             &mut data,
-            "nested_hooks",
-            "find",
+            &FieldHooksCall {
+                fields: &def.fields,
+                event: FieldHookEvent::AfterRead,
+                collection: "nested_hooks",
+                operation: "find",
+            },
         )
         .expect("field hooks failed");
 

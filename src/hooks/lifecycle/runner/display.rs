@@ -106,7 +106,7 @@ impl HookRunner {
         };
 
         match func.call::<Value>(ctx_lua) {
-            Ok(v) => match api::lua_to_json(&lua, &v) {
+            Ok(v) => match api::lua_to_json(&v) {
                 Ok(json) => Some(json),
                 Err(e) => {
                     warn!("crap.template_data['{name}']: result is not JSON-encodable: {e}");
@@ -205,7 +205,7 @@ fn execute_render_hooks(lua: &Lua, mut context: JsonValue) -> JsonValue {
         };
 
         match func.call::<Value>(ctx_lua) {
-            Ok(Value::Table(tbl)) => match api::lua_to_json(lua, &Value::Table(tbl)) {
+            Ok(Value::Table(tbl)) => match api::lua_to_json(&Value::Table(tbl)) {
                 Ok(new_ctx) => context = new_ctx,
                 Err(e) => {
                     warn!("before_render: failed to convert Lua result to JSON: {e}");

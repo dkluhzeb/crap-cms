@@ -1,6 +1,6 @@
 //! Parsing functions for field admin configuration.
 
-use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
+use mlua::{Error::RuntimeError, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
 use super::helpers::*;
 
 /// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
-pub(super) fn parse_field_admin(lua: &Lua, admin_tbl: &Table) -> LuaResult<FieldAdmin> {
+pub(super) fn parse_field_admin(admin_tbl: &Table) -> LuaResult<FieldAdmin> {
     let (labels_singular, labels_plural) = if let Ok(labels_tbl) = get_table(admin_tbl, "labels") {
         (
             get_localized_string(&labels_tbl, "singular"),
@@ -127,7 +127,7 @@ pub(super) fn parse_field_admin(lua: &Lua, admin_tbl: &Table) -> LuaResult<Field
     // template can read at `{{admin.extra.<key>}}`. Parsed once at
     // field-definition time; static per field instance.
     if let Ok(extra_tbl) = get_table(admin_tbl, "extra") {
-        let json = lua_to_json(lua, &Value::Table(extra_tbl)).map_err(|e| {
+        let json = lua_to_json(&Value::Table(extra_tbl)).map_err(|e| {
             RuntimeError(format!(
                 "crap.fields.*: invalid `admin.extra` (must be JSON-serializable): {e}"
             ))
@@ -170,7 +170,7 @@ mod tests {
         admin_tbl.set("format", "lexical").unwrap();
         admin_tbl.set("language", "en").unwrap();
         admin_tbl.set("rows", 5u32).unwrap();
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert!(admin.labels_singular.is_some());
         assert!(admin.labels_plural.is_some());
         assert_eq!(admin.features, vec!["bold", "italic"]);
@@ -191,7 +191,7 @@ mod tests {
         langs.set(3, "html").unwrap();
         admin_tbl.set("languages", langs).unwrap();
 
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert_eq!(admin.languages, vec!["javascript", "python", "html"]);
     }
 
@@ -199,7 +199,7 @@ mod tests {
     fn test_parse_field_admin_languages_default_empty() {
         let lua = Lua::new();
         let admin_tbl = lua.create_table().unwrap();
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert!(admin.languages.is_empty());
     }
 
@@ -208,7 +208,7 @@ mod tests {
         let lua = Lua::new();
         let admin_tbl = lua.create_table().unwrap();
         admin_tbl.set("resizable", false).unwrap();
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert!(!admin.resizable);
     }
 
@@ -217,7 +217,7 @@ mod tests {
         let lua = Lua::new();
         let admin_tbl = lua.create_table().unwrap();
         admin_tbl.set("template", "fields/rating").unwrap();
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert_eq!(admin.template.as_deref(), Some("fields/rating"));
     }
 
@@ -226,7 +226,7 @@ mod tests {
         let lua = Lua::new();
         let admin_tbl = lua.create_table().unwrap();
         admin_tbl.set("template", "../../etc/passwd").unwrap();
-        let err = parse_field_admin(&lua, &admin_tbl).unwrap_err();
+        let err = parse_field_admin(&admin_tbl).unwrap_err();
         assert!(
             err.to_string().contains("invalid `admin.template`"),
             "expected validation error, got: {err}"
@@ -247,7 +247,7 @@ mod tests {
         extra.set("colors", nested).unwrap();
         admin_tbl.set("extra", extra).unwrap();
 
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert_eq!(
             admin.extra.get("icon").and_then(|v| v.as_str()),
             Some("star")
@@ -279,7 +279,7 @@ mod tests {
         arr.set(2, "second").unwrap();
         admin_tbl.set("extra", arr).unwrap();
 
-        let err = parse_field_admin(&lua, &admin_tbl).unwrap_err();
+        let err = parse_field_admin(&admin_tbl).unwrap_err();
         assert!(
             err.to_string().contains("must be a table"),
             "expected sequence-rejection error, got: {err}"
@@ -290,7 +290,7 @@ mod tests {
     fn test_parse_field_admin_extra_default_empty() {
         let lua = Lua::new();
         let admin_tbl = lua.create_table().unwrap();
-        let admin = parse_field_admin(&lua, &admin_tbl).unwrap();
+        let admin = parse_field_admin(&admin_tbl).unwrap();
         assert!(admin.extra.is_empty());
     }
 }

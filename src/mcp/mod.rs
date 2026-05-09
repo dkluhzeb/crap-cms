@@ -18,7 +18,7 @@ mod tests {
     use super::*;
     use crate::core::collection::CollectionDefinition;
     use crate::db::{migrate, pool};
-    use crate::hooks::lifecycle::HookRunner;
+    use crate::hooks::HookRunner;
     use crate::{config::CrapConfig, core::Registry};
     use protocol::{
         INTERNAL_ERROR, INVALID_PARAMS, InitializeParams, JsonRpcRequest, METHOD_NOT_FOUND,

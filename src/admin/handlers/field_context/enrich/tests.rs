@@ -1167,7 +1167,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         crate::core::registry::Registry::default(),
     ));
     let config = crate::config::CrapConfig::default();
-    let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+    let hook_runner = crate::hooks::HookRunner::builder()
         .config_dir(tmp.path())
         .registry(shared_reg.clone())
         .config(&config)
@@ -1280,7 +1280,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         crate::core::registry::Registry::default(),
     ));
     let config = crate::config::CrapConfig::default();
-    let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+    let hook_runner = crate::hooks::HookRunner::builder()
         .config_dir(tmp.path())
         .registry(shared_reg.clone())
         .config(&config)

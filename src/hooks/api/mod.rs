@@ -22,10 +22,8 @@ mod schema;
 mod serializers;
 pub(crate) mod template_data;
 mod utils;
+mod vm_label;
 
 pub use register::register_api;
 pub(crate) use serializers::{json_to_lua, lua_to_json};
-
-/// Label stored in `Lua::app_data` to identify which VM is logging.
-/// Init VM uses `"init"`, pool VMs use `"vm-1"`, `"vm-2"`, etc.
-pub struct VmLabel(pub String);
+pub use vm_label::VmLabel;

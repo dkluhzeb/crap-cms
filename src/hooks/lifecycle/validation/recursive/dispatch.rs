@@ -1,246 +1,75 @@
+//! Layout dispatch: walk through Group/Row/Collapsible/Tabs containers and
+//! delegate scalar fields to `ValidationWalker::scalar`.
+
 use mlua::Lua;
-use serde_json::Value;
 
 use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, validate::FieldError},
-    db::{LocaleMode, query::helpers::prefixed_name, query::sanitize_locale},
+    db::query::helpers::prefixed_name,
     hooks::ValidationCtx,
 };
 
-use super::{
-    checks,
-    richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
-    sub_fields::{SubFieldParams, validate_sub_fields_inner},
-};
+/// Per-walk invariants for recursive validation. Methods take ≤ 4 args.
+pub(in crate::hooks::lifecycle::validation) struct ValidationWalker<'a> {
+    pub(in crate::hooks::lifecycle::validation::recursive) lua: &'a Lua,
+    pub(in crate::hooks::lifecycle::validation::recursive) data: &'a DocumentFields,
+    pub(in crate::hooks::lifecycle::validation::recursive) ctx: &'a ValidationCtx<'a>,
+}
 
-/// Recursive validation with prefix support for arbitrary nesting.
-/// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through.
-/// `inherited_localized` tracks locale state for unique checks.
-pub(super) fn validate_fields_recursive(
-    lua: &Lua,
-    fields: &[FieldDefinition],
-    data: &DocumentFields,
-    ctx: &ValidationCtx,
-    prefix: &str,
-    inherited_localized: bool,
-    errors: &mut Vec<FieldError>,
-) {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = prefixed_name(prefix, &field.name);
-                validate_fields_recursive(
-                    lua,
-                    &field.fields,
-                    data,
-                    ctx,
-                    &new_prefix,
-                    inherited_localized || field.localized,
-                    errors,
-                );
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                validate_fields_recursive(
-                    lua,
-                    &field.fields,
-                    data,
-                    ctx,
-                    prefix,
-                    inherited_localized,
-                    errors,
-                );
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    validate_fields_recursive(
-                        lua,
-                        &tab.fields,
-                        data,
-                        ctx,
-                        prefix,
-                        inherited_localized,
+impl<'a> ValidationWalker<'a> {
+    pub(in crate::hooks::lifecycle::validation) fn new(
+        lua: &'a Lua,
+        data: &'a DocumentFields,
+        ctx: &'a ValidationCtx<'a>,
+    ) -> Self {
+        Self { lua, data, ctx }
+    }
+
+    /// Recursive validation with prefix support for arbitrary nesting.
+    /// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through.
+    /// `inherited_localized` tracks locale state for unique checks.
+    pub(in crate::hooks::lifecycle::validation) fn walk(
+        &self,
+        fields: &[FieldDefinition],
+        prefix: &str,
+        inherited_localized: bool,
+        errors: &mut Vec<FieldError>,
+    ) {
+        for field in fields {
+            match field.field_type {
+                FieldType::Group => {
+                    let new_prefix = prefixed_name(prefix, &field.name);
+                    self.walk(
+                        &field.fields,
+                        &new_prefix,
+                        inherited_localized || field.localized,
                         errors,
                     );
                 }
-            }
-            FieldType::Join => {
-                // Virtual field — no data to validate
-            }
-            _ => {
-                validate_scalar_field(lua, field, data, ctx, prefix, inherited_localized, errors);
-            }
-        }
-    }
-}
-
-/// Validate a single scalar field (not Group/Row/Collapsible/Tabs).
-/// Dispatches to individual check functions in `checks` module.
-fn validate_scalar_field(
-    lua: &Lua,
-    field: &FieldDefinition,
-    data: &DocumentFields,
-    ctx: &ValidationCtx,
-    prefix: &str,
-    inherited_localized: bool,
-    errors: &mut Vec<FieldError>,
-) {
-    let data_key = prefixed_name(prefix, &field.name);
-
-    let value = data.get(&data_key);
-    let is_empty = match value {
-        None => true,
-        Some(Value::Null) => true,
-        Some(Value::String(s)) => s.is_empty(),
-        _ => false,
-    };
-    let is_update = ctx.exclude_id.is_some();
-
-    checks::check_required(
-        field,
-        &data_key,
-        value,
-        is_empty,
-        ctx.is_draft,
-        is_update,
-        errors,
-    );
-    checks::check_row_bounds(field, &data_key, value, ctx.is_draft, errors);
-    checks::check_polymorphic_allowlist(field, &data_key, value, errors);
-
-    // Validate sub-fields within Array/Blocks rows.
-    // Draft mode still validates sub-fields (format, bounds, etc.) — only `required`
-    // checks are skipped inside sub-field validation via the is_draft flag.
-    let has_sub_structure = !field.fields.is_empty() || !field.blocks.is_empty();
-    if matches!(field.field_type, FieldType::Array | FieldType::Blocks)
-        && has_sub_structure
-        && let Some(Value::Array(rows)) = value
-    {
-        for (idx, row) in rows.iter().enumerate() {
-            let row_obj = match row.as_object() {
-                Some(obj) => obj,
-                None => {
-                    errors.push(
-                        FieldError::with_key(
-                            format!("{}[{}]", data_key, idx),
-                            format!("{} row {} must be an object", field.name, idx),
-                            "validation.invalid_row_type",
-                        )
-                        .with_param("field", field.name.clone())
-                        .with_param("index", idx.to_string()),
-                    );
-                    continue;
+                FieldType::Row | FieldType::Collapsible => {
+                    self.walk(&field.fields, prefix, inherited_localized, errors);
                 }
-            };
-            let sub_fields: &[FieldDefinition] = if field.field_type == FieldType::Blocks {
-                let block_type = row_obj
-                    .get("_block_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                match field.blocks.iter().find(|b| b.block_type == block_type) {
-                    Some(bd) => &bd.fields,
-                    None => {
-                        errors.push(
-                            FieldError::with_key(
-                                format!("{}[{}]", data_key, idx),
-                                format!(
-                                    "{} row {} has unknown block type '{}'",
-                                    field.name, idx, block_type
-                                ),
-                                "validation.unknown_block_type",
-                            )
-                            .with_param("field", field.name.clone())
-                            .with_param("index", idx.to_string())
-                            .with_param("block_type", block_type.to_string()),
-                        );
-                        continue;
+                FieldType::Tabs => {
+                    for tab in &field.tabs {
+                        self.walk(&tab.fields, prefix, inherited_localized, errors);
                     }
                 }
-            } else {
-                &field.fields
-            };
-            let params = SubFieldParams {
-                lua,
-                parent_name: &data_key,
-                idx,
-                table: ctx.table,
-                registry: ctx.registry,
-                is_draft: ctx.is_draft,
-            };
-            validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
-        }
-    }
-
-    // Compute the actual DB column name for the unique check.
-    // Localized fields store data in suffixed columns (e.g., slug__en).
-    let is_localized = (inherited_localized || field.localized) && ctx.locale_ctx.is_some();
-    // Compute the actual DB column name for the unique check.
-    // If locale sanitization fails, emit a validation error rather than silently
-    // skipping the unique check, which could allow duplicates to slip through.
-    let col_name = if let (true, Some(lctx)) = (is_localized, ctx.locale_ctx) {
-        let locale = match &lctx.mode {
-            LocaleMode::Single(l) => l.as_str(),
-            _ => lctx.config.default_locale.as_str(),
-        };
-        match sanitize_locale(locale) {
-            Ok(l) => Some(format!("{}__{}", data_key, l)),
-            Err(_) => {
-                errors.push(
-                    FieldError::with_key(
-                        data_key.clone(),
-                        format!(
-                            "{}: invalid locale '{}' — cannot verify uniqueness",
-                            field.name, locale,
-                        ),
-                        "validation.invalid_locale",
-                    )
-                    .with_param("field", field.name.clone())
-                    .with_param("locale", locale.to_string()),
-                );
-                None
+                FieldType::Join => {
+                    // Virtual field — no data to validate
+                }
+                _ => {
+                    self.scalar(field, prefix, inherited_localized, errors);
+                }
             }
         }
-    } else {
-        Some(data_key.clone())
-    };
-
-    if let Some(col_name) = col_name {
-        checks::check_unique(field, &data_key, &col_name, value, is_empty, ctx, errors);
-    }
-    checks::check_length_bounds(field, &data_key, value, is_empty, errors);
-    checks::check_numeric_bounds(field, &data_key, value, is_empty, errors);
-    checks::check_email_format(field, &data_key, value, is_empty, errors);
-    checks::check_option_valid(field, &data_key, value, is_empty, errors);
-    checks::check_has_many_elements(field, &data_key, value, is_empty, errors);
-    checks::check_date_field(field, &data_key, value, is_empty, errors);
-    checks::check_custom_validate(lua, field, &data_key, value, data, ctx.table, errors);
-
-    // Validate custom node attrs within richtext content
-    if field.field_type == FieldType::Richtext
-        && !is_empty
-        && !field.admin.nodes.is_empty()
-        && let Some(registry) = ctx.registry
-        && let Some(Value::String(content)) = value
-    {
-        validate_richtext_node_attrs(
-            &RichtextValidationCtx::builder(lua, registry, ctx.table)
-                .draft(ctx.is_draft)
-                .build(),
-            content,
-            &data_key,
-            field,
-            errors,
-        );
     }
 }
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
-    use crate::config::LocaleConfig;
     use crate::core::DocumentFields;
-    use crate::core::field::{FieldAdmin, FieldDefinition, FieldTab, FieldType, JoinConfig};
-    use crate::core::registry::Registry;
-    use crate::core::richtext::RichtextNodeDef;
-    use crate::db::{InMemoryConn, LocaleContext, LocaleMode};
+    use crate::core::field::{FieldDefinition, FieldTab, FieldType, JoinConfig};
+    use crate::db::InMemoryConn;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
 
@@ -453,9 +282,9 @@ mod tests {
             r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_tabs_field = function(value, ctx)
-
+    
                 if value == "bad" then return "tabs validation error" end
-
+    
                 return true
             end
         "#,
@@ -852,300 +681,5 @@ mod tests {
             "Nested group prefix should be outer__inner__field"
         );
         assert_eq!(result.unwrap_err().errors[0].field, "outer__inner__field");
-    }
-
-    #[test]
-    fn test_validate_date_inside_collapsible_top_level() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, pub_date TEXT)");
-        let fields = vec![
-            FieldDefinition::builder("extra", FieldType::Collapsible)
-                .fields(vec![
-                    FieldDefinition::builder("pub_date", FieldType::Date).build(),
-                ])
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("pub_date".to_string(), json!("not-a-date"));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_err(),
-            "Invalid date inside collapsible at top-level should fail"
-        );
-        assert!(result.unwrap_err().errors[0].message.contains("valid date"));
-    }
-
-    #[test]
-    fn test_validate_date_inside_row_top_level() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, event_date TEXT)");
-        let fields = vec![
-            FieldDefinition::builder("layout", FieldType::Row)
-                .fields(vec![
-                    FieldDefinition::builder("event_date", FieldType::Date).build(),
-                ])
-                .build(),
-        ];
-        let mut data = DocumentFields::new();
-        data.insert("event_date".to_string(), json!("not-a-date"));
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test").build(),
-        );
-        assert!(
-            result.is_err(),
-            "Invalid date inside row at top-level should fail"
-        );
-        assert!(result.unwrap_err().errors[0].message.contains("valid date"));
-    }
-
-    // --- Richtext node attr validation integration tests ---
-
-    #[test]
-    fn test_richtext_node_attr_required_through_validation_pipeline() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, content TEXT)");
-
-        let mut reg = Registry::new();
-        reg.register_richtext_node(
-            RichtextNodeDef::builder("cta", "CTA")
-                .attrs(vec![
-                    FieldDefinition::builder("text", FieldType::Text)
-                        .required(true)
-                        .build(),
-                    FieldDefinition::builder("url", FieldType::Text)
-                        .required(true)
-                        .build(),
-                ])
-                .build(),
-        );
-
-        let fields = vec![
-            FieldDefinition::builder("content", FieldType::Richtext)
-                .admin(
-                    FieldAdmin::builder()
-                        .nodes(vec!["cta".to_string()])
-                        .richtext_format("json")
-                        .build(),
-                )
-                .build(),
-        ];
-
-        let json_content =
-            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
-        let mut data = DocumentFields::new();
-        data.insert("content".to_string(), json!(json_content));
-
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "pages")
-                .registry(&reg)
-                .build(),
-        );
-
-        assert!(result.is_err(), "empty required node attrs should fail");
-        let errs = result.unwrap_err().errors;
-        assert_eq!(errs.len(), 2);
-        assert_eq!(errs[0].field, "content[cta#0].text");
-        assert_eq!(errs[1].field, "content[cta#0].url");
-    }
-
-    #[test]
-    fn test_richtext_node_attr_valid_passes_pipeline() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, content TEXT)");
-
-        let mut reg = Registry::new();
-        reg.register_richtext_node(
-            RichtextNodeDef::builder("cta", "CTA")
-                .attrs(vec![
-                    FieldDefinition::builder("text", FieldType::Text)
-                        .required(true)
-                        .build(),
-                ])
-                .build(),
-        );
-
-        let fields = vec![
-            FieldDefinition::builder("content", FieldType::Richtext)
-                .admin(
-                    FieldAdmin::builder()
-                        .nodes(vec!["cta".to_string()])
-                        .richtext_format("json")
-                        .build(),
-                )
-                .build(),
-        ];
-
-        let json_content =
-            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click me"}}]}"#;
-        let mut data = DocumentFields::new();
-        data.insert("content".to_string(), json!(json_content));
-
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "pages")
-                .registry(&reg)
-                .build(),
-        );
-
-        assert!(result.is_ok(), "valid node attrs should pass");
-    }
-
-    #[test]
-    fn test_richtext_node_attr_no_registry_skips_validation() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, content TEXT)");
-
-        let fields = vec![
-            FieldDefinition::builder("content", FieldType::Richtext)
-                .admin(
-                    FieldAdmin::builder()
-                        .nodes(vec!["cta".to_string()])
-                        .richtext_format("json")
-                        .build(),
-                )
-                .build(),
-        ];
-
-        // Content with invalid data, but no registry provided
-        let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
-        let mut data = DocumentFields::new();
-        data.insert("content".to_string(), json!(json_content));
-
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "pages").build(), // no registry
-        );
-
-        assert!(
-            result.is_ok(),
-            "without registry, node attr validation is skipped"
-        );
-    }
-
-    #[test]
-    fn test_richtext_node_attrs_alongside_regular_field_errors() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, title TEXT, content TEXT)");
-
-        let mut reg = Registry::new();
-        reg.register_richtext_node(
-            RichtextNodeDef::builder("cta", "CTA")
-                .attrs(vec![
-                    FieldDefinition::builder("text", FieldType::Text)
-                        .required(true)
-                        .build(),
-                ])
-                .build(),
-        );
-
-        let fields = vec![
-            FieldDefinition::builder("title", FieldType::Text)
-                .required(true)
-                .build(),
-            FieldDefinition::builder("content", FieldType::Richtext)
-                .admin(
-                    FieldAdmin::builder()
-                        .nodes(vec!["cta".to_string()])
-                        .richtext_format("json")
-                        .build(),
-                )
-                .build(),
-        ];
-
-        let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
-        let mut data = DocumentFields::new();
-        data.insert("title".to_string(), json!(""));
-        data.insert("content".to_string(), json!(json_content));
-
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "pages")
-                .registry(&reg)
-                .build(),
-        );
-
-        assert!(result.is_err());
-        let errs = result.unwrap_err().errors;
-        assert_eq!(errs.len(), 2);
-        // Regular field error first, then node attr error
-        assert_eq!(errs[0].field, "title");
-        assert_eq!(errs[1].field, "content[cta#0].text");
-    }
-
-    /// Regression: when locale sanitization fails, validation must emit an
-    /// error rather than silently skipping the unique check (which could allow
-    /// duplicates to slip through in the localized column).
-    #[test]
-    fn test_invalid_locale_emits_validation_error() {
-        let lua = mlua::Lua::new();
-        let conn = InMemoryConn::open();
-        conn.setup(
-            "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT, slug__en TEXT);
-             INSERT INTO test (id, slug, slug__en) VALUES ('existing', 'taken', 'unique-en');",
-        );
-
-        let fields = vec![
-            FieldDefinition::builder("slug", FieldType::Text)
-                .unique(true)
-                .localized(true)
-                .build(),
-        ];
-
-        let locale_config = LocaleConfig {
-            default_locale: "en".to_string(),
-            locales: vec!["en".to_string()],
-            fallback: false,
-        };
-
-        // Use a locale string that sanitizes to empty (only special chars)
-        let locale_ctx = LocaleContext {
-            mode: LocaleMode::Single("@!#$%".to_string()),
-            config: locale_config,
-        };
-
-        let mut data = DocumentFields::new();
-        data.insert("slug".to_string(), json!("taken"));
-
-        let result = validate_fields_inner(
-            &lua,
-            &fields,
-            &data,
-            &ValidationCtx::builder(&conn, "test")
-                .locale_ctx(Some(&locale_ctx))
-                .build(),
-        );
-
-        assert!(result.is_err(), "Invalid locale must fail validation");
-        let errs = result.unwrap_err().errors;
-        assert_eq!(errs.len(), 1);
-        assert!(
-            errs[0].message.contains("invalid locale"),
-            "Error should mention invalid locale, got: {}",
-            errs[0].message,
-        );
-        assert_eq!(errs[0].key.as_deref(), Some("validation.invalid_locale"));
     }
 }

@@ -20,10 +20,10 @@ use crate::{
 /// preserves typed shapes (arrays/objects). We start with the stringified
 /// view, replace any composite leaves with their typed counterparts, and
 /// peel off `password` so the WriteInput.password channel can carry it.
-fn parse_item(lua: &Lua, item_table: &Table) -> mlua::Result<CreateManyItem> {
+fn parse_item(item_table: &Table) -> mlua::Result<CreateManyItem> {
     let mut data = service::values_from_strings(lua_table_to_hashmap(item_table)?);
 
-    let composite_data: DocumentFields = lua_table_to_json_map(lua, item_table)?
+    let composite_data: DocumentFields = lua_table_to_json_map(item_table)?
         .into_iter()
         .filter(|(_, v)| !matches!(v, JsonValue::String(_)))
         .collect();
@@ -74,7 +74,7 @@ fn create_many_documents(
             )));
         };
 
-        items.push(parse_item(lua, &item_table)?);
+        items.push(parse_item(&item_table)?);
     }
 
     let r = reg

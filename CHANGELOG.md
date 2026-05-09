@@ -567,6 +567,142 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
        (which return `()`) use `let Ok(def) = ... else {
        return };` to skip cleanly when the wrong def variant
        is wired up.
+- `src/hooks/` module audit per the alpha.9 playbook.
+  Initial state: 28k LOC, 108 files, 6 files >1000 LOC.
+  Final: 5327 tests pass, 0 failed; clippy clean. Active
+  changes:
+  - Axis 1 (zero `#[allow]`): 4 of 5 removed at root cause —
+    stale `dead_code` on `HookEvent` (every variant in use),
+    `unreachable_code` in `HookDepthGuard` test (rewrote the
+    closure to a block scope so the early-return doesn't have
+    a dead `Ok(())` after it), `dead_code` on
+    `validate_timezone` deleted (function + tests; only used
+    by its own tests). The 5th
+    (`clippy::too_many_arguments` on
+    `run_field_hooks_with_conn`) disappeared as a side effect
+    of axis 5 below. Also dropped `clippy::only_used_in_recursion`
+    by deleting the unused `lua: &Lua` param from
+    `lua_to_json` / `lua_to_json_inner` and propagating the
+    deletion through 5 helper fns + ~22 call sites.
+  - Axis 8 (zero `super::super`): 5 chains in
+    `api/{fields,email}.rs`, `api/serializers/{auth,upload}.rs`,
+    `api/parse/relationship.rs` rewritten to `crate::hooks::*`.
+  - Axis 25 (deep-path scan): 4 hits — all in test mods —
+    fixed by promoting `DisplayConditionResult` to a top-level
+    re-export (`HookRunner` was already re-exported) and
+    rewriting the 4 callers to the short path. Zero deep-path
+    imports remain.
+  - Axis 5 (>4-arg fns → typed structs / walker pattern):
+    - `validate_nested_rows` / `validate_leaf_sub_field`
+      (5 args each) bundle `(sf, qualified)` into a
+      `SubFieldCall<'_>` struct.
+    - `polymorphic::check_one` (5 args): drop the redundant
+      `rc: &RelationshipConfig` param — re-extracted from
+      `field.relationship.as_ref()` inside the function. Now
+      4 args.
+    - `register_collection_functions` /
+      `register_global_functions` (5 args): bundle the three
+      `&'a SharedRegistry / &'a LocaleConfig /
+      &'a PaginationConfig` refs into a `CrudRegisterCtx<'a>`
+      struct.
+    - `globals_update_inner` (6 args): bundle `slug, data_table,
+      opts` into `GlobalsUpdateInput`. Now 4 args.
+    - `run_field_hooks` (6 args) / `run_field_hooks_with_conn`
+      (8 args including `&self`) /
+      `run_field_hooks_inner` (6 args) /
+      `run_field_hooks_recursive` (7 args) /
+      `run_single_field_hook` (7 args): full walker refactor.
+      `FieldHooksCall<'a>` bundles `(fields, event, collection,
+      operation)`; `FieldWriteCtx` extends with
+      `infra: Option<LuaCrudInfra>`; the recursive helpers
+      become methods on a `FieldHookWalker<'a>` struct that
+      holds `(lua, call)`. Public methods now take
+      `(&mut data, &call)` or `(&mut data, &call, wctx)` —
+      ≤ 4 args + receiver throughout.
+    - `validate_fields_recursive` (7 args) /
+      `validate_scalar_field` (7 args): replaced with a
+      `ValidationWalker<'a>` struct holding `(lua, data, ctx)`
+      with `walk()` and `scalar()` methods (≤ 4 args +
+      receiver). Public callers construct the walker
+      explicitly:
+      `ValidationWalker::new(lua, data, ctx).walk(fields, "", false, &mut errors)`.
+  - Axis 3 (file-size splits, 6 files >1000 LOC):
+    - `lifecycle/execution.rs` (1132) → `execution/`:
+      `mod.rs` (declarations + re-exports only),
+      `runtime.rs` (315 LOC, generic hook execution),
+      `after_read.rs` (151), `broadcast.rs` (95),
+      `display.rs` (148), `field_hooks.rs` (479).
+      Tests redistributed to live with the code they
+      exercise.
+    - `lifecycle/validation/recursive.rs` (1151) →
+      `recursive/` with `dispatch.rs` + `scalar.rs` (the
+      walker + its scalar method in a separate `impl` block).
+      Tests split by topic (layout-dispatch tests in
+      `dispatch.rs`, scalar/locale/richtext tests in
+      `scalar.rs`).
+    - `lifecycle/validation/richtext_attrs.rs` (1284) →
+      `richtext_attrs/` with `extract.rs` (122 — node
+      extraction from JSON + HTML), `validate.rs` (924 —
+      `RichtextValidationCtx` + per-attr checks + tests),
+      `before_validate.rs` (256 — before_validate transform
+      pipeline).
+    - `lifecycle/access.rs` (1249) → `access/` with
+      `collection.rs` (478 — collection-level hook +
+      `parse_access_constraints`), `field.rs` (672 —
+      field-level read/write checks + recursive helpers),
+      `test_helpers.rs` (125 — shared `setup_lua` /
+      `make_field` / `make_user_doc` fixtures, factored out
+      so both collection.rs and field.rs tests can use them
+      without duplication).
+    - `api/parse/fields.rs` (1068) → `fields/` with
+      `constraints.rs` (173 — `Constraints` struct + numeric
+      / length / default-value / date-config parsers),
+      `single.rs` (861 — `parse_single_field` orchestrator
+      + sub-parsers + tests), `top.rs` (38 —
+      `parse_fields` entry + duplicate-name check).
+    - `lifecycle/validation/sub_fields/tests.rs` (1436 — pure
+      tests file) → `sub_fields/tests/` with `basic.rs`
+      (Array+Blocks fundamentals), `containers.rs`
+      (single-container-in-array), `nesting.rs` (multi-level
+      nesting + richtext), `value_constraints.rs` (drafts +
+      length/numeric/email/select bounds). Each under 470
+      LOC.
+    - All `mod.rs` files post-split contain only `mod`
+      declarations and `pub(crate) use` re-exports; zero
+      business logic lives in `mod.rs` per CLAUDE.md.
+  - Axis 17 (drop stale re-exports):
+    `pub use validate::{validate_hook_references,
+    validate_locale_field_collisions}` from `hooks/mod.rs`
+    deleted — both functions are only called from `init.rs`
+    via `super::validate::*`, so the top-level re-export was
+    dead.
+  - Axis 1 follow-up: dropped the unused `lua: &Lua` param
+    from `parse_field_admin`, `lua_table_to_json_map`,
+    `lua_table_to_auth_user`, `read_context_back`,
+    `json_encode`, `parse_item`, `extract_data`,
+    `read_hook_result` — none used `lua` for anything other
+    than pre-cascade forwarding to `lua_to_json`. ~10 fn
+    signatures + 30+ call sites simplified.
+  - Beyond-playbook: 4 `mod.rs` files in `hooks/` had
+    business logic in violation of CLAUDE.md "mod.rs files
+    should contain no business logic." Extracted:
+    `lifecycle/validation/mod.rs` (117 LOC) — `ValidationCtx`
+    + builder to `context.rs`, `validate_fields_inner` to
+    `runner.rs`. `api/mod.rs` — `VmLabel` to `vm_label.rs`.
+    `lifecycle/runner/mod.rs` — `HookRunner` struct + impl
+    to `hook_runner.rs`. `lifecycle/crud/mod.rs` —
+    `get_tx_conn` helper + its test to `tx_conn.rs`. All
+    four `mod.rs` files now contain only `mod` declarations
+    and `pub use` re-exports.
+  - Beyond-playbook: deduped the 5-line `is_empty = match
+    value { None | Null | empty-String => true, ... }`
+    pattern repeated in three validators (recursive scalar,
+    sub_fields, richtext_attrs). Extracted to
+    `validation::is_empty_value(value: Option<&Value>) ->
+    bool` in `runner.rs` with
+    `pub(in crate::hooks::lifecycle::validation)` visibility
+    so the three callers can `use ...::is_empty_value`
+    instead of carrying the same match arm three times.
 
 ## [0.1.0-alpha.8] — 2026-05-03
 

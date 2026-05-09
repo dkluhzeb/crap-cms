@@ -11,7 +11,7 @@ use crate::{
     core::email::{EmailJobData, create_email_provider, queue_email, validate_no_crlf},
 };
 
-use super::super::lifecycle::crud::get_tx_conn;
+use crate::hooks::lifecycle::crud::get_tx_conn;
 
 /// Validate header-derived email fields from a Lua `opts` table. Rejects any
 /// `\r`, `\n`, or `\0` in `to` or `subject` — the two fields currently

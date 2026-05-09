@@ -31,7 +31,6 @@ pub enum DisplayConditionResult {
 
 /// Events that trigger hooks.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum HookEvent {
     BeforeValidate,
     BeforeChange,
@@ -311,13 +310,11 @@ mod tests {
         let lua = Lua::new();
         lua.set_app_data(HookDepth(2));
 
-        let result: Result<(), &str> = (|| {
+        let result: Result<(), &str> = {
             let _guard = HookDepthGuard::increment(&lua, 2);
             assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 3);
-            Err("simulated error")?;
-            #[allow(unreachable_code)]
-            Ok(())
-        })();
+            Err("simulated error")
+        };
 
         assert!(result.is_err());
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);

@@ -1,162 +1,25 @@
-//! Parsing functions for field definitions from Lua tables.
-
-use std::collections::HashSet;
+//! Per-field parsing: orchestrates the full Lua → FieldDefinition conversion
+//! for a single field table, plus the small helper parsers (name, sub-fields,
+//! access, hooks).
 
 use anyhow::{Result, anyhow, bail};
-use mlua::{Lua, Table, Value};
-use serde_json::{Number as JsonNumber, Value as JsonValue};
+use mlua::{Lua, Table};
 
 use crate::{
     core::{
         FieldAdmin, FieldDefinition, FieldType,
-        field::{FieldAccess, FieldHooks, JoinConfig, McpFieldConfig, flatten_array_sub_fields},
+        field::{FieldAccess, FieldHooks, JoinConfig, McpFieldConfig},
     },
     db::query,
 };
 
-use super::{
-    admin::parse_field_admin,
-    blocks::{parse_block_definitions, parse_tab_definitions},
-    helpers::*,
-    relationship::parse_field_relationship,
-};
+use super::super::admin::parse_field_admin;
+use super::super::blocks::{parse_block_definitions, parse_tab_definitions};
+use super::super::helpers::*;
+use super::super::relationship::parse_field_relationship;
+use super::constraints::{parse_constraints, parse_date_config, parse_default_value};
+use super::top::parse_fields;
 
-/// Parse a default_value from a Lua field table and validate its type.
-fn parse_default_value(
-    field_tbl: &Table,
-    name: &str,
-    field_type: &FieldType,
-) -> Result<Option<JsonValue>> {
-    let val: Value = field_tbl.get("default_value").unwrap_or(Value::Nil);
-    let default_value = match val {
-        Value::Nil => None,
-        Value::Boolean(b) => Some(JsonValue::Bool(b)),
-        Value::Integer(i) => Some(JsonValue::Number(JsonNumber::from(i))),
-        Value::Number(n) => JsonNumber::from_f64(n).map(JsonValue::Number),
-        Value::String(s) => Some(JsonValue::String(s.to_str()?.to_string())),
-        _ => None,
-    };
-
-    if let Some(ref dv) = default_value {
-        let expected = match field_type {
-            FieldType::Checkbox => Some(("boolean", dv.is_boolean())),
-            FieldType::Number => Some(("number", dv.is_number())),
-            FieldType::Text
-            | FieldType::Textarea
-            | FieldType::Email
-            | FieldType::Code
-            | FieldType::Richtext
-            | FieldType::Select
-            | FieldType::Radio
-            | FieldType::Date => Some(("string", dv.is_string())),
-            _ => None,
-        };
-
-        if let Some((expected_type, false)) = expected {
-            let got = match dv {
-                JsonValue::Bool(_) => "boolean",
-                JsonValue::Number(_) => "number",
-                JsonValue::String(_) => "string",
-                _ => "unknown",
-            };
-            bail!(
-                "Field '{}': default_value type mismatch — expected {} but got {}",
-                name,
-                expected_type,
-                got
-            );
-        }
-    }
-
-    Ok(default_value)
-}
-
-/// Parse date-specific config (picker_appearance, timezone, default_timezone).
-fn parse_date_config(
-    field_tbl: &Table,
-    name: &str,
-    field_type: &FieldType,
-) -> Result<(Option<String>, bool, Option<String>)> {
-    if *field_type != FieldType::Date {
-        return Ok((None, false, None));
-    }
-
-    let picker_appearance = get_string(field_tbl, "picker_appearance");
-
-    let timezone = {
-        let tz = get_bool(field_tbl, "timezone", false)?;
-        let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
-
-        if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
-            tracing::warn!(
-                "Field '{}': timezone is not supported for '{}' picker; ignoring",
-                name,
-                appearance
-            );
-            false
-        } else {
-            tz
-        }
-    };
-
-    let default_timezone = if timezone {
-        get_string(field_tbl, "default_timezone")
-    } else {
-        None
-    };
-
-    Ok((picker_appearance, timezone, default_timezone))
-}
-
-/// Parsed constraint values for a single field.
-struct Constraints {
-    min_rows: Option<usize>,
-    max_rows: Option<usize>,
-    min_length: Option<usize>,
-    max_length: Option<usize>,
-    min: Option<f64>,
-    max: Option<f64>,
-}
-
-/// Validate min/max constraint pairs on a field.
-fn validate_constraints(name: &str, c: &Constraints) -> Result<()> {
-    if let (Some(mn), Some(mx)) = (c.min_rows, c.max_rows)
-        && mn > mx
-    {
-        bail!(
-            "Field '{}': min_rows ({}) must not exceed max_rows ({})",
-            name,
-            mn,
-            mx
-        );
-    }
-
-    if let (Some(mn), Some(mx)) = (c.min_length, c.max_length)
-        && mn > mx
-    {
-        bail!(
-            "Field '{}': min_length ({}) must not exceed max_length ({})",
-            name,
-            mn,
-            mx
-        );
-    }
-
-    if let (Some(mn), Some(mx)) = (c.min, c.max)
-        && mn > mx
-    {
-        bail!(
-            "Field '{}': min ({}) must not exceed max ({})",
-            name,
-            mn,
-            mx
-        );
-    }
-
-    Ok(())
-}
-
-/// Extract and validate a field name from a Lua field table.
 fn parse_field_name(field_tbl: &Table) -> Result<String> {
     let name: String =
         get_string_val(field_tbl, "name").map_err(|_| anyhow!("Field missing 'name'"))?;
@@ -178,7 +41,6 @@ fn parse_field_name(field_tbl: &Table) -> Result<String> {
     Ok(name)
 }
 
-/// Parse sub-fields for container types (Array, Group, Row, Collapsible).
 fn parse_sub_fields(
     lua: &Lua,
     field_tbl: &Table,
@@ -198,41 +60,7 @@ fn parse_sub_fields(
         .unwrap_or(Ok(Vec::new()))
 }
 
-/// Parse min/max constraint fields from a Lua field table.
-fn parse_constraints(field_tbl: &Table, name: &str) -> Result<Constraints> {
-    let min_rows = field_tbl.get::<Option<usize>>("min_rows").ok().flatten();
-    let max_rows = field_tbl.get::<Option<usize>>("max_rows").ok().flatten();
-    let min_length = field_tbl.get::<Option<usize>>("min_length").ok().flatten();
-    let max_length = field_tbl.get::<Option<usize>>("max_length").ok().flatten();
-
-    let min = match field_tbl.get::<Value>("min") {
-        Ok(Value::Number(n)) => Some(n),
-        Ok(Value::Integer(i)) => Some(i as f64),
-        _ => None,
-    };
-
-    let max = match field_tbl.get::<Value>("max") {
-        Ok(Value::Number(n)) => Some(n),
-        Ok(Value::Integer(i)) => Some(i as f64),
-        _ => None,
-    };
-
-    let constraints = Constraints {
-        min_rows,
-        max_rows,
-        min_length,
-        max_length,
-        min,
-        max,
-    };
-
-    validate_constraints(name, &constraints)?;
-
-    Ok(constraints)
-}
-
-/// Parse a single field definition from a Lua table.
-fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDefinition> {
+pub(super) fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDefinition> {
     let name = parse_field_name(field_tbl)?;
 
     let type_str: String = get_string_val(field_tbl, "type").unwrap_or_else(|_| "text".to_string());
@@ -249,7 +77,7 @@ fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDefinition> {
         .unwrap_or(Ok(Vec::new()))?;
 
     let admin = get_table(field_tbl, "admin")
-        .map(|tbl| parse_field_admin(lua, &tbl))
+        .map(|tbl| parse_field_admin(&tbl))
         .unwrap_or(Ok(FieldAdmin::default()))?;
 
     let hooks = get_table(field_tbl, "hooks")
@@ -369,43 +197,7 @@ fn parse_single_field(lua: &Lua, field_tbl: &Table) -> Result<FieldDefinition> {
     Ok(fd_builder.build())
 }
 
-/// Parse a Lua sequence of field tables into a `Vec<FieldDefinition>`.
-///
-/// Rejects duplicate field names within the same namespace. Layout wrappers
-/// (Row, Collapsible, Tabs) are transparent — their children share the
-/// parent's namespace — so uniqueness is checked across the flattened set.
-/// Group sub-fields live in their own namespace (columns are prefixed
-/// `group__subfield`), so they are only checked for uniqueness within their
-/// own group (handled recursively via `parse_single_field` -> `parse_sub_fields`).
-pub(crate) fn parse_fields(lua: &Lua, fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
-    let fields: Vec<FieldDefinition> = fields_tbl
-        .clone()
-        .sequence_values::<Table>()
-        .map(|pair| parse_single_field(lua, &pair?))
-        .collect::<Result<Vec<_>>>()?;
-
-    check_duplicate_field_names(&fields)?;
-
-    Ok(fields)
-}
-
-/// Fail when any two sibling fields (after flattening layout wrappers) share a name.
-fn check_duplicate_field_names(fields: &[FieldDefinition]) -> Result<()> {
-    let mut seen: HashSet<&str> = HashSet::new();
-
-    for f in flatten_array_sub_fields(fields) {
-        if !seen.insert(f.name.as_str()) {
-            bail!(
-                "Duplicate field name '{}' in the same scope — field names must be unique per level (layout wrappers are transparent)",
-                f.name
-            );
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) fn parse_field_access(access_tbl: &Table) -> FieldAccess {
+pub(in crate::hooks::api::parse) fn parse_field_access(access_tbl: &Table) -> FieldAccess {
     FieldAccess {
         read: get_string(access_tbl, "read"),
         create: get_string(access_tbl, "create"),
@@ -426,6 +218,7 @@ fn parse_field_hooks(hooks_tbl: &Table) -> Result<FieldHooks> {
 mod tests {
     use super::*;
     use mlua::Lua;
+    use serde_json::Value as JsonValue;
 
     #[test]
     fn test_parse_field_access() {

@@ -12,7 +12,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
-            FieldHookEvent, LuaCrudInfra,
+            FieldHookEvent, FieldHooksCall, LuaCrudInfra,
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
                 check_field_write_access_with_lua,
@@ -355,11 +355,13 @@ impl WriteHooks for LuaWriteHooks<'_> {
         if self.hooks_enabled {
             run_field_hooks_inner(
                 self.lua,
-                fields,
-                &FieldHookEvent::BeforeValidate,
                 &mut ctx.data,
-                &ctx.collection,
-                &ctx.operation,
+                &FieldHooksCall {
+                    fields,
+                    event: FieldHookEvent::BeforeValidate,
+                    collection: &ctx.collection,
+                    operation: &ctx.operation,
+                },
             )?;
 
             if let Some(registry) = self.registry {
@@ -382,11 +384,13 @@ impl WriteHooks for LuaWriteHooks<'_> {
         if self.hooks_enabled {
             run_field_hooks_inner(
                 self.lua,
-                fields,
-                &FieldHookEvent::BeforeChange,
                 &mut ctx.data,
-                &ctx.collection,
-                &ctx.operation,
+                &FieldHooksCall {
+                    fields,
+                    event: FieldHookEvent::BeforeChange,
+                    collection: &ctx.collection,
+                    operation: &ctx.operation,
+                },
             )?;
 
             ctx = run_hooks_inner(self.lua, hooks, HookEvent::BeforeChange, ctx)?;
@@ -410,11 +414,13 @@ impl WriteHooks for LuaWriteHooks<'_> {
         if matches!(event, HookEvent::AfterChange) {
             run_field_hooks_inner(
                 self.lua,
-                fields,
-                &FieldHookEvent::AfterChange,
                 &mut ctx.data,
-                &ctx.collection,
-                &ctx.operation,
+                &FieldHooksCall {
+                    fields,
+                    event: FieldHookEvent::AfterChange,
+                    collection: &ctx.collection,
+                    operation: &ctx.operation,
+                },
             )?;
         }
 

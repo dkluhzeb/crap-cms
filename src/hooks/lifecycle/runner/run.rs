@@ -23,6 +23,10 @@ pub struct FieldWriteCtx<'a> {
     pub conn: &'a dyn DbConnection,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
+    /// Lua CRUD infrastructure to inject into the hook VM (cache, event
+    /// transport, queues). `None` skips infra plumbing — used by tests and
+    /// system hooks that don't publish events from inside the hook.
+    pub infra: Option<LuaCrudInfra>,
 }
 
 impl<'a> FieldWriteCtx<'a> {
@@ -37,6 +41,7 @@ pub struct FieldWriteCtxBuilder<'a> {
     conn: &'a dyn DbConnection,
     user: Option<&'a Document>,
     ui_locale: Option<&'a str>,
+    infra: Option<LuaCrudInfra>,
 }
 
 impl<'a> FieldWriteCtxBuilder<'a> {
@@ -45,6 +50,7 @@ impl<'a> FieldWriteCtxBuilder<'a> {
             conn,
             user: None,
             ui_locale: None,
+            infra: None,
         }
     }
 
@@ -58,13 +64,32 @@ impl<'a> FieldWriteCtxBuilder<'a> {
         self
     }
 
+    pub fn infra(mut self, infra: Option<LuaCrudInfra>) -> Self {
+        self.infra = infra;
+        self
+    }
+
     pub fn build(self) -> FieldWriteCtx<'a> {
         FieldWriteCtx {
             conn: self.conn,
             user: self.user,
             ui_locale: self.ui_locale,
+            infra: self.infra,
         }
     }
+}
+
+/// Per-call descriptor for field-level hook execution.
+///
+/// Bundles the four "what to run" inputs that flow unchanged through the
+/// hook stack: which fields, which event, and the collection + operation
+/// labels used in `HookContext`. Threaded as a single `&FieldHooksCall`
+/// instead of four positional args.
+pub struct FieldHooksCall<'a> {
+    pub fields: &'a [FieldDefinition],
+    pub event: FieldHookEvent,
+    pub collection: &'a str,
+    pub operation: &'a str,
 }
 
 impl HookRunner {
@@ -172,38 +197,30 @@ impl HookRunner {
     /// Each hook receives `(value, context)` and returns the new value.
     pub fn run_field_hooks(
         &self,
-        fields: &[FieldDefinition],
-        event: FieldHookEvent,
         data: &mut DocumentFields,
-        collection: &str,
-        operation: &str,
+        call: &FieldHooksCall<'_>,
     ) -> Result<()> {
         // Skip VM acquisition if no fields have hooks for this event
-        if !has_field_hooks_for_event(fields, &event) {
+        if !has_field_hooks_for_event(call.fields, &call.event) {
             return Ok(());
         }
 
         let lua = self.pool.acquire()?;
 
-        run_field_hooks_inner(&lua, fields, &event, data, collection, operation)
+        run_field_hooks_inner(&lua, data, call)
     }
 
     /// Run field-level hooks with an active database connection/transaction injected.
     /// CRUD functions (`crap.collections.find`, `.create`, etc.) become available
     /// to Lua field hooks, sharing the provided connection for transaction atomicity.
-    #[allow(clippy::too_many_arguments)]
     pub fn run_field_hooks_with_conn(
         &self,
-        fields: &[FieldDefinition],
-        event: FieldHookEvent,
         data: &mut DocumentFields,
-        collection: &str,
-        operation: &str,
-        wctx: &FieldWriteCtx,
-        infra: Option<LuaCrudInfra>,
+        call: &FieldHooksCall<'_>,
+        wctx: FieldWriteCtx<'_>,
     ) -> Result<()> {
         // Skip VM acquisition if no fields have hooks for this event
-        if !has_field_hooks_for_event(fields, &event) {
+        if !has_field_hooks_for_event(call.fields, &call.event) {
             return Ok(());
         }
 
@@ -216,9 +233,9 @@ impl HookRunner {
             wctx.conn,
             wctx.user.cloned(),
             wctx.ui_locale.map(|s| s.to_string()),
-            infra,
+            wctx.infra,
         );
 
-        run_field_hooks_inner(&lua, fields, &event, data, collection, operation)
+        run_field_hooks_inner(&lua, data, call)
     }
 }

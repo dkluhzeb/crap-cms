@@ -139,7 +139,7 @@ pub fn evaluate_condition_results(
     fields: &[FieldDefinition],
     req: &EvaluateConditionsRequest,
 ) -> Map<String, Value> {
-    use crate::hooks::lifecycle::DisplayConditionResult;
+    use crate::hooks::DisplayConditionResult;
 
     let valid_refs = collect_condition_refs(fields);
     let form_data = json!(req.form_data);

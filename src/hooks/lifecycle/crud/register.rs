@@ -10,6 +10,16 @@ use crate::{
 
 use super::{collection, globals, jobs};
 
+/// Runtime config bundle threaded through the CRUD-function registration pass.
+///
+/// All three references point into long-lived startup config so passing them
+/// individually adds noise without any borrow-flexibility win.
+struct CrudRegisterCtx<'a> {
+    registry: &'a SharedRegistry,
+    locale_config: &'a LocaleConfig,
+    pagination_config: &'a PaginationConfig,
+}
+
 /// Register the CRUD functions on `crap.collections`, `crap.globals`, and `crap.jobs`.
 ///
 /// They read the active connection from Lua app_data (set by `run_hooks_with_conn`).
@@ -23,9 +33,14 @@ pub(crate) fn register_crud_functions(
     pagination_config: &PaginationConfig,
 ) -> Result<()> {
     let crap: Table = lua.globals().get("crap")?;
+    let ctx = CrudRegisterCtx {
+        registry: &registry,
+        locale_config,
+        pagination_config,
+    };
 
-    register_collection_functions(lua, &crap, &registry, locale_config, pagination_config)?;
-    register_global_functions(lua, &crap, &registry, locale_config)?;
+    register_collection_functions(lua, &crap, &ctx)?;
+    register_global_functions(lua, &crap, &ctx)?;
     register_job_functions(lua, &crap, registry)?;
 
     Ok(())
@@ -33,13 +48,12 @@ pub(crate) fn register_crud_functions(
 
 /// Register `crap.collections.*` CRUD functions.
 #[cfg(not(tarpaulin_include))]
-fn register_collection_functions(
-    lua: &Lua,
-    crap: &Table,
-    registry: &SharedRegistry,
-    locale_config: &LocaleConfig,
-    pagination_config: &PaginationConfig,
-) -> Result<()> {
+fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<'_>) -> Result<()> {
+    let CrudRegisterCtx {
+        registry,
+        locale_config,
+        pagination_config,
+    } = *ctx;
     let collections: Table = crap.get("collections")?;
 
     // Read operations
@@ -103,12 +117,13 @@ fn register_collection_functions(
 
 /// Register `crap.globals.*` functions.
 #[cfg(not(tarpaulin_include))]
-fn register_global_functions(
-    lua: &Lua,
-    crap: &Table,
-    registry: &SharedRegistry,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
+fn register_global_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<'_>) -> Result<()> {
+    let CrudRegisterCtx {
+        registry,
+        locale_config,
+        ..
+    } = *ctx;
+
     let globals_table: Table = crap.get("globals")?;
 
     globals::get::register_globals_get(lua, &globals_table, registry.clone(), locale_config)?;

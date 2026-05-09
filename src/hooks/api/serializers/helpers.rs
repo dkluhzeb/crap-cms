@@ -24,12 +24,11 @@ pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::
 const MAX_NESTING_DEPTH: usize = 64;
 
 /// Convert a Lua value to a JSON value.
-pub fn lua_to_json(lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
-    lua_to_json_inner(lua, value, 0)
+pub fn lua_to_json(value: &Value) -> mlua::Result<JsonValue> {
+    lua_to_json_inner(value, 0)
 }
 
-#[allow(clippy::only_used_in_recursion)]
-fn lua_to_json_inner(lua: &Lua, value: &Value, depth: usize) -> mlua::Result<JsonValue> {
+fn lua_to_json_inner(value: &Value, depth: usize) -> mlua::Result<JsonValue> {
     if depth > MAX_NESTING_DEPTH {
         return Err(mlua::Error::RuntimeError(format!(
             "Table nesting exceeds maximum depth of {}",
@@ -65,7 +64,7 @@ fn lua_to_json_inner(lua: &Lua, value: &Value, depth: usize) -> mlua::Result<Jso
                             Value::Number(n) => n.to_string(),
                             _ => continue,
                         };
-                        map.insert(key, lua_to_json_inner(lua, &v, depth + 1)?);
+                        map.insert(key, lua_to_json_inner(&v, depth + 1)?);
                     }
 
                     Ok(JsonValue::Object(map))
@@ -74,7 +73,7 @@ fn lua_to_json_inner(lua: &Lua, value: &Value, depth: usize) -> mlua::Result<Jso
 
                     for i in 1..=len {
                         let v: Value = t.raw_get(i)?;
-                        arr.push(lua_to_json_inner(lua, &v, depth + 1)?);
+                        arr.push(lua_to_json_inner(&v, depth + 1)?);
                     }
 
                     Ok(JsonValue::Array(arr))
@@ -84,7 +83,7 @@ fn lua_to_json_inner(lua: &Lua, value: &Value, depth: usize) -> mlua::Result<Jso
 
                 for pair in t.clone().pairs::<String, Value>() {
                     let (k, v) = pair?;
-                    map.insert(k, lua_to_json_inner(lua, &v, depth + 1)?);
+                    map.insert(k, lua_to_json_inner(&v, depth + 1)?);
                 }
 
                 Ok(JsonValue::Object(map))
@@ -184,33 +183,29 @@ mod tests {
 
     #[test]
     fn test_lua_to_json_nil() {
-        let lua = Lua::new();
-        let result = lua_to_json(&lua, &Value::Nil).unwrap();
+        let result = lua_to_json(&Value::Nil).unwrap();
         assert_eq!(result, json!(null));
     }
 
     #[test]
     fn test_lua_to_json_boolean() {
-        let lua = Lua::new();
-        let result = lua_to_json(&lua, &Value::Boolean(true)).unwrap();
+        let result = lua_to_json(&Value::Boolean(true)).unwrap();
         assert_eq!(result, json!(true));
-        let result = lua_to_json(&lua, &Value::Boolean(false)).unwrap();
+        let result = lua_to_json(&Value::Boolean(false)).unwrap();
         assert_eq!(result, json!(false));
     }
 
     #[test]
     fn test_lua_to_json_integer() {
-        let lua = Lua::new();
-        let result = lua_to_json(&lua, &Value::Integer(42)).unwrap();
+        let result = lua_to_json(&Value::Integer(42)).unwrap();
         assert_eq!(result, json!(42));
-        let result = lua_to_json(&lua, &Value::Integer(-1)).unwrap();
+        let result = lua_to_json(&Value::Integer(-1)).unwrap();
         assert_eq!(result, json!(-1));
     }
 
     #[test]
     fn test_lua_to_json_number() {
-        let lua = Lua::new();
-        let result = lua_to_json(&lua, &Value::Number(3.15)).unwrap();
+        let result = lua_to_json(&Value::Number(3.15)).unwrap();
         assert_eq!(result, json!(3.15));
     }
 
@@ -218,7 +213,7 @@ mod tests {
     fn test_lua_to_json_string() {
         let lua = Lua::new();
         let s = lua.create_string("hello world").unwrap();
-        let result = lua_to_json(&lua, &Value::String(s)).unwrap();
+        let result = lua_to_json(&Value::String(s)).unwrap();
         assert_eq!(result, json!("hello world"));
     }
 
@@ -229,7 +224,7 @@ mod tests {
         tbl.set(1, "a").unwrap();
         tbl.set(2, "b").unwrap();
         tbl.set(3, "c").unwrap();
-        let result = lua_to_json(&lua, &Value::Table(tbl)).unwrap();
+        let result = lua_to_json(&Value::Table(tbl)).unwrap();
         assert_eq!(result, json!(["a", "b", "c"]));
     }
 
@@ -239,7 +234,7 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         tbl.set("name", "test").unwrap();
         tbl.set("count", 42).unwrap();
-        let result = lua_to_json(&lua, &Value::Table(tbl)).unwrap();
+        let result = lua_to_json(&Value::Table(tbl)).unwrap();
         assert_eq!(result["name"], json!("test"));
         assert_eq!(result["count"], json!(42));
     }
@@ -248,7 +243,7 @@ mod tests {
     fn test_lua_to_json_function_becomes_null() {
         let lua = Lua::new();
         let f = lua.create_function(|_, ()| Ok(())).unwrap();
-        let result = lua_to_json(&lua, &Value::Function(f)).unwrap();
+        let result = lua_to_json(&Value::Function(f)).unwrap();
         assert_eq!(result, json!(null));
     }
 
@@ -342,7 +337,7 @@ mod tests {
             .eval::<Value>()
             .unwrap();
 
-        let err = lua_to_json(&lua, &val).unwrap_err();
+        let err = lua_to_json(&val).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("nesting exceeds maximum depth"),
@@ -375,7 +370,7 @@ mod tests {
         tbl.set(2, "second").unwrap();
         tbl.set("name", "test").unwrap();
 
-        let result = lua_to_json(&lua, &Value::Table(tbl)).unwrap();
+        let result = lua_to_json(&Value::Table(tbl)).unwrap();
         assert!(result.is_object(), "expected object, got: {result}");
         assert_eq!(result["name"], json!("test"));
         assert_eq!(result["1"], json!("first"));
@@ -393,7 +388,7 @@ mod tests {
             "empty": null
         });
         let lua_val = json_to_lua(&lua, &original).unwrap();
-        let back = lua_to_json(&lua, &lua_val).unwrap();
+        let back = lua_to_json(&lua_val).unwrap();
         assert_eq!(back["title"], json!("Hello"));
         assert_eq!(back["count"], json!(42));
         assert_eq!(back["tags"], json!(["a", "b"]));

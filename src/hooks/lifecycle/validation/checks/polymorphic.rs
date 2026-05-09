@@ -60,20 +60,18 @@ pub(crate) fn check_polymorphic_allowlist(
             _ => return,
         };
         for item in items {
-            check_one(field, data_key, &item, rc, errors);
+            check_one(field, data_key, &item, errors);
         }
     } else {
-        check_one(field, data_key, value, rc, errors);
+        check_one(field, data_key, value, errors);
     }
 }
 
-fn check_one(
-    field: &FieldDefinition,
-    data_key: &str,
-    value: &Value,
-    rc: &crate::core::field::RelationshipConfig,
-    errors: &mut Vec<FieldError>,
-) {
+fn check_one(field: &FieldDefinition, data_key: &str, value: &Value, errors: &mut Vec<FieldError>) {
+    let Some(rc) = field.relationship.as_ref() else {
+        return;
+    };
+
     let collection = match value {
         Value::String(s) if s.is_empty() => return,
         Value::String(s) => s.split_once('/').map(|(c, _)| c.to_string()),

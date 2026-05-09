@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Convert a Lua table returned by an auth strategy into a Document.
-fn lua_table_to_auth_user(lua: &mlua::Lua, tbl: &mlua::Table) -> Result<Document> {
+fn lua_table_to_auth_user(tbl: &mlua::Table) -> Result<Document> {
     let id: String = tbl.get("id")?;
     let mut fields = HashMap::new();
 
@@ -34,7 +34,7 @@ fn lua_table_to_auth_user(lua: &mlua::Lua, tbl: &mlua::Table) -> Result<Document
             continue;
         }
 
-        fields.insert(k, api::lua_to_json(lua, &v)?);
+        fields.insert(k, api::lua_to_json(&v)?);
     }
 
     let created_at: Option<String> = tbl.get("created_at").ok();
@@ -79,7 +79,7 @@ impl HookRunner {
         let result: Value = func.call(ctx_table)?;
 
         match result {
-            Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&lua, &tbl)?)),
+            Value::Table(tbl) => Ok(Some(lua_table_to_auth_user(&tbl)?)),
             Value::Nil | Value::Boolean(false) => Ok(None),
             _ => Ok(None),
         }
