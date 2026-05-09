@@ -14,9 +14,53 @@ use crate::{
         AdminState,
         handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
-    core::auth::AuthUser,
+    config::LocaleConfig,
+    core::ReqContext,
+    core::{
+        CollectionDefinition, Document,
+        auth::AuthUser,
+        cache::SharedCache,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+        upload::SharedStorage,
+    },
+    db::DbPool,
+    hooks::HookRunner,
     service::{self, ServiceError},
 };
+
+/// Owned inputs for the spawn-blocking delete body.
+struct DeleteBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    slug: String,
+    def: CollectionDefinition,
+    user_doc: Option<Document>,
+    invalidation_transport: SharedInvalidationTransport,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    storage: SharedStorage,
+    id: String,
+    locale_config: LocaleConfig,
+}
+
+/// Build the service context and run the delete service call.
+fn delete_document_blocking(input: DeleteBlockingInput) -> Result<ReqContext, ServiceError> {
+    let ctx = service::ServiceContext::collection(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(input.user_doc.as_ref())
+        .invalidation_transport(Some(input.invalidation_transport))
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    service::delete_document(
+        &ctx,
+        &input.id,
+        Some(&*input.storage),
+        Some(&input.locale_config),
+    )
+}
 
 /// Build a JSON `{"ok": true}` success response.
 fn json_ok_response() -> Response {
@@ -37,15 +81,12 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
     force_hard_delete: bool,
     json_response: bool,
 ) -> Response {
-    let def = match state.registry.get_collection(slug) {
-        Some(d) => d.clone(),
-        None => {
-            if json_response {
-                return json_error_response("Collection not found");
-            }
-
-            return Redirect::to("/admin/collections").into_response();
+    let Some(def) = state.registry.get_collection(slug).cloned() else {
+        if json_response {
+            return json_error_response("Collection not found");
         }
+
+        return Redirect::to(paths::COLLECTIONS_ROOT).into_response();
     };
 
     let pool = state.pool.clone();
@@ -64,18 +105,21 @@ pub(in crate::admin::handlers::collections) async fn delete_action_impl(
         def_clone.soft_delete = false;
     }
 
-    let result = task::spawn_blocking(move || {
-        let ctx = service::ServiceContext::collection(&slug_owned, &def_clone)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc.as_ref())
-            .invalidation_transport(Some(invalidation_transport))
-            .event_transport(event_transport)
-            .cache(cache)
-            .build();
-        service::delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
-    })
-    .await;
+    let input = DeleteBlockingInput {
+        pool,
+        runner,
+        slug: slug_owned,
+        def: def_clone,
+        user_doc,
+        invalidation_transport,
+        event_transport,
+        cache,
+        storage,
+        id: id_owned,
+        locale_config,
+    };
+
+    let result = task::spawn_blocking(move || delete_document_blocking(input)).await;
 
     match result {
         Ok(Ok(_)) => {

@@ -686,7 +686,8 @@ async fn csrf_middleware(
         .unwrap_or("")
         .to_string();
 
-    let csrf_cookie = extract_cookie(&cookie_header, "crap_csrf").map(|s| s.to_string());
+    let csrf_cookie =
+        extract_cookie(&cookie_header, auth_handlers::CSRF_COOKIE).map(|s| s.to_string());
 
     // On mutating methods, validate CSRF token
     if matches!(

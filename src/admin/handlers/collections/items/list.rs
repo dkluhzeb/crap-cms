@@ -5,7 +5,7 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, from_str, json};
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::{
     admin::{
@@ -21,8 +21,9 @@ use crate::{
             },
             shared::{
                 ListUrlContext, PaginationParams, extract_editor_locale, extract_status_filter,
-                extract_where_params, forbidden, not_found, parse_where_params, paths, render_page,
-                server_error, validate_sort,
+                extract_where_params, not_found, parse_where_params, paths, render_page,
+                server_error, service_error_to_admin_response, task_join_error_response,
+                validate_sort,
             },
         },
     },
@@ -215,11 +216,8 @@ pub async fn list_items(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug));
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return not_found(&state, &format!("Collection '{}' not found", slug));
     };
 
     let is_trash = def.soft_delete && params.trash.as_deref() == Some("1");
@@ -313,26 +311,15 @@ pub async fn list_items(
 
     let result = match read_result {
         Ok(Ok(v)) => v,
-        Ok(Err(ServiceError::AccessDenied(_))) => {
-            return forbidden(
-                &state,
-                if is_trash {
-                    "You don't have permission to view the trash"
-                } else {
-                    "You don't have permission to view this collection"
-                },
-            );
-        }
         Ok(Err(e)) => {
-            error!("Collection list query error: {}", e);
-
-            return server_error(&state, "An internal error occurred.");
+            let denied_msg = if is_trash {
+                "You don't have permission to view the trash"
+            } else {
+                "You don't have permission to view this collection"
+            };
+            return service_error_to_admin_response(&state, e, denied_msg);
         }
-        Err(e) => {
-            error!("Collection list task error: {}", e);
-
-            return server_error(&state, "An internal error occurred.");
-        }
+        Err(e) => return task_join_error_response(&state, e),
     };
 
     let pagination_result = result.pagination;

@@ -70,11 +70,8 @@ pub async fn delete_confirm(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug));
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return not_found(&state, &format!("Collection '{}' not found", slug));
     };
 
     // For soft-delete collections, use trash access (falls back to update).
@@ -105,7 +102,7 @@ pub async fn delete_confirm(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
         Breadcrumb::link(def.display_name(), paths::collection(&slug)),
         Breadcrumb::current("delete_name").with_name(def.singular_name()),
     ];

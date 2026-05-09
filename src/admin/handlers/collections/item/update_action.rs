@@ -24,9 +24,8 @@ pub async fn update_action(
     auth_user: Option<Extension<AuthUser>>,
     request: Request,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return redirect_response("/admin/collections"),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return redirect_response(paths::COLLECTIONS_ROOT);
     };
 
     let (mut form_data, file) = match parse_form(request, &state, &def).await {

@@ -1,18 +1,20 @@
 //! Collection CRUD handlers re-exports.
 
 /// Collection-related API handlers.
-pub mod api;
+pub(crate) mod api;
 /// Handlers for individual collection items.
-pub mod item;
+pub(crate) mod item;
 /// Handlers for collection item lists and creation.
-pub mod items;
+pub(crate) mod items;
 /// Handler for listing available collections.
-pub mod list_collections;
+pub(crate) mod list_collections;
 mod list_helpers;
 /// Shared collection handler utilities.
-pub mod shared;
+pub(crate) mod shared;
 
-// Re-export common handlers for the router
+// Re-export common handlers for the router. Stay `pub` (not `pub(crate)`)
+// because `admin::handlers::collections::*` is the public API the router
+// consumes from outside `collections/`.
 pub use api::save_user_settings::save_user_settings;
 pub use api::search::search_collection;
 pub use item::back_references::back_references;
@@ -30,7 +32,3 @@ pub use items::empty_trash::empty_trash_action;
 pub(crate) use items::evaluate_conditions::evaluate_conditions;
 pub use items::list::list_items;
 pub use list_collections::list_collections;
-
-// Re-export shared types for super/server
-pub use crate::admin::handlers::shared::PaginationParams;
-pub use api::search::SearchQuery;

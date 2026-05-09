@@ -86,78 +86,82 @@ fn try_strategy_auth(
     None
 }
 
+/// Synchronous body of [`verify_credentials`], extracted so the
+/// `spawn_blocking` call is a single fn invocation (CLAUDE.md).
+fn verify_credentials_blocking(
+    params: VerifyParams,
+) -> anyhow::Result<Option<Result<LoginSuccess, String>>> {
+    let conn = params.pool.get()?;
+    let slug = &params.slug;
+    let def = &params.def;
+
+    // Try local email+password authentication via service layer
+    if !params.disable_local {
+        let ctx = ServiceContext::collection(slug, def).conn(&conn).build();
+
+        match authenticate_local(
+            &ctx,
+            &params.email,
+            &params.password,
+            &*params.password_provider,
+            params.verify_email_flag,
+        ) {
+            Ok(result) => {
+                return Ok(Some(Ok(LoginSuccess {
+                    user: result.user,
+                    session_version: result.session_version,
+                })));
+            }
+            Err(ServiceError::AccountLocked) => {
+                debug!("Login denied: account locked");
+                return Ok(None);
+            }
+            Err(ServiceError::EmailNotVerified) => {
+                debug!("Login denied: email not verified");
+                return Ok(None);
+            }
+            Err(ServiceError::InvalidCredentials) => {}
+            Err(e) => return Err(e.into_anyhow()),
+        }
+    }
+
+    // Fallback: try auth strategies if local auth failed/skipped
+    if let Some(runner) = &params.hook_runner
+        && let Some(user) = try_strategy_auth(&conn, slug, def, runner, &params.headers)
+    {
+        let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
+
+        // Strategy-authenticated users still need locked/verified checks
+        if service::auth::is_locked(&ctx, &user.id).unwrap_or(false) {
+            debug!("Login denied for {}: account locked", user.id);
+            return Ok(None);
+        }
+
+        if params.verify_email_flag && !service::auth::is_verified(&ctx, &user.id).unwrap_or(false)
+        {
+            debug!("Login denied for {}: email not verified", user.id);
+            return Ok(None);
+        }
+
+        let session_version =
+            service::auth::get_session_version(&ctx, &user.id).map_err(|e| e.into_anyhow())?;
+        return Ok(Some(Ok(LoginSuccess {
+            user,
+            session_version,
+        })));
+    }
+
+    if !params.disable_local {
+        auth::dummy_verify();
+    }
+
+    Ok(None)
+}
+
 async fn verify_credentials(
     params: VerifyParams,
 ) -> Result<Result<Option<Result<LoginSuccess, String>>, anyhow::Error>, task::JoinError> {
-    task::spawn_blocking(move || {
-        let conn = params.pool.get()?;
-        let slug = &params.slug;
-        let def = &params.def;
-
-        // Try local email+password authentication via service layer
-        if !params.disable_local {
-            let ctx = ServiceContext::collection(slug, def).conn(&conn).build();
-
-            match authenticate_local(
-                &ctx,
-                &params.email,
-                &params.password,
-                &*params.password_provider,
-                params.verify_email_flag,
-            ) {
-                Ok(result) => {
-                    return Ok(Some(Ok(LoginSuccess {
-                        user: result.user,
-                        session_version: result.session_version,
-                    })));
-                }
-                Err(ServiceError::AccountLocked) => {
-                    debug!("Login denied: account locked");
-                    return Ok(None);
-                }
-                Err(ServiceError::EmailNotVerified) => {
-                    debug!("Login denied: email not verified");
-                    return Ok(None);
-                }
-                Err(ServiceError::InvalidCredentials) => {}
-                Err(e) => return Err(e.into_anyhow()),
-            }
-        }
-
-        // Fallback: try auth strategies if local auth failed/skipped
-        if let Some(runner) = &params.hook_runner
-            && let Some(user) = try_strategy_auth(&conn, slug, def, runner, &params.headers)
-        {
-            let ctx = ServiceContext::slug_only(slug).conn(&conn).build();
-
-            // Strategy-authenticated users still need locked/verified checks
-            if service::auth::is_locked(&ctx, &user.id).unwrap_or(false) {
-                debug!("Login denied for {}: account locked", user.id);
-                return Ok(None);
-            }
-
-            if params.verify_email_flag
-                && !service::auth::is_verified(&ctx, &user.id).unwrap_or(false)
-            {
-                debug!("Login denied for {}: email not verified", user.id);
-                return Ok(None);
-            }
-
-            let session_version =
-                service::auth::get_session_version(&ctx, &user.id).map_err(|e| e.into_anyhow())?;
-            return Ok(Some(Ok(LoginSuccess {
-                user,
-                session_version,
-            })));
-        }
-
-        if !params.disable_local {
-            auth::dummy_verify();
-        }
-
-        Ok::<_, anyhow::Error>(None)
-    })
-    .await
+    task::spawn_blocking(move || verify_credentials_blocking(params)).await
 }
 
 /// MFA pending token expiry in seconds (5 minutes).

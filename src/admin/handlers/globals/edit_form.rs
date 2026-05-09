@@ -8,7 +8,6 @@ use axum::{
 };
 use serde_json::json;
 use tokio::task;
-use tracing::error;
 
 use crate::{
     admin::{
@@ -21,8 +20,8 @@ use crate::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, not_found, paths,
-            render_page, server_error, split_sidebar_fields,
+            flatten_document_values, is_non_default_locale, not_found, paths, render_page,
+            service_error_to_admin_response, split_sidebar_fields, task_join_error_response,
         },
     },
     core::{
@@ -142,17 +141,14 @@ pub async fn edit_form(
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
-        Ok(Err(ServiceError::AccessDenied(_))) => {
-            return forbidden(&state, "You don't have permission to view this global");
-        }
         Ok(Err(e)) => {
-            error!("Global read query error: {}", e);
-            return server_error(&state, "An internal error occurred.");
+            return service_error_to_admin_response(
+                &state,
+                e,
+                "You don't have permission to view this global",
+            );
         }
-        Err(e) => {
-            error!("Global read task error: {}", e);
-            return server_error(&state, "An internal error occurred.");
-        }
+        Err(e) => return task_join_error_response(&state, e),
     };
 
     // Compute read-denied fields to exclude from form rendering.

@@ -42,7 +42,7 @@ pub use pagination::{Pagination, PaginationParams};
 pub(crate) use response::{
     forbidden, htmx_inline_created, htmx_redirect, htmx_redirect_with_created, not_found,
     page_with_toast, redirect_response, render_or_error, render_page, server_error,
-    toast_only_error,
+    service_error_to_admin_response, task_join_error_response, toast_only_error,
 };
 
 // versions

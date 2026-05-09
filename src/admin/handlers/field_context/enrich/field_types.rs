@@ -16,6 +16,7 @@ use crate::{
         },
         handlers::{
             field_context::{
+                MAX_FIELD_DEPTH,
                 builder::build_single_field_context,
                 count_errors_in_field_contexts,
                 enrich::{
@@ -514,7 +515,7 @@ fn build_group_child(
         condition: ConditionData::default(),
     };
 
-    if opts.depth + 1 >= super::super::MAX_FIELD_DEPTH {
+    if opts.depth + 1 >= MAX_FIELD_DEPTH {
         // Beyond max depth — return a base-only Text variant.
         return FieldContext::Text(TextField {
             base,

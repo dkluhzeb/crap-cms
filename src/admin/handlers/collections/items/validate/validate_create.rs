@@ -30,9 +30,8 @@ pub async fn validate_create(
     auth_user: Option<Extension<AuthUser>>,
     Json(payload): Json<ValidateRequest>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return validation_error_response_simple("Collection not found"),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return validation_error_response_simple("Collection not found");
     };
 
     match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {

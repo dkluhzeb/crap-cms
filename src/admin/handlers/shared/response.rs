@@ -14,6 +14,7 @@ use crate::{
         context::{BasePageContext, PageMeta, PageType, page::errors::ErrorPage},
     },
     core::richtext::renderer::html_escape,
+    service::ServiceError,
 };
 
 /// Serialize a typed page-context struct, run the `before_render` Lua hook,
@@ -212,6 +213,41 @@ pub fn not_found(state: &AdminState, message: &str) -> Response {
     };
 
     (StatusCode::NOT_FOUND, html).into_response()
+}
+
+/// Convert a [`ServiceError`] into an admin HTML response.
+///
+/// `AccessDenied` renders the 403 page with the caller-supplied `denied_msg`
+/// (which is shown to the user and so should be friendly + collection-/
+/// entity-aware, e.g. `"You don't have permission to view this item"`). All
+/// other variants log at `error!` (so the operator can correlate the
+/// `Display` text from the underlying error) and render the generic 500
+/// page.
+///
+/// Pairs with [`task_join_error_response`] so the
+/// `Result<Result<_, ServiceError>, JoinError>` shape from
+/// `tokio::task::spawn_blocking` collapses to two short return arms in the
+/// caller — see e.g. `handlers/collections/item/edit_form.rs`.
+pub fn service_error_to_admin_response(
+    state: &AdminState,
+    err: ServiceError,
+    denied_msg: &str,
+) -> Response {
+    match err {
+        ServiceError::AccessDenied(_) => forbidden(state, denied_msg),
+        e => {
+            error!("Service error: {}", e);
+            server_error(state, "An internal error occurred.")
+        }
+    }
+}
+
+/// Convert a [`tokio::task::JoinError`] into a generic admin HTML 500
+/// response. Tokio task failures generally indicate a panic in the
+/// `spawn_blocking` body and are not user-facing. Logged at `error!`.
+pub fn task_join_error_response(state: &AdminState, err: tokio::task::JoinError) -> Response {
+    error!("spawn_blocking task error: {}", err);
+    server_error(state, "An internal error occurred.")
 }
 
 /// Render a 500 Internal Server Error page with the given message.

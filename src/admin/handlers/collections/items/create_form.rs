@@ -105,11 +105,8 @@ pub async fn create_form(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug));
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return not_found(&state, &format!("Collection '{}' not found", slug));
     };
 
     match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
@@ -131,7 +128,7 @@ pub async fn create_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
         Breadcrumb::link(def.display_name(), paths::collection(&slug)),
         Breadcrumb::current("create_name").with_name(def.singular_name()),
     ];

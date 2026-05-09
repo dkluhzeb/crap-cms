@@ -18,6 +18,7 @@ use crate::{
     admin::{
         AdminState,
         context::{AuthBasePageContext, PageMeta, PageType},
+        handlers::{auth::SESSION_COOKIE, shared::paths},
         server::extract_cookie,
     },
     config::LocaleConfig,
@@ -37,7 +38,7 @@ fn validate_jwt_and_load_user(
     state: &AdminState,
     cookie_header: &str,
 ) -> Option<(auth::Claims, Option<AuthUser>)> {
-    let token = extract_cookie(cookie_header, "crap_session")?;
+    let token = extract_cookie(cookie_header, SESSION_COOKIE)?;
 
     let claims = match auth::validate_token(token, state.jwt_secret.as_ref()) {
         Ok(c) => c,
@@ -141,11 +142,11 @@ fn login_redirect(request: &Request<Body>) -> Response {
     if is_htmx {
         Response::builder()
             .status(StatusCode::OK)
-            .header("HX-Redirect", "/admin/login")
+            .header("HX-Redirect", paths::LOGIN)
             .body(Body::empty())
             .expect("static response builder")
     } else {
-        Redirect::to("/admin/login").into_response()
+        Redirect::to(paths::LOGIN).into_response()
     }
 }
 
@@ -255,6 +256,21 @@ pub(super) async fn auth_middleware(
     login_redirect(&request)
 }
 
+/// Blocking body for the admin-access gate's `spawn_blocking` call. Pulls a
+/// connection from the pool and runs the configured `admin.access` Lua hook.
+/// Returns `None` only when the pool is exhausted; pool failure is treated as
+/// a transient deny-by-default upstream.
+#[cfg(not(tarpaulin_include))]
+fn check_admin_access_blocking(
+    pool: &DbPool,
+    hook_runner: &HookRunner,
+    access_ref: &str,
+    user_doc: &Document,
+) -> Option<Result<query::AccessResult, anyhow::Error>> {
+    let conn = pool.get().ok()?;
+    Some(hook_runner.check_access(Some(access_ref), Some(user_doc), None, None, &conn))
+}
+
 /// Gate 2: Check `admin.access` Lua function. Returns a 403 response if the user
 /// is denied, or None if access is allowed (or no access function is configured).
 #[cfg(not(tarpaulin_include))]
@@ -276,8 +292,7 @@ pub(crate) async fn check_admin_gate_for_doc(
     let access_ref = access_ref.to_string();
 
     let result = spawn_blocking(move || {
-        let conn = pool.get().ok()?;
-        Some(hook_runner.check_access(Some(&access_ref), Some(&user_doc), None, None, &conn))
+        check_admin_access_blocking(&pool, &hook_runner, &access_ref, &user_doc)
     })
     .await;
 

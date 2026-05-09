@@ -3,7 +3,10 @@
 use axum::http::{HeaderMap, header};
 
 use crate::{
-    admin::{AdminState, context::LocaleTemplateData, server::extract_cookie},
+    admin::{
+        AdminState, context::LocaleTemplateData, handlers::auth::EDITOR_LOCALE_COOKIE,
+        server::extract_cookie,
+    },
     config::LocaleConfig,
     db::LocaleContext,
 };
@@ -21,7 +24,7 @@ pub fn extract_editor_locale(headers: &HeaderMap, config: &LocaleConfig) -> Opti
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let raw = extract_cookie(cookie_str, "crap_editor_locale");
+    let raw = extract_cookie(cookie_str, EDITOR_LOCALE_COOKIE);
     let locale = raw.unwrap_or(&config.default_locale);
 
     if config.locales.contains(&locale.to_string()) {

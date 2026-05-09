@@ -23,9 +23,16 @@ use crate::{
             },
         },
     },
-    core::{CollectionDefinition, Document, DocumentFields, auth::AuthUser, upload},
-    db::query::{LocaleContext, LocaleMode},
-    service::{self, ServiceError},
+    core::{
+        CollectionDefinition, Document, DocumentFields, auth::AuthUser, cache::SharedCache,
+        event::SharedEventTransport, upload,
+    },
+    db::{
+        DbPool,
+        query::{LocaleContext, LocaleMode},
+    },
+    hooks::HookRunner,
+    service::{self, EmailContext, ServiceError},
 };
 
 /// Handle post-create success: commit upload and enqueue conversions.
@@ -83,6 +90,53 @@ struct CreateInput {
     draft: bool,
 }
 
+/// Owned bundle for the spawn-blocking create body.
+struct CreateBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    email_ctx: Option<EmailContext>,
+    slug: String,
+    def: CollectionDefinition,
+    user_doc: Option<Document>,
+    locale: Option<String>,
+    ui_locale: Option<String>,
+    input: CreateInput,
+}
+
+/// Synchronous body of [`spawn_create`]. Builds the service context and runs
+/// `service::create_document` with the merged form + join-table data.
+fn create_document_blocking(
+    args: CreateBlockingInput,
+) -> Result<service::WriteResult, ServiceError> {
+    let ctx = service::ServiceContext::collection(&args.slug, &args.def)
+        .pool(&args.pool)
+        .runner(&args.runner)
+        .user(args.user_doc.as_ref())
+        .event_transport(args.event_transport)
+        .cache(args.cache)
+        .email_ctx(args.email_ctx)
+        .build();
+
+    service::create_document(
+        &ctx,
+        service::WriteInput::builder({
+            let mut __m = service::values_from_strings(args.input.form_data);
+            for (k, v) in args.input.join_data.iter() {
+                __m.insert(k.clone(), v.clone());
+            }
+            __m
+        })
+        .password(args.input.password.as_deref())
+        .locale_ctx(args.input.locale_ctx.as_ref())
+        .locale(args.locale)
+        .draft(args.input.draft)
+        .ui_locale(args.ui_locale)
+        .build(),
+    )
+}
+
 /// Clone state and run `service::create_document` in a blocking task.
 async fn spawn_create(
     state: &AdminState,
@@ -91,48 +145,27 @@ async fn spawn_create(
     auth_user: &Option<Extension<AuthUser>>,
     input: CreateInput,
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let event_transport = state.event_transport.clone();
-    let cache = state.cache.clone();
-    let email_ctx = Some(state.email_context());
-    let slug_owned = slug.to_string();
-    let def_owned = def.clone();
-    let user_doc = get_user_doc(auth_user).cloned();
     let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
         LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
     let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
-    task::spawn_blocking(move || {
-        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc.as_ref())
-            .event_transport(event_transport)
-            .cache(cache)
-            .email_ctx(email_ctx)
-            .build();
+    let args = CreateBlockingInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        event_transport: state.event_transport.clone(),
+        cache: state.cache.clone(),
+        email_ctx: Some(state.email_context()),
+        slug: slug.to_string(),
+        def: def.clone(),
+        user_doc: get_user_doc(auth_user).cloned(),
+        locale,
+        ui_locale,
+        input,
+    };
 
-        service::create_document(
-            &ctx,
-            service::WriteInput::builder({
-                let mut __m = service::values_from_strings(input.form_data);
-                for (k, v) in input.join_data.iter() {
-                    __m.insert(k.clone(), v.clone());
-                }
-                __m
-            })
-            .password(input.password.as_deref())
-            .locale_ctx(input.locale_ctx.as_ref())
-            .locale(locale)
-            .draft(input.draft)
-            .ui_locale(ui_locale)
-            .build(),
-        )
-    })
-    .await
+    task::spawn_blocking(move || create_document_blocking(args)).await
 }
 
 /// POST /admin/collections/{slug} — create a new item
@@ -142,9 +175,8 @@ pub async fn create_action(
     auth_user: Option<Extension<AuthUser>>,
     request: Request,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return redirect_response("/admin/collections"),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return redirect_response(paths::COLLECTIONS_ROOT);
     };
 
     // Inline-create requests come from `<crap-create-panel>`, which sets

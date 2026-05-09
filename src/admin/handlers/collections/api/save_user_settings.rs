@@ -82,9 +82,8 @@ pub async fn save_user_settings(
         None => return StatusCode::UNAUTHORIZED,
     };
 
-    let def = match state.registry.get_collection(&collection_slug) {
-        Some(d) => d.clone(),
-        None => return StatusCode::NOT_FOUND,
+    let Some(def) = state.registry.get_collection(&collection_slug).cloned() else {
+        return StatusCode::NOT_FOUND;
     };
 
     let valid_columns = parse_valid_columns(&form, &def);

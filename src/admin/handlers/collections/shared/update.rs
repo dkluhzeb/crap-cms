@@ -20,13 +20,20 @@ use crate::{
             },
         },
     },
+    config::LocaleConfig,
     core::{
-        DocumentFields, ReqContext,
+        Document, DocumentFields, ReqContext,
         auth::AuthUser,
+        cache::SharedCache,
         collection::CollectionDefinition,
+        event::{SharedEventTransport, SharedInvalidationTransport},
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
-    db::query::{LocaleContext, LocaleMode},
+    db::{
+        DbPool,
+        query::{LocaleContext, LocaleMode},
+    },
+    hooks::HookRunner,
     service::{
         self, ServiceContext, ServiceError,
         auth::{lock_user, unlock_user},
@@ -65,6 +72,84 @@ struct UpdateInput {
     action: String,
 }
 
+/// Owned bundle for the spawn-blocking update body.
+struct UpdateBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    invalidation_bus: SharedInvalidationTransport,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    slug: String,
+    id: String,
+    def: CollectionDefinition,
+    user_doc: Option<Document>,
+    locale: Option<String>,
+    ui_locale: Option<String>,
+    locale_config: LocaleConfig,
+    input: UpdateInput,
+}
+
+/// Synchronous body of [`spawn_update`]. Builds the service context, runs
+/// either `unpublish_document` (for `action == "unpublish"` on versioned
+/// collections) or `update_document`, and applies the optional account-lock
+/// toggle for auth collections.
+fn update_document_blocking(
+    args: UpdateBlockingInput,
+) -> Result<service::WriteResult, ServiceError> {
+    let ctx = service::ServiceContext::collection(&args.slug, &args.def)
+        .pool(&args.pool)
+        .runner(&args.runner)
+        .user(args.user_doc.as_ref())
+        .event_transport(args.event_transport)
+        .cache(args.cache)
+        .locale_config(Some(&args.locale_config))
+        .build();
+
+    let result = if args.input.action == "unpublish" && args.def.has_versions() {
+        let doc = service::unpublish_document(&ctx, &args.id)?;
+
+        Ok((doc, ReqContext::new()))
+    } else {
+        service::update_document(
+            &ctx,
+            &args.id,
+            service::WriteInput::builder({
+                let mut __m = service::values_from_strings(args.input.form_data);
+                for (k, v) in args.input.join_data.iter() {
+                    __m.insert(k.clone(), v.clone());
+                }
+                __m
+            })
+            .password(args.input.password.as_deref())
+            .locale_ctx(args.input.locale_ctx.as_ref())
+            .locale(args.locale)
+            .draft(args.input.draft)
+            .ui_locale(args.ui_locale)
+            .build(),
+        )
+    };
+
+    if result.is_ok()
+        && let Some(locked_field) = args.input.locked_value
+    {
+        let should_lock =
+            locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
+        let conn = args.pool.get().context("DB connection for lock update")?;
+        let ctx = ServiceContext::slug_only(&args.slug)
+            .conn(&conn)
+            .invalidation_transport(Some(args.invalidation_bus))
+            .build();
+
+        if should_lock {
+            lock_user(&ctx, &args.id)?;
+        } else {
+            unlock_user(&ctx, &args.id)?;
+        }
+    }
+
+    result
+}
+
 /// Run the blocking update/unpublish + lock update task.
 async fn spawn_update(
     state: &AdminState,
@@ -74,15 +159,6 @@ async fn spawn_update(
     auth_user: &Option<Extension<AuthUser>>,
     input: UpdateInput,
 ) -> Result<Result<service::WriteResult, ServiceError>, task::JoinError> {
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let invalidation_bus = state.invalidation_transport.clone();
-    let event_transport = state.event_transport.clone();
-    let cache = state.cache.clone();
-    let slug_owned = slug.to_string();
-    let id_owned = id.to_string();
-    let def_owned = def.clone();
-    let user_doc = get_user_doc(auth_user).cloned();
     let locale = input.locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
         LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
@@ -92,63 +168,23 @@ async fn spawn_update(
     // a `LocaleContext` to emit `title__en`/`title__de` for localized
     // fields when locales are enabled. Threading the config through
     // `ServiceContext` lets the service build a default `All` context.
-    let locale_config = state.config.locale.clone();
+    let args = UpdateBlockingInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        invalidation_bus: state.invalidation_transport.clone(),
+        event_transport: state.event_transport.clone(),
+        cache: state.cache.clone(),
+        slug: slug.to_string(),
+        id: id.to_string(),
+        def: def.clone(),
+        user_doc: get_user_doc(auth_user).cloned(),
+        locale,
+        ui_locale,
+        locale_config: state.config.locale.clone(),
+        input,
+    };
 
-    task::spawn_blocking(move || {
-        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc.as_ref())
-            .event_transport(event_transport)
-            .cache(cache)
-            .locale_config(Some(&locale_config))
-            .build();
-
-        let result = if input.action == "unpublish" && def_owned.has_versions() {
-            let doc = service::unpublish_document(&ctx, &id_owned)?;
-
-            Ok((doc, ReqContext::new()))
-        } else {
-            service::update_document(
-                &ctx,
-                &id_owned,
-                service::WriteInput::builder({
-                    let mut __m = service::values_from_strings(input.form_data);
-                    for (k, v) in input.join_data.iter() {
-                        __m.insert(k.clone(), v.clone());
-                    }
-                    __m
-                })
-                .password(input.password.as_deref())
-                .locale_ctx(input.locale_ctx.as_ref())
-                .locale(locale)
-                .draft(input.draft)
-                .ui_locale(ui_locale)
-                .build(),
-            )
-        };
-
-        if result.is_ok()
-            && let Some(locked_field) = input.locked_value
-        {
-            let should_lock =
-                locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
-            let conn = pool.get().context("DB connection for lock update")?;
-            let ctx = ServiceContext::slug_only(&slug_owned)
-                .conn(&conn)
-                .invalidation_transport(Some(invalidation_bus))
-                .build();
-
-            if should_lock {
-                lock_user(&ctx, &id_owned)?;
-            } else {
-                unlock_user(&ctx, &id_owned)?;
-            }
-        }
-
-        result
-    })
-    .await
+    task::spawn_blocking(move || update_document_blocking(args)).await
 }
 
 /// Process a form update for a collection item (called from `update_action.rs`).
@@ -160,9 +196,8 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     file: Option<UploadedFile>,
     auth_user: &Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(slug) {
-        Some(d) => d.clone(),
-        None => return redirect_response("/admin/collections").into_response(),
+    let Some(def) = state.registry.get_collection(slug).cloned() else {
+        return redirect_response(paths::COLLECTIONS_ROOT).into_response();
     };
 
     let action = form_data.remove("_action").unwrap_or_default();

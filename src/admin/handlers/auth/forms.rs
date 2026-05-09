@@ -76,13 +76,6 @@ pub struct VerifyEmailQuery {
     pub token: String,
 }
 
-/// Query parameters for the MFA code entry page.
-#[derive(Debug, Deserialize, Default)]
-pub struct MfaQuery {
-    /// The collection slug for the user's auth collection.
-    pub collection: Option<String>,
-}
-
 /// Form data for the MFA code verification.
 #[derive(Deserialize)]
 pub struct MfaForm {

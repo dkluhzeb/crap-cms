@@ -19,7 +19,7 @@ use super::helpers::{
     DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
     publish_upload_event, service_error_to_response,
 };
-use crate::admin::handlers::forms::parse_multipart_form;
+use crate::admin::parse_multipart_form;
 
 #[cfg(not(tarpaulin_include))]
 pub(super) async fn update_upload(

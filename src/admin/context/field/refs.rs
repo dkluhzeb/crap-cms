@@ -142,3 +142,115 @@ pub struct JoinItem {
     pub id: String,
     pub label: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::admin::context::field::{FieldContext, test_helpers::make_base};
+
+    // ── Relationship ───────────────────────────────────────────────────
+
+    #[test]
+    fn relationship_with_polymorphic_emits_collections() {
+        let f = RelationshipField {
+            base: make_base("author"),
+            relationship_collection: Some("users".to_string()),
+            has_many: Some(false),
+            polymorphic: Some(true),
+            collections: Some(vec!["users".to_string(), "guests".to_string()]),
+            picker: Some("drawer".to_string()),
+            selected_items: None,
+        };
+        let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();
+        assert_eq!(v["relationship_collection"], "users");
+        assert_eq!(v["polymorphic"], true);
+        assert_eq!(v["collections"], json!(["users", "guests"]));
+    }
+
+    #[test]
+    fn relationship_with_selected_items_flat() {
+        let f = RelationshipField {
+            base: make_base("author"),
+            relationship_collection: Some("users".to_string()),
+            has_many: Some(true),
+            polymorphic: None,
+            collections: None,
+            picker: None,
+            selected_items: Some(vec![RelationshipSelectedItem {
+                id: "u1".to_string(),
+                label: "Alice".to_string(),
+                collection: None,
+                thumbnail_url: None,
+                is_image: None,
+                filename: None,
+            }]),
+        };
+        let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();
+        let items = v["selected_items"].as_array().unwrap();
+        assert_eq!(items[0]["id"], "u1");
+        assert_eq!(items[0]["label"], "Alice");
+        assert!(items[0].get("collection").is_none());
+    }
+
+    #[test]
+    fn relationship_polymorphic_selected_items_carry_collection() {
+        let f = RelationshipField {
+            base: make_base("ref"),
+            relationship_collection: Some("users".to_string()),
+            has_many: Some(false),
+            polymorphic: Some(true),
+            collections: Some(vec!["users".to_string()]),
+            picker: None,
+            selected_items: Some(vec![RelationshipSelectedItem {
+                id: "u1".to_string(),
+                label: "Alice".to_string(),
+                collection: Some("users".to_string()),
+                thumbnail_url: None,
+                is_image: None,
+                filename: None,
+            }]),
+        };
+        let v = serde_json::to_value(FieldContext::Relationship(f)).unwrap();
+        let items = v["selected_items"].as_array().unwrap();
+        assert_eq!(items[0]["collection"], "users");
+    }
+
+    // ── Upload ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn upload_with_picker_default() {
+        let f = UploadField {
+            base: make_base("image"),
+            relationship_collection: Some("media".to_string()),
+            has_many: None,
+            picker: Some("drawer".to_string()),
+            selected_filename: None,
+            selected_preview_url: None,
+            selected_items: None,
+        };
+        let v = serde_json::to_value(FieldContext::Upload(f)).unwrap();
+        assert_eq!(v["relationship_collection"], "media");
+        assert_eq!(v["picker"], "drawer");
+    }
+
+    // ── Join ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn join_emits_collection_and_on() {
+        let mut b = make_base("posts");
+        b.readonly = true;
+        let f = JoinField {
+            base: b,
+            join_collection: Some("posts".to_string()),
+            join_on: Some("author_id".to_string()),
+            join_items: None,
+            join_count: None,
+        };
+        let v = serde_json::to_value(FieldContext::Join(f)).unwrap();
+        assert_eq!(v["readonly"], true);
+        assert_eq!(v["join_collection"], "posts");
+        assert_eq!(v["join_on"], "author_id");
+    }
+}

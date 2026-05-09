@@ -5,6 +5,22 @@ use tracing::warn;
 
 use crate::{admin::AdminState, config::SessionCookieSameSite};
 
+/// Session JWT cookie name.
+pub(in crate::admin) const SESSION_COOKIE: &str = "crap_session";
+
+/// Visible session-expiry companion cookie name (read by the JS layer to
+/// drive proactive refresh).
+pub(in crate::admin) const SESSION_EXP_COOKIE: &str = "crap_session_exp";
+
+/// MFA pending JWT cookie name.
+pub(in crate::admin) const MFA_PENDING_COOKIE: &str = "crap_mfa_pending";
+
+/// CSRF token cookie name.
+pub(in crate::admin) const CSRF_COOKIE: &str = "crap_csrf";
+
+/// Per-user editor locale cookie name.
+pub(in crate::admin) const EDITOR_LOCALE_COOKIE: &str = "crap_editor_locale";
+
 /// MFA pending cookie expiry in seconds (5 minutes).
 const MFA_PENDING_EXPIRY: u64 = 300;
 
@@ -106,12 +122,12 @@ pub(in crate::admin::handlers) fn session_cookies(
     same_site: &'static str,
 ) -> Vec<String> {
     vec![
-        Cookie::builder("crap_session", token)
+        Cookie::builder(SESSION_COOKIE, token)
             .max_age(expiry)
             .same_site(same_site)
             .build(dev_mode)
             .to_string(),
-        Cookie::builder("crap_session_exp", &exp.to_string())
+        Cookie::builder(SESSION_EXP_COOKIE, &exp.to_string())
             .max_age(expiry)
             .http_only(false)
             .same_site(same_site)
@@ -122,7 +138,7 @@ pub(in crate::admin::handlers) fn session_cookies(
 
 /// Build a `Set-Cookie` header value for the MFA pending token.
 pub(in crate::admin::handlers) fn mfa_pending_cookie(token: &str, dev_mode: bool) -> String {
-    Cookie::builder("crap_mfa_pending", token)
+    Cookie::builder(MFA_PENDING_COOKIE, token)
         .max_age(MFA_PENDING_EXPIRY)
         .build(dev_mode)
         .to_string()
@@ -130,7 +146,7 @@ pub(in crate::admin::handlers) fn mfa_pending_cookie(token: &str, dev_mode: bool
 
 /// Build a `Set-Cookie` header value that clears the MFA pending cookie.
 pub(in crate::admin::handlers) fn clear_mfa_pending_cookie(dev_mode: bool) -> String {
-    Cookie::builder("crap_mfa_pending", "")
+    Cookie::builder(MFA_PENDING_COOKIE, "")
         .build(dev_mode)
         .to_string()
 }
@@ -154,11 +170,11 @@ pub(in crate::admin::handlers) fn clear_session_cookies(
     same_site: &'static str,
 ) -> Vec<String> {
     vec![
-        Cookie::builder("crap_session", "")
+        Cookie::builder(SESSION_COOKIE, "")
             .same_site(same_site)
             .build(dev_mode)
             .to_string(),
-        Cookie::builder("crap_session_exp", "")
+        Cookie::builder(SESSION_EXP_COOKIE, "")
             .http_only(false)
             .same_site(same_site)
             .build(dev_mode)

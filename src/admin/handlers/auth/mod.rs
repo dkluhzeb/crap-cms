@@ -43,13 +43,16 @@ pub use session_refresh::session_refresh;
 pub use verify_email::verify_email;
 
 pub use forms::{
-    ForgotPasswordForm, LocaleForm, LoginForm, LoginPageQuery, MfaForm, MfaQuery,
-    ResetPasswordForm, ResetPasswordQuery, VerifyEmailQuery,
+    ForgotPasswordForm, LocaleForm, LoginForm, LoginPageQuery, MfaForm, ResetPasswordForm,
+    ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
     all_disable_local, client_ip, create_session_token, extract_user_email, find_auth_collection,
     get_auth_collections, headers_to_map, login_error, render_forgot_success, session_redirect,
     show_forgot_password,
+};
+pub(in crate::admin) use session::{
+    CSRF_COOKIE, EDITOR_LOCALE_COOKIE, MFA_PENDING_COOKIE, SESSION_COOKIE,
 };
 pub(super) use session::{
     append_cookies, clear_mfa_pending_cookie, clear_session_cookies, mfa_pending_cookie,

@@ -11,7 +11,7 @@ use anyhow::anyhow;
 use tracing::warn;
 
 use crate::{
-    admin::handlers::forms::extract_join_data_from_form,
+    admin::extract_join_data_from_form,
     config::LocaleConfig,
     core::{
         Document, ReqContext,

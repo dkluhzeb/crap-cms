@@ -14,7 +14,7 @@ use crate::{
         context::{AuthBasePageContext, PageMeta, PageType, page::auth::ResetPasswordPage},
         handlers::{
             auth::{ResetPasswordForm, client_ip},
-            shared::render_page,
+            shared::{paths, render_page},
         },
     },
     core::{Registry, auth::ResetTokenError},
@@ -115,7 +115,9 @@ pub async fn reset_password_action(
             .await;
 
     match result {
-        Ok(Ok(())) => Redirect::to("/admin/login?success=success_password_reset").into_response(),
+        Ok(Ok(())) => {
+            Redirect::to(&paths::login_with_success("success_password_reset")).into_response()
+        }
         Ok(Err(e)) => {
             // Record failure on invalid/expired token — not on success
             state.ip_forgot_password_limiter.record_failure(&ip);

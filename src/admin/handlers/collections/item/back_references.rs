@@ -18,9 +18,8 @@ pub async fn back_references(
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return Json(json!({ "error": "Collection not found" })).into_response(),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return Json(json!({ "error": "Collection not found" })).into_response();
     };
 
     match check_access_or_forbid(

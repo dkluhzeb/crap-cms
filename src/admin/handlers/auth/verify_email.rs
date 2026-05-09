@@ -12,7 +12,10 @@ use tracing::error;
 use crate::{
     admin::{
         AdminState,
-        handlers::auth::{VerifyEmailQuery, client_ip},
+        handlers::{
+            auth::{VerifyEmailQuery, client_ip},
+            shared::paths,
+        },
     },
     core::Registry,
     db::DbPool,
@@ -70,7 +73,7 @@ pub async fn verify_email(
     // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
     // verification failures blocking legitimate login attempts from the same IP.
     if state.ip_forgot_password_limiter.is_blocked(&ip) {
-        return Redirect::to("/admin/login");
+        return Redirect::to(paths::LOGIN);
     }
 
     let pool = state.pool.clone();
@@ -81,23 +84,23 @@ pub async fn verify_email(
         task::spawn_blocking(move || consume_verification_token(&pool, &registry, &token)).await;
 
     match result {
-        Ok(Ok(true)) => Redirect::to("/admin/login?success=success_email_verified"),
+        Ok(Ok(true)) => Redirect::to(&paths::login_with_success("success_email_verified")),
         Ok(Ok(false)) => {
             // Invalid or expired token — record rate-limit failure
             state.ip_forgot_password_limiter.record_failure(&ip);
-            Redirect::to("/admin/login")
+            Redirect::to(paths::LOGIN)
         }
         Ok(Err(e)) => {
             // Internal error — log but don't penalize IP
             error!("Email verification error: {}", e);
 
-            Redirect::to("/admin/login")
+            Redirect::to(paths::LOGIN)
         }
         Err(e) => {
             // Task join error — log but don't penalize IP
             error!("Email verification task error: {}", e);
 
-            Redirect::to("/admin/login")
+            Redirect::to(paths::LOGIN)
         }
     }
 }

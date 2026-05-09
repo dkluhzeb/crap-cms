@@ -60,11 +60,9 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
 ) -> Response {
     let mut fields = build_field_contexts(&p.def.fields, p.form_data, p.error_map, true, false);
 
-    let mut enrich_opts = EnrichOptions::builder(p.error_map).filter_hidden(true);
-
-    if let Some(id) = p.doc_id {
-        enrich_opts = enrich_opts.doc_id(id);
-    }
+    let enrich_opts = EnrichOptions::builder(p.error_map)
+        .filter_hidden(true)
+        .doc_id(p.doc_id);
 
     enrich_field_contexts(
         &mut fields,

@@ -1,13 +1,27 @@
+//! Bundled inputs for [`enrich_field_contexts`](super::enrich_field_contexts).
+
 use std::collections::HashMap;
 
-use crate::admin::handlers::field_context::enrich::EnrichOptions;
+/// Bundled parameters for `enrich_field_contexts` to avoid too many arguments.
+pub struct EnrichOptions<'a> {
+    pub filter_hidden: bool,
+    pub non_default_locale: bool,
+    pub errors: &'a HashMap<String, String>,
+    pub doc_id: Option<&'a str>,
+}
+
+impl<'a> EnrichOptions<'a> {
+    pub fn builder(errors: &'a HashMap<String, String>) -> EnrichOptionsBuilder<'a> {
+        EnrichOptionsBuilder::new(errors)
+    }
+}
 
 /// Builder for [`EnrichOptions`].
 pub struct EnrichOptionsBuilder<'a> {
-    pub(super) filter_hidden: bool,
-    pub(super) non_default_locale: bool,
-    pub(super) errors: &'a HashMap<String, String>,
-    pub(super) doc_id: Option<&'a str>,
+    filter_hidden: bool,
+    non_default_locale: bool,
+    errors: &'a HashMap<String, String>,
+    doc_id: Option<&'a str>,
 }
 
 impl<'a> EnrichOptionsBuilder<'a> {
@@ -30,8 +44,10 @@ impl<'a> EnrichOptionsBuilder<'a> {
         self
     }
 
-    pub fn doc_id(mut self, v: &'a str) -> Self {
-        self.doc_id = Some(v);
+    /// Take `Option<&str>` so an optional caller-side `doc_id` flows through
+    /// without an `if let` ceremony at the call site.
+    pub fn doc_id(mut self, v: Option<&'a str>) -> Self {
+        self.doc_id = v;
         self
     }
 

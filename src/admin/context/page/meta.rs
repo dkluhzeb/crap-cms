@@ -45,12 +45,6 @@ impl PageMeta {
         self.title_name = Some(name.into());
         self
     }
-
-    /// Fluent setter for the breadcrumb trail.
-    pub fn with_breadcrumbs(mut self, breadcrumbs: Vec<Breadcrumb>) -> Self {
-        self.breadcrumbs = breadcrumbs;
-        self
-    }
 }
 
 #[cfg(test)]
@@ -73,26 +67,6 @@ mod tests {
         assert_eq!(
             v,
             json!({"type": "collection_edit", "title": "edit_name", "title_name": "Post"})
-        );
-    }
-
-    #[test]
-    fn page_meta_with_breadcrumbs_includes_them() {
-        let meta = PageMeta::new(PageType::CollectionItems, "posts").with_breadcrumbs(vec![
-            Breadcrumb::link("Home", "/admin"),
-            Breadcrumb::current("Posts"),
-        ]);
-        let v = serde_json::to_value(&meta).unwrap();
-        assert_eq!(
-            v,
-            json!({
-                "type": "collection_items",
-                "title": "posts",
-                "breadcrumbs": [
-                    {"label": "Home", "url": "/admin"},
-                    {"label": "Posts"}
-                ]
-            })
         );
     }
 }

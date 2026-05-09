@@ -38,12 +38,16 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 
 mod base;
 mod composites;
 mod refs;
 mod scalars;
+
+#[cfg(test)]
+mod test_helpers;
 
 pub use base::{BaseFieldData, ConditionData, ValidationAttrs};
 pub use composites::{
@@ -114,7 +118,10 @@ pub enum FieldContext {
 
 impl FieldContext {
     /// Convert this field context to its JSON representation. Infallible —
-    /// admin context structs serialize cleanly.
+    /// admin context structs serialize cleanly. Test-only: production code
+    /// serializes via the typed pipeline, but tests use this for assertions
+    /// against the wire JSON shape.
+    #[cfg(test)]
     pub fn to_value(&self) -> Value {
         serde_json::to_value(self).expect("FieldContext serialization is infallible")
     }
@@ -170,35 +177,26 @@ impl FieldContext {
             FieldContext::Blocks(f) => &mut f.base,
         }
     }
-
-    /// Returns the canonical lowercase field-type discriminator string for
-    /// this variant — same as the `field_type` key in the serialized JSON.
-    pub fn field_type_str(&self) -> &'static str {
-        match self {
-            FieldContext::Text(_) => "text",
-            FieldContext::Email(_) => "email",
-            FieldContext::Password(_) => "password",
-            FieldContext::Json(_) => "json",
-            FieldContext::Textarea(_) => "textarea",
-            FieldContext::Number(_) => "number",
-            FieldContext::Code(_) => "code",
-            FieldContext::Richtext(_) => "richtext",
-            FieldContext::Date(_) => "date",
-            FieldContext::Checkbox(_) => "checkbox",
-            FieldContext::Select(_) => "select",
-            FieldContext::Radio(_) => "radio",
-            FieldContext::Relationship(_) => "relationship",
-            FieldContext::Upload(_) => "upload",
-            FieldContext::Join(_) => "join",
-            FieldContext::Group(_) => "group",
-            FieldContext::Row(_) => "row",
-            FieldContext::Collapsible(_) => "collapsible",
-            FieldContext::Tabs(_) => "tabs",
-            FieldContext::Array(_) => "array",
-            FieldContext::Blocks(_) => "blocks",
-        }
-    }
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::admin::context::field::test_helpers::make_base;
+
+    /// The internally-tagged enum produces `{"field_type": "...", ...flat
+    /// keys...}` with no per-variant wrapper object.
+    #[test]
+    fn untagged_enum_produces_no_variant_wrapper() {
+        let f = TextField {
+            base: make_base("title"),
+            has_many: None,
+            tags: None,
+        };
+        let v = serde_json::to_value(FieldContext::Text(f)).unwrap();
+        // Internally tagged: no `{"Text": {...}}` wrapper — the keys are at root.
+        assert!(v.is_object());
+        assert!(v.get("Text").is_none());
+        assert_eq!(v["name"], "title");
+    }
+}

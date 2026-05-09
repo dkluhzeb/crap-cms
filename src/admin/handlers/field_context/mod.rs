@@ -6,6 +6,9 @@ mod builder;
 mod enrich;
 mod helpers;
 
+#[cfg(test)]
+mod test_helpers;
+
 pub(super) use builder::build_field_contexts;
 pub(super) use enrich::{EnrichOptions, enrich_field_contexts};
 pub(super) use helpers::{

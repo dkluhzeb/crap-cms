@@ -243,8 +243,10 @@ fn pages() -> Vec<PageEntry> {
 fn definitions() -> Vec<(&'static str, Schema)> {
     use crate::admin::context::{
         AuthBasePageContext, BasePageContext, Breadcrumb, CollectionContext, CrapMeta, DocumentRef,
-        EditorLocaleOption, FieldContext, GlobalContext, LocaleTemplateOption, NavCollection,
-        NavData, NavGlobal, PageMeta, PaginationContext, UserContext,
+        EditorLocaleOption, FieldContext, GlobalContext, NavData, PageMeta, PaginationContext,
+        UserContext,
+        locale_template::LocaleTemplateOption,
+        nav::{NavCollection, NavGlobal},
         page::auth::AuthCollection,
         page::collections::{CollectionEntry, UploadFormContext, UploadInfo},
         page::dashboard::{CollectionCard, GlobalCard},

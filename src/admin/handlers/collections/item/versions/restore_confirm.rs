@@ -32,11 +32,8 @@ pub async fn restore_confirm(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug));
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return not_found(&state, &format!("Collection '{}' not found", slug));
     };
 
     if !def.has_versions() {
@@ -77,17 +74,14 @@ pub async fn restore_confirm(
         Err(msg) => return server_error(&state, msg),
     };
 
-    let restore_url = format!(
-        "/admin/collections/{}/{}/versions/{}/restore",
-        slug, id, version_id
-    );
+    let restore_url = paths::collection_item_version_restore(&slug, &id, &version_id);
     let back_url = paths::collection_item(&slug, &id);
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
         Breadcrumb::link(def.display_name(), paths::collection(&slug)),
         Breadcrumb::link(&id, paths::collection_item(&slug, &id)),
         Breadcrumb::current("restore_version"),

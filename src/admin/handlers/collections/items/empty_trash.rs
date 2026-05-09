@@ -26,6 +26,21 @@ use crate::{
     service::{DeleteManyOptions, ServiceContext, ServiceError, delete_many},
 };
 
+/// Bundled inputs for [`empty_trash`]. Grouped to keep the spawn-blocking
+/// closure tidy and to satisfy the `>4 args` rule from CLAUDE.md.
+struct EmptyTrashInput<'a> {
+    pool: &'a DbPool,
+    runner: &'a HookRunner,
+    def: &'a CollectionDefinition,
+    slug: &'a str,
+    locale_cfg: &'a LocaleConfig,
+    storage: &'a dyn StorageBackend,
+    user_doc: Option<&'a Document>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+}
+
 /// Build trash filters: match only soft-deleted documents.
 fn trash_filters() -> Vec<FilterClause> {
     vec![FilterClause::Single(Filter {
@@ -35,31 +50,19 @@ fn trash_filters() -> Vec<FilterClause> {
 }
 
 /// Find all trashed documents and permanently delete them via the service layer.
-#[allow(clippy::too_many_arguments)]
-fn empty_trash(
-    pool: &DbPool,
-    runner: &HookRunner,
-    def: &CollectionDefinition,
-    slug: &str,
-    locale_cfg: &LocaleConfig,
-    storage: &dyn StorageBackend,
-    user_doc: Option<&Document>,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
-) -> Result<usize, ServiceError> {
-    let mut hard_def = def.clone();
+fn empty_trash(input: EmptyTrashInput<'_>) -> Result<usize, ServiceError> {
+    let mut hard_def = input.def.clone();
     hard_def.soft_delete = false;
 
     let filters = trash_filters();
 
-    let ctx = ServiceContext::collection(slug, &hard_def)
-        .pool(pool)
-        .runner(runner)
-        .user(user_doc)
-        .invalidation_transport(invalidation_transport)
-        .event_transport(event_transport)
-        .cache(cache)
+    let ctx = ServiceContext::collection(input.slug, &hard_def)
+        .pool(input.pool)
+        .runner(input.runner)
+        .user(input.user_doc)
+        .invalidation_transport(input.invalidation_transport)
+        .event_transport(input.event_transport)
+        .cache(input.cache)
         .build();
 
     let delete_opts = DeleteManyOptions {
@@ -67,10 +70,10 @@ fn empty_trash(
         include_deleted: true,
     };
 
-    let result = delete_many(&ctx, filters, locale_cfg, &delete_opts)?;
+    let result = delete_many(&ctx, filters, input.locale_cfg, &delete_opts)?;
 
     for fields in &result.upload_fields_to_clean {
-        upload::delete_upload_files(storage, fields);
+        upload::delete_upload_files(input.storage, fields);
     }
 
     Ok(result.hard_deleted as usize)
@@ -83,9 +86,8 @@ pub async fn empty_trash_action(
     Path(slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return StatusCode::NOT_FOUND.into_response(),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
     if !def.soft_delete {
@@ -106,18 +108,18 @@ pub async fn empty_trash_action(
     let cache = state.cache.clone();
 
     let result = task::spawn_blocking(move || {
-        empty_trash(
-            &pool,
-            &runner,
-            &def,
-            &slug,
-            &locale_cfg,
-            &*storage,
-            user_doc.as_ref(),
-            Some(invalidation_transport),
+        empty_trash(EmptyTrashInput {
+            pool: &pool,
+            runner: &runner,
+            def: &def,
+            slug: &slug,
+            locale_cfg: &locale_cfg,
+            storage: &*storage,
+            user_doc: user_doc.as_ref(),
+            invalidation_transport: Some(invalidation_transport),
             event_transport,
             cache,
-        )
+        })
     })
     .await;
 

@@ -157,6 +157,188 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/admin/` module audit per the alpha.9 playbook — first
+  pass: test colocation. The three monolithic sibling-file test
+  modules (`context/field/tests.rs` 626 LOC,
+  `handlers/field_context/builder/tests.rs` 1133 LOC,
+  `handlers/field_context/enrich/tests.rs` 1854 LOC) are gone.
+  Each test is now in a `#[cfg(test)] mod tests` block at the
+  bottom of the source file that owns the function it exercises:
+  - `context/field/tests.rs` → split by variant family across
+    `base.rs` (3 base-data tests + the shared `make_base()`
+    fixture in a new `test_helpers.rs`), `scalars.rs` (12 tests
+    for text/textarea/number/code/richtext/date/select/checkbox),
+    `refs.rs` (5 tests for relationship/upload/join),
+    `composites.rs` (8 tests for group/collapsible/row/tabs/
+    array/blocks), and `mod.rs` (the enum-tagging test).
+  - `handlers/field_context/builder/tests.rs` → 36
+    `build_field_contexts_*` tests moved into
+    `builder/context.rs` (alongside the production fn);
+    `safe_template_id_*`, `split_sidebar_fields_*`, and
+    `count_errors_*` tests joined the existing
+    `field_context/helpers.rs` test module. Shared fixtures
+    (`make_field`, `fields_from_json`, the `Vec<Value>`-returning
+    `build_value_contexts` wrapper) live in a new
+    `field_context/test_helpers.rs`. The 4 `split_sidebar_fields`
+    tests now exercise the production fn through
+    `fields_from_json` instead of a parallel Value-based partition
+    impl that the old test file kept as scaffolding (`#[allow(
+    dead_code)] split_sidebar_field_contexts` deleted).
+  - `handlers/field_context/enrich/tests.rs` → 30
+    `enriched_sub_field_*` + `enrich_nested_fields_*` tests moved
+    into `enrich/nested.rs`; 5 `enrich_field_contexts_*` /
+    `*_transparent_names` tests into `enrich/enrichment.rs` (with
+    the two tests that inlined `make_test_state` rewritten to
+    call the shared helper, ~110 LOC each → 1 line); 7
+    `enrich_richtext_*` tests + the `make_cta_registry` fixture
+    into `enrich/enrich_types.rs`; the 3
+    `collect_node_attr_errors_*` tests joined the
+    `field_context/helpers.rs` test module (where the production
+    fn lives). `enrich/test_helpers.rs` houses the
+    sqlite-feature-gated wrappers (`build_enriched_sub_field_value`,
+    `enrich_field_contexts_values`, `enrich_nested_fields_values`,
+    `enrich_richtext_value`, `make_test_state`) — same gating the
+    monolithic file had. The duplicated
+    `max_depth_prevents_infinite_recursion` test (one copy in
+    each of the two old test files) is now a single test in
+    `builder/context.rs`.
+- Test-file file-size soft limit deliberately broken on
+  `enrich/nested.rs` (1518 LOC after split). Per CLAUDE.md the
+  1000-line cap is a soft limit; respecting it would have meant
+  either keeping a sibling `tests.rs` indirection or fragmenting
+  `nested.rs` into smaller per-test-topic source files for no
+  source-readability gain. Strict colocation — function visible
+  alongside its tests — won the trade. Other files stay under
+  1000 LOC even with their tests folded in.
+- `src/admin/` audit second pass: structural cleanup across the
+  alpha.9 playbook axes 1, 2/3, 5, 6, 8, 16/17/18, 25. All five
+  `#[allow(...)]` escapes resolved at root cause:
+  - `mod.rs::AdminState` `dead_code` allow was a stale legacy
+    blanket; every field is read.
+  - `templates/helpers/translation.rs::TranslationHelper`
+    `dead_code` allow was stale — the struct is constructed at
+    `helpers::register_helpers` and its field is read in
+    `call_inner`.
+  - `handlers/collections/items/empty_trash.rs::empty_trash`
+    `clippy::too_many_arguments` (10 args) replaced with
+    `EmptyTrashInput<'_>` typed input struct (axis 5).
+  - The remaining two were on test files that no longer exist
+    (deleted in the test-colocation pass).
+- `enrich/` builders colocated with their structs, three-struct
+  `enrich/context.rs` decomposed (axis 2/3): `enrich_options.rs`
+  holds `EnrichOptions` + `EnrichOptionsBuilder`; `sub_field_opts.rs`
+  holds `SubFieldOpts` + `SubFieldOptsBuilder`; `enrich_ctx.rs`
+  holds the module-internal `EnrichCtx`. The orphaned
+  `enrich_options_builder.rs` / `sub_field_opts_builder.rs` /
+  `context.rs` files are gone. Builders dropped from the module's
+  re-export surface (reachable via `Type::builder()` per the
+  playbook).
+- `EnrichOptionsBuilder::doc_id` now takes `Option<&'a str>`
+  (axis 6 symmetry). The single call site that did
+  `if let Some(id) = p.doc_id { enrich_opts = enrich_opts.doc_id(id); }`
+  collapses to `enrich_opts.doc_id(p.doc_id)`. The other call site
+  passes `Some(id)` explicitly.
+- One `super::super::MAX_FIELD_DEPTH` chain in
+  `enrich/field_types.rs` rewritten to use the existing
+  field_context-level import (axis 8). Zero `super::super::`
+  remain in `src/admin/`.
+- Visibility tightening (axes 16/17/18). At `admin/mod.rs`:
+  `csp_nonce` demoted from `pub mod` to `mod` (the `pub use
+  csp_nonce::{...}` re-exports cover the public surface);
+  `context` and `server_builder` demoted to `pub(crate) mod`. At
+  `admin/handlers/mod.rs`: ten of eleven submodules demoted to
+  `pub(crate) mod` (`forms` stays `pub` because it has cross-crate
+  consumers). Stale re-exports dropped: `AdminMeta`, `AuthMeta`,
+  `UploadMeta`, `FieldAdminMeta`, `LocaleTemplateOption`,
+  `NavCollection`, `NavGlobal` from `context/mod.rs` (only
+  internal `schema_doc.rs` referenced the last three, and it now
+  reaches them via deep path); `PaginationParams` /
+  `SearchQuery` re-exports from `handlers/collections/mod.rs`.
+- Genuine dead code deleted (axis 18): `PageMeta::with_breadcrumbs`
+  + its test (handlers use `BasePageContext::with_breadcrumbs`
+  which writes both `self.breadcrumbs` and `self.page.breadcrumbs`
+  — the `PageMeta`-level helper was redundant and never called
+  from production code); `FieldContext::field_type_str` (zero
+  callers); `MfaQuery` struct + `Query<MfaQuery>` extractor in
+  `mfa_page` (collection slug travels through the
+  `crap_mfa_pending` JWT cookie, not via the URL query string —
+  full flow trace verified). `FieldContext::to_value` gated to
+  `#[cfg(test)]` because only test code uses it.
+- Workspace-split prep (axis 25): the only two cross-module
+  imports into `admin` (`api::upload` and `service::upload`
+  pulling `parse_multipart_form` and `extract_join_data_from_form`
+  from `admin::handlers::forms`) are now top-level `crate::admin::Foo`
+  imports via a `pub(crate) use handlers::{...}` re-export at
+  `admin/mod.rs`. Zero `crate::admin::<sub>::*` deep paths from
+  outside `src/admin/`. Promotion stays `pub(crate)` since both
+  callers live in this crate; a future workspace split flips it
+  to `pub`.
+- `src/admin/` audit third pass: improvements not covered by the
+  playbook axes:
+  - **Cookie-name constants**: 16 raw `"crap_session"` /
+    `"crap_session_exp"` / `"crap_mfa_pending"` / `"crap_csrf"` /
+    `"crap_editor_locale"` literals across `auth/session.rs`,
+    `auth/mfa.rs`, `auth_middleware.rs`, `server.rs`,
+    `uploads/serve.rs`, and `shared/locale.rs` hoisted to
+    `pub(in crate::admin) const`s in `auth/session.rs`. A typo at
+    one site can no longer silently break auth — every cookie
+    write and read goes through the same constant.
+  - **`service_error_to_admin_response` + `task_join_error_response`**
+    helpers added to `handlers::shared::response`. The
+    `ServiceError` variant matching that 4 admin handlers
+    (`globals/edit_form`, `collections/items/list`,
+    `collections/item/edit_form`, plus more) duplicated inline
+    now collapses to a one-liner. The 403/500 page rendering and
+    the `error!` log of underlying details live in one place.
+    Mirrors the JSON-returning `service_error_to_response` that
+    `api/upload` already uses; the two are domain-shaped (HTML
+    vs JSON) so they stay separate functions.
+  - **`paths::*` migration completion**: the existing
+    `handlers::shared::paths` helpers covered ~36% of admin URL
+    construction; raw `format!("/admin/...")` and string literals
+    handled the rest. New helpers (`paths::LOGIN`,
+    `paths::COLLECTIONS_ROOT`, `paths::login_with_success(key)`,
+    `paths::collection_item_versions_page(slug, id, page)`,
+    `paths::collection_item_version_restore(slug, id, version_id)`)
+    + ~12 call-site rewrites bring the migration to ~95%. The
+    remaining literals are all axum route definitions in
+    `server.rs` (route patterns, not URL builders) and test
+    fixtures.
+  - **`registry.get_collection` let-else conversion**: 14 sites
+    used `match state.registry.get_collection(&slug) { Some(d) =>
+    d.clone(), None => return X }`. Converted to
+    `let Some(def) = state.registry.get_collection(&slug).cloned()
+    else { return X };` (Rust 1.65+ let-else, idiomatic).
+    4-line block → 3-line block, happy path no longer indented
+    inside a match arm. CLAUDE.md "Prefer early returns over
+    nesting" applied uniformly.
+  - **`AdminState::mcp_server` helper**: the 8-field manual splat
+    in `mcp_handler::mcp_http_handler` (`pool: state.pool.clone()`,
+    `registry: state.registry.clone()`, …) collapsed to
+    `state.mcp_server()`. Mirrors `AdminState::email_context()`
+    from the service/ pass; a future workspace split won't have
+    to re-derive the same plumbing.
+  - **Spawn-blocking body extraction**: 8 `spawn_blocking(move ||
+    { … })` closures with multi-statement bodies (build
+    `ServiceContext`, call service fn, sometimes do follow-up
+    work) extracted to named `*_blocking` functions per CLAUDE.md.
+    Each gets a typed `*BlockingInput` struct bundling the owned
+    captures: `RestoreVersionInput`, `RestoreGlobalVersionInput`,
+    `UndeleteInput`, `UpdateBlockingInput`, `CreateBlockingInput`,
+    `DeleteBlockingInput`, plus the simpler
+    `check_admin_access_blocking`,
+    `check_upload_access_blocking`,
+    `verify_credentials_blocking`,
+    `verify_mfa_blocking`,
+    `run_auth_strategy_blocking`. Closure bodies are now
+    single-fn-call shaped throughout `src/admin/`.
+  - **`admin/mod.rs` architecture sketch**: top-of-module doc
+    expanded from one line to a short architecture map covering
+    the submodule layout, cross-module conventions (cookies,
+    URLs, error response, spawn-blocking), and `AdminState`
+    plumbing. Anchors newcomers without forcing them to
+    reverse-engineer the layout.
+
 - Continued the alpha.8 admin-context typing work into the rest of
   the app: audited every non-admin `serde_json::Value` /
   `HashMap<String, Value>` usage and typed the cases with a

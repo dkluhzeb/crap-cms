@@ -21,15 +21,29 @@ use std::path;
 use crate::{
     admin::{
         AdminState,
+        handlers::auth::SESSION_COOKIE,
         server::{extract_cookie, load_auth_user},
     },
-    core::{AuthUser, auth::validate_token},
-    db::AccessResult,
+    core::{AuthUser, Document, auth::validate_token},
+    db::{AccessResult, DbPool},
+    hooks::HookRunner,
 };
 
 /// Check if a path segment contains traversal characters.
 fn has_path_traversal(segment: &str) -> bool {
     segment.contains("..") || segment.contains('/') || segment.contains('\\')
+}
+
+/// Blocking body for [`check_upload_access`]'s `spawn_blocking` call. Pulls a
+/// pool connection and runs the configured collection-level read access hook.
+fn check_upload_access_blocking(
+    pool: &DbPool,
+    hook_runner: &HookRunner,
+    func_ref: &str,
+    user_doc: Option<&Document>,
+) -> Result<AccessResult, anyhow::Error> {
+    let conn = pool.get()?;
+    hook_runner.check_access(Some(func_ref), user_doc, None, None, &conn)
 }
 
 /// Check collection read access, returning the cache policy to use.
@@ -53,8 +67,7 @@ async fn check_upload_access(
     let hook_runner = state.hook_runner.clone();
 
     let access = task::spawn_blocking(move || {
-        let conn = pool.get()?;
-        hook_runner.check_access(Some(&func_ref), user_doc.as_ref(), None, None, &conn)
+        check_upload_access_blocking(&pool, &hook_runner, &func_ref, user_doc.as_ref())
     })
     .await;
 
@@ -122,7 +135,7 @@ fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<Auth
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if let Some(token) = extract_cookie(cookie_header, "crap_session")
+    if let Some(token) = extract_cookie(cookie_header, SESSION_COOKIE)
         && let Some(user) = auth_from_token(token, state)
     {
         return Some(user);

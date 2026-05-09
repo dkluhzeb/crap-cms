@@ -1,13 +1,29 @@
+//! Bundled inputs for sub-field enrichment functions.
+
 use std::collections::HashMap;
 
-use crate::admin::handlers::field_context::enrich::SubFieldOpts;
+/// Bundled parameters for sub-field enrichment functions (`sub_array`,
+/// `sub_blocks`, `sub_row_collapsible`, `sub_tabs`,
+/// `build_enriched_sub_field_context`) to avoid too many arguments.
+pub struct SubFieldOpts<'a> {
+    pub locale_locked: bool,
+    pub non_default_locale: bool,
+    pub depth: usize,
+    pub errors: &'a HashMap<String, String>,
+}
+
+impl<'a> SubFieldOpts<'a> {
+    pub fn builder(errors: &'a HashMap<String, String>) -> SubFieldOptsBuilder<'a> {
+        SubFieldOptsBuilder::new(errors)
+    }
+}
 
 /// Builder for [`SubFieldOpts`].
 pub struct SubFieldOptsBuilder<'a> {
-    pub(super) locale_locked: bool,
-    pub(super) non_default_locale: bool,
-    pub(super) depth: usize,
-    pub(super) errors: &'a HashMap<String, String>,
+    locale_locked: bool,
+    non_default_locale: bool,
+    depth: usize,
+    errors: &'a HashMap<String, String>,
 }
 
 impl<'a> SubFieldOptsBuilder<'a> {

@@ -9,7 +9,6 @@ use axum::{
 
 use serde_json::{Value, json};
 use tokio::task;
-use tracing::error;
 
 use crate::admin::context::field::{
     BaseFieldData, CheckboxField, ConditionData, FieldContext, TextField, ValidationAttrs,
@@ -26,8 +25,9 @@ use crate::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
             build_locale_template_data, compute_denied_read_fields, enrich_field_contexts,
             extract_doc_status, extract_editor_locale, fetch_version_sidebar_data,
-            flatten_document_values, forbidden, is_non_default_locale, lookup_ref_count, not_found,
-            paths, render_page, server_error, split_sidebar_fields,
+            flatten_document_values, is_non_default_locale, lookup_ref_count, not_found, paths,
+            render_page, service_error_to_admin_response, split_sidebar_fields,
+            task_join_error_response,
         },
     },
     core::{
@@ -148,7 +148,7 @@ fn prepare_edit_fields(
         &EnrichOptions::builder(&HashMap::new())
             .filter_hidden(true)
             .non_default_locale(non_default_locale)
-            .doc_id(id)
+            .doc_id(Some(id))
             .build(),
     );
 
@@ -274,11 +274,8 @@ pub async fn edit_form(
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug));
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return not_found(&state, &format!("Collection '{}' not found", slug));
     };
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
@@ -302,19 +299,14 @@ pub async fn edit_form(
         Ok(Ok(None)) => {
             return not_found(&state, &format!("Document '{}' not found", id));
         }
-        Ok(Err(ServiceError::AccessDenied(_))) => {
-            return forbidden(&state, "You don't have permission to view this item");
-        }
         Ok(Err(e)) => {
-            error!("Document edit query error: {}", e);
-
-            return server_error(&state, "An internal error occurred.");
+            return service_error_to_admin_response(
+                &state,
+                e,
+                "You don't have permission to view this item",
+            );
         }
-        Err(e) => {
-            error!("Document edit task error: {}", e);
-
-            return server_error(&state, "An internal error occurred.");
-        }
+        Err(e) => return task_join_error_response(&state, e),
     };
 
     // Compute read-denied fields to exclude from form rendering.
@@ -362,7 +354,7 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("collections", "/admin/collections"),
+        Breadcrumb::link("collections", paths::COLLECTIONS_ROOT),
         Breadcrumb::link(def.display_name(), paths::collection(&slug)),
         Breadcrumb::current(doc_title.clone()),
     ];

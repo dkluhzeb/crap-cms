@@ -14,9 +14,39 @@ use crate::{
         AdminState,
         handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
-    core::auth::AuthUser,
+    core::{
+        CollectionDefinition, Document, auth::AuthUser, cache::SharedCache,
+        event::SharedEventTransport,
+    },
+    db::DbPool,
+    hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},
 };
+
+/// Owned inputs for the spawn-blocking undelete body.
+struct UndeleteInput {
+    pool: DbPool,
+    runner: HookRunner,
+    slug: String,
+    def: CollectionDefinition,
+    user_doc: Option<Document>,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    id: String,
+}
+
+/// Build the service context and run the undelete service call.
+fn undelete_document_blocking(input: UndeleteInput) -> Result<Document, ServiceError> {
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(input.user_doc.as_ref())
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    service::undelete_document(&ctx, &input.id)
+}
 
 /// POST /admin/collections/{slug}/{id}/undelete — undelete a soft-deleted item
 pub async fn undelete_action(
@@ -24,36 +54,26 @@ pub async fn undelete_action(
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => return htmx_redirect("/admin/collections"),
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return htmx_redirect(paths::COLLECTIONS_ROOT);
     };
 
     if !def.soft_delete {
         return htmx_redirect(&paths::collection(&slug));
     }
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let slug_owned = slug.clone();
-    let id_owned = id.clone();
-    let def_owned = def.clone();
-    let user_doc = get_user_doc(&auth_user).cloned();
-    let event_transport = state.event_transport.clone();
-    let cache = state.cache.clone();
+    let input = UndeleteInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        slug: slug.clone(),
+        def,
+        user_doc: get_user_doc(&auth_user).cloned(),
+        event_transport: state.event_transport.clone(),
+        cache: state.cache.clone(),
+        id: id.clone(),
+    };
 
-    let result = task::spawn_blocking(move || {
-        let ctx = ServiceContext::collection(&slug_owned, &def_owned)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc.as_ref())
-            .event_transport(event_transport)
-            .cache(cache)
-            .build();
-
-        service::undelete_document(&ctx, &id_owned)
-    })
-    .await;
+    let result = task::spawn_blocking(move || undelete_document_blocking(input)).await;
 
     match result {
         Ok(Ok(_doc)) => {

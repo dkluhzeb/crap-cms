@@ -4,6 +4,18 @@
 //! handlers. Helps with grep-ability and prevents subtle path drift between
 //! call sites that reference the same route.
 
+/// `/admin/login` — login page.
+pub const LOGIN: &str = "/admin/login";
+
+/// `/admin/collections` — collection-list landing page.
+pub const COLLECTIONS_ROOT: &str = "/admin/collections";
+
+/// `/admin/login?success={key}` — login with a post-flow success message.
+/// `key` is a translation key like `"success_email_verified"`.
+pub fn login_with_success(key: &str) -> String {
+    format!("{LOGIN}?success={key}")
+}
+
 /// `/admin/collections/{slug}` — collection list.
 pub fn collection(slug: &str) -> String {
     format!("/admin/collections/{slug}")
@@ -27,6 +39,16 @@ pub fn collection_item(slug: &str, id: &str) -> String {
 /// `/admin/collections/{slug}/{id}/versions` — version list for a document.
 pub fn collection_item_versions(slug: &str, id: &str) -> String {
     format!("/admin/collections/{slug}/{id}/versions")
+}
+
+/// `/admin/collections/{slug}/{id}/versions?page={page}` — paginated version list.
+pub fn collection_item_versions_page(slug: &str, id: &str, page: u64) -> String {
+    format!("/admin/collections/{slug}/{id}/versions?page={page}")
+}
+
+/// `/admin/collections/{slug}/{id}/versions/{version_id}/restore` — version restore endpoint.
+pub fn collection_item_version_restore(slug: &str, id: &str, version_id: &str) -> String {
+    format!("/admin/collections/{slug}/{id}/versions/{version_id}/restore")
 }
 
 /// `/admin/globals/{slug}` — edit form for a global.
@@ -102,6 +124,28 @@ mod tests {
     #[test]
     fn mfa_path_carries_collection() {
         assert_eq!(mfa_with_collection("users"), "/admin/mfa?collection=users");
+    }
+
+    #[test]
+    fn login_constants_and_success() {
+        assert_eq!(LOGIN, "/admin/login");
+        assert_eq!(COLLECTIONS_ROOT, "/admin/collections");
+        assert_eq!(
+            login_with_success("success_email_verified"),
+            "/admin/login?success=success_email_verified"
+        );
+    }
+
+    #[test]
+    fn collection_version_paths() {
+        assert_eq!(
+            collection_item_versions_page("posts", "abc", 2),
+            "/admin/collections/posts/abc/versions?page=2"
+        );
+        assert_eq!(
+            collection_item_version_restore("posts", "abc", "v1"),
+            "/admin/collections/posts/abc/versions/v1/restore"
+        );
     }
 
     #[test]
