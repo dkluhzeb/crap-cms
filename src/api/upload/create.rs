@@ -9,10 +9,15 @@ use axum::{
 };
 use tokio::task;
 
+use std::collections::HashMap;
+
+use crate::core::upload::SharedStorage;
 use crate::{
     admin::AdminState,
-    core::event::EventOperation,
-    service::{self, upload::UploadCreateResult},
+    core::{CollectionDefinition, Document, event::EventOperation, upload::UploadedFile},
+    db::DbPool,
+    hooks::HookRunner,
+    service::{self, ServiceError, upload::UploadCreateResult},
 };
 
 use super::helpers::{
@@ -20,6 +25,39 @@ use super::helpers::{
     publish_upload_event, service_error_to_response,
 };
 use crate::admin::parse_multipart_form;
+
+/// Owned bundle for the upload-create spawn-blocking body.
+struct UploadCreateBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    storage: SharedStorage,
+    slug: String,
+    def: CollectionDefinition,
+    user_doc: Option<Document>,
+    file: UploadedFile,
+    form_data: HashMap<String, String>,
+    ui_locale: Option<String>,
+    max_file_size: u64,
+}
+
+fn create_upload_blocking(
+    input: UploadCreateBlockingInput,
+) -> Result<UploadCreateResult, ServiceError> {
+    let ctx = service::ServiceContext::collection(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(input.user_doc.as_ref())
+        .build();
+
+    service::upload::create_upload(
+        &ctx,
+        &input.storage,
+        input.file,
+        input.form_data,
+        input.ui_locale,
+        input.max_file_size,
+    )
+}
 
 #[cfg(not(tarpaulin_include))]
 pub(super) async fn create_upload(
@@ -33,14 +71,11 @@ pub(super) async fn create_upload(
         Err(e) => return *e,
     };
 
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                &format!("Collection '{}' not found", slug),
-            );
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            &format!("Collection '{}' not found", slug),
+        );
     };
 
     if !def.is_upload_collection() {
@@ -82,24 +117,20 @@ pub(super) async fn create_upload(
         }
     };
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let storage = state.storage.clone();
-    let slug_owned = slug.clone();
-    let def_owned = def.clone();
-    let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-    let max_file_size = state.config.upload.max_file_size;
+    let input = UploadCreateBlockingInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        storage: state.storage.clone(),
+        slug: slug.clone(),
+        def: def.clone(),
+        user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),
+        file,
+        form_data,
+        ui_locale: auth_user.as_ref().map(|au| au.ui_locale.clone()),
+        max_file_size: state.config.upload.max_file_size,
+    };
 
-    let result = task::spawn_blocking(move || {
-        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc_owned.as_ref())
-            .build();
-        service::upload::create_upload(&ctx, &storage, file, form_data, ui_locale, max_file_size)
-    })
-    .await;
+    let result = task::spawn_blocking(move || create_upload_blocking(input)).await;
 
     match result {
         Ok(Ok(UploadCreateResult { doc, .. })) => {

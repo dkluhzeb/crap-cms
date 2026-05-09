@@ -1,13 +1,80 @@
 //! Delete handler — delete a document by ID (soft or hard).
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
+    config::LocaleConfig,
+    core::{
+        CollectionDefinition, Registry,
+        auth::SharedTokenProvider,
+        cache::SharedCache,
+        event::{SharedEventTransport, SharedInvalidationTransport},
+        upload::SharedStorage,
+    },
+    db::DbPool,
+    hooks::HookRunner,
     service::{self, ServiceError},
 };
+
+/// Owned bundle for the `Delete` spawn-blocking body.
+struct DeleteBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    db_kind: String,
+    def: CollectionDefinition,
+    collection: String,
+    id: String,
+    storage: SharedStorage,
+    locale_config: LocaleConfig,
+    invalidation_transport: SharedInvalidationTransport,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    token: Option<String>,
+}
+
+fn delete_blocking(input: DeleteBlockingInput) -> Result<(), Status> {
+    let conn = input
+        .pool
+        .get()
+        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+
+    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+
+    // Service-layer delete publishes the invalidation signal on
+    // hard-delete of auth collections when a transport is attached.
+    let ctx = service::ServiceContext::collection(&input.collection, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(user_doc.as_ref())
+        .invalidation_transport(Some(input.invalidation_transport))
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    service::delete_document(
+        &ctx,
+        &input.id,
+        Some(&*input.storage),
+        Some(&input.locale_config),
+    )
+    .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
+
+    Ok(())
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -31,48 +98,27 @@ impl ContentService {
             def.soft_delete = false;
         }
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let def_clone = def.clone();
-        let collection = req.collection.clone();
-        let id = req.id.clone();
-        let storage = self.storage.clone();
-        let locale_config = self.locale_config.clone();
-        let invalidation_transport = self.invalidation_transport.clone();
-        let event_transport = self.event_transport.clone();
-        let cache = Some(self.cache.clone());
+        let input = DeleteBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            db_kind: self.db_kind.clone(),
+            def,
+            collection: req.collection.clone(),
+            id: req.id.clone(),
+            storage: self.storage.clone(),
+            locale_config: self.locale_config.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
+            event_transport: self.event_transport.clone(),
+            cache: Some(self.cache.clone()),
+            token,
+        };
 
-        task::spawn_blocking(move || -> Result<(), Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-
-            // Service-layer delete publishes the invalidation signal on
-            // hard-delete of auth collections when a transport is attached.
-            let ctx = service::ServiceContext::collection(&collection, &def_clone)
-                .pool(&pool)
-                .runner(&runner)
-                .user(user_doc.as_ref())
-                .invalidation_transport(Some(invalidation_transport))
-                .event_transport(event_transport)
-                .cache(cache)
-                .build();
-            service::delete_document(&ctx, &id, Some(&*storage), Some(&locale_config))
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            Ok(())
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        task::spawn_blocking(move || delete_blocking(input))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::DeleteResponse {
             success: true,

@@ -119,7 +119,6 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner.clone())
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(

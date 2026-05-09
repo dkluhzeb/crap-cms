@@ -527,7 +527,6 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .pool(pool.clone())
                     .registry(registry_snapshot.clone())
                     .hook_runner(hook_runner.clone())
-                    .jwt_secret(jwt_secret.clone())
                     .config(cfg.clone())
                     .config_dir(config_dir.clone())
                     .event_transport(event_transport.clone())
@@ -574,10 +573,8 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         }
     };
 
-    try_join!(admin_handle, grpc_handle, scheduler_handle).map_err(|e| {
-        error!("Server error: {}", e);
-        e
-    })?;
+    try_join!(admin_handle, grpc_handle, scheduler_handle)
+        .inspect_err(|e| error!("Server error: {}", e))?;
 
     let cleanup_errors = shutdown_cleanup(&config_dir, &pool);
     let exit_code = compute_shutdown_exit_code(&cleanup_errors);

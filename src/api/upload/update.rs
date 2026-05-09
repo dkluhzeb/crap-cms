@@ -9,11 +9,58 @@ use axum::{
 };
 use tokio::task;
 
+use std::collections::HashMap;
+
 use crate::{
     admin::AdminState,
-    core::event::EventOperation,
-    service::{self, upload::UploadUpdateResult},
+    config::LocaleConfig,
+    core::{
+        CollectionDefinition, Document, event::EventOperation, upload::SharedStorage,
+        upload::UploadedFile,
+    },
+    db::DbPool,
+    hooks::HookRunner,
+    service::{self, ServiceError, upload::UploadUpdateResult},
 };
+
+/// Owned bundle for the upload-update spawn-blocking body.
+struct UploadUpdateBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    storage: SharedStorage,
+    slug: String,
+    id: String,
+    def: CollectionDefinition,
+    user_doc: Option<Document>,
+    file: Option<UploadedFile>,
+    form_data: HashMap<String, String>,
+    ui_locale: Option<String>,
+    locale_config: LocaleConfig,
+    max_file_size: u64,
+}
+
+fn update_upload_blocking(
+    input: UploadUpdateBlockingInput,
+) -> Result<UploadUpdateResult, ServiceError> {
+    let ctx = service::ServiceContext::collection(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(input.user_doc.as_ref())
+        .build();
+
+    service::upload::update_upload(
+        &ctx,
+        service::upload::UpdateUploadInput {
+            id: &input.id,
+            storage: &input.storage,
+            file: input.file,
+            form_data: input.form_data,
+            ui_locale: input.ui_locale,
+            locale_config: &input.locale_config,
+            upload_max_file_size: input.max_file_size,
+        },
+    )
+}
 
 use super::helpers::{
     DocumentBody, check_upload_access, extract_bearer_user, json_error, json_ok,
@@ -33,14 +80,11 @@ pub(super) async fn update_upload(
         Err(e) => return *e,
     };
 
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                &format!("Collection '{}' not found", slug),
-            );
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            &format!("Collection '{}' not found", slug),
+        );
     };
 
     if !def.is_upload_collection() {
@@ -72,37 +116,22 @@ pub(super) async fn update_upload(
         }
     };
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let storage = state.storage.clone();
-    let slug_owned = slug.clone();
-    let id_owned = id.clone();
-    let def_owned = def.clone();
-    let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-    let locale_config = state.config.locale.clone();
-    let max_file_size = state.config.upload.max_file_size;
+    let input = UploadUpdateBlockingInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        storage: state.storage.clone(),
+        slug: slug.clone(),
+        id: id.clone(),
+        def: def.clone(),
+        user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),
+        file,
+        form_data,
+        ui_locale: auth_user.as_ref().map(|au| au.ui_locale.clone()),
+        locale_config: state.config.locale.clone(),
+        max_file_size: state.config.upload.max_file_size,
+    };
 
-    let result = task::spawn_blocking(move || {
-        let ctx = service::ServiceContext::collection(&slug_owned, &def_owned)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc_owned.as_ref())
-            .build();
-        service::upload::update_upload(
-            &ctx,
-            service::upload::UpdateUploadInput {
-                id: &id_owned,
-                storage: &storage,
-                file,
-                form_data,
-                ui_locale,
-                locale_config: &locale_config,
-                upload_max_file_size: max_file_size,
-            },
-        )
-    })
-    .await;
+    let result = task::spawn_blocking(move || update_upload_blocking(input)).await;
 
     match result {
         Ok(Ok(UploadUpdateResult { doc, .. })) => {

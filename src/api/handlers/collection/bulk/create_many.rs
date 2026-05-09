@@ -1,5 +1,7 @@
 //! Bulk CreateMany RPC handler.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -12,8 +14,77 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
-    service::{self, CreateManyItem, CreateManyOptions, ServiceContext, ServiceError},
+    core::{
+        CollectionDefinition, Registry, auth::SharedTokenProvider, cache::SharedCache,
+        event::SharedEventTransport,
+    },
+    db::DbPool,
+    hooks::HookRunner,
+    service::{
+        self, CreateManyItem, CreateManyOptions, EmailContext, ServiceContext, ServiceError,
+    },
 };
+
+/// Owned bundle for the `CreateMany` spawn-blocking body.
+struct CreateManyBlockingInput {
+    pool: DbPool,
+    hook_runner: HookRunner,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    db_kind: String,
+    collection: String,
+    def: CollectionDefinition,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    email_ctx: Option<EmailContext>,
+    token: Option<String>,
+    items: Vec<CreateManyItem>,
+    run_hooks: bool,
+    draft: bool,
+}
+
+fn create_many_blocking(
+    input: CreateManyBlockingInput,
+) -> Result<(i64, Vec<content::Document>), Status> {
+    let conn = input
+        .pool
+        .get()
+        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+
+    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .pool(&input.pool)
+        .runner(&input.hook_runner)
+        .user(user_doc)
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .email_ctx(input.email_ctx)
+        .build();
+
+    let opts = CreateManyOptions {
+        run_hooks: input.run_hooks,
+        draft: input.draft,
+    };
+
+    let result = service::create_many(&ctx, input.items, &opts)
+        .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
+
+    let proto_docs: Vec<content::Document> = result
+        .documents
+        .iter()
+        .map(|doc| document_to_proto(doc, &input.collection))
+        .collect();
+
+    Ok((result.created, proto_docs))
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -36,55 +107,27 @@ impl ContentService {
             })
             .collect();
 
-        let run_hooks = req.hooks.unwrap_or(true);
-        let draft = req.draft.unwrap_or(false);
+        let input = CreateManyBlockingInput {
+            pool: self.pool.clone(),
+            hook_runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            db_kind: self.db_kind.clone(),
+            collection: req.collection.clone(),
+            def,
+            event_transport: self.event_transport.clone(),
+            cache: Some(self.cache.clone()),
+            email_ctx: Some(self.email_context()),
+            token,
+            items,
+            run_hooks: req.hooks.unwrap_or(true),
+            draft: req.draft.unwrap_or(false),
+        };
 
-        let pool = self.pool.clone();
-        let hook_runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let collection = req.collection.clone();
-        let def_owned = def;
-        let event_transport = self.event_transport.clone();
-        let cache = Some(self.cache.clone());
-        let email_ctx = Some(self.email_context());
-
-        let result = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-
-            let ctx = ServiceContext::collection(&collection, &def_owned)
-                .pool(&pool)
-                .runner(&hook_runner)
-                .user(user_doc)
-                .event_transport(event_transport)
-                .cache(cache)
-                .email_ctx(email_ctx)
-                .build();
-
-            let opts = CreateManyOptions { run_hooks, draft };
-
-            let result = service::create_many(&ctx, items, &opts)
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            let proto_docs: Vec<content::Document> = result
-                .documents
-                .iter()
-                .map(|doc| document_to_proto(doc, &collection))
-                .collect();
-
-            Ok((result.created, proto_docs))
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let result = task::spawn_blocking(move || create_many_blocking(input))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::CreateManyResponse {
             created: result.0,

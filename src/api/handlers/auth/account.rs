@@ -1,11 +1,15 @@
 //! Account management handlers: lock, unlock, verify, unverify.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
+    core::{Registry, auth::SharedTokenProvider, event::SharedInvalidationTransport},
+    db::DbPool,
     service::{self, ServiceContext, ServiceError},
 };
 
@@ -26,8 +30,75 @@ fn validate_auth_collection(service: &ContentService, collection: &str) -> Resul
     Ok(())
 }
 
+/// Owned bundle for an account-action spawn-blocking body.
+///
+/// `invalidation_transport` is wired only for the `lock_user` flow (which
+/// publishes a user-revocation signal so live subscribers tear down the
+/// session). Other actions ignore it.
+struct AccountActionBlockingInput {
+    pool: DbPool,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    db_kind: String,
+    collection: String,
+    id: String,
+    token: Option<String>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+}
+
+/// Resolve auth, then call one of `lock_user`/`unlock_user`/`mark_verified`/
+/// `mark_unverified`. The action is taken as a fn pointer so the closure
+/// passed to `spawn_blocking` is a single fn call.
+fn account_action_blocking(
+    input: AccountActionBlockingInput,
+    action: fn(&ServiceContext, &str) -> Result<(), ServiceError>,
+) -> Result<(), Status> {
+    let conn = input
+        .pool
+        .get()
+        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+
+    if auth_user.is_none() {
+        return Err(Status::unauthenticated("Authentication required"));
+    }
+
+    let ctx = ServiceContext::slug_only(&input.collection)
+        .conn(&conn)
+        .invalidation_transport(input.invalidation_transport)
+        .build();
+
+    action(&ctx, &input.id).map_err(|e| Status::from(e.reclassify(&input.db_kind)))
+}
+
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
+    /// Build the spawn-blocking input bundle from the request, with optional
+    /// invalidation transport (used by the lock flow only).
+    fn account_action_input(
+        &self,
+        token: Option<String>,
+        req: &content::AccountActionRequest,
+        with_invalidation: bool,
+    ) -> AccountActionBlockingInput {
+        AccountActionBlockingInput {
+            pool: self.pool.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            db_kind: self.db_kind.clone(),
+            collection: req.collection.clone(),
+            id: req.id.clone(),
+            token,
+            invalidation_transport: with_invalidation.then(|| self.invalidation_transport.clone()),
+        }
+    }
+
     /// Lock a user account, preventing login.
     pub(in crate::api::handlers) async fn lock_account_impl(
         &self,
@@ -38,40 +109,14 @@ impl ContentService {
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let collection = req.collection.clone();
-        let id = req.id.clone();
-        let invalidation_transport = self.invalidation_transport.clone();
+        // Service-layer lock_user publishes the invalidation signal
+        // when a transport is attached to the context.
+        let input = self.account_action_input(token, &req, true);
 
-        task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            if auth_user.is_none() {
-                return Err(Status::unauthenticated("Authentication required"));
-            }
-
-            // Service-layer lock_user publishes the invalidation signal
-            // when a transport is attached to the context.
-            let ctx = ServiceContext::slug_only(&collection)
-                .conn(&conn)
-                .invalidation_transport(Some(invalidation_transport))
-                .build();
-            service::auth::lock_user(&ctx, &id)
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            Ok(())
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        task::spawn_blocking(move || account_action_blocking(input, service::auth::lock_user))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::AccountActionResponse {
             success: true,
@@ -88,34 +133,12 @@ impl ContentService {
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let collection = req.collection.clone();
-        let id = req.id.clone();
+        let input = self.account_action_input(token, &req, false);
 
-        task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            if auth_user.is_none() {
-                return Err(Status::unauthenticated("Authentication required"));
-            }
-
-            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
-            service::auth::unlock_user(&ctx, &id)
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            Ok(())
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        task::spawn_blocking(move || account_action_blocking(input, service::auth::unlock_user))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::AccountActionResponse {
             success: true,
@@ -132,34 +155,12 @@ impl ContentService {
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let collection = req.collection.clone();
-        let id = req.id.clone();
+        let input = self.account_action_input(token, &req, false);
 
-        task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            if auth_user.is_none() {
-                return Err(Status::unauthenticated("Authentication required"));
-            }
-
-            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
-            service::auth::mark_verified(&ctx, &id)
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            Ok(())
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        task::spawn_blocking(move || account_action_blocking(input, service::auth::mark_verified))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::AccountActionResponse {
             success: true,
@@ -176,30 +177,10 @@ impl ContentService {
         let req = request.into_inner();
         validate_auth_collection(self, &req.collection)?;
 
-        let pool = self.pool.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let collection = req.collection.clone();
-        let id = req.id.clone();
+        let input = self.account_action_input(token, &req, false);
 
-        task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            if auth_user.is_none() {
-                return Err(Status::unauthenticated("Authentication required"));
-            }
-
-            let ctx = ServiceContext::slug_only(&collection).conn(&conn).build();
-            service::auth::mark_unverified(&ctx, &id)
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            Ok(())
+        task::spawn_blocking(move || {
+            account_action_blocking(input, service::auth::mark_unverified)
         })
         .await
         .inspect_err(|e| error!("Task error: {}", e))

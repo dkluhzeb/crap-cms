@@ -14,11 +14,10 @@ use crate::{
         content::{FILE_DESCRIPTOR_SET, content_api_server::ContentApiServer},
         handlers::{ContentService, ContentServiceDeps},
         rate_limit::GrpcRateLimitLayer,
-        server_builder::GrpcStartParamsBuilder,
     },
     config::CrapConfig,
     core::{
-        JwtSecret, Registry,
+        Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         email::EmailRenderer,
@@ -35,7 +34,6 @@ pub struct GrpcStartParams {
     pub pool: DbPool,
     pub registry: Arc<Registry>,
     pub hook_runner: HookRunner,
-    pub jwt_secret: JwtSecret,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
     pub event_transport: Option<SharedEventTransport>,
@@ -63,6 +61,184 @@ impl GrpcStartParams {
     }
 }
 
+/// Builder for [`GrpcStartParams`]. Created via [`GrpcStartParams::builder`].
+pub struct GrpcStartParamsBuilder {
+    pool: Option<DbPool>,
+    registry: Option<Arc<Registry>>,
+    hook_runner: Option<HookRunner>,
+    config: Option<CrapConfig>,
+    config_dir: Option<PathBuf>,
+    event_transport: Option<SharedEventTransport>,
+    login_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_login_limiter: Option<Arc<LoginRateLimiter>>,
+    forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    ip_forgot_password_limiter: Option<Arc<LoginRateLimiter>>,
+    storage: Option<SharedStorage>,
+    cache: Option<SharedCache>,
+    token_provider: Option<SharedTokenProvider>,
+    password_provider: Option<SharedPasswordProvider>,
+    rate_limit_backend: Option<SharedRateLimitBackend>,
+    invalidation_transport: Option<SharedInvalidationTransport>,
+    populate_singleflight: Option<SharedPopulateSingleflight>,
+}
+
+impl GrpcStartParamsBuilder {
+    pub(crate) fn new() -> Self {
+        Self {
+            pool: None,
+            registry: None,
+            hook_runner: None,
+            config: None,
+            config_dir: None,
+            event_transport: None,
+            login_limiter: None,
+            ip_login_limiter: None,
+            forgot_password_limiter: None,
+            ip_forgot_password_limiter: None,
+            storage: None,
+            cache: None,
+            token_provider: None,
+            password_provider: None,
+            rate_limit_backend: None,
+            invalidation_transport: None,
+            populate_singleflight: None,
+        }
+    }
+
+    pub fn pool(mut self, pool: DbPool) -> Self {
+        self.pool = Some(pool);
+
+        self
+    }
+
+    pub fn registry(mut self, registry: Arc<Registry>) -> Self {
+        self.registry = Some(registry);
+
+        self
+    }
+
+    pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
+        self.hook_runner = Some(hook_runner);
+
+        self
+    }
+
+    pub fn config(mut self, config: CrapConfig) -> Self {
+        self.config = Some(config);
+
+        self
+    }
+
+    pub fn config_dir(mut self, config_dir: PathBuf) -> Self {
+        self.config_dir = Some(config_dir);
+
+        self
+    }
+
+    pub fn event_transport(mut self, transport: Option<SharedEventTransport>) -> Self {
+        self.event_transport = transport;
+
+        self
+    }
+
+    pub fn login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.login_limiter = Some(limiter);
+
+        self
+    }
+
+    pub fn ip_login_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_login_limiter = Some(limiter);
+
+        self
+    }
+
+    pub fn forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.forgot_password_limiter = Some(limiter);
+
+        self
+    }
+
+    pub fn ip_forgot_password_limiter(mut self, limiter: Arc<LoginRateLimiter>) -> Self {
+        self.ip_forgot_password_limiter = Some(limiter);
+
+        self
+    }
+
+    pub fn storage(mut self, storage: SharedStorage) -> Self {
+        self.storage = Some(storage);
+
+        self
+    }
+
+    pub fn cache(mut self, cache: SharedCache) -> Self {
+        self.cache = Some(cache);
+
+        self
+    }
+
+    pub fn token_provider(mut self, token_provider: SharedTokenProvider) -> Self {
+        self.token_provider = Some(token_provider);
+
+        self
+    }
+
+    pub fn password_provider(mut self, password_provider: SharedPasswordProvider) -> Self {
+        self.password_provider = Some(password_provider);
+
+        self
+    }
+
+    pub fn rate_limit_backend(mut self, backend: SharedRateLimitBackend) -> Self {
+        self.rate_limit_backend = Some(backend);
+
+        self
+    }
+
+    pub fn invalidation_transport(mut self, transport: SharedInvalidationTransport) -> Self {
+        self.invalidation_transport = Some(transport);
+
+        self
+    }
+
+    /// Process-wide populate singleflight shared with the HookRunner.
+    pub fn populate_singleflight(mut self, sf: SharedPopulateSingleflight) -> Self {
+        self.populate_singleflight = Some(sf);
+
+        self
+    }
+
+    pub fn build(self) -> GrpcStartParams {
+        GrpcStartParams {
+            pool: self.pool.expect("pool is required"),
+            registry: self.registry.expect("registry is required"),
+            hook_runner: self.hook_runner.expect("hook_runner is required"),
+            config: self.config.expect("config is required"),
+            config_dir: self.config_dir.expect("config_dir is required"),
+            event_transport: self.event_transport,
+            login_limiter: self.login_limiter.expect("login_limiter is required"),
+            ip_login_limiter: self.ip_login_limiter.expect("ip_login_limiter is required"),
+            forgot_password_limiter: self
+                .forgot_password_limiter
+                .expect("forgot_password_limiter is required"),
+            ip_forgot_password_limiter: self
+                .ip_forgot_password_limiter
+                .expect("ip_forgot_password_limiter is required"),
+            storage: self.storage.expect("storage is required"),
+            cache: self.cache.expect("cache is required"),
+            token_provider: self.token_provider.expect("token_provider is required"),
+            password_provider: self
+                .password_provider
+                .expect("password_provider is required"),
+            rate_limit_backend: self
+                .rate_limit_backend
+                .expect("rate_limit_backend is required"),
+            invalidation_transport: self.invalidation_transport,
+            populate_singleflight: self.populate_singleflight,
+        }
+    }
+}
+
 /// Start the gRPC server. Reflection is enabled by default but can be
 /// disabled via `config.server.grpc_reflection`.
 #[cfg(not(tarpaulin_include))]
@@ -83,7 +259,6 @@ pub async fn start(addr: &str, params: GrpcStartParams, shutdown: CancellationTo
         .pool(params.pool)
         .registry(params.registry)
         .hook_runner(params.hook_runner)
-        .jwt_secret(params.jwt_secret)
         .config(params.config)
         .config_dir(params.config_dir)
         .email_renderer(email_renderer)

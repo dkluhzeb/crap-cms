@@ -1,12 +1,9 @@
 //! gRPC API server (Tonic) implementing the ContentAPI service.
 
 pub mod handlers;
-pub mod rate_limit;
+pub(crate) mod rate_limit;
 pub mod server;
-pub mod server_builder;
 pub mod upload;
-
-pub use server_builder::GrpcStartParamsBuilder;
 
 /// Generated gRPC content service types.
 pub mod content {

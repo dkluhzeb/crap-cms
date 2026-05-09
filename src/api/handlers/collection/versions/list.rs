@@ -1,5 +1,7 @@
 //! ListVersions handler — list version history for a document.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -7,8 +9,56 @@ use tracing::error;
 use crate::{
     api::handlers::convert::pagination_result_to_proto,
     api::{content, handlers::ContentService},
-    service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
+    core::{CollectionDefinition, Registry, auth::SharedTokenProvider, document::VersionSnapshot},
+    db::DbPool,
+    hooks::HookRunner,
+    service::{ListVersionsInput, PaginatedResult, RunnerReadHooks, ServiceContext, list_versions},
 };
+
+/// Owned bundle for the `ListVersions` spawn-blocking body.
+struct ListVersionsBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    collection: String,
+    id: String,
+    limit: Option<i64>,
+    def: CollectionDefinition,
+    token: Option<String>,
+}
+
+fn list_versions_blocking(
+    input: ListVersionsBlockingInput,
+) -> Result<PaginatedResult<VersionSnapshot>, Status> {
+    let conn = input
+        .pool
+        .get()
+        .inspect_err(|e| error!("ListVersions pool error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+
+    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+    let hooks = RunnerReadHooks::new(&input.runner, &conn);
+
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .conn(&conn)
+        .read_hooks(&hooks)
+        .user(user_doc)
+        .build();
+
+    let list_input = ListVersionsInput::builder(&input.id)
+        .limit(input.limit)
+        .build();
+
+    list_versions(&ctx, &list_input).map_err(Status::from)
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -29,41 +79,22 @@ impl ContentService {
             )));
         }
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let collection = req.collection.clone();
-        let id = req.id.clone();
-        let limit = req.limit;
+        let input = ListVersionsBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            collection: req.collection.clone(),
+            id: req.id.clone(),
+            limit: req.limit,
+            def,
+            token,
+        };
 
-        let result = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool.get().map_err(|e| {
-                error!("ListVersions pool error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let hooks = RunnerReadHooks::new(&runner, &conn);
-
-            let ctx = ServiceContext::collection(&collection, &def)
-                .conn(&conn)
-                .read_hooks(&hooks)
-                .user(user_doc)
-                .build();
-
-            let input = ListVersionsInput::builder(&id).limit(limit).build();
-
-            let result = list_versions(&ctx, &input).map_err(Status::from)?;
-
-            Ok(result)
-        })
-        .await
-        .inspect_err(|e| error!("ListVersions task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let result = task::spawn_blocking(move || list_versions_blocking(input))
+            .await
+            .inspect_err(|e| error!("ListVersions task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         let proto_versions: Vec<content::VersionInfo> = result
             .docs

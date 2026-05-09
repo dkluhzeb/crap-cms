@@ -1,12 +1,12 @@
-//! Builder for [`ContentServiceDeps`].
+//! [`ContentServiceDeps`] — the dependency bundle handed to
+//! [`ContentService::new`](super::ContentService::new) — and its builder.
 
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    api::handlers::ContentServiceDeps,
     config::CrapConfig,
     core::{
-        JwtSecret, Registry,
+        Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider},
         cache::SharedCache,
         email::EmailRenderer,
@@ -18,12 +18,43 @@ use crate::{
     hooks::HookRunner,
 };
 
+/// Dependencies for constructing a `ContentService`.
+pub struct ContentServiceDeps {
+    pub pool: DbPool,
+    pub registry: Arc<Registry>,
+    pub hook_runner: HookRunner,
+    pub config: CrapConfig,
+    pub config_dir: PathBuf,
+    pub email_renderer: Arc<EmailRenderer>,
+    pub event_transport: Option<SharedEventTransport>,
+    pub login_limiter: Arc<LoginRateLimiter>,
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
+    pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub storage: SharedStorage,
+    pub cache: SharedCache,
+    pub token_provider: SharedTokenProvider,
+    pub password_provider: SharedPasswordProvider,
+    /// Optional: shared invalidation transport. When `None`, a fresh
+    /// in-process one is created internally.
+    pub invalidation_transport: Option<SharedInvalidationTransport>,
+    /// Optional: shared populate singleflight. When `None`, a fresh
+    /// process-wide one is created internally for this service.
+    pub populate_singleflight: Option<SharedPopulateSingleflight>,
+}
+
+impl ContentServiceDeps {
+    /// Create a builder for `ContentServiceDeps`.
+    pub fn builder() -> ContentServiceDepsBuilder {
+        ContentServiceDepsBuilder::new()
+    }
+}
+
 /// Builder for [`ContentServiceDeps`]. Created via [`ContentServiceDeps::builder`].
 pub struct ContentServiceDepsBuilder {
     pool: Option<DbPool>,
     registry: Option<Arc<Registry>>,
     hook_runner: Option<HookRunner>,
-    jwt_secret: Option<JwtSecret>,
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
     email_renderer: Option<Arc<EmailRenderer>>,
@@ -46,7 +77,6 @@ impl ContentServiceDepsBuilder {
             pool: None,
             registry: None,
             hook_runner: None,
-            jwt_secret: None,
             config: None,
             config_dir: None,
             email_renderer: None,
@@ -78,12 +108,6 @@ impl ContentServiceDepsBuilder {
 
     pub fn hook_runner(mut self, hook_runner: HookRunner) -> Self {
         self.hook_runner = Some(hook_runner);
-
-        self
-    }
-
-    pub fn jwt_secret(mut self, jwt_secret: impl Into<JwtSecret>) -> Self {
-        self.jwt_secret = Some(jwt_secret.into());
 
         self
     }
@@ -183,7 +207,6 @@ impl ContentServiceDepsBuilder {
             pool: self.pool.expect("pool is required"),
             registry: self.registry.expect("registry is required"),
             hook_runner: self.hook_runner.expect("hook_runner is required"),
-            jwt_secret: self.jwt_secret.expect("jwt_secret is required"),
             config: self.config.expect("config is required"),
             config_dir: self.config_dir.expect("config_dir is required"),
             email_renderer: self.email_renderer.expect("email_renderer is required"),

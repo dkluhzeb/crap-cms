@@ -1,10 +1,37 @@
 //! ListJobs handler — list all defined jobs.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::api::{content, handlers::ContentService};
+use crate::{
+    api::{content, handlers::ContentService},
+    core::{Registry, auth::SharedTokenProvider},
+    db::DbPool,
+};
+
+/// Pull a connection, resolve the auth user, and reject anonymous callers.
+fn list_jobs_auth_check_blocking(
+    pool: &DbPool,
+    token_provider: &SharedTokenProvider,
+    registry: &Arc<Registry>,
+    token: Option<String>,
+) -> Result<(), Status> {
+    let conn = pool
+        .get()
+        .inspect_err(|e| error!("ListJobs pool error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let auth_user = ContentService::resolve_auth_user(token, &**token_provider, registry, &conn)?;
+
+    if auth_user.is_none() {
+        return Err(Status::unauthenticated("Authentication required"));
+    }
+
+    Ok(())
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -21,19 +48,7 @@ impl ContentService {
         let registry = self.registry.clone();
 
         task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| {
-                error!("ListJobs pool error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            if auth_user.is_none() {
-                return Err(Status::unauthenticated("Authentication required"));
-            }
-
-            Ok::<_, Status>(())
+            list_jobs_auth_check_blocking(&pool, &token_provider, &registry, token)
         })
         .await
         .inspect_err(|e| error!("ListJobs task error: {}", e))

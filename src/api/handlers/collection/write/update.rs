@@ -1,5 +1,7 @@
 //! Update handler — update an existing document by ID.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -13,10 +15,73 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
-    core::DocumentFields,
-    db::LocaleContext,
+    core::{
+        CollectionDefinition, DocumentFields, Registry, auth::SharedTokenProvider,
+        cache::SharedCache, event::SharedEventTransport,
+    },
+    db::{DbPool, LocaleContext},
+    hooks::HookRunner,
     service::{self, ServiceContext, ServiceError, WriteInput},
 };
+
+/// Owned bundle for the `Update` spawn-blocking body.
+struct UpdateBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    db_kind: String,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    collection: String,
+    id: String,
+    def: CollectionDefinition,
+    token: Option<String>,
+    data: DocumentFields,
+    password: Option<String>,
+    locale_ctx: Option<LocaleContext>,
+    draft: bool,
+}
+
+fn update_blocking(input: UpdateBlockingInput) -> Result<content::Document, Status> {
+    let conn = input
+        .pool
+        .get()
+        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+
+    // Field write access is now checked inside service::update_document_in_conn
+    // via WriteHooks::field_write_denied (using the transaction connection).
+
+    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+    let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+    let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+    let write_input = WriteInput::builder(input.data)
+        .password(input.password.as_deref())
+        .locale_ctx(input.locale_ctx.as_ref())
+        .draft(input.draft)
+        .ui_locale(ui_locale)
+        .build();
+
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(user_doc.as_ref())
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    let (doc, _req_context) = service::update_document(&ctx, &input.id, write_input)
+        .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
+
+    Ok(document_to_proto(&doc, &input.collection))
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -51,56 +116,28 @@ impl ContentService {
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let event_transport = self.event_transport.clone();
-        let cache = Some(self.cache.clone());
-        let collection = req.collection.clone();
-        let id = req.id.clone();
-        let def_owned = def;
+        let input = UpdateBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            db_kind: self.db_kind.clone(),
+            event_transport: self.event_transport.clone(),
+            cache: Some(self.cache.clone()),
+            collection: req.collection.clone(),
+            id: req.id.clone(),
+            def,
+            token,
+            data,
+            password,
+            locale_ctx,
+            draft: req.draft.unwrap_or(false),
+        };
 
-        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            // Field write access is now checked inside service::update_document_in_conn
-            // via WriteHooks::field_write_denied (using the transaction connection).
-
-            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-            let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-            let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            let input = WriteInput::builder(data)
-                .password(password.as_deref())
-                .locale_ctx(locale_ctx.as_ref())
-                .draft(req.draft.unwrap_or(false))
-                .ui_locale(ui_locale)
-                .build();
-
-            let ctx = ServiceContext::collection(&collection, &def_owned)
-                .pool(&pool)
-                .runner(&runner)
-                .user(user_doc.as_ref())
-                .event_transport(event_transport)
-                .cache(cache)
-                .build();
-
-            let (doc, _req_context) = service::update_document(&ctx, &id, input)
-                .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            let proto_doc = document_to_proto(&doc, &collection);
-
-            Ok(proto_doc)
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let proto_doc = task::spawn_blocking(move || update_blocking(input))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::UpdateResponse {
             document: Some(proto_doc),

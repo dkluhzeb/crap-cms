@@ -16,7 +16,7 @@ use crate::{
     },
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, DocumentFields, JwtSecret, Registry,
+        AuthUser, CollectionDefinition, DocumentFields, Registry,
         auth::{SharedPasswordProvider, SharedTokenProvider, TokenProvider},
         cache::SharedCache,
         collection::GlobalDefinition,
@@ -34,12 +34,10 @@ use crate::{
 };
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
-#[allow(dead_code)]
 pub struct ContentService {
     pub(in crate::api::handlers) pool: DbPool,
     pub(in crate::api::handlers) registry: Arc<Registry>,
     pub(in crate::api::handlers) hook_runner: HookRunner,
-    pub(in crate::api::handlers) jwt_secret: JwtSecret,
     pub(in crate::api::handlers) default_depth: i32,
     pub(in crate::api::handlers) max_depth: i32,
     pub(in crate::api::handlers) email_config: EmailConfig,
@@ -155,7 +153,6 @@ impl ContentService {
             pool: deps.pool,
             registry: deps.registry,
             hook_runner: deps.hook_runner,
-            jwt_secret: deps.jwt_secret,
             default_depth,
             max_depth,
             email_config: deps.config.email,
@@ -202,9 +199,8 @@ impl ContentService {
         let claims = token_provider
             .validate_token(&token)
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
-        let def = match registry.get_collection(&claims.collection) {
-            Some(d) => d.clone(),
-            None => return Err(Status::unauthenticated("Auth collection no longer exists")),
+        let Some(def) = registry.get_collection(&claims.collection).cloned() else {
+            return Err(Status::unauthenticated("Auth collection no longer exists"));
         };
         // Auth infrastructure — direct query for user lookup, not a user-facing read.
         let doc = match query::find_by_id(conn, &claims.collection, &def, &claims.sub, None) {
@@ -241,24 +237,18 @@ impl ContentService {
         conn: &mut BoxedConnection,
     ) -> Result<AccessResult, Status> {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let tx = conn.transaction().map_err(|e| {
-            error!("Access check tx error: {}", e);
-
-            Status::internal("Internal error")
-        })?;
+        let tx = conn
+            .transaction()
+            .inspect_err(|e| error!("Access check tx error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
         let result = hook_runner
             .check_access(access_ref, user_doc, id, data, &tx)
-            .map_err(|e| {
-                error!("Access check error: {}", e);
+            .inspect_err(|e| error!("Access check error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
 
-                Status::internal("Internal error")
-            })?;
-
-        tx.commit().map_err(|e| {
-            error!("Access check commit error: {}", e);
-
-            Status::internal("Internal error")
-        })?;
+        tx.commit()
+            .inspect_err(|e| error!("Access check commit error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))?;
         Ok(result)
     }
 }

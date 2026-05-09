@@ -116,7 +116,6 @@ fn setup_service(
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -568,7 +567,6 @@ return M
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -708,7 +706,6 @@ return M
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -829,7 +826,6 @@ return M
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -961,7 +957,6 @@ return M
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(
@@ -1086,7 +1081,6 @@ return M
             .pool(db_pool.clone())
             .registry(Registry::snapshot(&registry))
             .hook_runner(hook_runner)
-            .jwt_secret(config.auth.secret.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
             .storage(

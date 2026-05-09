@@ -1,5 +1,7 @@
 //! RestoreVersion handler — restore a document to a previous version.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -9,8 +11,67 @@ use crate::{
         content,
         handlers::{ContentService, convert::document_to_proto},
     },
+    config::LocaleConfig,
+    core::{
+        CollectionDefinition, Registry, auth::SharedTokenProvider, cache::SharedCache,
+        event::SharedEventTransport,
+    },
+    db::DbPool,
+    hooks::HookRunner,
     service::{ServiceContext, restore_collection_version},
 };
+
+/// Owned bundle for the `RestoreVersion` spawn-blocking body.
+struct RestoreVersionBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    collection: String,
+    document_id: String,
+    version_id: String,
+    def: CollectionDefinition,
+    locale_config: LocaleConfig,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    token: Option<String>,
+}
+
+fn restore_version_blocking(
+    input: RestoreVersionBlockingInput,
+) -> Result<content::Document, Status> {
+    let conn = input
+        .pool
+        .get()
+        .inspect_err(|e| error!("RestoreVersion pool error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(user_doc.as_ref())
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .build();
+
+    let doc = restore_collection_version(
+        &ctx,
+        &input.document_id,
+        &input.version_id,
+        &input.locale_config,
+    )
+    .map_err(Status::from)?;
+
+    Ok(document_to_proto(&doc, &input.collection))
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -31,46 +92,25 @@ impl ContentService {
             )));
         }
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let collection = req.collection.clone();
-        let document_id = req.document_id.clone();
-        let version_id = req.version_id.clone();
-        let def_owned = def.clone();
-        let locale_config = self.locale_config.clone();
-        let event_transport = self.event_transport.clone();
-        let cache = Some(self.cache.clone());
+        let input = RestoreVersionBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            collection: req.collection.clone(),
+            document_id: req.document_id.clone(),
+            version_id: req.version_id.clone(),
+            def,
+            locale_config: self.locale_config.clone(),
+            event_transport: self.event_transport.clone(),
+            cache: Some(self.cache.clone()),
+            token,
+        };
 
-        let doc = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool.get().map_err(|e| {
-                error!("RestoreVersion pool error: {}", e);
-                Status::internal("Internal error")
-            })?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-
-            let ctx = ServiceContext::collection(&collection, &def_owned)
-                .pool(&pool)
-                .runner(&runner)
-                .user(user_doc.as_ref())
-                .event_transport(event_transport)
-                .cache(cache)
-                .build();
-
-            let doc = restore_collection_version(&ctx, &document_id, &version_id, &locale_config)
-                .map_err(Status::from)?;
-
-            let proto_doc = document_to_proto(&doc, &collection);
-
-            Ok(proto_doc)
-        })
-        .await
-        .inspect_err(|e| error!("RestoreVersion task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let doc = task::spawn_blocking(move || restore_version_blocking(input))
+            .await
+            .inspect_err(|e| error!("RestoreVersion task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::RestoreVersionResponse {
             document: Some(doc),

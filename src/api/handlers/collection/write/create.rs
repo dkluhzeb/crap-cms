@@ -1,5 +1,7 @@
 //! Create handler — create a new document in a collection.
 
+use std::sync::Arc;
+
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
@@ -13,10 +15,73 @@ use crate::{
             convert::{document_to_proto, prost_struct_to_json_map},
         },
     },
-    core::DocumentFields,
-    db::LocaleContext,
-    service::{self, ServiceContext, ServiceError, WriteInput},
+    core::{
+        CollectionDefinition, DocumentFields, Registry, auth::SharedTokenProvider,
+        cache::SharedCache, event::SharedEventTransport,
+    },
+    db::{DbPool, LocaleContext},
+    hooks::HookRunner,
+    service::{self, EmailContext, ServiceContext, ServiceError, WriteInput},
 };
+
+/// Owned bundle for the `Create` spawn-blocking body.
+struct CreateBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    token_provider: SharedTokenProvider,
+    registry: Arc<Registry>,
+    db_kind: String,
+    event_transport: Option<SharedEventTransport>,
+    cache: Option<SharedCache>,
+    collection: String,
+    def: CollectionDefinition,
+    email_ctx: Option<EmailContext>,
+    token: Option<String>,
+    data: DocumentFields,
+    password: Option<String>,
+    locale_ctx: Option<LocaleContext>,
+    draft: bool,
+}
+
+fn create_blocking(input: CreateBlockingInput) -> Result<content::Document, Status> {
+    let conn = input
+        .pool
+        .get()
+        .map_err(|e| Status::from(ServiceError::classify(e, &input.db_kind)))?;
+
+    let auth_user = ContentService::resolve_auth_user(
+        input.token,
+        &*input.token_provider,
+        &input.registry,
+        &conn,
+    )?;
+
+    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+    let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+    let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+
+    let ctx = ServiceContext::collection(&input.collection, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(user_doc.as_ref())
+        .event_transport(input.event_transport)
+        .cache(input.cache)
+        .email_ctx(input.email_ctx)
+        .build();
+
+    let (doc, _req_context) = service::create_document(
+        &ctx,
+        WriteInput::builder(input.data)
+            .password(input.password.as_deref())
+            .locale_ctx(input.locale_ctx.as_ref())
+            .draft(input.draft)
+            .ui_locale(ui_locale)
+            .build(),
+    )
+    .map_err(|e| Status::from(e.reclassify(&input.db_kind)))?;
+
+    Ok(document_to_proto(&doc, &input.collection))
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -47,56 +112,28 @@ impl ContentService {
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config)
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let pool = self.pool.clone();
-        let runner = self.hook_runner.clone();
-        let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
-        let db_kind = self.db_kind.clone();
-        let event_transport = self.event_transport.clone();
-        let cache = Some(self.cache.clone());
-        let collection = req.collection.clone();
-        let def_owned = def;
-        let email_ctx = Some(self.email_context());
+        let input = CreateBlockingInput {
+            pool: self.pool.clone(),
+            runner: self.hook_runner.clone(),
+            token_provider: self.token_provider.clone(),
+            registry: self.registry.clone(),
+            db_kind: self.db_kind.clone(),
+            event_transport: self.event_transport.clone(),
+            cache: Some(self.cache.clone()),
+            collection: req.collection.clone(),
+            def,
+            email_ctx: Some(self.email_context()),
+            token,
+            data,
+            password,
+            locale_ctx,
+            draft: req.draft.unwrap_or(false),
+        };
 
-        let proto_doc = task::spawn_blocking(move || -> Result<_, Status> {
-            let conn = pool
-                .get()
-                .map_err(|e| Status::from(ServiceError::classify(e, &db_kind)))?;
-
-            let auth_user =
-                ContentService::resolve_auth_user(token, &*token_provider, &registry, &conn)?;
-
-            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-            let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-            let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-
-            let ctx = ServiceContext::collection(&collection, &def_owned)
-                .pool(&pool)
-                .runner(&runner)
-                .user(user_doc.as_ref())
-                .event_transport(event_transport)
-                .cache(cache)
-                .email_ctx(email_ctx)
-                .build();
-
-            let (doc, _req_context) = service::create_document(
-                &ctx,
-                WriteInput::builder(data)
-                    .password(password.as_deref())
-                    .locale_ctx(locale_ctx.as_ref())
-                    .draft(req.draft.unwrap_or(false))
-                    .ui_locale(ui_locale)
-                    .build(),
-            )
-            .map_err(|e| Status::from(e.reclassify(&db_kind)))?;
-
-            let proto_doc = document_to_proto(&doc, &collection);
-
-            Ok(proto_doc)
-        })
-        .await
-        .inspect_err(|e| error!("Task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))??;
+        let proto_doc = task::spawn_blocking(move || create_blocking(input))
+            .await
+            .inspect_err(|e| error!("Task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         Ok(Response::new(content::CreateResponse {
             document: Some(proto_doc),

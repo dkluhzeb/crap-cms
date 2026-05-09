@@ -1,14 +1,46 @@
 //! Verify email handler — verify an email address using a verification token.
 
-use anyhow::Context as _;
 use tokio::task;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
+    core::CollectionDefinition,
+    db::DbPool,
     service::{ServiceContext, auth::consume_verification_token},
 };
+
+/// Owned bundle for the `VerifyEmail` spawn-blocking body.
+struct VerifyEmailBlockingInput {
+    pool: DbPool,
+    slug: String,
+    def: CollectionDefinition,
+    token: String,
+}
+
+fn verify_email_blocking(input: VerifyEmailBlockingInput) -> Result<bool, Status> {
+    let mut conn = input
+        .pool
+        .get()
+        .inspect_err(|e| error!("Verify email DB connection error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+    let tx = conn
+        .transaction()
+        .inspect_err(|e| error!("Verify email start transaction error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .conn(&tx)
+        .build();
+
+    let verified = consume_verification_token(&ctx, &input.token).map_err(Status::from)?;
+    tx.commit()
+        .inspect_err(|e| error!("Verify email commit error: {}", e))
+        .map_err(|_| Status::internal("Internal error"))?;
+
+    Ok(verified)
+}
 
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
@@ -33,31 +65,17 @@ impl ContentService {
             ));
         }
 
-        let pool = self.pool.clone();
-        let slug = req.collection.clone();
-        let token = req.token.clone();
-        let def_owned = def;
+        let input = VerifyEmailBlockingInput {
+            pool: self.pool.clone(),
+            slug: req.collection.clone(),
+            def,
+            token: req.token.clone(),
+        };
 
-        let found = task::spawn_blocking(move || {
-            let mut conn = pool.get().context("DB connection")?;
-            let tx = conn.transaction().context("Start transaction")?;
-
-            let ctx = ServiceContext::collection(&slug, &def_owned)
-                .conn(&tx)
-                .build();
-
-            let verified = consume_verification_token(&ctx, &token)?;
-            tx.commit().context("Commit transaction")?;
-
-            Ok::<_, anyhow::Error>(verified)
-        })
-        .await
-        .inspect_err(|e| error!("Verify email task error: {}", e))
-        .map_err(|_| Status::internal("Internal error"))?
-        .map_err(|e: anyhow::Error| {
-            error!("Verify email error: {}", e);
-            Status::internal("Internal error")
-        })?;
+        let found = task::spawn_blocking(move || verify_email_blocking(input))
+            .await
+            .inspect_err(|e| error!("Verify email task error: {}", e))
+            .map_err(|_| Status::internal("Internal error"))??;
 
         if !found {
             return Err(Status::not_found("Invalid verification token"));

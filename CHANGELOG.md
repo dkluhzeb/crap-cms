@@ -338,6 +338,118 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     URLs, error response, spawn-blocking), and `AdminState`
     plumbing. Anchors newcomers without forcing them to
     reverse-engineer the layout.
+- `src/api/` module audit per the alpha.9 playbook. Module was
+  in better shape than `admin/` at the start (zero `super::super`,
+  zero deep-path imports from outside, zero manual `Default` impls,
+  all files under 1000 LOC). Three structured passes:
+  - Pass 1 — structural cleanup. Sole `#[allow(dead_code)]` on
+    `ContentService` removed by tracing the one truly-dead
+    `jwt_secret` field through the data flow: it was set by both
+    `ContentServiceDeps` and `GrpcStartParams` but never read.
+    The actual JWT operations all flow through `token_provider`
+    (a `SharedTokenProvider` constructed externally from the same
+    secret), so the duplicate field was vestigial. Removed from
+    `ContentService`, `ContentServiceDeps`,
+    `ContentServiceDepsBuilder` (field + setter), `GrpcStartParams`,
+    `GrpcStartParamsBuilder`, plus the 23 `.jwt_secret(...)`
+    setter calls scattered across 14 integration tests in
+    `tests/`. Builder colocation: `ContentServiceDeps` +
+    `ContentServiceDepsBuilder` collapsed into a new
+    `handlers/content_service_deps.rs` (the struct previously
+    lived in `handlers/mod.rs`, violating CLAUDE.md's
+    "mod.rs files should contain no business logic"); the
+    builder's old `handlers/deps_builder.rs` deleted.
+    `GrpcStartParams` + `GrpcStartParamsBuilder` collapsed into
+    `server.rs`; `server_builder.rs` deleted. Top-level
+    `pub use server_builder::GrpcStartParamsBuilder` re-export in
+    `api/mod.rs` removed (builders are reached via
+    `Type::builder()`, not separate import). `pub mod
+    rate_limit` demoted to `pub(crate) mod` (no external
+    consumers).
+  - Pass 2 — pattern application from the `admin/` audit. Four
+    `match registry.get_collection(&slug) { Some(d) => d.clone(),
+    None => return X }` sites converted to
+    `let Some(def) = ....cloned() else { return X };` (Rust 1.65+
+    let-else). Twenty-one `spawn_blocking(move || { … })`
+    closures with multi-statement bodies extracted to named
+    `*_blocking` functions taking typed `*BlockingInput` structs
+    bundling the owned captures, per CLAUDE.md's "the closure
+    should be a single function call" rule. Per-site structs:
+    `TriggerJobBlockingInput`, `ListJobRunsBlockingInput`,
+    `GetJobRunBlockingInput`, `CountBlockingInput`,
+    `FindBlockingInput`, `FindByIdBlockingInput`,
+    `ListVersionsBlockingInput`, `RestoreVersionBlockingInput`,
+    `CreateBlockingInput`, `UpdateBlockingInput`,
+    `DeleteBlockingInput`, `UndeleteBlockingInput`,
+    `UnpublishBlockingInput`, `ValidateBlockingInput`,
+    `CreateManyBlockingInput`, `UpdateManyBlockingInput`,
+    `DeleteManyBlockingInput`, `GetGlobalBlockingInput`,
+    `UpdateGlobalBlockingInput`, `MeBlockingInput`,
+    `LoginBlockingInput`, `VerifyEmailBlockingInput`,
+    `ResetPasswordBlockingInput`, `UploadCreateBlockingInput`,
+    `UploadUpdateBlockingInput`, `UploadDeleteBlockingInput`,
+    `ResolveSubscribeAccessBlockingInput`. The four
+    `account.rs` action sites (`lock`/`unlock`/`verify`/
+    `unverify`) DRY'd via a single `account_action_blocking`
+    helper that takes a `fn(&ServiceContext, &str) ->
+    Result<(), ServiceError>` action pointer + a shared
+    `AccountActionBlockingInput`, plus an
+    `account_action_input` constructor method that toggles
+    `invalidation_transport` for the lock-only flow.
+  - Pass 3 — gRPC-specific helpers: nothing to add. The
+    existing `From<ServiceError> for Status` impl in
+    `handlers/collection/error_mapping.rs` already covers every
+    variant with proper gRPC status code mapping (per-variant
+    tested with regression tests for the
+    `UniqueViolation`→`AlreadyExists` and
+    `InvalidToken`→`Unauthenticated` mappings). All 23
+    `Status::from(ServiceError::classify(...))` /
+    `Status::from(e.reclassify(...))` call sites use this impl
+    — no inline matching to consolidate.
+  - Follow-up: `account_action_blocking` had one residual
+    `if let Some(transport) = input.invalidation_transport
+    { builder = builder.invalidation_transport(Some(transport)); }`
+    from the lock-only special case. Since
+    `ServiceContextBuilder::invalidation_transport` already
+    takes `Option<SharedInvalidationTransport>`, the wrapper was
+    redundant — flattened to `.invalidation_transport(input
+    .invalidation_transport)` in the build chain. The other 11
+    `.invalidation_transport(Some(...))` / `.cache(Some(...))` /
+    `.event_transport(Some(...))` call sites in the codebase
+    were verified to source from non-Option values where the
+    `Some(_)` wrap is intentional, not a violation.
+  - Follow-up: `reset_password.rs` /  `verify_email.rs` /
+    `me.rs` / `login.rs` blocking fns previously returned
+    `Result<_, anyhow::Error>` and the call site did the work
+    of converting to `Status` via a second `.map_err(|e| {
+    error!(...); Status::internal(...) })` after the
+    JoinError-to-Status `.map_err(...)?`. Each blocking fn now
+    returns `Result<_, Status>` directly — `pool.get()` /
+    `conn.transaction()` / `tx.commit()` failures map to
+    `Status::internal` inline (with `inspect_err` for the
+    log side-effect, `map_err` only for the type transform),
+    and `ServiceError`-returning service calls map via
+    `.map_err(Status::from)` so they pick up the proper variant
+    from `error_mapping::From<ServiceError> for Status` instead
+    of being collapsed to a generic 500 (incidental fix:
+    `verify_email` and `update_global_document` used to surface
+    every `ServiceError` as 500 internal — they now map to
+    their semantic gRPC variant). Call sites use the standard
+    `??` pattern matching the rest of the api/ tree.
+  - Follow-up: codebase-wide `inspect_err`/`map_err`
+    separation. Logging is a side-effect and should not live
+    inside the closure that transforms the error type.
+    Twenty additional sites across api/ + admin/ + commands/
+    were converted from `.map_err(|e| { error!("...", e);
+    SomeReturnError })` to `.inspect_err(|e| error!("...", e))
+    .map_err(|_| SomeReturnError)`. Files touched:
+    `api/handlers/{auth/login, jobs/{trigger,get_run,list_runs,
+    list}, globals/{get,update}, collection/versions/{list,
+    restore}, content_service, subscribe}.rs`,
+    `admin/handlers/shared/access.rs`, and
+    `commands/serve/startup.rs` (where the closure was a no-op
+    `|e| { error!(...); e }` — collapsed to `.inspect_err(...)?`
+    with no map_err at all).
 
 - Continued the alpha.8 admin-context typing work into the rest of
   the app: audited every non-admin `serde_json::Value` /

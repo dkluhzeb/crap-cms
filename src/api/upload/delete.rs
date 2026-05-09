@@ -11,10 +11,44 @@ use tokio::task;
 
 use crate::{
     admin::AdminState,
-    core::event::EventOperation,
-    db::query,
-    service::{ServiceContext, delete_document},
+    config::LocaleConfig,
+    core::{
+        CollectionDefinition, Document, ReqContext, event::EventOperation,
+        event::SharedInvalidationTransport, upload::SharedStorage,
+    },
+    db::{DbPool, query},
+    hooks::HookRunner,
+    service::{ServiceContext, ServiceError, delete_document},
 };
+
+/// Owned bundle for the upload-delete spawn-blocking body.
+struct UploadDeleteBlockingInput {
+    pool: DbPool,
+    runner: HookRunner,
+    def: CollectionDefinition,
+    slug: String,
+    id: String,
+    user_doc: Option<Document>,
+    storage: SharedStorage,
+    locale_config: LocaleConfig,
+    invalidation_transport: SharedInvalidationTransport,
+}
+
+fn delete_upload_blocking(input: UploadDeleteBlockingInput) -> Result<ReqContext, ServiceError> {
+    let ctx = ServiceContext::collection(&input.slug, &input.def)
+        .pool(&input.pool)
+        .runner(&input.runner)
+        .user(input.user_doc.as_ref())
+        .invalidation_transport(Some(input.invalidation_transport))
+        .build();
+
+    delete_document(
+        &ctx,
+        &input.id,
+        Some(&*input.storage),
+        Some(&input.locale_config),
+    )
+}
 
 use super::helpers::{
     SuccessBody, check_upload_access, classify_delete_error, extract_bearer_user, json_error,
@@ -32,14 +66,11 @@ pub(super) async fn delete_upload(
         Err(e) => return *e,
     };
 
-    let def = match state.registry.get_collection(&slug) {
-        Some(d) => d.clone(),
-        None => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                &format!("Collection '{}' not found", slug),
-            );
-        }
+    let Some(def) = state.registry.get_collection(&slug).cloned() else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            &format!("Collection '{}' not found", slug),
+        );
     };
 
     if !def.is_upload_collection() {
@@ -84,26 +115,19 @@ pub(super) async fn delete_upload(
         );
     }
 
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let def_clone = def.clone();
-    let slug_owned = slug.clone();
-    let id_owned = id.clone();
-    let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
-    let storage = state.storage.clone();
-    let locale_config = state.config.locale.clone();
-    let invalidation_transport = state.invalidation_transport.clone();
+    let input = UploadDeleteBlockingInput {
+        pool: state.pool.clone(),
+        runner: state.hook_runner.clone(),
+        def: def.clone(),
+        slug: slug.clone(),
+        id: id.clone(),
+        user_doc: auth_user.as_ref().map(|au| au.user_doc.clone()),
+        storage: state.storage.clone(),
+        locale_config: state.config.locale.clone(),
+        invalidation_transport: state.invalidation_transport.clone(),
+    };
 
-    let result = task::spawn_blocking(move || {
-        let ctx = ServiceContext::collection(&slug_owned, &def_clone)
-            .pool(&pool)
-            .runner(&runner)
-            .user(user_doc_owned.as_ref())
-            .invalidation_transport(Some(invalidation_transport))
-            .build();
-        delete_document(&ctx, &id_owned, Some(&*storage), Some(&locale_config))
-    })
-    .await;
+    let result = task::spawn_blocking(move || delete_upload_blocking(input)).await;
 
     match result {
         Ok(Ok(_req_context)) => {

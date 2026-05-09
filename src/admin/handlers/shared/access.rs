@@ -50,10 +50,8 @@ pub fn check_access_or_forbid(
     let result = state
         .hook_runner
         .check_access(access_ref, user_doc, id, data, &tx)
-        .map_err(|e| {
-            error!("Access check error: {}", e);
-            Box::new(forbidden(state, "Access check failed").into_response())
-        })?;
+        .inspect_err(|e| error!("Access check error: {}", e))
+        .map_err(|_| Box::new(forbidden(state, "Access check failed").into_response()))?;
 
     tx.commit()
         .map_err(|_| Box::new(forbidden(state, "Database error").into_response()))?;
@@ -74,15 +72,16 @@ pub fn compute_denied_read_fields(
 
     let user_doc = get_user_doc(auth_user);
 
-    let mut conn = state.pool.get().map_err(|e| {
-        error!("Field access check pool error: {}", e);
-        Box::new(server_error(state, "Database error"))
-    })?;
+    let mut conn = state
+        .pool
+        .get()
+        .inspect_err(|e| error!("Field access check pool error: {}", e))
+        .map_err(|_| Box::new(server_error(state, "Database error")))?;
 
-    let tx = conn.transaction().map_err(|e| {
-        error!("Field access check tx error: {}", e);
-        Box::new(server_error(state, "Database error"))
-    })?;
+    let tx = conn
+        .transaction()
+        .inspect_err(|e| error!("Field access check tx error: {}", e))
+        .map_err(|_| Box::new(server_error(state, "Database error")))?;
 
     let denied = state
         .hook_runner
