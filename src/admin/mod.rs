@@ -196,6 +196,14 @@ impl AdminState {
             event_transport: self.event_transport.clone(),
             invalidation_transport: Some(self.invalidation_transport.clone()),
             cache: self.cache.clone(),
+            // HTTP transport: every request gets a fresh `McpServer`,
+            // so `client_name` never gets populated by `initialize`
+            // (the request that initialized is a different instance).
+            // Audit logs fall back to `transport_label = "http"`.
+            // Per-session identity propagation needs `Mcp-Session-Id`
+            // tracking — tracked separately.
+            client_name: std::sync::OnceLock::new(),
+            transport_label: "(http)",
         }
     }
 }

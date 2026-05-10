@@ -16,7 +16,7 @@ use tracing::warn;
 use crate::{
     admin::AdminState,
     config::McpApiKey,
-    mcp::protocol::{
+    mcp::{
         INTERNAL_ERROR, INVALID_REQUEST, JsonRpcError, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR,
     },
 };

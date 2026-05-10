@@ -9,7 +9,7 @@ use crate::core::{
 
 /// CRUD operation type, determines which fields are included/required in the schema.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CrudOp {
+pub(in crate::mcp) enum CrudOp {
     Create,
     CreateMany,
     Update,
@@ -97,7 +97,7 @@ fn blocks_schema(field: &FieldDefinition) -> Value {
 }
 
 /// Convert a single `FieldDefinition` to a JSON Schema value.
-pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
+pub(in crate::mcp) fn field_to_json_schema(field: &FieldDefinition) -> Value {
     let description = field.mcp.description.as_deref().or(field
         .admin
         .description
@@ -250,7 +250,7 @@ fn id_only_schema() -> Value {
 }
 
 /// Generate the input schema for a collection CRUD tool.
-pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
+pub(in crate::mcp) fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value {
     match op {
         CrudOp::Create => create_schema(def),
         CrudOp::CreateMany => {
@@ -377,7 +377,7 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
 }
 
 /// Generate the input schema for a global CRUD tool.
-pub fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
+pub(in crate::mcp) fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
     match op {
         CrudOp::Find => {
             // Read global — no params needed

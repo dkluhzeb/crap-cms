@@ -1,9 +1,13 @@
 //! `McpServer` struct and JSON-RPC message dispatch.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, from_value, json, to_value};
+use tracing::info;
 
 use crate::{
     config::CrapConfig,
@@ -20,7 +24,10 @@ use super::protocol::{
     INTERNAL_ERROR, INVALID_PARAMS, InitializeParams, JsonRpcRequest, JsonRpcResponse,
     METHOD_NOT_FOUND, PROTOCOL_VERSION, ResourceReadParams, ToolCallParams,
 };
-use super::{resources, tools};
+use super::{
+    resources,
+    tools::{self, ToolExecCtx},
+};
 
 /// Shared state for the MCP server.
 pub struct McpServer {
@@ -37,6 +44,32 @@ pub struct McpServer {
     /// Shared cross-request cache for cache invalidation on write ops.
     /// `None` = no cache invalidation (standalone CLI / tests).
     pub cache: Option<SharedCache>,
+    /// Client name from the MCP `initialize` handshake. One-shot — the
+    /// spec mandates `initialize` happens exactly once per session, so
+    /// later calls are silently ignored. `get()` returns `None` until
+    /// the first `initialize` lands; transports without per-session
+    /// state (HTTP) won't ever populate it, which is why
+    /// [`Self::transport_label`] exists as a fallback for audit logs.
+    pub client_name: OnceLock<String>,
+    /// Fallback identifier for audit logs when no client name is
+    /// known yet. Set at construction by the transport runner —
+    /// `"(stdio)"` for the long-lived stdio process, `"(http)"`
+    /// for the per-request HTTP handler, `"(test)"` for unit tests.
+    /// The parens disambiguate the fallback from a real client that
+    /// happens to be named `stdio`/`http`/`test`.
+    pub transport_label: &'static str,
+}
+
+impl McpServer {
+    /// Resolve the audit-log identifier for the current call —
+    /// the client name from `initialize` if present, otherwise the
+    /// transport-level fallback.
+    pub(in crate::mcp) fn audit_label(&self) -> &str {
+        self.client_name
+            .get()
+            .map(String::as_str)
+            .unwrap_or(self.transport_label)
+    }
 }
 
 /// Parse required JSON-RPC params, returning an error response on failure.
@@ -90,10 +123,26 @@ impl McpServer {
 
     /// Respond with server capabilities and protocol version.
     fn handle_initialize(&self, id: Option<Value>, params: Option<Value>) -> JsonRpcResponse {
-        let _params: InitializeParams = match parse_params(&id, params) {
+        let params: InitializeParams = match parse_params(&id, params) {
             Ok(p) => p,
             Err(resp) => return *resp,
         };
+
+        let (client_name, client_version) = match params.client_info.as_ref() {
+            Some(c) => (c.name.as_str(), c.version.as_deref().unwrap_or("?")),
+            None => ("(unnamed)", "?"),
+        };
+
+        // Remember the client name for subsequent audit-log lines. Per
+        // MCP spec `initialize` happens once per session, so a second
+        // call here is a protocol violation — silently ignore the set
+        // failure and keep the original name.
+        let _ = self.client_name.set(client_name.to_string());
+
+        info!(
+            "MCP initialize: client={}/{} protocol={} capabilities={}",
+            client_name, client_version, params.protocol_version, params.capabilities
+        );
 
         JsonRpcResponse::success(
             id,
@@ -129,18 +178,17 @@ impl McpServer {
             Err(resp) => return *resp,
         };
 
-        let result = tools::execute_tool(
-            &call.name,
-            &call.arguments,
-            &self.pool,
-            &self.registry,
-            &self.runner,
-            &self.config_dir,
-            &self.config,
-            self.event_transport.clone(),
-            self.invalidation_transport.clone(),
-            self.cache.clone(),
-        );
+        let exec_ctx = ToolExecCtx {
+            registry: &self.registry,
+            pool: &self.pool,
+            runner: &self.runner,
+            config: &self.config,
+            event_transport: self.event_transport.clone(),
+            invalidation_transport: self.invalidation_transport.clone(),
+            cache: self.cache.clone(),
+            client_label: self.audit_label(),
+        };
+        let result = tools::execute_tool(&call.name, &call.arguments, &self.config_dir, &exec_ctx);
 
         match result {
             Ok(text) => JsonRpcResponse::success(

@@ -1,37 +1,29 @@
 //! Execute `update` — update an existing document.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use serde_json::{Value, to_string_pretty};
 use tracing::info;
 
 use crate::{
-    config::CrapConfig,
-    core::{Registry, cache::SharedCache, event::SharedEventTransport},
-    db::DbPool,
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::{doc_to_json, extract_data_from_args},
+    mcp::tools::{
+        ToolExecCtx,
+        collection::helpers::{doc_to_json, extract_data_from_args},
+    },
     service::{ServiceContext, WriteInput, update_document},
 };
 
 /// Execute `update` — update an existing document.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_update(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-    config: &CrapConfig,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
@@ -46,28 +38,28 @@ pub(in crate::mcp::tools) fn exec_update(
     };
 
     if let Some(ref pw) = password {
-        config.auth.password_policy.validate(pw)?;
+        ctx.config.auth.password_policy.validate(pw)?;
     }
 
     let data = extract_data_from_args(args, &["id", "password"]);
 
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
-        .runner(runner)
+    let svc_ctx = ServiceContext::collection(slug, def)
+        .pool(ctx.pool)
+        .runner(ctx.runner)
         .override_access(true)
-        .event_transport(event_transport)
-        .cache(cache)
+        .event_transport(ctx.event_transport.clone())
+        .cache(ctx.cache.clone())
         .build();
 
     let (doc, _ctx) = update_document(
-        &ctx,
+        &svc_ctx,
         id,
         WriteInput::builder(data)
             .password(password.as_deref())
             .build(),
     )?;
 
-    info!("MCP update {}: {}", slug, id);
+    info!("MCP update {}: {} [client={}]", slug, id, ctx.client_label);
 
     Ok(to_string_pretty(&doc_to_json(&doc))?)
 }

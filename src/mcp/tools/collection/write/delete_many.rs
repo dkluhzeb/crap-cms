@@ -1,11 +1,14 @@
 //! Execute `delete_many` — bulk delete multiple documents matching filters.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use serde::Serialize;
 use serde_json::{Value, to_string_pretty};
 use tracing::info;
+
+use crate::{
+    mcp::tools::{ToolExecCtx, collection::helpers::parse_where_filters},
+    service::{self, DeleteManyOptions, ServiceContext},
+};
 
 /// Shape returned to the MCP client for a `delete_many` tool call.
 ///
@@ -20,33 +23,14 @@ struct DeleteManyResponse<'a> {
     deleted_ids: &'a [String],
 }
 
-use crate::{
-    config::CrapConfig,
-    core::{
-        Registry,
-        cache::SharedCache,
-        event::{SharedEventTransport, SharedInvalidationTransport},
-    },
-    db::DbPool,
-    hooks::HookRunner,
-    mcp::tools::collection::helpers::parse_where_filters,
-    service::{self, DeleteManyOptions, ServiceContext},
-};
-
 /// Execute `delete_many` — bulk delete documents matching a where filter.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_delete_many(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-    config: &CrapConfig,
-    event_transport: Option<SharedEventTransport>,
-    invalidation_transport: Option<SharedInvalidationTransport>,
-    cache: Option<SharedCache>,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
-    let mut def = registry
+    let mut def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?
@@ -65,13 +49,13 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         def.soft_delete = false;
     }
 
-    let ctx = ServiceContext::collection(slug, &def)
-        .pool(pool)
-        .runner(runner)
+    let svc_ctx = ServiceContext::collection(slug, &def)
+        .pool(ctx.pool)
+        .runner(ctx.runner)
         .override_access(true)
-        .event_transport(event_transport)
-        .invalidation_transport(invalidation_transport)
-        .cache(cache)
+        .event_transport(ctx.event_transport.clone())
+        .invalidation_transport(ctx.invalidation_transport.clone())
+        .cache(ctx.cache.clone())
         .build();
 
     let opts = DeleteManyOptions {
@@ -79,11 +63,11 @@ pub(in crate::mcp::tools) fn exec_delete_many(
         ..Default::default()
     };
 
-    let result = service::delete_many(&ctx, filters, &config.locale, &opts)?;
+    let result = service::delete_many(&svc_ctx, filters, &ctx.config.locale, &opts)?;
 
     info!(
-        "MCP delete_many {}: {} hard, {} soft, {} skipped",
-        slug, result.hard_deleted, result.soft_deleted, result.skipped
+        "MCP delete_many {}: {} hard, {} soft, {} skipped [client={}]",
+        slug, result.hard_deleted, result.soft_deleted, result.skipped, ctx.client_label
     );
 
     Ok(to_string_pretty(&DeleteManyResponse {

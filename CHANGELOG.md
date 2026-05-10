@@ -157,6 +157,119 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/mcp/` module audit per the alpha.9 playbook. Three passes:
+  - Pass 1 (structural). All 7 `#[allow(clippy::too_many_arguments)]`
+    escapes scattered across `tools/collection/{write/{create,
+    update, delete, delete_many, update_many}, versions}.rs` and
+    `tools/dispatch.rs::execute_tool` resolved at the root cause.
+    New `tools/exec_ctx.rs` defines a single
+    `ToolExecCtx<'a> { registry, pool, runner, config,
+    event_transport, invalidation_transport, cache }` bundle that
+    every CRUD-style `exec_*` fn now takes as its third argument
+    (after the per-call `args` and `slug`). Each tool fn went
+    from 6–9 positional params to a flat `(args, slug, ctx)`
+    signature. The existing `UnpublishParams` ad-hoc struct
+    collapsed into the same shape and was deleted along with its
+    re-export. `dispatch::execute_tool` now constructs nothing
+    inline — it pattern-matches `ToolOp` and dispatches each
+    branch with `(args, slug, ctx)`. The two callers of
+    `execute_tool` (`mcp::server` and the test sites in
+    `tools/dispatch.rs`'s colocated `mod tests`) build the
+    `ToolExecCtx` once via a shared `make_exec_ctx` helper.
+    File splits to bring `tools/schema/introspection.rs` (1472
+    LOC) under the 1000-LOC soft limit: split into four
+    sibling files by purpose — `field_types.rs`,
+    `list_collections.rs`, `describe_collection.rs`, and
+    `cli_reference.rs`. The CLI-reference file then split
+    further: types + dispatch fn stay in `cli_reference.rs`
+    (~240 LOC), the 23 `CLI_DETAIL_*` static command
+    descriptions live in a sibling `cli_details.rs` (~945 LOC)
+    so each file individually clears the soft limit. Test
+    colocation: the monolithic `tools/tests.rs` (922 LOC, 64
+    tests) deleted; tests redistributed into per-tool
+    `#[cfg(test)] mod tests` blocks beside the function they
+    exercise — 24 tests to `dispatch.rs`, 18 to
+    `collection/helpers.rs` (parse_where_filters + doc_to_json),
+    10 to `schema/config_files.rs`, 5 to
+    `schema/describe_collection.rs`, 3 each to
+    `schema/list_collections.rs` and `schema/cli_reference.rs`,
+    1 to `schema/field_types.rs`. Shared fixtures
+    (`make_registry`, `make_exec_ctx`) extracted to a new
+    `tools/test_helpers.rs` reachable by every colocated test
+    block.
+  - Pass 2 (admin/api/-pattern application). Cross-cutting
+    sweep — most patterns were already absent in mcp/ (no
+    `match registry.get(slug)` fallthroughs to convert; mcp
+    tools are sync, so no `spawn_blocking` antipatterns; no
+    `if let Some(...) { builder.x(Some(x)) }` Option-wrap
+    violations at builder call sites; no `.map_err(|e| {
+    error!(...); X })` log/transform mixes). Four
+    `.map_err(|e| e.into_anyhow())` closures (in
+    `find.rs`, `find_by_id.rs`, `count.rs`, `globals/get.rs`)
+    converted to function-pointer form
+    `.map_err(ServiceError::into_anyhow)` for parity with the
+    api/ pass.
+  - Pass 3 (beyond-playbook polish). Visibility tightening:
+    every `pub mod` under `mcp/` (protocol, resources, schema,
+    server, stdio, tools) demoted to `pub(crate) mod` after
+    confirming via grep that no external callers reach in.
+    Top-level re-exports added for the actual external API
+    surface: `McpServer` (already exported), `run_stdio` (now
+    `mcp::run_stdio` — `commands/mcp.rs` updated from
+    `mcp::stdio::run_stdio`), and the JSON-RPC types used by
+    `admin::mcp_handler` (`JsonRpcRequest`, `JsonRpcResponse`,
+    `JsonRpcError`, plus the `INTERNAL_ERROR` /
+    `INVALID_REQUEST` / `PARSE_ERROR` constants —
+    `admin::mcp_handler` updated from `mcp::protocol::*` to
+    `mcp::*`). Crate-internal `tools` re-exports trimmed to
+    just the three names actually consumed (`execute_tool`,
+    `generate_tools`, `should_include`); `ParsedTool`, `ToolOp`,
+    `parse_tool_name` were exposed but never imported outside
+    of `mcp::tools` itself, so they're back to module-private.
+    Dead code: `protocol::ToolResultContent` struct (defined
+    but never constructed) deleted. `InitializeParams` /
+    `ClientInfo` flagged with dead-field warnings —
+    investigated against the MCP spec to decide the right
+    treatment. The `initialize` request mandates
+    `protocolVersion`, `capabilities`, `clientInfo.name` per
+    spec, but the server is only obligated to *echo back* its
+    own version+capabilities — not to act on the client's
+    declared ones. To make the fields genuinely live (no
+    `#[allow(dead_code)]` shortcuts), `handle_initialize` now
+    emits a single diagnostic `info!` line on each handshake:
+    `MCP initialize: client=<name>/<version>
+    protocol=<version> capabilities=<json>`. This gives
+    operators visibility into which integrations connect with
+    which protocol/feature flags, and incidentally makes every
+    spec-modeled field a production read.
+  - Pass 3 follow-up — per-call audit trail. The 10
+    `info!("MCP <op> ...")` lines on write tools (the only
+    transport in the codebase that does layered success
+    logging — api/ has zero, admin/ has one) were already
+    deliberate: MCP is the one transport whose caller is a
+    model, so "what did Claude do to my data" is a real
+    operational question. The lines used to be unstructured
+    and didn't say *which* client made the call. Plumbed the
+    client identity through: new
+    `McpServer::client_name: OnceLock<String>` populated by
+    `handle_initialize` from `params.client_info.name`, and
+    new `McpServer::transport_label: &'static str` set at
+    construction by each transport runner — `(stdio)` for
+    the long-lived stdio process, `(http)` for the
+    per-request HTTP handler, `(test)` for unit tests. Parens
+    on the fallback labels disambiguate them from a real
+    client that happens to be named "stdio". `handle_tools_call`
+    resolves an `audit_label()` (client name when known,
+    transport label otherwise) and passes it through
+    `ToolExecCtx::client_label`. Every audit `info!` now ends
+    with `[client=<label>]`. Stdio sees the actual client name
+    after `initialize`; HTTP shows `(http)` until session-id
+    tracking lands (separate work — `Mcp-Session-Id` header
+    +  `AdminState`-level session map). The
+    `exec_write_config_file` static tool also takes
+    `client_label` directly since its dispatch path doesn't go
+    through `ToolExecCtx`.
+
 - `src/admin/` module audit per the alpha.9 playbook — first
   pass: test colocation. The three monolithic sibling-file test
   modules (`context/field/tests.rs` 626 LOC,

@@ -53,9 +53,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         event_transport: None,
         invalidation_transport: None,
         cache: None,
+        client_name: std::sync::OnceLock::new(),
+        transport_label: "(stdio)",
     };
 
-    mcp::stdio::run_stdio(server).await;
+    mcp::run_stdio(server).await;
 
     Ok(())
 }

@@ -1,17 +1,13 @@
 //! Version tools for collections: list versions and restore a version.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use serde::Serialize;
 use serde_json::{Value, to_string_pretty, to_value};
 use tracing::info;
 
 use crate::{
-    config::CrapConfig,
-    core::{Registry, cache::SharedCache, event::SharedEventTransport},
-    db::{DbPool, query::PaginationResult},
-    hooks::HookRunner,
+    db::query::PaginationResult,
+    mcp::tools::ToolExecCtx,
     service::{
         ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions,
         restore_collection_version,
@@ -31,15 +27,14 @@ struct ListVersionsResponse<'a> {
 pub(in crate::mcp::tools) fn exec_list_versions(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
@@ -48,9 +43,9 @@ pub(in crate::mcp::tools) fn exec_list_versions(
     let offset = args.get("offset").and_then(|v| v.as_i64());
 
     // MCP operates with full access — override access checks
-    let conn = pool.get().context("DB connection")?;
-    let hooks = RunnerReadHooks::new(runner, &conn);
-    let ctx = ServiceContext::collection(slug, def)
+    let conn = ctx.pool.get().context("DB connection")?;
+    let hooks = RunnerReadHooks::new(ctx.runner, &conn);
+    let svc_ctx = ServiceContext::collection(slug, def)
         .conn(&conn)
         .read_hooks(&hooks)
         .override_access(true)
@@ -61,7 +56,7 @@ pub(in crate::mcp::tools) fn exec_list_versions(
         .offset(offset)
         .build();
 
-    let result = list_versions(&ctx, &input)?;
+    let result = list_versions(&svc_ctx, &input)?;
 
     let versions: Vec<Value> = result
         .docs
@@ -78,16 +73,10 @@ pub(in crate::mcp::tools) fn exec_list_versions(
 }
 
 /// Execute `restore_version` — restore a document to a specific version.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::mcp::tools) fn exec_restore_version(
     args: &Value,
     slug: &str,
-    registry: &Arc<Registry>,
-    pool: &DbPool,
-    runner: &HookRunner,
-    config: &CrapConfig,
-    event_transport: Option<SharedEventTransport>,
-    cache: Option<SharedCache>,
+    ctx: &ToolExecCtx<'_>,
 ) -> Result<String> {
     let id = args
         .get("id")
@@ -97,22 +86,26 @@ pub(in crate::mcp::tools) fn exec_restore_version(
         .get("version_id")
         .and_then(|v| v.as_str())
         .context("Missing 'version_id' argument")?;
-    let def = registry
+    let def = ctx
+        .registry
         .collections
         .get(slug)
         .context("Collection not found")?;
 
-    let ctx = ServiceContext::collection(slug, def)
-        .pool(pool)
-        .runner(runner)
+    let svc_ctx = ServiceContext::collection(slug, def)
+        .pool(ctx.pool)
+        .runner(ctx.runner)
         .override_access(true)
-        .event_transport(event_transport)
-        .cache(cache)
+        .event_transport(ctx.event_transport.clone())
+        .cache(ctx.cache.clone())
         .build();
 
-    let doc = restore_collection_version(&ctx, id, version_id, &config.locale)?;
+    let doc = restore_collection_version(&svc_ctx, id, version_id, &ctx.config.locale)?;
 
-    info!("MCP restore_version {}: {} -> {}", slug, id, version_id);
+    info!(
+        "MCP restore_version {}: {} -> {} [client={}]",
+        slug, id, version_id, ctx.client_label
+    );
 
     Ok(to_string_pretty(&doc_to_json(&doc))?)
 }

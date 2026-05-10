@@ -34,7 +34,7 @@ struct GlobalSchemaEntry {
 }
 
 /// List all available MCP resources.
-pub fn list_resources() -> Vec<ResourceDefinition> {
+pub(in crate::mcp) fn list_resources() -> Vec<ResourceDefinition> {
     vec![
         ResourceDefinition {
             uri: "crap://schema/collections".to_string(),
@@ -130,7 +130,7 @@ fn config_resource(config: &CrapConfig) -> String {
 }
 
 /// Read a resource by URI.
-pub fn read_resource(
+pub(in crate::mcp) fn read_resource(
     uri: &str,
     registry: &Registry,
     config: &CrapConfig,

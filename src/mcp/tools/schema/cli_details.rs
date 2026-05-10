@@ -1,348 +1,10 @@
-//! Introspection tools: list collections, describe collection, field types, CLI reference.
+//! CLI reference data — 24 CLI_DETAIL_* statics consumed by `exec_cli_reference`.
+//!
+//! Split out from `cli_reference.rs` to keep that file under the 1000-LOC soft limit.
 
-use anyhow::{Context as _, Result, bail};
-use serde::Serialize;
-use serde_json::{Value, to_string_pretty};
+use super::cli_reference::{CliArg, CliCommandDetail, CliFlag, CliSubcommand};
 
-use crate::{
-    config::McpConfig,
-    core::Registry,
-    mcp::{
-        schema::{CrudOp, collection_input_schema, global_input_schema},
-        tools::should_include,
-    },
-};
-
-/// Single entry in the `list_field_types` MCP tool response.
-#[derive(Serialize)]
-struct FieldTypeInfo {
-    name: &'static str,
-    description: &'static str,
-    json_schema_type: &'static str,
-    supports_has_many: bool,
-    supports_sub_fields: bool,
-    supports_options: bool,
-}
-
-const FIELD_TYPES: &[FieldTypeInfo] = &[
-    FieldTypeInfo {
-        name: "text",
-        description: "Single-line text input",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "number",
-        description: "Numeric input (integer or float)",
-        json_schema_type: "number",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "textarea",
-        description: "Multi-line text input",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "select",
-        description: "Dropdown select from predefined options",
-        json_schema_type: "string",
-        supports_has_many: true,
-        supports_sub_fields: false,
-        supports_options: true,
-    },
-    FieldTypeInfo {
-        name: "radio",
-        description: "Radio button group from predefined options",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: true,
-    },
-    FieldTypeInfo {
-        name: "checkbox",
-        description: "Boolean checkbox (true/false)",
-        json_schema_type: "boolean",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "date",
-        description: "Date/datetime picker",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "email",
-        description: "Email address input with validation",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "json",
-        description: "Raw JSON data stored as text",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "richtext",
-        description: "Rich text editor (HTML content)",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "code",
-        description: "Code editor with syntax highlighting",
-        json_schema_type: "string",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "relationship",
-        description: "Reference to document(s) in another collection",
-        json_schema_type: "string",
-        supports_has_many: true,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "array",
-        description: "Repeatable group of sub-fields (stored in join table)",
-        json_schema_type: "array",
-        supports_has_many: false,
-        supports_sub_fields: true,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "group",
-        description: "Named group of sub-fields (columns prefixed with group name)",
-        json_schema_type: "object",
-        supports_has_many: false,
-        supports_sub_fields: true,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "upload",
-        description: "File upload field referencing an upload collection",
-        json_schema_type: "string",
-        supports_has_many: true,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "blocks",
-        description: "Flexible content blocks with different block types",
-        json_schema_type: "array",
-        supports_has_many: false,
-        supports_sub_fields: true,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "row",
-        description: "Layout-only horizontal container. Sub-fields promoted to parent level (no prefix)",
-        json_schema_type: "null",
-        supports_has_many: false,
-        supports_sub_fields: true,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "collapsible",
-        description: "Layout-only collapsible container. Sub-fields promoted to parent level (no prefix)",
-        json_schema_type: "null",
-        supports_has_many: false,
-        supports_sub_fields: true,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "tabs",
-        description: "Layout-only tabbed container. Sub-fields promoted to parent level (no prefix)",
-        json_schema_type: "null",
-        supports_has_many: false,
-        supports_sub_fields: true,
-        supports_options: false,
-    },
-    FieldTypeInfo {
-        name: "join",
-        description: "Virtual reverse-relationship field. Shows documents from another collection that reference this document. No stored data.",
-        json_schema_type: "null",
-        supports_has_many: false,
-        supports_sub_fields: false,
-        supports_options: false,
-    },
-];
-
-/// Top-level shape returned when `cli_reference` is called without a command.
-#[derive(Serialize)]
-struct CliOverview {
-    binary: &'static str,
-    description: &'static str,
-    usage: &'static str,
-    commands: &'static [CliCommandSummary],
-}
-
-#[derive(Serialize)]
-struct CliCommandSummary {
-    name: &'static str,
-    description: &'static str,
-}
-
-/// Shape returned when `cli_reference` is called with a specific command name.
-/// All optional fields are skipped when `None` to preserve the existing wire
-/// format exactly (some commands have no subcommands, etc.).
-#[derive(Serialize)]
-struct CliCommandDetail {
-    command: &'static str,
-    description: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    flags: Option<&'static [CliFlag]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    args: Option<&'static [CliArg]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subcommands: Option<&'static [CliSubcommand]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    examples: Option<&'static [&'static str]>,
-}
-
-#[derive(Serialize)]
-struct CliFlag {
-    flag: &'static str,
-    description: &'static str,
-}
-
-#[derive(Serialize)]
-struct CliArg {
-    arg: &'static str,
-    description: &'static str,
-}
-
-#[derive(Serialize)]
-struct CliSubcommand {
-    name: &'static str,
-    usage: &'static str,
-    description: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    flags: Option<&'static [CliFlag]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    examples: Option<&'static [&'static str]>,
-}
-
-#[derive(Serialize)]
-struct CliReferenceError {
-    error: String,
-}
-
-static CLI_COMMANDS_OVERVIEW: &[CliCommandSummary] = &[
-    CliCommandSummary {
-        name: "serve",
-        description: "Start the admin UI and gRPC servers",
-    },
-    CliCommandSummary {
-        name: "status",
-        description: "Show project status (collections, globals, migrations)",
-    },
-    CliCommandSummary {
-        name: "init",
-        description: "Scaffold a new config directory",
-    },
-    CliCommandSummary {
-        name: "make",
-        description: "Generate scaffolding files (collection, global, hook, job)",
-    },
-    CliCommandSummary {
-        name: "blueprint",
-        description: "Manage saved blueprints (save, use, list, remove)",
-    },
-    CliCommandSummary {
-        name: "user",
-        description: "User management for auth collections (create, list, delete, lock, unlock, change-password)",
-    },
-    CliCommandSummary {
-        name: "migrate",
-        description: "Run database migrations (create, up, down, list, fresh)",
-    },
-    CliCommandSummary {
-        name: "backup",
-        description: "Backup database and optionally uploads",
-    },
-    CliCommandSummary {
-        name: "db",
-        description: "Database tools (console, cleanup)",
-    },
-    CliCommandSummary {
-        name: "export",
-        description: "Export collection data to JSON",
-    },
-    CliCommandSummary {
-        name: "import",
-        description: "Import collection data from JSON",
-    },
-    CliCommandSummary {
-        name: "typegen",
-        description: "Generate typed definitions from collection schemas",
-    },
-    CliCommandSummary {
-        name: "proto",
-        description: "Export the embedded content.proto file",
-    },
-    CliCommandSummary {
-        name: "templates",
-        description: "List and extract default admin templates and static files",
-    },
-    CliCommandSummary {
-        name: "jobs",
-        description: "Manage background jobs (list, trigger, status, purge, healthcheck)",
-    },
-    CliCommandSummary {
-        name: "images",
-        description: "Manage image processing queue (list, stats, retry, purge)",
-    },
-    CliCommandSummary {
-        name: "trash",
-        description: "Manage soft-deleted documents (list, restore, purge, empty)",
-    },
-    CliCommandSummary {
-        name: "mcp",
-        description: "Start the MCP (Model Context Protocol) server (stdio transport)",
-    },
-    CliCommandSummary {
-        name: "logs",
-        description: "View and manage log files",
-    },
-    CliCommandSummary {
-        name: "work",
-        description: "Run a standalone job worker (without HTTP/gRPC servers)",
-    },
-    CliCommandSummary {
-        name: "bench",
-        description: "Benchmark hooks, queries, and write cycles",
-    },
-    CliCommandSummary {
-        name: "update",
-        description: "Manage installed versions of crap-cms (install, use, check, completions)",
-    },
-    CliCommandSummary {
-        name: "restore",
-        description: "Restore database (and optionally uploads) from a backup",
-    },
-];
-
-static CLI_DETAIL_SERVE: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_SERVE: CliCommandDetail = CliCommandDetail {
     command: "crap-cms serve",
     description: "Start the admin UI and gRPC servers",
     flags: Some(&[CliFlag {
@@ -354,7 +16,7 @@ static CLI_DETAIL_SERVE: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms serve", "crap-cms serve --detach"]),
 };
 
-static CLI_DETAIL_STATUS: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_STATUS: CliCommandDetail = CliCommandDetail {
     command: "crap-cms status [--check]",
     description: "Show project status (server config, collections with row/trash counts, globals, versioning, access rules, hooks, live events, migrations, jobs). With --check, runs a 24-rule best-practice audit.",
     flags: Some(&[CliFlag {
@@ -366,7 +28,7 @@ static CLI_DETAIL_STATUS: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms status", "crap-cms status --check"]),
 };
 
-static CLI_DETAIL_INIT: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_INIT: CliCommandDetail = CliCommandDetail {
     command: "crap-cms init [DIR]",
     description: "Scaffold a new config directory with default structure",
     flags: None,
@@ -378,7 +40,7 @@ static CLI_DETAIL_INIT: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms init", "crap-cms init"]),
 };
 
-static CLI_DETAIL_MAKE: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_MAKE: CliCommandDetail = CliCommandDetail {
     command: "crap-cms make <SUBCOMMAND>",
     description: "Generate scaffolding files",
     flags: None,
@@ -499,7 +161,7 @@ static CLI_DETAIL_MAKE: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_BLUEPRINT: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_BLUEPRINT: CliCommandDetail = CliCommandDetail {
     command: "crap-cms blueprint <SUBCOMMAND>",
     description: "Manage saved blueprints",
     flags: None,
@@ -537,7 +199,7 @@ static CLI_DETAIL_BLUEPRINT: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_USER: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_USER: CliCommandDetail = CliCommandDetail {
     command: "crap-cms user <SUBCOMMAND>",
     description: "User management for auth collections",
     flags: None,
@@ -635,7 +297,7 @@ static CLI_DETAIL_USER: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_MIGRATE: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_MIGRATE: CliCommandDetail = CliCommandDetail {
     command: "crap-cms migrate <SUBCOMMAND>",
     description: "Run database migrations",
     flags: None,
@@ -685,7 +347,7 @@ static CLI_DETAIL_MIGRATE: CliCommandDetail = CliCommandDetail {
     ]),
 };
 
-static CLI_DETAIL_BACKUP: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_BACKUP: CliCommandDetail = CliCommandDetail {
     command: "crap-cms backup [OPTIONS]",
     description: "Backup database and optionally uploads",
     flags: Some(&[
@@ -703,7 +365,7 @@ static CLI_DETAIL_BACKUP: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms backup", "crap-cms backup -o /backups -i"]),
 };
 
-static CLI_DETAIL_DB: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_DB: CliCommandDetail = CliCommandDetail {
     command: "crap-cms db <SUBCOMMAND>",
     description: "Database tools",
     flags: None,
@@ -730,7 +392,7 @@ static CLI_DETAIL_DB: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_EXPORT: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_EXPORT: CliCommandDetail = CliCommandDetail {
     command: "crap-cms export [OPTIONS]",
     description: "Export collection data to JSON",
     flags: Some(&[
@@ -748,7 +410,7 @@ static CLI_DETAIL_EXPORT: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms export", "crap-cms export -c posts -o posts.json"]),
 };
 
-static CLI_DETAIL_IMPORT: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_IMPORT: CliCommandDetail = CliCommandDetail {
     command: "crap-cms import <FILE> [OPTIONS]",
     description: "Import collection data from JSON",
     flags: Some(&[CliFlag {
@@ -763,7 +425,7 @@ static CLI_DETAIL_IMPORT: CliCommandDetail = CliCommandDetail {
     ]),
 };
 
-static CLI_DETAIL_TYPEGEN: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_TYPEGEN: CliCommandDetail = CliCommandDetail {
     command: "crap-cms typegen [OPTIONS]",
     description: "Generate typed definitions from collection schemas",
     flags: Some(&[
@@ -784,7 +446,7 @@ static CLI_DETAIL_TYPEGEN: CliCommandDetail = CliCommandDetail {
     ]),
 };
 
-static CLI_DETAIL_PROTO: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_PROTO: CliCommandDetail = CliCommandDetail {
     command: "crap-cms proto [OPTIONS]",
     description: "Export the embedded content.proto file for gRPC client codegen",
     flags: Some(&[CliFlag {
@@ -796,7 +458,7 @@ static CLI_DETAIL_PROTO: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms proto", "crap-cms proto -o ./proto/content.proto"]),
 };
 
-static CLI_DETAIL_TEMPLATES: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_TEMPLATES: CliCommandDetail = CliCommandDetail {
     command: "crap-cms templates <SUBCOMMAND>",
     description: "List and extract default admin templates and static files",
     flags: None,
@@ -842,7 +504,7 @@ static CLI_DETAIL_TEMPLATES: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_JOBS: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_JOBS: CliCommandDetail = CliCommandDetail {
     command: "crap-cms jobs <SUBCOMMAND>",
     description: "Manage background jobs",
     flags: None,
@@ -906,7 +568,7 @@ static CLI_DETAIL_JOBS: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_IMAGES: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_IMAGES: CliCommandDetail = CliCommandDetail {
     command: "crap-cms images <SUBCOMMAND>",
     description: "Manage image processing queue",
     flags: None,
@@ -969,7 +631,7 @@ static CLI_DETAIL_IMAGES: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_TRASH: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_TRASH: CliCommandDetail = CliCommandDetail {
     command: "crap-cms trash <SUBCOMMAND>",
     description: "Manage soft-deleted documents",
     flags: None,
@@ -1020,7 +682,7 @@ static CLI_DETAIL_TRASH: CliCommandDetail = CliCommandDetail {
     examples: None,
 };
 
-static CLI_DETAIL_MCP: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_MCP: CliCommandDetail = CliCommandDetail {
     command: "crap-cms mcp",
     description: "Start the MCP (Model Context Protocol) server using stdio transport",
     flags: None,
@@ -1029,7 +691,7 @@ static CLI_DETAIL_MCP: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms mcp"]),
 };
 
-static CLI_DETAIL_LOGS: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_LOGS: CliCommandDetail = CliCommandDetail {
     command: "crap-cms logs [OPTIONS]",
     description: "View and manage log files",
     flags: Some(&[
@@ -1053,7 +715,7 @@ static CLI_DETAIL_LOGS: CliCommandDetail = CliCommandDetail {
     examples: Some(&["crap-cms logs", "crap-cms logs -f", "crap-cms logs clear"]),
 };
 
-static CLI_DETAIL_WORK: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_WORK: CliCommandDetail = CliCommandDetail {
     command: "crap-cms work [OPTIONS]",
     description: "Run a standalone job worker (processes queues without HTTP/gRPC servers)",
     flags: Some(&[
@@ -1095,7 +757,7 @@ static CLI_DETAIL_WORK: CliCommandDetail = CliCommandDetail {
     ]),
 };
 
-static CLI_DETAIL_RESTORE: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_RESTORE: CliCommandDetail = CliCommandDetail {
     command: "crap-cms restore <BACKUP> [OPTIONS]",
     description: "Restore database (and optionally uploads) from a backup directory",
     flags: Some(&[
@@ -1116,7 +778,7 @@ static CLI_DETAIL_RESTORE: CliCommandDetail = CliCommandDetail {
     ]),
 };
 
-static CLI_DETAIL_BENCH: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_BENCH: CliCommandDetail = CliCommandDetail {
     command: "crap-cms bench <SUBCOMMAND>",
     description: "Benchmark hooks, queries, and write cycles",
     flags: None,
@@ -1207,7 +869,7 @@ static CLI_DETAIL_BENCH: CliCommandDetail = CliCommandDetail {
     ]),
 };
 
-static CLI_DETAIL_UPDATE: CliCommandDetail = CliCommandDetail {
+pub(super) static CLI_DETAIL_UPDATE: CliCommandDetail = CliCommandDetail {
     command: "crap-cms update [SUBCOMMAND]",
     description: "Manage installed versions of crap-cms. Without a subcommand, installs latest + activates it.",
     flags: Some(&[
@@ -1281,192 +943,3 @@ static CLI_DETAIL_UPDATE: CliCommandDetail = CliCommandDetail {
         "crap-cms update completions --uninstall",
     ]),
 };
-
-/// One entry in the `list_collections` MCP tool response.
-///
-/// Untagged sum: collection entries omit `type`; global entries set
-/// `type: "global"`. Wire-format-compatible with prior releases.
-#[derive(Serialize)]
-#[serde(untagged)]
-enum ListEntry<'a> {
-    Collection {
-        slug: &'a str,
-        label: String,
-        fields: usize,
-        has_auth: bool,
-        has_upload: bool,
-        has_drafts: bool,
-    },
-    Global {
-        slug: &'a str,
-        label: String,
-        #[serde(rename = "type")]
-        kind: &'static str,
-        fields: usize,
-    },
-}
-
-/// List all collections and globals with metadata.
-pub(in crate::mcp::tools) fn exec_list_collections(
-    registry: &Registry,
-    mcp_config: &McpConfig,
-) -> Result<String> {
-    let mut result = Vec::new();
-    for (slug, def) in &registry.collections {
-        if !should_include(slug, mcp_config) {
-            continue;
-        }
-        result.push(ListEntry::Collection {
-            slug,
-            label: def.display_name().to_string(),
-            fields: def.fields.len(),
-            has_auth: def.is_auth_collection(),
-            has_upload: def.is_upload_collection(),
-            has_drafts: def.has_drafts(),
-        });
-    }
-    for (slug, def) in &registry.globals {
-        result.push(ListEntry::Global {
-            slug,
-            label: def.display_name().to_string(),
-            kind: "global",
-            fields: def.fields.len(),
-        });
-    }
-    Ok(to_string_pretty(&result)?)
-}
-
-/// Response shape for the `describe_collection` MCP tool. Internally
-/// tagged on the `type` discriminator (`"collection"` or `"global"`).
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum DescribeResponse<'a> {
-    Collection {
-        slug: &'a str,
-        label: String,
-        timestamps: bool,
-        has_auth: bool,
-        has_upload: bool,
-        has_drafts: bool,
-        schema: Value,
-    },
-    Global {
-        slug: &'a str,
-        label: String,
-        schema: Value,
-    },
-}
-
-/// Describe a single collection or global by slug, including its full schema.
-pub(in crate::mcp::tools) fn exec_describe_collection(
-    args: &Value,
-    registry: &Registry,
-    mcp_config: &McpConfig,
-) -> Result<String> {
-    let slug = args
-        .get("slug")
-        .and_then(|v| v.as_str())
-        .context("Missing 'slug' argument")?;
-
-    if let Some(def) = registry.collections.get(slug) {
-        if !should_include(slug, mcp_config) {
-            bail!("Unknown collection or global: {}", slug);
-        }
-        let response = DescribeResponse::Collection {
-            slug,
-            label: def.display_name().to_string(),
-            timestamps: def.timestamps,
-            has_auth: def.is_auth_collection(),
-            has_upload: def.is_upload_collection(),
-            has_drafts: def.has_drafts(),
-            schema: collection_input_schema(def, CrudOp::Create),
-        };
-
-        return Ok(to_string_pretty(&response)?);
-    }
-
-    if let Some(def) = registry.globals.get(slug) {
-        let response = DescribeResponse::Global {
-            slug,
-            label: def.display_name().to_string(),
-            schema: global_input_schema(def, CrudOp::Update),
-        };
-
-        return Ok(to_string_pretty(&response)?);
-    }
-
-    bail!("Unknown collection or global: {}", slug)
-}
-
-/// List all available field types with their capabilities.
-pub(in crate::mcp::tools) fn exec_list_field_types() -> Result<String> {
-    Ok(to_string_pretty(FIELD_TYPES)?)
-}
-
-/// Return CLI reference documentation, optionally filtered by command name.
-pub(in crate::mcp::tools) fn exec_cli_reference(command: Option<&str>) -> Result<String> {
-    match command {
-        None => {
-            let overview = CliOverview {
-                binary: "crap-cms",
-                description: "Crap CMS - Headless CMS with Lua hooks",
-                usage: "crap-cms <COMMAND> [OPTIONS]",
-                commands: CLI_COMMANDS_OVERVIEW,
-            };
-            Ok(to_string_pretty(&overview)?)
-        }
-        Some(cmd) => {
-            let detail = match cmd {
-                "serve" => &CLI_DETAIL_SERVE,
-                "status" => &CLI_DETAIL_STATUS,
-                "init" => &CLI_DETAIL_INIT,
-                "make" | "make collection" | "make global" | "make hook" | "make job" => {
-                    &CLI_DETAIL_MAKE
-                }
-                "blueprint" | "blueprint save" | "blueprint use" | "blueprint list"
-                | "blueprint remove" => &CLI_DETAIL_BLUEPRINT,
-                "user"
-                | "user create"
-                | "user list"
-                | "user delete"
-                | "user lock"
-                | "user unlock"
-                | "user change-password" => &CLI_DETAIL_USER,
-                "migrate" | "migrate create" | "migrate up" | "migrate down" | "migrate list"
-                | "migrate fresh" => &CLI_DETAIL_MIGRATE,
-                "backup" => &CLI_DETAIL_BACKUP,
-                "db" | "db console" | "db cleanup" => &CLI_DETAIL_DB,
-                "export" => &CLI_DETAIL_EXPORT,
-                "import" => &CLI_DETAIL_IMPORT,
-                "typegen" => &CLI_DETAIL_TYPEGEN,
-                "proto" => &CLI_DETAIL_PROTO,
-                "templates" | "templates list" | "templates extract" => &CLI_DETAIL_TEMPLATES,
-                "jobs" | "jobs list" | "jobs trigger" | "jobs status" | "jobs purge"
-                | "jobs healthcheck" => &CLI_DETAIL_JOBS,
-                "images" | "images list" | "images stats" | "images retry" | "images purge" => {
-                    &CLI_DETAIL_IMAGES
-                }
-                "trash" | "trash list" | "trash restore" | "trash purge" | "trash empty" => {
-                    &CLI_DETAIL_TRASH
-                }
-                "mcp" => &CLI_DETAIL_MCP,
-                "logs" | "logs clear" => &CLI_DETAIL_LOGS,
-                "work" => &CLI_DETAIL_WORK,
-                "restore" => &CLI_DETAIL_RESTORE,
-                "bench" | "bench hooks" | "bench queries" | "bench create" => &CLI_DETAIL_BENCH,
-                "update" | "update check" | "update list" | "update install" | "update use"
-                | "update uninstall" | "update where" | "update completions" => &CLI_DETAIL_UPDATE,
-                _ => {
-                    let err = CliReferenceError {
-                        error: format!(
-                            "Unknown command: '{}'. Call cli_reference without a command argument to see all available commands.",
-                            cmd
-                        ),
-                    };
-                    return Ok(to_string_pretty(&err)?);
-                }
-            };
-            Ok(to_string_pretty(detail)?)
-        }
-    }
-}
