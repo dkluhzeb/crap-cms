@@ -100,14 +100,14 @@ pub fn print(tokens: &[Token<'_>]) -> Result<String> {
                 attrs_raw,
                 self_closed,
             } => {
-                emit_start_tag(
+                emit_start_tag(EmitStartTag {
                     name,
                     attrs_raw,
-                    *self_closed,
+                    self_closed: *self_closed,
                     depth,
-                    &mut out,
-                    &mut at_line_start,
-                )?;
+                    out: &mut out,
+                    at_line_start: &mut at_line_start,
+                })?;
                 if !self_closed && !is_void(name) {
                     depth += 1;
                 }
@@ -359,17 +359,21 @@ fn render_self_or_void_inline(name: &str, attrs_raw: &str, self_closed: bool) ->
     Ok(out)
 }
 
-fn emit_start_tag(
-    name: &str,
-    attrs_raw: &str,
+/// Inputs to [`emit_start_tag`]. Bundled into a struct so the call
+/// site reads at a glance instead of counting six positional args.
+struct EmitStartTag<'a> {
+    name: &'a str,
+    attrs_raw: &'a str,
     self_closed: bool,
     depth: usize,
-    out: &mut String,
-    at_line_start: &mut bool,
-) -> Result<()> {
-    let attrs = parse_attributes(attrs_raw)?;
-    let void = is_void(name);
-    let close = if self_closed || void { " />" } else { ">" };
+    out: &'a mut String,
+    at_line_start: &'a mut bool,
+}
+
+fn emit_start_tag(p: EmitStartTag<'_>) -> Result<()> {
+    let attrs = parse_attributes(p.attrs_raw)?;
+    let void = is_void(p.name);
+    let close = if p.self_closed || void { " />" } else { ">" };
 
     // Inline form: zero or one attribute (no embedded HBS block).
     let inline_eligible = attrs
@@ -377,32 +381,32 @@ fn emit_start_tag(
         .all(|a| matches!(a, Attr::Plain { .. } | Attr::HbsExpr(_)))
         && attrs.len() <= 1;
     if inline_eligible {
-        ensure_line_indent(out, at_line_start, depth);
-        out.push('<');
-        out.push_str(name);
+        ensure_line_indent(p.out, p.at_line_start, p.depth);
+        p.out.push('<');
+        p.out.push_str(p.name);
         for a in &attrs {
-            out.push(' ');
-            out.push_str(&render_attr(a));
+            p.out.push(' ');
+            p.out.push_str(&render_attr(a));
         }
-        out.push_str(close);
-        newline(out, at_line_start);
+        p.out.push_str(close);
+        newline(p.out, p.at_line_start);
         return Ok(());
     }
 
     // Stacked form: one attribute per line, closing `>` on its own line.
-    ensure_line_indent(out, at_line_start, depth);
-    out.push('<');
-    out.push_str(name);
-    let attr_indent = INDENT.repeat(depth + 1);
+    ensure_line_indent(p.out, p.at_line_start, p.depth);
+    p.out.push('<');
+    p.out.push_str(p.name);
+    let attr_indent = INDENT.repeat(p.depth + 1);
     for a in &attrs {
-        out.push('\n');
-        out.push_str(&attr_indent);
-        out.push_str(&render_attr(a));
+        p.out.push('\n');
+        p.out.push_str(&attr_indent);
+        p.out.push_str(&render_attr(a));
     }
-    out.push('\n');
-    out.push_str(&INDENT.repeat(depth));
-    out.push_str(close.trim_start());
-    newline(out, at_line_start);
+    p.out.push('\n');
+    p.out.push_str(&INDENT.repeat(p.depth));
+    p.out.push_str(close.trim_start());
+    newline(p.out, p.at_line_start);
     Ok(())
 }
 

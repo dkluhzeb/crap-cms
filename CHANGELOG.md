@@ -157,6 +157,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/fmt/` code-quality cleanup pass. Inventory was structurally
+  already clean (4 files, 1594 LOC, all under the 1000 soft limit, 0
+  `#[allow]`, 0 `super::super`, 0 manual `Default`, 0 external deep
+  paths). Concrete changes:
+  - **Visibility tightening:** `pub mod printer` and `pub mod
+    tokenizer` demoted to `pub(crate) mod`. The single external
+    consumer (`commands/fmt.rs`) only imports
+    `crate::fmt::format` — neither submodule needs a public
+    surface.
+  - **`emit_start_tag` (6 positional args) refactored to a typed
+    `EmitStartTag<'_>` input struct.** Only >4-arg fn in the
+    module.
+  - **`mod.rs` architecture sketch** expanded from a 5-line `//!`
+    to a 25-line layout/conventions map covering the `tokenize ->
+    print` pipeline and the idempotency invariant.
+  42 fmt unit tests pass; clippy clean.
+
 - `src/config/` code-quality cleanup pass. Inventory was already in
   good shape on the playbook structural axes (0 `#[allow]`, 0
   `super::super`, 0 external deep-path imports, 0 wide-arg fns) but
