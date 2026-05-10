@@ -14,7 +14,7 @@ use super::helpers::has_locales_enabled;
 
 /// Entry point from the `run` dispatcher — destructures CLI args and delegates.
 #[cfg(not(tarpaulin_include))]
-pub fn run_collection(config_dir: &Path, action: MakeAction) -> Result<()> {
+pub(super) fn run_collection(config_dir: &Path, action: MakeAction) -> Result<()> {
     let MakeAction::Collection {
         slug,
         fields,

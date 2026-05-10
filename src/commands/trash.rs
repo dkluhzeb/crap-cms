@@ -183,28 +183,34 @@ fn parse_threshold(older_than: &str) -> Result<Option<i64>> {
     Ok(Some(secs))
 }
 
-/// Purge (permanently delete) trashed documents, optionally filtered by age.
-fn run_purge(
-    registry: &SharedRegistry,
-    pool: &DbPool,
-    storage: &dyn StorageBackend,
-    collection: Option<&str>,
-    older_than: &str,
+/// Args for [`run_purge`]. Bundles the runtime handles and the
+/// `TrashAction::Purge` variant fields so the call site reads
+/// declaratively rather than positionally.
+struct PurgeParams<'a> {
+    registry: &'a SharedRegistry,
+    pool: &'a DbPool,
+    storage: &'a dyn StorageBackend,
+    collection: Option<&'a str>,
+    older_than: &'a str,
     dry_run: bool,
-) -> Result<()> {
-    let slugs = resolve_collections(registry, collection)?;
+}
+
+/// Purge (permanently delete) trashed documents, optionally filtered by age.
+fn run_purge(p: PurgeParams<'_>) -> Result<()> {
+    let slugs = resolve_collections(p.registry, p.collection)?;
 
     if slugs.is_empty() {
         cli::info("No collections with soft_delete enabled.");
         return Ok(());
     }
 
-    let threshold_secs = parse_threshold(older_than)?;
+    let threshold_secs = parse_threshold(p.older_than)?;
 
-    let reg = registry
+    let reg = p
+        .registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-    let mut conn = pool.get().context("Failed to get DB connection")?;
+    let mut conn = p.pool.get().context("Failed to get DB connection")?;
     let mut total = 0u64;
 
     for slug in &slugs {
@@ -218,23 +224,23 @@ fn run_purge(
             continue;
         }
 
-        if dry_run {
+        if p.dry_run {
             for id in &ids {
                 cli::info(&format!("Would purge: {} / {}", slug, id));
             }
         } else {
             let tx = conn.transaction().context("Start transaction")?;
-            purge_documents(&tx, slug, def, &ids, storage)?;
+            purge_documents(&tx, slug, def, &ids, p.storage)?;
             tx.commit().context("Commit purge")?;
 
             // Re-acquire connection after commit (tx consumed it)
-            conn = pool.get().context("Failed to get DB connection")?;
+            conn = p.pool.get().context("Failed to get DB connection")?;
         }
 
         total += ids.len() as u64;
     }
 
-    if dry_run {
+    if p.dry_run {
         cli::info(&format!("{} document(s) would be purged.", total));
     } else {
         cli::success(&format!("Purged {} trashed document(s).", total));
@@ -407,14 +413,14 @@ pub fn run(action: TrashAction, config_dir: &Path) -> Result<()> {
             collection,
             older_than,
             dry_run,
-        } => run_purge(
-            &registry,
-            &pool,
-            &*storage,
-            collection.as_deref(),
-            &older_than,
+        } => run_purge(PurgeParams {
+            registry: &registry,
+            pool: &pool,
+            storage: &*storage,
+            collection: collection.as_deref(),
+            older_than: &older_than,
             dry_run,
-        ),
+        }),
 
         TrashAction::Restore { collection, id } => run_restore(&registry, &pool, &collection, &id),
 

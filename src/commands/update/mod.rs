@@ -501,12 +501,6 @@ fn confirm(prompt: &str) -> Result<bool> {
         .interact()?)
 }
 
-/// Resolve the path the startup nudge should write the update cache to.
-/// Exposed for tests.
-pub fn cache_path() -> Option<PathBuf> {
-    cache::default_path()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

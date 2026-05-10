@@ -17,5 +17,4 @@ pub(crate) use collection::make_collection_command;
 pub use dispatch::run;
 pub use helpers::{
     has_locales_enabled, try_load_collection_slugs, try_load_field_infos, try_load_field_names,
-    try_load_registry,
 };

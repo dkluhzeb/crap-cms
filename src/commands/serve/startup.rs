@@ -1,6 +1,7 @@
 //! Server startup — config loading, initialization, and server orchestration.
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use chrono::Utc;
 use nanoid::nanoid;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -11,7 +12,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     admin, api,
-    commands::helpers::{load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
+    commands::{
+        helpers::{load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
+        update,
+    },
     config::{AuthConfig, CrapConfig},
     core::{
         Registry, SharedRegistry,
@@ -164,11 +168,10 @@ fn log_update_notice(cfg: &CrapConfig) {
         return;
     }
 
-    let Some(path) = crate::commands::update::cache::default_path() else {
+    let Some(path) = update::cache::default_path() else {
         return;
     };
-    let Some(latest) = crate::commands::update::cache::fresh_latest_at(&path, chrono::Utc::now())
-    else {
+    let Some(latest) = update::cache::fresh_latest_at(&path, Utc::now()) else {
         return;
     };
 

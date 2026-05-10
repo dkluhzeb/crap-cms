@@ -73,7 +73,7 @@ pub(crate) use handlers::{extract_join_data_from_form, parse_multipart_form};
 
 use std::{
     path::PathBuf,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{Arc, OnceLock, atomic::AtomicUsize},
 };
 
 use handlebars::Handlebars;
@@ -202,7 +202,7 @@ impl AdminState {
             // Audit logs fall back to `transport_label = "http"`.
             // Per-session identity propagation needs `Mcp-Session-Id`
             // tracking — tracked separately.
-            client_name: std::sync::OnceLock::new(),
+            client_name: OnceLock::new(),
             transport_label: "(http)",
         }
     }

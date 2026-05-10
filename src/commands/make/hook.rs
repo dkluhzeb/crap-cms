@@ -15,7 +15,7 @@ use super::helpers::try_load_registry;
 
 /// Handle the `make hook` subcommand — resolve missing flags via interactive survey.
 #[cfg(not(tarpaulin_include))]
-pub fn run_hook(config_dir: &Path, action: MakeAction) -> Result<()> {
+pub(super) fn run_hook(config_dir: &Path, action: MakeAction) -> Result<()> {
     let MakeAction::Hook {
         name,
         hook_type,

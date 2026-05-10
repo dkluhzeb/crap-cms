@@ -18,7 +18,7 @@ use crate::{
 use super::helpers::{self, format_duration, timing_stats};
 
 /// Parameters for the create benchmark.
-pub struct CreateBenchParams<'a> {
+pub(super) struct CreateBenchParams<'a> {
     pub registry: &'a SharedRegistry,
     pub pool: &'a DbPool,
     pub runner: &'a HookRunner,

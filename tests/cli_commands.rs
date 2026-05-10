@@ -280,15 +280,15 @@ fn cmd_import_roundtrip() {
 fn cmd_user_create_via_library() {
     let (_tmp, pool, registry) = full_setup();
 
-    commands::user::user_create(
-        &pool,
-        &registry,
-        "users",
-        Some("lib_create@example.com".to_string()),
-        Some("password123".to_string()),
-        vec![("name".to_string(), "Lib User".to_string())],
-        &crap_cms::config::PasswordPolicy::default(),
-    )
+    commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("lib_create@example.com".to_string()),
+        password: Some("password123".to_string()),
+        fields: vec![("name".to_string(), "Lib User".to_string())],
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    })
     .unwrap();
 
     // Verify user was created in DB
@@ -312,18 +312,18 @@ fn cmd_user_create_via_library() {
 fn cmd_user_create_extra_fields() {
     let (_tmp, pool, registry) = full_setup();
 
-    commands::user::user_create(
-        &pool,
-        &registry,
-        "users",
-        Some("extra@example.com".to_string()),
-        Some("secret456".to_string()),
-        vec![
+    commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("extra@example.com".to_string()),
+        password: Some("secret456".to_string()),
+        fields: vec![
             ("name".to_string(), "Admin User".to_string()),
             ("role".to_string(), "admin".to_string()),
         ],
-        &crap_cms::config::PasswordPolicy::default(),
-    )
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    })
     .unwrap();
 
     let reg = registry.read().unwrap();
@@ -340,15 +340,15 @@ fn cmd_user_create_extra_fields() {
 fn cmd_user_create_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_create(
-        &pool,
-        &registry,
-        "posts",
-        Some("fail@example.com".to_string()),
-        Some("password".to_string()),
-        vec![],
-        &crap_cms::config::PasswordPolicy::default(),
-    );
+    let result = commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "posts",
+        email: Some("fail@example.com".to_string()),
+        password: Some("password".to_string()),
+        fields: vec![],
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    });
     assert!(
         result.is_err(),
         "creating user in non-auth collection should fail"
@@ -853,7 +853,7 @@ fn cmd_user_list() {
     create_user(&pool, &def, "bob@example.com", "pw456", &[("name", "Bob")]);
 
     // user_list should succeed
-    let result = commands::user::user_list(&pool, &registry, "users");
+    let result = commands::user_list(&pool, &registry, "users");
     assert!(
         result.is_ok(),
         "user_list should succeed: {:?}",
@@ -866,7 +866,7 @@ fn cmd_user_list_empty() {
     let (_tmp, pool, registry) = full_setup();
 
     // No users yet — should succeed with "No users" message
-    let result = commands::user::user_list(&pool, &registry, "users");
+    let result = commands::user_list(&pool, &registry, "users");
     assert!(
         result.is_ok(),
         "user_list on empty collection should succeed: {:?}",
@@ -878,7 +878,7 @@ fn cmd_user_list_empty() {
 fn cmd_user_list_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_list(&pool, &registry, "posts");
+    let result = commands::user_list(&pool, &registry, "posts");
     assert!(
         result.is_err(),
         "user_list on non-auth collection should fail"
@@ -891,7 +891,7 @@ fn cmd_user_list_non_auth_errors() {
 fn cmd_user_list_missing_collection_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_list(&pool, &registry, "nonexistent");
+    let result = commands::user_list(&pool, &registry, "nonexistent");
     assert!(
         result.is_err(),
         "user_list on missing collection should fail"

@@ -9,11 +9,12 @@ use crate::{
 };
 
 use super::{
-    create::user_create,
+    create::{UserCreateParams, user_create},
     info::user_info,
     list::user_list,
     modify::{
-        user_change_password, user_delete, user_lock, user_unlock, user_unverify, user_verify,
+        UserChangePasswordParams, UserDeleteParams, user_change_password, user_delete, user_lock,
+        user_unlock, user_unverify, user_verify,
     },
 };
 
@@ -30,15 +31,15 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
             let (pool, registry) = load_config_and_sync(config_dir)?;
 
-            user_create(
-                &pool,
-                &registry,
-                &collection,
+            user_create(UserCreateParams {
+                pool: &pool,
+                registry: &registry,
+                collection: &collection,
                 email,
                 password,
                 fields,
-                &cfg.auth.password_policy,
-            )
+                password_policy: &cfg.auth.password_policy,
+            })
         }
         UserAction::List { collection } => {
             let (pool, registry) = load_config_and_sync(config_dir)?;
@@ -62,7 +63,14 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
         } => {
             let (pool, registry) = load_config_and_sync(config_dir)?;
 
-            user_delete(&pool, &registry, &collection, email, id, confirm)
+            user_delete(UserDeleteParams {
+                pool: &pool,
+                registry: &registry,
+                collection: &collection,
+                email,
+                id,
+                confirm,
+            })
         }
         UserAction::Lock {
             collection,
@@ -109,15 +117,15 @@ pub fn run(config_dir: &Path, action: UserAction) -> Result<()> {
             let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
             let (pool, registry) = load_config_and_sync(config_dir)?;
 
-            user_change_password(
-                &pool,
-                &registry,
-                &collection,
+            user_change_password(UserChangePasswordParams {
+                pool: &pool,
+                registry: &registry,
+                collection: &collection,
                 email,
                 id,
                 password,
-                &cfg.auth.password_policy,
-            )
+                password_policy: &cfg.auth.password_policy,
+            })
         }
     }
 }

@@ -160,7 +160,7 @@ fn cmd_user_lock_by_email() {
     drop(conn);
 
     // Lock via command
-    commands::user::user_lock(
+    commands::user_lock(
         &pool,
         &registry,
         "users",
@@ -190,7 +190,7 @@ fn cmd_user_lock_by_id() {
     );
 
     // Lock via ID
-    commands::user::user_lock(&pool, &registry, "users", None, Some(doc.id.to_string())).unwrap();
+    commands::user_lock(&pool, &registry, "users", None, Some(doc.id.to_string())).unwrap();
 
     let conn = pool.get().unwrap();
     assert!(query::is_locked(&conn, "users", &doc.id).unwrap());
@@ -218,7 +218,7 @@ fn cmd_user_unlock_by_email() {
     drop(conn);
 
     // Unlock via command
-    commands::user::user_unlock(
+    commands::user_unlock(
         &pool,
         &registry,
         "users",
@@ -248,14 +248,14 @@ fn cmd_user_delete_with_confirm_by_email() {
     let id = doc.id.clone();
 
     // Delete with confirm=true (skips interactive prompt)
-    commands::user::user_delete(
-        &pool,
-        &registry,
-        "users",
-        Some("deleteme@example.com".to_string()),
-        None,
-        true, // skip confirmation
-    )
+    commands::user_delete(commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("deleteme@example.com".to_string()),
+        id: None,
+        confirm: true, // skip confirmation
+    })
     .unwrap();
 
     // Verify deleted
@@ -283,7 +283,15 @@ fn cmd_user_delete_with_confirm_by_id() {
     let id = doc.id.to_string();
 
     // Delete by ID with confirm=true
-    commands::user::user_delete(&pool, &registry, "users", None, Some(id.clone()), true).unwrap();
+    commands::user_delete(commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: None,
+        id: Some(id.clone()),
+        confirm: true,
+    })
+    .unwrap();
 
     let reg = registry.read().unwrap();
     let def = reg.get_collection("users").unwrap();
@@ -296,14 +304,14 @@ fn cmd_user_delete_with_confirm_by_id() {
 fn cmd_user_delete_nonexistent_email_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_delete(
-        &pool,
-        &registry,
-        "users",
-        Some("nonexistent@example.com".to_string()),
-        None,
-        true,
-    );
+    let result = commands::user_delete(commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("nonexistent@example.com".to_string()),
+        id: None,
+        confirm: true,
+    });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("No user found"), "error: {}", err);
@@ -325,15 +333,15 @@ fn cmd_user_change_password_by_email() {
     );
 
     // Change password via command (programmatic, not interactive)
-    commands::user::user_change_password(
-        &pool,
-        &registry,
-        "users",
-        Some("chpw@example.com".to_string()),
-        None,
-        Some("newpw123".to_string()),
-        &crap_cms::config::PasswordPolicy::default(),
-    )
+    commands::user_change_password(commands::UserChangePasswordParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("chpw@example.com".to_string()),
+        id: None,
+        password: Some("newpw123".to_string()),
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    })
     .unwrap();
 
     // Verify new password works
@@ -360,15 +368,15 @@ fn cmd_user_change_password_by_id() {
         &[("name", "ChPW ID")],
     );
 
-    commands::user::user_change_password(
-        &pool,
-        &registry,
-        "users",
-        None,
-        Some(doc.id.to_string()),
-        Some("newpw456".to_string()),
-        &crap_cms::config::PasswordPolicy::default(),
-    )
+    commands::user_change_password(commands::UserChangePasswordParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: None,
+        id: Some(doc.id.to_string()),
+        password: Some("newpw456".to_string()),
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    })
     .unwrap();
 
     let conn = pool.get().unwrap();
@@ -382,15 +390,15 @@ fn cmd_user_change_password_by_id() {
 fn cmd_user_change_password_nonexistent_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_change_password(
-        &pool,
-        &registry,
-        "users",
-        Some("noone@example.com".to_string()),
-        None,
-        Some("newpw".to_string()),
-        &crap_cms::config::PasswordPolicy::default(),
-    );
+    let result = commands::user_change_password(commands::UserChangePasswordParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "users",
+        email: Some("noone@example.com".to_string()),
+        id: None,
+        password: Some("newpw".to_string()),
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    });
     assert!(result.is_err());
 }
 
@@ -398,7 +406,7 @@ fn cmd_user_change_password_nonexistent_errors() {
 fn cmd_user_lock_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_lock(
+    let result = commands::user_lock(
         &pool,
         &registry,
         "posts",
@@ -414,7 +422,7 @@ fn cmd_user_lock_non_auth_errors() {
 fn cmd_user_unlock_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_unlock(
+    let result = commands::user_unlock(
         &pool,
         &registry,
         "posts",
@@ -430,14 +438,14 @@ fn cmd_user_unlock_non_auth_errors() {
 fn cmd_user_delete_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_delete(
-        &pool,
-        &registry,
-        "posts",
-        Some("anyone@example.com".to_string()),
-        None,
-        true,
-    );
+    let result = commands::user_delete(commands::UserDeleteParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "posts",
+        email: Some("anyone@example.com".to_string()),
+        id: None,
+        confirm: true,
+    });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {}", err);
@@ -447,15 +455,15 @@ fn cmd_user_delete_non_auth_errors() {
 fn cmd_user_change_password_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_change_password(
-        &pool,
-        &registry,
-        "posts",
-        Some("anyone@example.com".to_string()),
-        None,
-        Some("newpw".to_string()),
-        &crap_cms::config::PasswordPolicy::default(),
-    );
+    let result = commands::user_change_password(commands::UserChangePasswordParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "posts",
+        email: Some("anyone@example.com".to_string()),
+        id: None,
+        password: Some("newpw".to_string()),
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {}", err);
@@ -465,15 +473,15 @@ fn cmd_user_change_password_non_auth_errors() {
 fn cmd_user_create_missing_collection_errors() {
     let (_tmp, pool, registry) = full_setup();
 
-    let result = commands::user::user_create(
-        &pool,
-        &registry,
-        "nonexistent",
-        Some("test@example.com".to_string()),
-        Some("pw".to_string()),
-        vec![],
-        &crap_cms::config::PasswordPolicy::default(),
-    );
+    let result = commands::user_create(commands::UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: "nonexistent",
+        email: Some("test@example.com".to_string()),
+        password: Some("pw".to_string()),
+        fields: vec![],
+        password_policy: &crap_cms::config::PasswordPolicy::default(),
+    });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not found"), "error: {}", err);

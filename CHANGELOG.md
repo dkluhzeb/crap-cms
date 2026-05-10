@@ -157,6 +157,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/commands/` module audit per the alpha.9 playbook. The
+  module was already in markedly better shape than the earlier
+  audit subjects — inventory found 0 `#[allow(...)]` escapes,
+  0 `super::super::` chains, 0 manual `Default` impls, 0
+  external `crate::commands::sub::*` deep imports, and 1 file
+  >1000 LOC. Concrete work:
+  - `templates.rs` (1079 LOC, 7 public actions + ~10 helpers
+    + 11 colocated tests) split into a folder per the
+    "one file per `crap-cms templates <action>` subcommand"
+    rubric the user articulated: `templates/{list,extract,
+    status,layout,diff,shared}.rs` plus `mod.rs` (re-exports).
+    `status.rs` keeps the `customization_counts` /
+    `CustomizationCounts` API that `commands::status::display`
+    consumes, alongside the `Drift` enum and overlay walker.
+    `layout.rs` carries the 23 `EXACT_LAYOUT_MOVES` entries
+    plus `LayoutKind` + `LayoutEntry` + classifier helpers.
+    `diff.rs` keeps `print_unified_diff` and its tests.
+    `shared.rs` holds `split_kind`, `lookup_embedded`, and
+    `CRATE_VERSION` — used by both `status.rs` and `diff.rs`.
+    Each destination got the colocated tests that exercise
+    its own functions: 4 to `status.rs`, 5 to `layout.rs`,
+    2 to `diff.rs`. Largest resulting file is `layout.rs` at
+    563 LOC (the layout move tables dominate).
+  - Visibility tightening (axis 16). Sweep across the 8
+    subcommand subdirs found 54 `pub fn` / `pub struct` /
+    `pub enum` items with **zero external callers** outside
+    their own subdir; demoted to `pub(super)`. Cascaded
+    fallout: 4 `pub use` re-exports in `make/mod.rs`,
+    `db/mod.rs`, `user/mod.rs` referencing newly-private
+    items broke (`E0364: cannot widen private item`) — each
+    re-export was independently unused (no `crate::commands::
+    foo::bar` external grep hit), so the right answer was
+    to delete the re-export rather than restore the `pub`.
+    Items affected:
+    `try_load_registry`, `find_orphan_columns`, `user_verify`,
+    `user_unverify` — all genuinely module-internal helpers
+    that had been over-exposed. Deleted unused-pub fn
+    `cache_path` in `update/mod.rs` per axis 18 (its doc
+    comment said "Exposed for tests" but no test referenced
+    it; speculative API that never landed).
+  - Closure-to-fn-pointer (axis-2-style polish). 4 sites in
+    `user/modify.rs` converted from `.map_err(|e|
+    e.into_anyhow())` to `.map_err(ServiceError::into_anyhow)`,
+    matching the api/ + mcp/ pass.
+  - Axis 5 (param structs over wide signatures). 5 fns
+    refactored from positional-arg signatures to
+    `(p: *Params<'_>)` per "perfect readability for developers
+    — a struct with named fields is more visual than counting
+    to position 5":
+      - `user_create` (7 params → `UserCreateParams`)
+      - `user_change_password` (7 → `UserChangePasswordParams`)
+      - `user_delete` (6 → `UserDeleteParams`)
+      - `run_purge` (6 → `PurgeParams`, `pub(super)` private to trash.rs)
+      - `write_backup_manifest` (6 → `WriteManifestParams`,
+        private to db/backup.rs)
+    Both call sites in `init.rs` (commands-internal first-user
+    prompt) and ~10 sites in `tests/cli_commands*.rs` updated
+    to struct-literal construction.
+  - Axis 7 (top-level re-export consistency) follow-up. The
+    user-management library entry points (`user_create`,
+    `user_change_password`, `user_delete`, `user_list`,
+    `user_lock`, `user_unlock` + their `*Params` structs)
+    were reached at `commands::user::user_create` from 6+
+    integration-test sites, repeating the deep path twice
+    when `*Params` was also referenced in the same expression.
+    Promoted to `commands::*` top-level re-exports so callers
+    write `commands::user_create(commands::UserCreateParams {
+    ... })` instead of double-nested `commands::user::*`.
+    `init.rs`'s internal call site uses the promoted path too
+    for path consistency.
+  - Axis 8 (shortest available path). Swept inline deep-path
+    callsites across commands/ that violated CLAUDE.md's
+    "Keep module chains as short as possible — import and use
+    names directly":
+      - `chrono::Local::now()` → `Local::now()` (db/backup.rs)
+      - `chrono::Utc::now()` → `Utc::now()` (serve/startup.rs)
+      - `crate::commands::update::cache::*` → `update::cache::*`
+        with `commands::update` import (serve/startup.rs)
+      - `std::sync::OnceLock::new()` → `OnceLock::new()` (3
+        sites: commands/mcp.rs, admin/mod.rs, mcp/mod.rs test
+        block — left-over from earlier audit passes that
+        introduced the field but didn't import the type)
+      - `std::collections::BTreeMap` → `BTreeMap` (templates/
+        layout.rs)
+    `serde_json::*` and `tokio::*` callsites stay deep —
+    grepped codebase pattern shows they're treated as
+    "module prefix that adds semantic meaning" per CLAUDE.md's
+    explicit exception (e.g. `serde_json::to_string` reads as
+    "JSON serialize", `tokio::spawn` reads as "async runtime
+    spawn"; a bare `to_string` or `spawn` would lose that).
+  Other axes verified N/A: no `spawn_blocking` (commands are
+  sync top-level entry points), no Option-symmetric builders
+  (no own builders), no `match Some/None` registry lookups,
+  no log-then-transform `map_err` (the `anyhow!` ones in
+  `config_resolve` are error-message construction, not log
+  side-effects). `to_string_pretty` already used everywhere
+  JSON output is emitted (axis 11). Top-level re-exports
+  (`resolve_config_dir`, `load_config_and_sync`,
+  `parse_key_val`, action enums, `UpdateCmd`) all verified
+  to have ≥2 external users.
+  Beyond-playbook: 30-line architecture sketch added to
+  `commands/mod.rs` (layout convention, entry-point
+  convention, cross-cutting helpers, visibility convention)
+  matching the admin/ + mcp/ module-doc pattern.
+
 - `src/mcp/` module audit per the alpha.9 playbook. Three passes:
   - Pass 1 (structural). All 7 `#[allow(clippy::too_many_arguments)]`
     escapes scattered across `tools/collection/{write/{create,

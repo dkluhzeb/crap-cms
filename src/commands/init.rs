@@ -7,7 +7,11 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     cli::{self, crap_theme},
-    commands::{load_config_and_sync, make::make_collection_command, user::user_create},
+    commands::{
+        load_config_and_sync,
+        make::make_collection_command,
+        user::{UserCreateParams, user_create},
+    },
     config::CrapConfig,
     scaffold,
 };
@@ -240,15 +244,15 @@ fn prompt_first_user(config_dir: &Path, auth_collection: &str) -> Result<()> {
     let cfg = CrapConfig::load(config_dir).context("Failed to load config")?;
     let (pool, registry) = load_config_and_sync(config_dir)?;
 
-    if let Err(e) = user_create(
-        &pool,
-        &registry,
-        auth_collection,
-        None,
-        None,
-        vec![],
-        &cfg.auth.password_policy,
-    ) {
+    if let Err(e) = user_create(UserCreateParams {
+        pool: &pool,
+        registry: &registry,
+        collection: auth_collection,
+        email: None,
+        password: None,
+        fields: vec![],
+        password_policy: &cfg.auth.password_policy,
+    }) {
         cli::warning(&format!("Could not create user: {e}"));
         cli::hint(&format!(
             "You can create a user later with: crap-cms user create {}",

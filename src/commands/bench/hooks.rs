@@ -140,7 +140,7 @@ fn select_hooks(
 }
 
 /// Parameters for the hook benchmark.
-pub struct HookBenchParams<'a> {
+pub(super) struct HookBenchParams<'a> {
     pub registry: &'a SharedRegistry,
     pub runner: &'a HookRunner,
     pub conn: &'a dyn DbConnection,

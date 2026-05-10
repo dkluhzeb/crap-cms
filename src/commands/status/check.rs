@@ -66,7 +66,7 @@ fn gather_findings(
 }
 
 /// Run all checks and print results. Returns the number of warnings.
-pub fn run_checks(
+pub(super) fn run_checks(
     cfg: &CrapConfig,
     reg: &Registry,
     conn: &dyn DbConnection,

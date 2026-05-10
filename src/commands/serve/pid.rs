@@ -38,7 +38,7 @@ pub fn is_process_running(pid: u32) -> bool {
 
 /// Check if a PID file exists and warn if the process is still running.
 #[cfg(unix)]
-pub fn check_existing_pid(config_dir: &Path) {
+pub(super) fn check_existing_pid(config_dir: &Path) {
     helpers::check_existing_pid(config_dir, PID_FILENAME);
 }
 

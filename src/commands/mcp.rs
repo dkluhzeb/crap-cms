@@ -1,7 +1,8 @@
 //! `mcp` command — start the MCP stdio server.
 
+use std::{path::Path, sync::OnceLock};
+
 use anyhow::{Context as _, Result};
-use std::path::Path;
 use tracing::info;
 
 use crate::{
@@ -53,7 +54,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         event_transport: None,
         invalidation_transport: None,
         cache: None,
-        client_name: std::sync::OnceLock::new(),
+        client_name: OnceLock::new(),
         transport_label: "(stdio)",
     };
 

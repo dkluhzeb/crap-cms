@@ -107,7 +107,7 @@ fn drop_orphan_columns(conn: &dyn DbConnection, orphans: &[(String, Vec<String>)
 /// System columns (`_`-prefixed, `id`, `created_at`, `updated_at`) are excluded.
 /// Plugin columns are NOT orphans because plugins run during `init_lua` and their
 /// fields are included in the registry definitions.
-pub fn find_orphan_columns(
+pub(super) fn find_orphan_columns(
     conn: &dyn DbConnection,
     reg: &Registry,
     locale_config: &LocaleConfig,

@@ -14,7 +14,7 @@ use super::helpers::{get_user_email, resolve_user};
 
 /// Show detailed info for a single user.
 #[cfg(not(tarpaulin_include))]
-pub fn user_info(
+pub(super) fn user_info(
     pool: &DbPool,
     registry: &SharedRegistry,
     collection: &str,

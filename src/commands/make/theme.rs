@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::{cli::crap_theme, commands::MakeAction, scaffold};
 
 #[cfg(not(tarpaulin_include))]
-pub fn run_theme(config_dir: &Path, action: MakeAction) -> Result<()> {
+pub(super) fn run_theme(config_dir: &Path, action: MakeAction) -> Result<()> {
     let MakeAction::Theme { name, force } = action else {
         unreachable!()
     };

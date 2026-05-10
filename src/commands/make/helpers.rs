@@ -14,7 +14,7 @@ pub fn has_locales_enabled(config_dir: &Path) -> bool {
 }
 
 /// Try to load the Lua registry once for reuse across make helpers.
-pub fn try_load_registry(config_dir: &Path) -> Option<SharedRegistry> {
+pub(super) fn try_load_registry(config_dir: &Path) -> Option<SharedRegistry> {
     let config_dir = config_dir.canonicalize().ok()?;
     let cfg = CrapConfig::load(&config_dir).ok()?;
 

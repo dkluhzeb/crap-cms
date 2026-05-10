@@ -8,29 +8,32 @@ use crate::{
     config::{LocaleConfig, PasswordPolicy},
     core::SharedRegistry,
     db::{DbPool, query},
-    service::{self, ServiceContext},
+    service::{self, ServiceContext, ServiceError},
 };
 
 use super::helpers::{get_user_email, require_verify_email, resolve_user};
 
+/// Args for [`user_delete`].
+pub struct UserDeleteParams<'a> {
+    pub pool: &'a DbPool,
+    pub registry: &'a SharedRegistry,
+    pub collection: &'a str,
+    pub email: Option<String>,
+    pub id: Option<String>,
+    pub confirm: bool,
+}
+
 /// Delete a user from an auth collection.
 #[cfg(not(tarpaulin_include))]
-pub fn user_delete(
-    pool: &DbPool,
-    registry: &SharedRegistry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-    confirm: bool,
-) -> Result<()> {
-    let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
+    let (_, doc) = resolve_user(p.pool, p.registry, p.collection, p.email, p.id)?;
     let user_email = get_user_email(&doc);
 
-    if !confirm {
+    if !p.confirm {
         let proceed = Confirm::with_theme(&crap_theme())
             .with_prompt(format!(
                 "Delete user {} ({}) from '{}'?",
-                doc.id, user_email, collection
+                doc.id, user_email, p.collection
             ))
             .default(false)
             .interact()
@@ -43,29 +46,30 @@ pub fn user_delete(
         }
     }
 
-    let mut conn = pool.get().context("Failed to get database connection")?;
-    let reg = registry
+    let mut conn = p.pool.get().context("Failed to get database connection")?;
+    let reg = p
+        .registry
         .read()
         .map_err(|_| anyhow!("Failed to read registry"))?;
     let def = reg
-        .get_collection(collection)
-        .ok_or_else(|| anyhow!("Collection '{}' not found in registry", collection))?;
+        .get_collection(p.collection)
+        .ok_or_else(|| anyhow!("Collection '{}' not found in registry", p.collection))?;
     let lc = LocaleConfig::default();
 
     let tx = conn
         .transaction_immediate()
         .context("Failed to start transaction")?;
 
-    query::ref_count::before_hard_delete(&tx, collection, &doc.id, &def.fields, &lc)
+    query::ref_count::before_hard_delete(&tx, p.collection, &doc.id, &def.fields, &lc)
         .context("Failed to adjust ref counts")?;
 
-    query::delete(&tx, collection, &doc.id).context("Failed to delete user")?;
+    query::delete(&tx, p.collection, &doc.id).context("Failed to delete user")?;
 
     tx.commit().context("Failed to commit delete transaction")?;
 
     cli::success(&format!(
         "Deleted user {} ({}) from '{}'",
-        doc.id, user_email, collection
+        doc.id, user_email, p.collection
     ));
 
     Ok(())
@@ -87,7 +91,7 @@ pub fn user_lock(
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
 
     service::auth::lock_user(&ctx, &doc.id)
-        .map_err(|e| e.into_anyhow())
+        .map_err(ServiceError::into_anyhow)
         .context("Failed to lock user")?;
 
     cli::success(&format!(
@@ -116,7 +120,7 @@ pub fn user_unlock(
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
 
     service::auth::unlock_user(&ctx, &doc.id)
-        .map_err(|e| e.into_anyhow())
+        .map_err(ServiceError::into_anyhow)
         .context("Failed to unlock user")?;
 
     cli::success(&format!(
@@ -131,7 +135,7 @@ pub fn user_unlock(
 
 /// Verify a user account (mark email as verified).
 #[cfg(not(tarpaulin_include))]
-pub fn user_verify(
+pub(super) fn user_verify(
     pool: &DbPool,
     registry: &SharedRegistry,
     collection: &str,
@@ -146,7 +150,7 @@ pub fn user_verify(
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
 
     service::auth::mark_verified(&ctx, &doc.id)
-        .map_err(|e| e.into_anyhow())
+        .map_err(ServiceError::into_anyhow)
         .context("Failed to verify user")?;
 
     cli::success(&format!(
@@ -161,7 +165,7 @@ pub fn user_verify(
 
 /// Unverify a user account (mark email as unverified).
 #[cfg(not(tarpaulin_include))]
-pub fn user_unverify(
+pub(super) fn user_unverify(
     pool: &DbPool,
     registry: &SharedRegistry,
     collection: &str,
@@ -177,7 +181,7 @@ pub fn user_unverify(
     let ctx = ServiceContext::slug_only(collection).conn(&conn).build();
 
     service::auth::mark_unverified(&ctx, &doc.id)
-        .map_err(|e| e.into_anyhow())
+        .map_err(ServiceError::into_anyhow)
         .context("Failed to unverify user")?;
 
     cli::success(&format!(
@@ -190,23 +194,26 @@ pub fn user_unverify(
     Ok(())
 }
 
+/// Args for [`user_change_password`].
+pub struct UserChangePasswordParams<'a> {
+    pub pool: &'a DbPool,
+    pub registry: &'a SharedRegistry,
+    pub collection: &'a str,
+    pub email: Option<String>,
+    pub id: Option<String>,
+    pub password: Option<String>,
+    pub password_policy: &'a PasswordPolicy,
+}
+
 /// Change a user's password.
 #[cfg(not(tarpaulin_include))]
-pub fn user_change_password(
-    pool: &DbPool,
-    registry: &SharedRegistry,
-    collection: &str,
-    email: Option<String>,
-    id: Option<String>,
-    password: Option<String>,
-    password_policy: &PasswordPolicy,
-) -> Result<()> {
-    let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
+pub fn user_change_password(p: UserChangePasswordParams<'_>) -> Result<()> {
+    let (_, doc) = resolve_user(p.pool, p.registry, p.collection, p.email, p.id)?;
 
-    let password = match password {
-        Some(p) => {
+    let password = match p.password {
+        Some(pw) => {
             cli::warning("Password provided via command line — it may be visible in shell history");
-            p
+            pw
         }
         None => Password::with_theme(&crap_theme())
             .with_prompt("New password")
@@ -215,18 +222,18 @@ pub fn user_change_password(
             .context("Failed to read password")?,
     };
 
-    password_policy.validate(&password)?;
+    p.password_policy.validate(&password)?;
 
-    let conn = pool.get().context("Failed to get database connection")?;
+    let conn = p.pool.get().context("Failed to get database connection")?;
 
-    query::update_password(&conn, collection, &doc.id, &password)
+    query::update_password(&conn, p.collection, &doc.id, &password)
         .context("Failed to update password")?;
 
     cli::success(&format!(
         "Password changed for user {} ({}) in '{}'",
         doc.id,
         get_user_email(&doc),
-        collection
+        p.collection
     ));
 
     Ok(())

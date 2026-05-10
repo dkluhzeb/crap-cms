@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
+use chrono::Local;
 
 use crate::{
     cli::{self, Spinner},
@@ -48,14 +49,14 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         None
     };
 
-    write_backup_manifest(
-        &backup_dir,
-        &db_path,
-        &config_dir,
+    write_backup_manifest(WriteManifestParams {
+        backup_dir: &backup_dir,
+        db_path: &db_path,
+        config_dir: &config_dir,
         db_size,
         uploads_size,
         include_uploads,
-    )?;
+    })?;
 
     cli::success(&format!("Backup complete: {}", backup_dir.display()));
 
@@ -85,7 +86,7 @@ fn preflight_writable(base: &Path) -> Result<()> {
 /// Create the timestamped backup directory.
 #[cfg(not(tarpaulin_include))]
 fn create_backup_dir(config_dir: &Path, output: Option<PathBuf>) -> Result<PathBuf> {
-    let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let timestamp = Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
     let backup_base = output.unwrap_or_else(|| config_dir.join("backups"));
     let backup_dir = backup_base.join(format!("backup-{}", timestamp));
 
@@ -173,28 +174,33 @@ fn backup_uploads(config_dir: &Path, backup_dir: &Path) -> Option<u64> {
     }
 }
 
-/// Write the backup manifest.json with metadata about the backup.
-#[cfg(not(tarpaulin_include))]
-fn write_backup_manifest(
-    backup_dir: &Path,
-    db_path: &Path,
-    config_dir: &Path,
+/// Args for [`write_backup_manifest`]. Path triple + sizes +
+/// the `--include-uploads` flag — declarative call site instead
+/// of 6 positional args at the single dispatch site.
+struct WriteManifestParams<'a> {
+    backup_dir: &'a Path,
+    db_path: &'a Path,
+    config_dir: &'a Path,
     db_size: u64,
     uploads_size: Option<u64>,
     include_uploads: bool,
-) -> Result<()> {
+}
+
+/// Write the backup manifest.json with metadata about the backup.
+#[cfg(not(tarpaulin_include))]
+fn write_backup_manifest(p: WriteManifestParams<'_>) -> Result<()> {
     let manifest = BackupManifest {
         crap_version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: chrono::Local::now().to_rfc3339(),
-        db_size,
-        uploads_size,
-        include_uploads,
-        source_db: db_path.to_string_lossy().into_owned(),
-        source_config: config_dir.to_string_lossy().into_owned(),
+        timestamp: Local::now().to_rfc3339(),
+        db_size: p.db_size,
+        uploads_size: p.uploads_size,
+        include_uploads: p.include_uploads,
+        source_db: p.db_path.to_string_lossy().into_owned(),
+        source_config: p.config_dir.to_string_lossy().into_owned(),
     };
 
     fs::write(
-        backup_dir.join("manifest.json"),
+        p.backup_dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest)?,
     )
     .context("Failed to write manifest.json")

@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Format a byte count as a human-readable string (e.g., "1.5 MB").
-pub fn format_bytes(bytes: u64) -> String {
+pub(super) fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;
@@ -30,7 +30,7 @@ pub fn format_bytes(bytes: u64) -> String {
 }
 
 /// Recursively sum file sizes in a directory.
-pub fn dir_size(path: &Path) -> u64 {
+pub(super) fn dir_size(path: &Path) -> u64 {
     if !path.is_dir() {
         return 0;
     }
@@ -53,7 +53,7 @@ pub fn dir_size(path: &Path) -> u64 {
 }
 
 /// Count files (non-directories) in a directory recursively.
-pub fn walkdir_count(path: &Path) -> usize {
+pub(super) fn walkdir_count(path: &Path) -> usize {
     let mut count = 0;
 
     if let Ok(entries) = fs::read_dir(path) {
@@ -72,7 +72,7 @@ pub fn walkdir_count(path: &Path) -> usize {
 }
 
 /// Print database info (path and size for SQLite, backend name otherwise).
-pub fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbConnection) {
+pub(super) fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbConnection) {
     match conn.kind() {
         "sqlite" => {
             let db_path = cfg.db_path(config_dir);
@@ -98,7 +98,7 @@ pub fn print_db_info(cfg: &CrapConfig, config_dir: &Path, conn: &dyn DbConnectio
 /// Silently emits nothing when the config dir has no `templates/` and
 /// no `static/` directories (fresh install) — the kv line would be
 /// noise.
-pub fn print_customizations(config_dir: &Path) {
+pub(super) fn print_customizations(config_dir: &Path) {
     let counts = match crate::commands::templates::customization_counts(config_dir) {
         Ok(c) => c,
         Err(_) => return, // I/O issue under config_dir — silently skip
@@ -136,7 +136,7 @@ pub fn print_customizations(config_dir: &Path) {
 }
 
 /// Print upload directory stats (total size and file count).
-pub fn print_uploads_info(config_dir: &Path) {
+pub(super) fn print_uploads_info(config_dir: &Path) {
     let uploads_dir = config_dir.join("uploads");
 
     if uploads_dir.is_dir() {
@@ -151,7 +151,7 @@ pub fn print_uploads_info(config_dir: &Path) {
 }
 
 /// Print locale configuration summary.
-pub fn print_locale_info(cfg: &CrapConfig) {
+pub(super) fn print_locale_info(cfg: &CrapConfig) {
     if cfg.locale.is_enabled() {
         cli::kv(
             "Locales",
@@ -170,7 +170,7 @@ pub fn print_locale_info(cfg: &CrapConfig) {
 }
 
 /// Print collections table with row counts, trash counts, and tags.
-pub fn print_collections(reg: &Registry, conn: &dyn DbConnection) {
+pub(super) fn print_collections(reg: &Registry, conn: &dyn DbConnection) {
     if reg.collections.is_empty() {
         cli::dim("Collections: (none)");
         return;
@@ -234,7 +234,7 @@ fn trash_count(conn: &dyn DbConnection, slug: &str) -> i64 {
 }
 
 /// Print globals table.
-pub fn print_globals(reg: &Registry) {
+pub(super) fn print_globals(reg: &Registry) {
     if reg.globals.is_empty() {
         cli::dim("Globals: (none)");
         return;
@@ -253,7 +253,7 @@ pub fn print_globals(reg: &Registry) {
 }
 
 /// Print server configuration summary.
-pub fn print_server_info(cfg: &CrapConfig) {
+pub(super) fn print_server_info(cfg: &CrapConfig) {
     cli::kv(
         "Admin",
         &format!("{}:{}", cfg.server.host, cfg.server.admin_port),
@@ -279,7 +279,7 @@ pub fn print_server_info(cfg: &CrapConfig) {
 }
 
 /// Print access rules overview for collections and globals.
-pub fn print_access(cfg: &CrapConfig, reg: &Registry) {
+pub(super) fn print_access(cfg: &CrapConfig, reg: &Registry) {
     let mut table = Table::new(vec!["Target", "Read", "Create", "Update", "Delete"]);
     let mut has_rows = false;
 
@@ -343,7 +343,7 @@ fn access_row(target: &str, a: &crate::core::collection::Access) -> Vec<String> 
 }
 
 /// Print live event configuration per collection.
-pub fn print_live(cfg: &CrapConfig, reg: &Registry) {
+pub(super) fn print_live(cfg: &CrapConfig, reg: &Registry) {
     if !cfg.live.enabled {
         cli::dim("Live events: disabled");
         return;
@@ -401,7 +401,7 @@ fn live_status(live: &Option<LiveSetting>, mode: &LiveMode) -> String {
 }
 
 /// Print versioning configuration per collection.
-pub fn print_versions(reg: &Registry) {
+pub(super) fn print_versions(reg: &Registry) {
     let versioned: Vec<_> = {
         let mut slugs: Vec<_> = reg.collections.keys().collect();
         slugs.sort();
@@ -435,7 +435,7 @@ pub fn print_versions(reg: &Registry) {
 }
 
 /// Print migration status (total, applied, pending).
-pub fn print_migrations(config_dir: &Path, pool: &DbPool) {
+pub(super) fn print_migrations(config_dir: &Path, pool: &DbPool) {
     let migrations_dir = config_dir.join("migrations");
     let all_files = migrate::list_migration_files(&migrations_dir).unwrap_or_default();
     let applied = migrate::get_applied_migrations(pool).unwrap_or_default();
@@ -453,7 +453,7 @@ pub fn print_migrations(config_dir: &Path, pool: &DbPool) {
 }
 
 /// Print hooks assigned to collections and globals.
-pub fn print_hooks(reg: &Registry) {
+pub(super) fn print_hooks(reg: &Registry) {
     let mut rows = Vec::new();
 
     let mut slugs: Vec<_> = reg.collections.keys().collect();
@@ -518,7 +518,7 @@ fn collect_hook_names(h: &crate::core::collection::Hooks) -> Vec<(&'static str, 
 }
 
 /// Print jobs summary (defined, running, failed in last 24h).
-pub fn print_jobs(reg: &Registry, conn: &dyn DbConnection, config_dir: &Path) {
+pub(super) fn print_jobs(reg: &Registry, conn: &dyn DbConnection, config_dir: &Path) {
     let jobs_dir = config_dir.join("jobs");
 
     if !jobs_dir.is_dir() {

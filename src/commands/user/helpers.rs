@@ -15,7 +15,7 @@ use crate::{
 use dialoguer::Input;
 
 /// Extract the email field from a user document, defaulting to "unknown".
-pub fn get_user_email(doc: &Document) -> &str {
+pub(super) fn get_user_email(doc: &Document) -> &str {
     doc.fields
         .get("email")
         .and_then(|v| v.as_str())
@@ -24,7 +24,7 @@ pub fn get_user_email(doc: &Document) -> &str {
 
 /// Load and validate an auth collection definition from the registry.
 /// Returns the cloned definition (lock is released before returning).
-pub fn load_auth_collection(
+pub(super) fn load_auth_collection(
     registry: &SharedRegistry,
     collection: &str,
 ) -> Result<CollectionDefinition> {
@@ -47,7 +47,7 @@ pub fn load_auth_collection(
 }
 
 /// Check that the collection has email verification enabled.
-pub fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Result<()> {
+pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Result<()> {
     if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
         bail!(
             "Collection '{}' does not have email verification enabled (verify_email must be true)",
@@ -61,7 +61,7 @@ pub fn require_verify_email(def: &CollectionDefinition, collection: &str) -> Res
 /// Resolve a user by --email or --id. Returns (def, document).
 /// Untestable: interactive fallback uses dialoguer::Select for user selection.
 #[cfg(not(tarpaulin_include))]
-pub fn resolve_user(
+pub(super) fn resolve_user(
     pool: &DbPool,
     registry: &SharedRegistry,
     collection: &str,
@@ -137,7 +137,7 @@ fn select_user_interactive(
 }
 
 /// Convert a JSON default value to a string.
-pub fn default_value_string(val: &Value) -> String {
+pub(super) fn default_value_string(val: &Value) -> String {
     match val {
         Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -147,7 +147,7 @@ pub fn default_value_string(val: &Value) -> String {
 /// Prompt for required fields not already present in the data map.
 /// Skips email (handled separately) and checkboxes (absent = false).
 #[cfg(not(tarpaulin_include))]
-pub fn prompt_required_fields(
+pub(super) fn prompt_required_fields(
     def: &CollectionDefinition,
     data: &mut HashMap<String, String>,
 ) -> Result<()> {

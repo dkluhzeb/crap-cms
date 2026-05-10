@@ -9,7 +9,7 @@ use std::{fs::File, io::Read, path::Path};
 /// Manifest lines look like `<hex>  <filename>` (double-space). Filenames may
 /// contain subdirectories depending on how the workflow was run — we compare
 /// against the basename to be robust.
-pub fn expected_hex_for(manifest: &str, asset_name: &str) -> Option<String> {
+pub(super) fn expected_hex_for(manifest: &str, asset_name: &str) -> Option<String> {
     for line in manifest.lines() {
         let mut parts = line.split_whitespace();
         let Some(hex) = parts.next() else { continue };
@@ -26,7 +26,7 @@ pub fn expected_hex_for(manifest: &str, asset_name: &str) -> Option<String> {
 }
 
 /// Hex-encoded SHA256 of a file.
-pub fn file_hex(path: &Path) -> Result<String> {
+pub(super) fn file_hex(path: &Path) -> Result<String> {
     let mut file =
         File::open(path).with_context(|| format!("opening {} for checksum", path.display()))?;
 
@@ -56,7 +56,11 @@ pub fn verify(downloaded: &Path, expected_hex: &str) -> Result<()> {
 }
 
 /// Given a manifest + asset name, verify the file.
-pub fn verify_against_manifest(downloaded: &Path, manifest: &str, asset_name: &str) -> Result<()> {
+pub(super) fn verify_against_manifest(
+    downloaded: &Path,
+    manifest: &str,
+    asset_name: &str,
+) -> Result<()> {
     let expected = expected_hex_for(manifest, asset_name)
         .ok_or_else(|| anyhow!("no SHA256 entry for {asset_name} in SHA256SUMS manifest"))?;
     verify(downloaded, &expected)

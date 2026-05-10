@@ -32,7 +32,7 @@ use crate::cli;
 const SUPPORTED_SHELLS: &[Shell] = &[Shell::Bash, Shell::Zsh, Shell::Fish];
 
 /// Detect the user's login shell from `$SHELL`.
-pub fn detect_shell() -> Option<Shell> {
+pub(super) fn detect_shell() -> Option<Shell> {
     let shell_path = std::env::var("SHELL").ok()?;
     let shell_name = shell_path.rsplit('/').next()?;
 
@@ -46,14 +46,14 @@ pub fn detect_shell() -> Option<Shell> {
 }
 
 /// Generate completions to stdout (for `update completions <shell>`).
-pub fn print_completions<C: CommandFactory>(shell: Shell) {
+pub(super) fn print_completions<C: CommandFactory>(shell: Shell) {
     let mut cmd = C::command();
     let name = cmd.get_name().to_string();
     generate(shell, &mut cmd, name, &mut std::io::stdout());
 }
 
 /// Install completions for the user's login shell. Best-effort.
-pub fn install_completions<C: CommandFactory>() {
+pub(super) fn install_completions<C: CommandFactory>() {
     let Some(shell) = detect_shell() else {
         return;
     };
@@ -64,7 +64,7 @@ pub fn install_completions<C: CommandFactory>() {
 /// Install completions for a specific shell. Probes the shell's setup so
 /// we write somewhere that will actually be loaded; emits an activation
 /// hint otherwise.
-pub fn install_completions_for<C: CommandFactory>(shell: Shell) {
+pub(super) fn install_completions_for<C: CommandFactory>(shell: Shell) {
     let Some(plan) = plan_install(shell) else {
         cli::warning(&format!(
             "Don't know where to install completions for {shell}."
@@ -104,7 +104,7 @@ pub fn install_completions_for<C: CommandFactory>(shell: Shell) {
 
 /// Remove the installed completion file for a specific shell.
 /// Returns true if a file was removed.
-pub fn uninstall_completions_for(shell: Shell) -> bool {
+pub(super) fn uninstall_completions_for(shell: Shell) -> bool {
     let Some(path) = default_install_path(shell) else {
         return false;
     };
@@ -114,7 +114,7 @@ pub fn uninstall_completions_for(shell: Shell) -> bool {
 
 /// Remove completion files for every supported shell. Called when
 /// `update uninstall` removes the last installed version.
-pub fn uninstall_all_completions() {
+pub(super) fn uninstall_all_completions() {
     let mut removed = 0usize;
 
     for &shell in SUPPORTED_SHELLS {

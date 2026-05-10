@@ -12,7 +12,7 @@ use crate::{
 
 /// Where the benchmark data came from.
 #[derive(Debug, Clone, Copy)]
-pub enum DataSource {
+pub(super) enum DataSource {
     UserProvided,
     ExistingDocument,
     Synthetic,
@@ -29,7 +29,7 @@ impl DataSource {
 }
 
 /// Resolve benchmark data for a collection. Priority: user JSON > existing doc > synthetic.
-pub fn resolve_bench_data(
+pub(super) fn resolve_bench_data(
     conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
@@ -79,7 +79,7 @@ pub fn to_string_map(data: &DocumentFields) -> HashMap<String, String> {
 }
 
 /// Append a random suffix to unique fields so benchmarks don't hit uniqueness violations.
-pub fn randomize_unique_fields(data: &mut DocumentFields, fields: &[FieldDefinition]) {
+pub(super) fn randomize_unique_fields(data: &mut DocumentFields, fields: &[FieldDefinition]) {
     for field in fields {
         if !field.unique {
             continue;
@@ -153,7 +153,7 @@ pub fn format_duration(d: Duration) -> String {
 }
 
 /// Compute min, avg, max from a slice of durations.
-pub fn timing_stats(durations: &[Duration]) -> (Duration, Duration, Duration) {
+pub(super) fn timing_stats(durations: &[Duration]) -> (Duration, Duration, Duration) {
     let min = durations.iter().copied().min().unwrap_or_default();
     let max = durations.iter().copied().max().unwrap_or_default();
     let sum: Duration = durations.iter().sum();

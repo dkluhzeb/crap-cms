@@ -179,7 +179,7 @@ fn xdg_data_home() -> Option<PathBuf> {
 }
 
 /// Binary filename inside a version directory (includes `.exe` on Windows).
-pub fn binary_filename() -> &'static str {
+pub(super) fn binary_filename() -> &'static str {
     if cfg!(windows) {
         "crap-cms.exe"
     } else {

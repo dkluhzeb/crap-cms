@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BackupManifest {
+pub(super) struct BackupManifest {
     pub crap_version: String,
     pub timestamp: String,
     pub db_size: u64,
