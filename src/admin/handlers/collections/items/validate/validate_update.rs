@@ -20,7 +20,7 @@ use crate::{
     db::{AccessResult, query::LocaleContext},
 };
 
-use super::prepare_form_for_validation;
+use super::helpers::prepare_form_for_validation;
 
 /// POST /admin/collections/{slug}/{id}/validate — validate fields for update
 #[tracing::instrument(skip(state, auth_user, payload), name = "collections::validate_update")]
