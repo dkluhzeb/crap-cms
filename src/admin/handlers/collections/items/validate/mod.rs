@@ -4,11 +4,11 @@
 //! returning JSON `{ valid: true }` or `{ valid: false, errors: { ... } }`.
 //! Used by the `<crap-validate-form>` component to validate fields before uploading files.
 
-mod helpers;
 /// Handler for validating a create form.
-pub mod validate_create;
+pub mod create;
+mod helpers;
 /// Handler for validating an update form.
-pub mod validate_update;
+pub mod update;
 
-pub use validate_create::validate_create;
-pub use validate_update::validate_update;
+pub use create::validate_create;
+pub use update::validate_update;

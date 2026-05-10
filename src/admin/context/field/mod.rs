@@ -38,7 +38,7 @@
 
 mod base;
 mod composites;
-mod field_context;
+mod context;
 mod refs;
 mod scalars;
 
@@ -50,7 +50,7 @@ pub use composites::{
     ArrayField, ArrayRow, BlockDefinition, BlockRow, BlocksField, GroupField, RowField, TabPanel,
     TabsField,
 };
-pub use field_context::FieldContext;
+pub use context::FieldContext;
 pub use refs::{JoinField, JoinItem, RelationshipField, RelationshipSelectedItem, UploadField};
 pub use scalars::{
     CheckboxField, ChoiceField, CodeField, DateField, NumberField, RichtextField,

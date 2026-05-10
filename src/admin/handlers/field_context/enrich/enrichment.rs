@@ -7,7 +7,7 @@ use crate::{
         AdminState,
         context::field::{FieldContext, RelationshipSelectedItem, TabsField},
         handlers::field_context::enrich::{
-            EnrichCtx, EnrichOptions, enrich_types, nested::enrich_nested_fields,
+            EnrichCtx, EnrichOptions, nested::enrich_nested_fields, types,
         },
     },
     core::{DocumentFields, FieldDefinition, Registry, RelationshipConfig},
@@ -111,16 +111,16 @@ fn enrich_single_field(
 
     match fc {
         FieldContext::Relationship(rf) => {
-            enrich_types::enrich_relationship(rf, field_def, doc_fields, conn, reg, rel_locale_ctx);
+            types::enrich_relationship(rf, field_def, doc_fields, conn, reg, rel_locale_ctx);
         }
         FieldContext::Upload(uf) => {
-            enrich_types::enrich_upload(uf, field_def, doc_fields, conn, reg, rel_locale_ctx);
+            types::enrich_upload(uf, field_def, doc_fields, conn, reg, rel_locale_ctx);
         }
         FieldContext::Array(af) => {
-            enrich_types::enrich_array(af, field_def, doc_fields, enrich_ctx);
+            types::enrich_array(af, field_def, doc_fields, enrich_ctx);
         }
         FieldContext::Blocks(bf) => {
-            enrich_types::enrich_blocks(bf, field_def, doc_fields, enrich_ctx);
+            types::enrich_blocks(bf, field_def, doc_fields, enrich_ctx);
         }
         FieldContext::Row(rf) => {
             enrich_field_contexts(
@@ -153,10 +153,10 @@ fn enrich_single_field(
             enrich_tabs(tf, field_def, doc_fields, state, opts);
         }
         FieldContext::Join(jf) => {
-            enrich_types::enrich_join(jf, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
+            types::enrich_join(jf, field_def, conn, reg, rel_locale_ctx, opts.doc_id);
         }
         FieldContext::Richtext(rf) => {
-            enrich_types::enrich_richtext(rf, reg);
+            types::enrich_richtext(rf, reg);
         }
         _ => {}
     }

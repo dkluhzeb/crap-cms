@@ -10,8 +10,8 @@ use crate::scaffold::guards::refuse_file_overwrite;
 use crate::scaffold::paths;
 use crate::scaffold::render::render;
 
-use super::collection_options::CollectionOptions;
 use super::field_types::CONTAINER_TYPES;
+use super::options::CollectionOptions;
 use super::parser::{pluralize, singularize};
 use super::stubs::FieldStub;
 use super::writer::write_field_lua;

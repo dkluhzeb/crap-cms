@@ -4,8 +4,6 @@
 //! - `PasswordProvider` trait — password hashing/verification (default: `Argon2PasswordProvider`)
 //! - Free functions for backward compat and Lua API usage
 
-/// Authenticated user context for request extensions.
-pub mod auth_user;
 /// JWT claims module + builder.
 pub mod claims;
 /// Error types for auth operations.
@@ -18,8 +16,9 @@ pub mod jwt_secret;
 pub mod password;
 /// Token provider trait + JWT implementation.
 pub mod token;
+/// Authenticated user context for request extensions.
+pub mod user;
 
-pub use auth_user::AuthUser;
 pub use claims::{Claims, ClaimsBuilder};
 pub use errors::ResetTokenError;
 pub use hashed_password::HashedPassword;
@@ -31,3 +30,4 @@ pub use password::{
 pub use token::{
     JwtTokenProvider, SharedTokenProvider, TokenProvider, create_token, validate_token,
 };
+pub use user::AuthUser;

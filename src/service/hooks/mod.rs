@@ -1,9 +1,9 @@
 //! Hook trait abstractions for read and write operations.
 
-mod read_hooks;
+mod read;
 pub(crate) mod richtext;
-mod write_hooks;
+mod write;
 
-pub(crate) use read_hooks::ReadHooksJoinGuard;
-pub use read_hooks::{LuaReadHooks, ReadHooks, RunnerReadHooks};
-pub use write_hooks::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};
+pub(crate) use read::ReadHooksJoinGuard;
+pub use read::{LuaReadHooks, ReadHooks, RunnerReadHooks};
+pub use write::{LuaWriteHooks, RunnerWriteHooks, WriteHooks};

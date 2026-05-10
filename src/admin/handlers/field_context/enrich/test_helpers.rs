@@ -33,7 +33,7 @@ use crate::{
     hooks::HookRunner,
 };
 
-use super::{EnrichOptions, SubFieldOpts, enrich_types};
+use super::{EnrichOptions, SubFieldOpts, types};
 
 /// Build a minimal [`FieldDefinition`] with default admin/validation settings.
 pub(super) fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
@@ -102,11 +102,11 @@ pub(super) fn enrich_nested_fields_values(
     *sub_fields = typed.into_iter().map(|fc| fc.to_value()).collect();
 }
 
-/// Test wrapper for `enrich_types::enrich_richtext` taking `&mut Value`.
+/// Test wrapper for `types::enrich_richtext` taking `&mut Value`.
 pub(super) fn enrich_richtext_value(ctx: &mut Value, reg: &Registry) {
     let mut typed: RichtextField =
         serde_json::from_value(ctx.clone()).expect("test richtext ctx must deserialize");
-    enrich_types::enrich_richtext(&mut typed, reg);
+    types::enrich_richtext(&mut typed, reg);
     *ctx = serde_json::to_value(typed).expect("RichtextField serializes infallibly");
 }
 

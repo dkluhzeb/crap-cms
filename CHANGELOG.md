@@ -157,6 +157,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Stutter-rename pass (file-structure audit, section B).** Files
+  whose names repeated their parent directory got their prefixes
+  dropped — the prefix is informative inside the type name
+  (`FieldDefinition`, `AuthConfig`) but redundant inside the path.
+  Renames: `core/auth/auth_user.rs` → `user.rs`,
+  `core/collection/collection_definition.rs` → `definition.rs`,
+  `core/field/{field_admin,field_definition}.rs` →
+  `{admin,definition}.rs`,
+  `core/richtext/richtext_node_def.rs` → `node_def.rs`,
+  `config/auth/auth_config.rs` → `config.rs`,
+  `config/server/server_config.rs` → `config.rs`,
+  `scaffold/collection/collection_options.rs` → `options.rs`,
+  `admin/context/field/field_context.rs` → `context.rs`,
+  `admin/handlers/field_context/enrich/{enrich_ctx,enrich_options,enrich_types}.rs`
+  → `{ctx,options,types}.rs`,
+  `admin/handlers/collections/items/validate/{validate_create,validate_update}.rs`
+  → `{create,update}.rs`,
+  `service/hooks/{read_hooks,write_hooks}.rs` → `{read,write}.rs`.
+  No type names changed. `commands/export/{export_cmd,import_cmd}.rs`
+  were left as-is — `module_inception` clippy fires on
+  `commands/export/export.rs`; the parent dir needs its own restructure
+  (planned section C) before those two can shed the `_cmd` suffix.
+
 - **Inline `use` cleanup, codebase-wide.** CLAUDE.md's "tree-style
   imports at the top of the file/module. Never use inline `use`
   statements inside function bodies" rule had drifted in the

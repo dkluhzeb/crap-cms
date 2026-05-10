@@ -3,7 +3,7 @@
 mod access;
 mod admin_config;
 mod auth;
-mod collection_definition;
+mod definition;
 mod global_definition;
 mod hooks;
 mod index_definition;
@@ -15,7 +15,7 @@ mod versions_config;
 pub use access::{Access, AccessBuilder};
 pub use admin_config::{AdminConfig, AdminConfigBuilder};
 pub use auth::{Auth, AuthStrategy, MfaMode};
-pub use collection_definition::{CollectionDefinition, CollectionDefinitionBuilder};
+pub use definition::{CollectionDefinition, CollectionDefinitionBuilder};
 pub use global_definition::{GlobalDefinition, GlobalDefinitionBuilder};
 pub use hooks::{Hooks, HooksBuilder};
 pub use index_definition::IndexDefinition;

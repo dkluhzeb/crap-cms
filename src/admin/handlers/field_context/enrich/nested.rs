@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::enrich_types::build_upload_item;
+use super::types::build_upload_item;
 use crate::{
     admin::{
         context::field::{
