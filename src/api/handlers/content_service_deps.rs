@@ -6,13 +6,9 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     config::CrapConfig,
     core::{
-        Registry,
-        auth::{SharedPasswordProvider, SharedTokenProvider},
-        cache::SharedCache,
-        email::EmailRenderer,
-        event::{SharedEventTransport, SharedInvalidationTransport},
+        Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport,
+        SharedPasswordProvider, SharedStorage, SharedTokenProvider, email::EmailRenderer,
         rate_limit::LoginRateLimiter,
-        upload::SharedStorage,
     },
     db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,

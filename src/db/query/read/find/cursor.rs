@@ -102,8 +102,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::config::{CrapConfig, DatabaseConfig};
+    use crate::core::CollectionDefinition;
     use crate::core::DocumentFields;
-    use crate::core::collection::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::query::cursor::{CursorData, SortDirection};
     use crate::db::query::read::find::find;

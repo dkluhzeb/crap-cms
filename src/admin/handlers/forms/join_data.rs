@@ -3,10 +3,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::core::{
-    DocumentFields,
-    field::{FieldDefinition, FieldType},
-};
+use crate::core::{DocumentFields, FieldDefinition, FieldType};
 
 use super::composite::parse_composite_form_data;
 
@@ -78,8 +75,7 @@ fn extract_join_data_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
-
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }

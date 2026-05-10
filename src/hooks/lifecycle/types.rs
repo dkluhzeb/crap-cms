@@ -5,10 +5,8 @@ use mlua::Lua;
 use crate::{
     config::LocaleConfig,
     core::{
-        ConditionExpr, Document,
-        cache::SharedCache,
-        event::{SharedEventTransport, SharedInvalidationTransport},
-        upload::SharedStorage,
+        ConditionExpr, Document, SharedCache, SharedEventTransport, SharedInvalidationTransport,
+        SharedStorage,
     },
     db::{DbConnection, query::SharedPopulateSingleflight},
     service::{EventQueue, ServiceContext, VerificationQueue},

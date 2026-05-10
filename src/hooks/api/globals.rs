@@ -106,6 +106,7 @@ fn list(lua: &Lua, reg: &SharedRegistry) -> mlua::Result<Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::GlobalDefinition;
     use crate::core::Registry;
     use std::sync::{Arc, RwLock};
 
@@ -145,8 +146,6 @@ mod tests {
     /// `tests/lua_api_filters.rs::globals_*_redefine` tests panic.
     #[test]
     fn redefine_existing_global_at_runtime_is_allowed() {
-        use crate::core::collection::GlobalDefinition;
-
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
         let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));

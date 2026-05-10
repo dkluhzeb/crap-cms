@@ -16,7 +16,7 @@ use super::{
 };
 
 /// Typed admin form field context — one variant per
-/// [`FieldType`](crate::core::field::FieldType).
+/// [`FieldType`](crate::core::FieldType).
 ///
 /// Internally tagged on `field_type` (lowercase variant name) so the
 /// serialized JSON has `{"field_type": "text", ...flat fields...}`. This is

@@ -9,10 +9,7 @@ use std::path::Path;
 use crate::{
     cli,
     config::{CompressionMode, CrapConfig},
-    core::{
-        Registry,
-        collection::{Hooks, LiveMode},
-    },
+    core::{Hooks, LiveMode, Registry},
     db::{DbConnection, DbPool, migrate},
 };
 

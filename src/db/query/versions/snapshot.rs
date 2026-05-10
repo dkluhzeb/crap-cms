@@ -181,8 +181,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, RelationshipConfig};
-
+    use crate::core::{FieldDefinition, FieldTab, RelationshipConfig};
     #[test]
     fn extract_snapshot_data_basic() {
         let fields = vec![

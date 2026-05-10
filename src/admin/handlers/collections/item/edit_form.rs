@@ -30,11 +30,7 @@ use crate::{
             task_join_error_response,
         },
     },
-    core::{
-        CollectionDefinition, Document,
-        auth::{AuthUser, Claims},
-        upload,
-    },
+    core::{AuthUser, Claims, CollectionDefinition, Document, upload},
     db::{DbPool, query::LocaleContext},
     hooks::HookRunner,
     service::{

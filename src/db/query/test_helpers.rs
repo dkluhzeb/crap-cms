@@ -1,9 +1,6 @@
 //! Shared test helpers for db::query module tests.
 
-use crate::core::{
-    collection::CollectionDefinition,
-    field::{FieldDefinition, FieldTab, FieldType},
-};
+use crate::core::{FieldDefinition, FieldTab, FieldType, collection::CollectionDefinition};
 
 pub(crate) fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, field_type).build()

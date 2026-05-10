@@ -280,8 +280,8 @@ fn query_has_many(
 mod tests {
     use super::*;
     use crate::core::Slug;
-    use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::core::{CollectionDefinition, GlobalDefinition};
+    use crate::core::{FieldDefinition, FieldType, RelationshipConfig};
     use crate::db::query::read::back_references::test_helpers::*;
 
     // ── Has-one relationship ──────────────────────────────────────────

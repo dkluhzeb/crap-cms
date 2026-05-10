@@ -12,8 +12,7 @@
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::core::field::{FieldDefinition, FieldType};
-
+use crate::core::{FieldDefinition, FieldType};
 /// Normalize `has_many` select/text/number form values into canonical JSON array strings.
 pub(crate) fn transform_select_has_many(
     form: &mut HashMap<String, String>,
@@ -103,8 +102,7 @@ fn transform_has_many_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
-
+    use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }

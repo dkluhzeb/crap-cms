@@ -127,8 +127,8 @@ fn field_to_lua_type(field: &FieldDefinition, parent_pascal: &str) -> String {
 mod tests {
     use super::super::test_helpers::{checkbox_field, select_field, text_field};
     use super::*;
-    use crate::core::field::{LocalizedString, RelationshipConfig};
-
+    use crate::core::SelectOption;
+    use crate::core::{LocalizedString, RelationshipConfig};
     #[test]
     fn field_type_mapping() {
         let f = text_field("x", true);
@@ -305,7 +305,6 @@ mod tests {
 
     #[test]
     fn lua_select_has_many_with_and_without_options() {
-        use crate::core::field::SelectOption;
         // has_many with options → (opt1 | opt2|string)[]
         let f_with_opts = FieldDefinition::builder("tags", FieldType::Select)
             .has_many(true)

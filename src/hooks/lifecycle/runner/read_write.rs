@@ -6,9 +6,7 @@ use serde_json::Value;
 use super::run::{FieldHooksCall, FieldWriteCtx};
 use crate::{
     core::{
-        Document, DocumentFields, FieldDefinition, FieldType,
-        collection::Hooks,
-        validate::{FieldError, ValidationError},
+        Document, DocumentFields, FieldDefinition, FieldError, FieldType, Hooks, ValidationError,
     },
     db::{DbConnection, query::helpers::prefixed_name},
     hooks::{
@@ -365,8 +363,7 @@ fn collect_richtext_fields_recursive<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldAdmin, FieldTab};
-
+    use crate::core::{FieldAdmin, FieldTab};
     fn rt_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, crate::core::FieldType::Richtext)
             .admin(FieldAdmin::builder().nodes(vec!["cta".to_string()]).build())

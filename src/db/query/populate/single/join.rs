@@ -58,7 +58,7 @@ pub(super) fn populate_join_fields(
 fn populate_join_docs(
     ctx: &PopulateContext<'_>,
     doc: &Document,
-    jc: &crate::core::field::JoinConfig,
+    jc: &crate::core::JoinConfig,
     target_def: &crate::core::CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
     opts: &PopulateOpts<'_>,

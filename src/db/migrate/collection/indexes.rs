@@ -195,7 +195,7 @@ pub(super) fn sync_indexes(
 mod tests {
     use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::{FieldDefinition, FieldType};
     use crate::db::migrate::collection::create::create_collection_table;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::{DbConnection, DbValue};

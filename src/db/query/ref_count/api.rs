@@ -259,9 +259,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::core::CollectionDefinition;
     use crate::core::DocumentFields;
     use crate::core::Slug;
-    use crate::core::collection::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::query::ref_count::test_helpers::*;
 

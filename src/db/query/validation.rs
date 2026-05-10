@@ -275,8 +275,7 @@ pub(crate) fn validate_filter_field(
 mod tests {
     use super::*;
     use crate::core::{
-        CollectionDefinition,
-        field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig},
+        CollectionDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig,
     };
 
     #[test]

@@ -82,7 +82,7 @@ pub use self::theme::{MakeThemeOptions, make_theme};
 pub use self::wizard::interactive_field_wizard;
 
 // Re-export the shared title-case helper so submodules can call `super::to_title_case`.
-pub(crate) use crate::core::field::to_title_case;
+pub(crate) use crate::core::to_title_case;
 
 // Re-export from canonical location for backward compatibility.
 //

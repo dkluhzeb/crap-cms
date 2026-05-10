@@ -15,13 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::LocaleConfig,
-    core::{
-        SharedRegistry,
-        email::SYSTEM_EMAIL_JOB,
-        job::{JobDefinition, JobRun},
-        upload,
-        upload::SharedStorage,
-    },
+    core::{JobDefinition, JobRun, SharedRegistry, SharedStorage, email::SYSTEM_EMAIL_JOB, upload},
     db::{
         BoxedConnection, DbConnection, DbPool, DbValue,
         query::{self, images as image_query, jobs as job_query},

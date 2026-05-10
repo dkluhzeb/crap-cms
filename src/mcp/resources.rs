@@ -158,10 +158,7 @@ pub(in crate::mcp) fn read_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        JwtSecret,
-        collection::{CollectionDefinition, GlobalDefinition},
-    };
+    use crate::core::{CollectionDefinition, GlobalDefinition, JwtSecret};
 
     #[test]
     fn list_resources_returns_three() {

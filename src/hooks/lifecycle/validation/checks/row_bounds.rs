@@ -51,7 +51,7 @@ pub(crate) fn check_row_bounds(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::core::DocumentFields;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
 

@@ -16,10 +16,7 @@
 use anyhow::{Result, bail};
 use mlua::Lua;
 
-use crate::core::{
-    FieldDefinition, SharedRegistry,
-    collection::{Access, Hooks},
-};
+use crate::core::{Access, FieldDefinition, Hooks, SharedRegistry};
 use crate::hooks::lifecycle::resolve_hook_function;
 
 /// Validate every statically-known hook and access reference in the registry.
@@ -247,10 +244,7 @@ fn check_field_list(lua: &Lua, fields: &[FieldDefinition], source: &str, out: &m
 mod tests {
     use mlua::{Lua, LuaOptions, StdLib};
 
-    use crate::core::{
-        CollectionDefinition, FieldDefinition, FieldType, Registry,
-        collection::{Access, Hooks},
-    };
+    use crate::core::{Access, CollectionDefinition, FieldDefinition, FieldType, Hooks, Registry};
 
     use super::*;
 

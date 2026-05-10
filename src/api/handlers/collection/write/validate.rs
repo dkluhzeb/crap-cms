@@ -11,7 +11,7 @@ use crate::{
         content,
         handlers::{ContentService, convert::prost_struct_to_json_map},
     },
-    core::{CollectionDefinition, DocumentFields, Registry, auth::SharedTokenProvider},
+    core::{CollectionDefinition, DocumentFields, Registry, SharedTokenProvider},
     db::{DbPool, LocaleContext},
     hooks::HookRunner,
     service::{self, RunnerWriteHooks, ServiceError, ValidateContext, WriteInput},

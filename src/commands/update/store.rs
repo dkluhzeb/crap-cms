@@ -13,6 +13,8 @@
 //! the single atomic swap point for `crap-cms update use <version>`.
 
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -199,7 +201,6 @@ fn make_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
 
 #[cfg(unix)]
 fn set_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(path, perms)?;

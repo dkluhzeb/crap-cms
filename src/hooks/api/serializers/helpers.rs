@@ -146,7 +146,7 @@ fn json_to_lua_inner(lua: &Lua, value: &JsonValue, depth: usize) -> mlua::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::LocalizedString;
+    use crate::core::LocalizedString;
     use mlua::Lua;
     use serde_json::json;
     use std::collections::HashMap;

@@ -63,7 +63,7 @@ fn is_value_present(field: &FieldDefinition, value: Option<&Value>, is_empty: bo
 mod tests {
     use super::*;
     use crate::core::DocumentFields;
-    use crate::core::field::RelationshipConfig;
+    use crate::core::RelationshipConfig;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
 

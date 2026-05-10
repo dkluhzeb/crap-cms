@@ -22,17 +22,11 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        Document, DocumentFields, ReqContext,
-        auth::AuthUser,
-        cache::SharedCache,
-        collection::CollectionDefinition,
-        event::{SharedEventTransport, SharedInvalidationTransport},
+        AuthUser, CollectionDefinition, Document, DocumentFields, ReqContext, SharedCache,
+        SharedEventTransport, SharedInvalidationTransport,
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
-    db::{
-        DbPool,
-        query::{LocaleContext, LocaleMode},
-    },
+    db::{DbPool, LocaleContext, LocaleMode},
     hooks::HookRunner,
     service::{
         self, ServiceContext, ServiceError,

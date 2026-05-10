@@ -16,8 +16,8 @@ use crate::{
         },
     },
     core::{
-        CollectionDefinition, DocumentFields, Registry, auth::SharedTokenProvider,
-        cache::SharedCache, event::SharedEventTransport,
+        CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
+        SharedTokenProvider,
     },
     db::{DbPool, LocaleContext},
     hooks::HookRunner,

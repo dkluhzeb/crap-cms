@@ -74,10 +74,8 @@ mod tests {
     use crate::{
         config::LocaleConfig,
         core::{
-            CollectionDefinition, Document, DocumentFields, FieldDefinition,
-            collection::{Hooks, VersionsConfig},
-            field::FieldType,
-            validate::ValidationError,
+            CollectionDefinition, Document, DocumentFields, FieldDefinition, FieldType, Hooks,
+            ValidationError, VersionsConfig,
         },
         db::{AccessResult, DbConnection},
         hooks::{HookContext, HookEvent, ValidationCtx, lifecycle::AfterReadCtx},

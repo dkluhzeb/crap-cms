@@ -28,12 +28,8 @@ use tracing::warn;
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser, Document, Registry, Slug,
-        collection::LiveMode,
-        event::{
-            EventOperation, EventReceiver, EventTarget, InvalidationReceiver, MutationEvent,
-            RecvError,
-        },
+        AuthUser, Document, EventReceiver, LiveMode, MutationEvent, Registry, Slug,
+        event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{AccessResult, FilterClause, query::filter::memory},
     hooks::HookRunner,
@@ -482,9 +478,8 @@ mod tests {
     use crate::{
         config::CrapConfig,
         core::{
-            DocumentFields, DocumentId,
-            collection::{Access, CollectionDefinition},
-            field::{FieldAccess, FieldDefinition, FieldType},
+            Access, CollectionDefinition, DocumentFields, DocumentId, FieldAccess, FieldDefinition,
+            FieldType,
         },
     };
 

@@ -14,10 +14,7 @@ use crate::{
         AdminState,
         handlers::shared::{forbidden, get_user_doc, htmx_redirect, paths},
     },
-    core::{
-        CollectionDefinition, Document, auth::AuthUser, cache::SharedCache,
-        event::SharedEventTransport,
-    },
+    core::{CollectionDefinition, Document, SharedCache, SharedEventTransport, auth::AuthUser},
     db::DbPool,
     hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},

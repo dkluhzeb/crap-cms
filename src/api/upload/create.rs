@@ -11,7 +11,7 @@ use tokio::task;
 
 use std::collections::HashMap;
 
-use crate::core::upload::SharedStorage;
+use crate::core::SharedStorage;
 use crate::{
     admin::AdminState,
     core::{CollectionDefinition, Document, event::EventOperation, upload::UploadedFile},

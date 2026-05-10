@@ -62,7 +62,7 @@ fn warn_global_index_unique(slug: &str, fields: &[FieldDefinition]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::LocalizedString;
+    use crate::core::LocalizedString;
     use mlua::Lua;
 
     #[test]

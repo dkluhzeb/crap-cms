@@ -141,7 +141,7 @@ fn find_missing_ids(conn: &dyn DbConnection, collection: &str, ids: &[&str]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::CollectionDefinition;
+    use crate::core::CollectionDefinition;
     use crate::db::query::ref_count::outgoing_ref::OutgoingRef;
     use crate::db::query::ref_count::test_helpers::*;
 

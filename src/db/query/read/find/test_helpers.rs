@@ -3,8 +3,8 @@
 use tempfile::TempDir;
 
 use crate::config::{CrapConfig, DatabaseConfig};
-use crate::core::collection::CollectionDefinition;
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::CollectionDefinition;
+use crate::core::{FieldDefinition, FieldType};
 use crate::db::{DbConnection, DbPool, pool};
 
 pub(super) fn test_def() -> CollectionDefinition {

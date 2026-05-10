@@ -23,15 +23,8 @@ use crate::{
             shared::auto_label_from_name,
         },
     },
-    core::{
-        Registry,
-        field::{FieldDefinition, FieldType},
-        upload,
-    },
-    db::{
-        DbConnection,
-        query::{self, LocaleContext},
-    },
+    core::{FieldDefinition, FieldType, Registry, upload},
+    db::{DbConnection, LocaleContext, query},
 };
 
 /// Build the indexed form name for a sub-field within an array/blocks row.
@@ -626,10 +619,8 @@ mod tests {
             },
         },
         core::{
-            CollectionDefinition, RelationshipConfig,
-            field::{BlockDefinition, FieldType, LocalizedString, SelectOption},
-            registry::Registry,
-            upload::CollectionUpload,
+            BlockDefinition, CollectionDefinition, FieldType, LocalizedString, Registry,
+            RelationshipConfig, SelectOption, upload::CollectionUpload,
         },
     };
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 
-use crate::core::job::{JobRun, JobStatus};
+use crate::core::{JobRun, JobStatus};
 use crate::db::query::jobs::count_running_per_slug;
 use crate::db::{DbConnection, DbRow, DbValue};
 

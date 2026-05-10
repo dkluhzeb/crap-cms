@@ -15,8 +15,7 @@ use crate::{
     admin::AdminState,
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, event::EventOperation, upload::SharedStorage,
-        upload::UploadedFile,
+        CollectionDefinition, Document, SharedStorage, event::EventOperation, upload::UploadedFile,
     },
     db::DbPool,
     hooks::HookRunner,

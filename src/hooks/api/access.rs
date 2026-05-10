@@ -278,10 +278,7 @@ fn resolve_fields(registry: &SharedRegistry, collection: &str) -> LuaResult<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        CollectionDefinition, Registry, SharedRegistry,
-        collection::{Access, GlobalDefinition},
-    };
+    use crate::core::{Access, CollectionDefinition, GlobalDefinition, Registry, SharedRegistry};
     use crate::db::{Filter, FilterClause, FilterOp};
     use mlua::Lua;
     use std::sync::{Arc, RwLock};

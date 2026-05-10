@@ -11,7 +11,7 @@ use crate::{
         content,
         handlers::{ContentService, convert::document_to_proto},
     },
-    core::{CollectionDefinition, Registry, auth::SharedTokenProvider, cache::SharedCache},
+    core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
     db::{DbPool, LocaleContext, query::SharedPopulateSingleflight},
     hooks::HookRunner,
     service::{FindByIdInput, RunnerReadHooks, ServiceContext, ServiceError, find_document_by_id},

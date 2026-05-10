@@ -278,7 +278,7 @@ pub(crate) fn extract_status_filter(raw_query: &str) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::FieldType;
+    use crate::core::FieldType;
     use crate::core::{collection::CollectionDefinition, field::FieldDefinition};
 
     fn test_def() -> CollectionDefinition {

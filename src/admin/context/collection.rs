@@ -5,11 +5,7 @@ use serde::Serialize;
 
 use crate::{
     admin::context::FieldMeta,
-    core::{
-        CollectionDefinition,
-        collection::{Auth, VersionsConfig},
-        upload::CollectionUpload,
-    },
+    core::{CollectionDefinition, VersionsConfig, collection::Auth, upload::CollectionUpload},
 };
 
 /// Top-level collection metadata exposed to templates.

@@ -116,7 +116,7 @@ pub(in crate::db::migrate) fn ensure_locale_column(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::collection::test_helpers::*;
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("snippet", FieldType::Code)
                 .admin(
-                    crate::core::field::FieldAdmin::builder()
+                    crate::core::FieldAdmin::builder()
                         .languages(vec!["javascript".to_string(), "python".to_string()])
                         .build(),
                 )
@@ -264,7 +264,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("snippet", FieldType::Code)
                 .admin(
-                    crate::core::field::FieldAdmin::builder()
+                    crate::core::FieldAdmin::builder()
                         .language("javascript")
                         .build(),
                 )
@@ -282,7 +282,7 @@ mod tests {
                 .fields(vec![
                     FieldDefinition::builder("example", FieldType::Code)
                         .admin(
-                            crate::core::field::FieldAdmin::builder()
+                            crate::core::FieldAdmin::builder()
                                 .languages(vec!["javascript".to_string()])
                                 .build(),
                         )

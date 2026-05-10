@@ -10,8 +10,8 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, SharedRegistry,
-        collection::GlobalDefinition, event::SharedInvalidationTransport,
+        CollectionDefinition, Document, DocumentFields, GlobalDefinition,
+        SharedInvalidationTransport, SharedRegistry,
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{

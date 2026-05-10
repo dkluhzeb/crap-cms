@@ -272,16 +272,16 @@ pub fn verify_mfa_code(ctx: &ServiceContext, id: &str, code: &str) -> Result<boo
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use crate::core::event::{InProcessInvalidationBus, SharedInvalidationTransport};
     use std::sync::Arc;
 
     use rusqlite::Connection;
 
     use crate::{
         core::{
-            CollectionDefinition, FieldDefinition,
+            CollectionDefinition, FieldDefinition, FieldType,
             auth::{Argon2PasswordProvider, PasswordProvider},
             collection::Auth,
-            field::FieldType,
         },
         service::ServiceContext,
     };
@@ -564,8 +564,6 @@ mod tests {
 
     #[tokio::test]
     async fn lock_user_publishes_invalidation_when_transport_set() {
-        use crate::core::event::{InProcessInvalidationBus, SharedInvalidationTransport};
-
         let (conn, def, _) = setup();
         let bus = Arc::new(InProcessInvalidationBus::new());
         let transport: SharedInvalidationTransport = bus;

@@ -11,10 +11,7 @@ use crate::{
         },
         handlers::shared::{extract_editor_locale, get_user_doc, has_read_access, render_page},
     },
-    core::{
-        Document,
-        auth::{AuthUser, Claims},
-    },
+    core::{AuthUser, Claims, Document},
     db::{BoxedConnection, DbConnection, ops::count_documents, query::helpers::global_table},
 };
 

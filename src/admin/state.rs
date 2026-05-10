@@ -14,13 +14,9 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     config::CrapConfig,
     core::{
-        JwtSecret, Registry,
-        auth::{SharedPasswordProvider, SharedTokenProvider},
-        cache::SharedCache,
-        email::{EmailRenderer, SharedEmailProvider},
-        event::{SharedEventTransport, SharedInvalidationTransport},
-        rate_limit::LoginRateLimiter,
-        upload::SharedStorage,
+        JwtSecret, Registry, SharedCache, SharedEmailProvider, SharedEventTransport,
+        SharedInvalidationTransport, SharedPasswordProvider, SharedStorage, SharedTokenProvider,
+        email::EmailRenderer, rate_limit::LoginRateLimiter,
     },
     db::{DbPool, query::SharedPopulateSingleflight},
     hooks::HookRunner,

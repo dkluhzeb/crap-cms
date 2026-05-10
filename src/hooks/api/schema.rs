@@ -4,8 +4,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, SharedRegistry,
-    collection::{GlobalDefinition, Labels},
+    CollectionDefinition, FieldDefinition, GlobalDefinition, Labels, SharedRegistry,
 };
 
 /// Convert `Labels` to a Lua table with optional `singular` and `plural` keys.

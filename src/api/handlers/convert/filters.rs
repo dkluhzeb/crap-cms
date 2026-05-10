@@ -143,7 +143,7 @@ pub(in crate::api::handlers) fn value_to_string(v: &JsonValue) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::query::{FilterClause, FilterOp};
+    use crate::db::{FilterClause, FilterOp};
     use serde_json::json;
 
     // ── parse_where_json ───────────────────────────────────────────────────

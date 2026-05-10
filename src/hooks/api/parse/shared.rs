@@ -226,8 +226,8 @@ pub(super) fn parse_access_config(config: &Table) -> Access {
 mod tests {
     use super::*;
     use crate::core::{
+        BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString,
         collection::LiveSetting,
-        field::{BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString},
     };
     use mlua::Lua;
 

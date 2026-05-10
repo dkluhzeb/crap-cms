@@ -9,8 +9,7 @@ use crate::{
     config::CrapConfig,
     core::Registry,
     db::{migrate, pool},
-    hooks,
-    hooks::HookRunner,
+    hooks::{self, HookRunner},
     mcp,
 };
 

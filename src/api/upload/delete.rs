@@ -13,8 +13,8 @@ use crate::{
     admin::AdminState,
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, ReqContext, event::EventOperation,
-        event::SharedInvalidationTransport, upload::SharedStorage,
+        CollectionDefinition, Document, ReqContext, SharedInvalidationTransport, SharedStorage,
+        event::EventOperation,
     },
     db::{DbPool, query},
     hooks::HookRunner,

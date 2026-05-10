@@ -136,7 +136,7 @@ pub(super) fn scan_blocks(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::collection::CollectionDefinition;
+    use crate::core::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::DbConnection;
     use crate::db::query::read::back_references::find_back_references;

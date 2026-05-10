@@ -160,8 +160,7 @@ fn collect_field_access_denied(
 mod tests {
     use super::super::test_helpers::*;
     use super::*;
-    use crate::core::field::{FieldAccess, FieldType};
-
+    use crate::core::{FieldAccess, FieldType};
     #[test]
     fn field_read_no_access_config_allows_all() {
         let lua = setup_lua();
@@ -591,7 +590,7 @@ mod tests {
         let lua = setup_lua();
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab {
+                .tabs(vec![crate::core::FieldTab {
                     label: "Main".to_string(),
                     description: None,
                     fields: vec![make_field(
@@ -613,7 +612,7 @@ mod tests {
         let lua = setup_lua();
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab {
+                .tabs(vec![crate::core::FieldTab {
                     label: "Settings".to_string(),
                     description: None,
                     fields: vec![make_field(
@@ -634,7 +633,7 @@ mod tests {
     fn has_any_nested_in_tabs() {
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab {
+                .tabs(vec![crate::core::FieldTab {
                     label: "SEO".to_string(),
                     description: None,
                     fields: vec![make_field(

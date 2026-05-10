@@ -51,7 +51,7 @@ pub(super) fn sync_blocks_table(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::DbConnection;
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
     use crate::db::migrate::helpers::introspection::{get_table_columns, table_exists};

@@ -11,11 +11,9 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, SharedRegistry,
+        CollectionDefinition, JobDefinition, JobRun, SharedRegistry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
-        job::{JobDefinition, JobRun},
-        upload,
-        upload::StorageBackend,
+        upload::{self, StorageBackend},
     },
     db::{DbConnection, DbPool, DbValue, query, query::jobs as job_query},
     hooks::HookRunner,

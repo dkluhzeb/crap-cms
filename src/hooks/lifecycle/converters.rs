@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use crate::{
     core::{Document, FieldDefinition, FieldType},
     db::{
-        Filter, FilterClause, FilterOp, FindQuery,
-        query::{PaginationResult, cursor::CursorData, helpers::prefixed_name},
+        Filter, FilterClause, FilterOp, FindQuery, PaginationResult,
+        query::{cursor::CursorData, helpers::prefixed_name},
     },
     hooks::api,
 };

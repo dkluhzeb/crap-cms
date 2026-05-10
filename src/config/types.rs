@@ -255,7 +255,9 @@ impl CrapConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{is_world_accessible_mode, should_warn_loose_permissions};
     use crate::config::PaginationMode;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn default_config_values() {
@@ -460,9 +462,6 @@ dev_mode = false
     #[cfg(unix)]
     #[test]
     fn config_warns_on_world_readable_with_secrets() {
-        use super::{is_world_accessible_mode, should_warn_loose_permissions};
-        use std::os::unix::fs::PermissionsExt;
-
         // Write a real world-readable config with a secret, then sanity-check
         // that load() succeeds. The warn! call is not captured by default tests,
         // but the pure decision helper is.

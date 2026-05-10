@@ -5,10 +5,7 @@ use std::{fs, path::Path};
 use crate::{
     cli::{self, Table},
     config::CrapConfig,
-    core::{
-        Registry,
-        collection::{LiveMode, LiveSetting},
-    },
+    core::{LiveMode, LiveSetting, Registry},
     db::{DbConnection, DbPool, migrate, query},
 };
 
@@ -330,7 +327,7 @@ pub(super) fn print_access(cfg: &CrapConfig, reg: &Registry) {
     cli::dim(&format!("  Unset rules default to: {default}"));
 }
 
-fn access_row(target: &str, a: &crate::core::collection::Access) -> Vec<String> {
+fn access_row(target: &str, a: &crate::core::Access) -> Vec<String> {
     let fmt = |opt: &Option<String>| opt.as_deref().unwrap_or("-").to_string();
 
     vec![
@@ -498,7 +495,7 @@ pub(super) fn print_hooks(reg: &Registry) {
 }
 
 /// Collect non-empty hook events with their function names.
-fn collect_hook_names(h: &crate::core::collection::Hooks) -> Vec<(&'static str, &Vec<String>)> {
+fn collect_hook_names(h: &crate::core::Hooks) -> Vec<(&'static str, &Vec<String>)> {
     let events: &[(&str, &Vec<String>)] = &[
         ("before_validate", &h.before_validate),
         ("before_change", &h.before_change),

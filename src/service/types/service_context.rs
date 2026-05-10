@@ -8,13 +8,9 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, FieldDefinition,
-        cache::SharedCache,
-        collection::{GlobalDefinition, LiveMode},
-        event::{
-            EventOperation, EventTarget, EventUser, SharedEventTransport,
-            SharedInvalidationTransport,
-        },
+        CollectionDefinition, Document, DocumentFields, FieldDefinition, GlobalDefinition,
+        LiveMode, SharedCache, SharedEventTransport, SharedInvalidationTransport,
+        event::{EventOperation, EventTarget, EventUser},
     },
     db::{BoxedConnection, DbConnection, DbPool, query::helpers::global_table},
     hooks::HookRunner,

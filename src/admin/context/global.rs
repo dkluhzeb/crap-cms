@@ -37,10 +37,7 @@ impl GlobalContext {
 mod tests {
     use super::*;
 
-    use crate::core::{
-        collection::{GlobalDefinition, Labels},
-        field::{FieldDefinition, FieldType, LocalizedString},
-    };
+    use crate::core::{FieldDefinition, FieldType, GlobalDefinition, Labels, LocalizedString};
 
     #[test]
     fn from_def_includes_all_fields() {

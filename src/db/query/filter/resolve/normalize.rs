@@ -66,7 +66,7 @@ fn is_group_field(name: &str, fields: &[FieldDefinition]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::query::{Filter, FilterClause, FilterOp};
 
     fn make_field(name: &str, ft: FieldType, localized: bool) -> FieldDefinition {

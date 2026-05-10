@@ -134,7 +134,7 @@ fn alter_array_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::FieldTab;
+    use crate::core::FieldTab;
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
     use crate::db::migrate::helpers::join_tables::sync_join_tables;
 

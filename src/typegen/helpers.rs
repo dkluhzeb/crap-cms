@@ -118,7 +118,7 @@ pub(super) fn collect_sub_type_fields(fields: &[FieldDefinition]) -> Vec<SubType
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{collection::GlobalDefinition, field::FieldDefinition};
+    use crate::core::{FieldDefinition, FieldTab, GlobalDefinition, RelationshipConfig};
 
     // ── to_pascal_case ─────────────────────────────────────────────────
 
@@ -151,7 +151,6 @@ mod tests {
 
     #[test]
     fn rel_has_many_with_has_many_config() {
-        use crate::core::field::RelationshipConfig;
         let f = FieldDefinition::builder("", FieldType::Upload)
             .relationship(RelationshipConfig::new("media", true))
             .build();
@@ -160,7 +159,6 @@ mod tests {
 
     #[test]
     fn rel_has_many_with_has_one_config() {
-        use crate::core::field::RelationshipConfig;
         let f = FieldDefinition::builder("", FieldType::Upload)
             .relationship(RelationshipConfig::new("media", false))
             .build();
@@ -269,7 +267,6 @@ mod tests {
 
     #[test]
     fn collect_sub_type_fields_nested_in_layout() {
-        use crate::core::field::FieldTab;
         let fields = vec![
             FieldDefinition::builder("row_container", FieldType::Row)
                 .fields(vec![

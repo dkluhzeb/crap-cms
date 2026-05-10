@@ -15,8 +15,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        CollectionDefinition, DocumentFields, Registry, auth::SharedTokenProvider,
-        cache::SharedCache, event::SharedEventTransport,
+        CollectionDefinition, DocumentFields, Registry, SharedCache, SharedEventTransport,
+        SharedTokenProvider,
     },
     db::{AccessResult, DbPool, LocaleContext},
     hooks::HookRunner,

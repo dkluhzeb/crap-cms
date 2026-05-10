@@ -23,10 +23,7 @@ use crate::{
         },
     },
     core::auth::AuthUser,
-    db::{
-        AccessResult,
-        query::{LocaleContext, helpers::global_table},
-    },
+    db::{AccessResult, LocaleContext, query::helpers::global_table},
 };
 
 /// POST /admin/globals/{slug}/validate — validate fields for global update

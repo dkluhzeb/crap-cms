@@ -269,11 +269,7 @@ mod tests {
 
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
-    use crate::core::{
-        FieldType,
-        collection::{CollectionDefinition, VersionsConfig},
-        field::{FieldDefinition, FieldTab},
-    };
+    use crate::core::{CollectionDefinition, FieldDefinition, FieldTab, FieldType, VersionsConfig};
     use crate::db::{BoxedConnection, pool, query::versions::crud::count_versions};
     use tempfile::TempDir;
 

@@ -4,10 +4,7 @@ use serde_json::json;
 
 use crate::{
     core::{
-        DocumentFields,
-        field::{FieldAdmin, FieldDefinition, FieldTab, FieldType},
-        registry::Registry,
-        richtext::RichtextNodeDef,
+        DocumentFields, FieldAdmin, FieldDefinition, FieldTab, FieldType, Registry, RichtextNodeDef,
     },
     hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
 };

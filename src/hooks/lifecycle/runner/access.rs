@@ -221,8 +221,7 @@ fn deny_all_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldAccess, FieldTab};
-
+    use crate::core::{FieldAccess, FieldTab};
     fn make_field(name: &str, access: FieldAccess) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .access(access)

@@ -11,8 +11,7 @@ use crate::{
     config::CrapConfig,
     core::SharedRegistry,
     db::{DbPool, migrate, pool},
-    hooks,
-    hooks::HookRunner,
+    hooks::{self, HookRunner},
 };
 
 #[cfg(unix)]

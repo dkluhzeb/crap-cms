@@ -50,7 +50,7 @@ pub(super) fn register_fields(lua: &Lua, crap: &Table) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::FieldType;
+    use crate::core::FieldType;
     use mlua::{Function, Lua, Table};
 
     #[test]

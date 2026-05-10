@@ -9,8 +9,7 @@ use serde_json::Value;
 
 use crate::{
     core::{
-        FieldDefinition,
-        registry::Registry,
+        FieldDefinition, Registry,
         richtext::renderer::{extract_attr_value, html_escape_attr},
     },
     hooks::{api, lifecycle::execution::resolve_hook_function},

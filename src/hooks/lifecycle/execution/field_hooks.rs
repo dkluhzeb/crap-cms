@@ -235,7 +235,8 @@ pub(crate) fn call_field_hook_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldHooks, FieldType};
+    use crate::core::FieldTab;
+    use crate::core::{FieldHooks, FieldType};
     use serde_json::json;
 
     #[test]
@@ -436,8 +437,6 @@ mod tests {
     /// Regression: has_any_field_hook must find hooks inside Group/Row/Tabs.
     #[test]
     fn has_any_field_hook_finds_nested_hooks() {
-        use crate::core::FieldTab;
-
         let mut inner = FieldDefinition::builder("inner", FieldType::Text).build();
         inner.hooks.before_change = vec!["hooks.my_hook".to_string()];
 

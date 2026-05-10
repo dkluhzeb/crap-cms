@@ -4,7 +4,7 @@ use std::fmt;
 
 use anyhow::anyhow;
 
-use crate::core::validate::ValidationError;
+use crate::core::ValidationError;
 
 /// Typed service-layer errors that callers can match on for surface-specific handling.
 #[derive(Debug)]
@@ -188,9 +188,8 @@ impl ServiceError {
 mod tests {
     use anyhow::anyhow;
 
-    use crate::core::validate::{FieldError, ValidationError};
-
     use super::*;
+    use crate::core::{FieldError, ValidationError};
 
     // ── classify ────────────────────────────────────────────────────
 

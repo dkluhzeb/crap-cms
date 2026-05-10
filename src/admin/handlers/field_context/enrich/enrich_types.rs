@@ -24,16 +24,10 @@ use crate::{
         },
     },
     core::{
-        Document, DocumentFields,
-        collection::CollectionDefinition,
-        field::{BlockDefinition, FieldDefinition, FieldType, to_title_case},
-        registry::Registry,
-        upload,
+        BlockDefinition, CollectionDefinition, Document, DocumentFields, FieldDefinition,
+        FieldType, Registry, to_title_case, upload,
     },
-    db::{
-        DbConnection,
-        query::{self, LocaleContext},
-    },
+    db::{DbConnection, LocaleContext, query},
 };
 
 /// Extract selected IDs from a has-many field value.
@@ -739,9 +733,8 @@ mod tests {
     use crate::{
         admin::handlers::field_context::enrich::test_helpers::enrich_richtext_value,
         core::{
-            field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption},
-            registry::Registry,
-            richtext::RichtextNodeDef,
+            FieldAdmin, FieldDefinition, FieldType, LocalizedString, Registry, RichtextNodeDef,
+            SelectOption,
         },
     };
 

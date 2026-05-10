@@ -112,11 +112,8 @@ mod tests {
     fn build_field_contexts_array_select_sub_field_includes_options() {
         let mut select_sf = make_field("status", FieldType::Select);
         select_sf.options = vec![
-            crate::core::field::SelectOption::new(
-                LocalizedString::Plain("Draft".to_string()),
-                "draft",
-            ),
-            crate::core::field::SelectOption::new(
+            crate::core::SelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
+            crate::core::SelectOption::new(
                 LocalizedString::Plain("Published".to_string()),
                 "published",
             ),
@@ -162,14 +159,8 @@ mod tests {
     fn build_field_contexts_blocks_select_sub_field_includes_options() {
         let mut select_sf = make_field("align", FieldType::Select);
         select_sf.options = vec![
-            crate::core::field::SelectOption::new(
-                LocalizedString::Plain("Left".to_string()),
-                "left",
-            ),
-            crate::core::field::SelectOption::new(
-                LocalizedString::Plain("Center".to_string()),
-                "center",
-            ),
+            crate::core::SelectOption::new(LocalizedString::Plain("Left".to_string()), "left"),
+            crate::core::SelectOption::new(LocalizedString::Plain("Center".to_string()), "center"),
         ];
         let mut blocks_field = make_field("layout", FieldType::Blocks);
         blocks_field.blocks = vec![BlockDefinition::new("section", vec![select_sf])];
@@ -548,11 +539,8 @@ mod tests {
     fn build_field_contexts_select_marks_selected_option() {
         let mut sel = make_field("color", FieldType::Select);
         sel.options = vec![
-            crate::core::field::SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
-            crate::core::field::SelectOption::new(
-                LocalizedString::Plain("Blue".to_string()),
-                "blue",
-            ),
+            crate::core::SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+            crate::core::SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
         ];
         let mut values = HashMap::new();
         values.insert("color".to_string(), "blue".to_string());

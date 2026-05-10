@@ -19,17 +19,25 @@ use schemars::{Schema, schema_for};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::admin::context::page::{
-    auth::{ForgotPasswordPage, LoginPage, MfaPage, ResetPasswordPage},
-    collections::{
-        CollectionCreatePage, CollectionDeleteConfirmPage, CollectionEditPage,
-        CollectionFormErrorPage, CollectionItemsListPage, CollectionListPage,
-        CollectionRestoreConfirmPage, CollectionVersionsListPage,
-    },
-    dashboard::DashboardPage,
-    errors::ErrorPage,
-    globals::{
-        GlobalEditPage, GlobalFormErrorPage, GlobalRestoreConfirmPage, GlobalVersionsListPage,
+use crate::admin::context::{
+    AuthBasePageContext, BasePageContext, Breadcrumb, CollectionContext, CrapMeta, DocumentRef,
+    EditorLocaleOption, FieldContext, GlobalContext, NavData, PageMeta, PaginationContext,
+    UserContext,
+    locale_template::LocaleTemplateOption,
+    nav::{NavCollection, NavGlobal},
+    page::{
+        auth::{AuthCollection, ForgotPasswordPage, LoginPage, MfaPage, ResetPasswordPage},
+        collections::{
+            CollectionCreatePage, CollectionDeleteConfirmPage, CollectionEditPage, CollectionEntry,
+            CollectionFormErrorPage, CollectionItemsListPage, CollectionListPage,
+            CollectionRestoreConfirmPage, CollectionVersionsListPage, UploadFormContext,
+            UploadInfo,
+        },
+        dashboard::{CollectionCard, DashboardPage, GlobalCard},
+        errors::ErrorPage,
+        globals::{
+            GlobalEditPage, GlobalFormErrorPage, GlobalRestoreConfirmPage, GlobalVersionsListPage,
+        },
     },
 };
 
@@ -241,17 +249,6 @@ fn pages() -> Vec<PageEntry> {
 }
 
 fn definitions() -> Vec<(&'static str, Schema)> {
-    use crate::admin::context::{
-        AuthBasePageContext, BasePageContext, Breadcrumb, CollectionContext, CrapMeta, DocumentRef,
-        EditorLocaleOption, FieldContext, GlobalContext, NavData, PageMeta, PaginationContext,
-        UserContext,
-        locale_template::LocaleTemplateOption,
-        nav::{NavCollection, NavGlobal},
-        page::auth::AuthCollection,
-        page::collections::{CollectionEntry, UploadFormContext, UploadInfo},
-        page::dashboard::{CollectionCard, GlobalCard},
-    };
-
     vec![
         ("BasePageContext", schema_for!(BasePageContext)),
         ("AuthBasePageContext", schema_for!(AuthBasePageContext)),

@@ -157,8 +157,8 @@ pub(crate) fn fts_where_clause(
 mod tests {
     use super::*;
     use crate::config::{CrapConfig, LocaleConfig};
-    use crate::core::collection::CollectionDefinition;
-    use crate::core::field::FieldDefinition;
+    use crate::core::CollectionDefinition;
+    use crate::core::FieldDefinition;
     use crate::db::migrate::collection::test_helpers::text_field;
     use crate::db::query::fts::sync::sync_fts_table;
     use crate::db::{BoxedConnection, DbValue, pool};

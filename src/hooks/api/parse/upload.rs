@@ -183,7 +183,7 @@ pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &C
 mod tests {
     use super::*;
     use crate::core::{
-        field::{FieldDefinition, FieldType},
+        FieldDefinition, FieldType,
         upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit},
     };
     use mlua::Lua;

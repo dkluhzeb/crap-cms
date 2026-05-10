@@ -18,10 +18,7 @@ use crate::{
             paths, render_page,
         },
     },
-    core::{
-        CollectionDefinition,
-        auth::{AuthUser, Claims},
-    },
+    core::{AuthUser, Claims, CollectionDefinition},
     db::query::AccessResult,
     service::{FindByIdInput, RunnerReadHooks, ServiceContext, find_document_by_id},
 };

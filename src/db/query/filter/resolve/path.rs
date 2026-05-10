@@ -237,7 +237,7 @@ fn resolve_relationship_filter(ctx: SubFilterCtx<'_>) -> Result<ResolvedFilter> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::RelationshipConfig;
+    use crate::core::RelationshipConfig;
     use crate::db::query::filter::resolve::test_helpers::*;
 
     #[test]

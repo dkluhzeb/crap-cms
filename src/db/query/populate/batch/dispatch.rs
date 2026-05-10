@@ -417,6 +417,7 @@ mod join_key_tests {
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use anyhow::Result as AnyResult;
     use serde_json::json;
 
     use super::*;
@@ -559,8 +560,6 @@ mod tests {
     /// leave every parent with an empty array, not an unfiltered fetch.
     #[test]
     fn batch_join_field_denies_for_all_parents_when_target_read_denied() {
-        use anyhow::Result as AnyResult;
-
         struct DenyAll;
         impl JoinAccessCheck for DenyAll {
             fn check(&self, _: Option<&str>, _: Option<&Document>) -> AnyResult<AccessResult> {

@@ -58,11 +58,10 @@ pub(in crate::api::handlers) fn field_def_to_proto(field: &FieldDefinition) -> c
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{
+    use crate::core::{
         BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
         SelectOption,
     };
-
     fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, field_type).build()
     }

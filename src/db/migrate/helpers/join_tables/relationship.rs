@@ -170,7 +170,7 @@ fn rebuild_junction_table_for_polymorphic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldType, RelationshipConfig};
+    use crate::core::{FieldType, RelationshipConfig};
     use crate::db::DbValue;
     use crate::db::migrate::collection::{create_collection_table, test_helpers::*};
     use crate::db::migrate::helpers::join_tables::sync_join_tables;

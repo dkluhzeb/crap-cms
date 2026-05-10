@@ -22,11 +22,10 @@ use crate::{
     },
     config::{CrapConfig, EmailConfig, UploadConfig},
     core::{
-        DocumentFields, Registry,
+        DocumentFields, FieldDefinition, FieldType, Registry,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         email::{EmailRenderer, create_email_provider},
         event::InProcessInvalidationBus,
-        field::{FieldDefinition, FieldType},
         rate_limit::LoginRateLimiter,
         upload::create_storage,
     },

@@ -79,7 +79,7 @@ fn check_has_many_options(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::core::DocumentFields;
-    use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
+    use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
 

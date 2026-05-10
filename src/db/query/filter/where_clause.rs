@@ -341,10 +341,8 @@ fn check_flat_sub_fields<'a>(
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::collection::CollectionDefinition;
-    use crate::core::field::{
-        BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig,
-    };
+    use crate::core::CollectionDefinition;
+    use crate::core::{BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig};
     use crate::db::{
         DbValue,
         query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode},

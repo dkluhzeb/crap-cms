@@ -43,7 +43,7 @@ pub(in crate::db::migrate) fn sync_collection_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::VersionsConfig;
+    use crate::core::VersionsConfig;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::{get_table_columns, table_exists};
 

@@ -15,7 +15,7 @@ pub(super) use create::create_collection_table;
 pub(crate) mod test_helpers {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::CollectionDefinition;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::core::{FieldDefinition, FieldType};
     use crate::db::{DbPool, pool};
     use tempfile::TempDir;
 

@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::{
     api::{content, handlers::ContentService},
-    core::{Registry, auth::SharedTokenProvider},
+    core::{Registry, SharedTokenProvider},
     db::DbPool,
     hooks::HookRunner,
     service::{self, ServiceContext},

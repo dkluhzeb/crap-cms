@@ -5,8 +5,7 @@ use serde_json::json;
 
 use crate::core::cache::NoneCache;
 use crate::core::{
-    Document, FieldDefinition, Registry,
-    field::{BlockDefinition, FieldTab, FieldType, RelationshipConfig},
+    BlockDefinition, Document, FieldDefinition, FieldTab, FieldType, Registry, RelationshipConfig,
 };
 use crate::db::DbConnection;
 use crate::db::query::populate::{

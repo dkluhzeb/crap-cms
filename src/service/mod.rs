@@ -1,8 +1,50 @@
 //! Shared service layer for collection/global CRUD operations.
 //!
-//! These synchronous functions encapsulate the transaction lifecycle (open tx → run hooks →
-//! DB operation → commit) shared between admin handlers and the gRPC service. They are meant
+//! These synchronous functions encapsulate the transaction lifecycle
+//! (open tx -> run before hooks -> DB op -> run after hooks -> commit)
+//! shared between admin handlers and the gRPC service. They are meant
 //! to be called from within `spawn_blocking`.
+//!
+//! ## Submodule layout
+//!
+//! - `types/` -- the input/output value types used across the service
+//!   layer: `ServiceContext` + builder, `WriteInput`, `WriteResult`,
+//!   `PersistOptions`, `Find*Input`, `*Result`, `Def` (collection
+//!   vs global tag), `EmailContext`, the event/verification queues.
+//! - `collection/` -- public CRUD entry points for collections:
+//!   `create_document`, `update_document`, `delete_document`,
+//!   `undelete_document`, `unpublish_document`, plus the bulk
+//!   variants (`create_many`, `update_many`, `delete_many`).
+//! - `globals/` -- global-document equivalents.
+//! - `read/` -- query/read helpers shared by both: `find_documents`,
+//!   `find_document_by_id`, `count_documents`, `search_documents`,
+//!   `get_global_document`.
+//! - `persist/` -- the actual `persist_create` / `persist_update` /
+//!   `persist_unpublish` / `persist_draft_version` /
+//!   `persist_bulk_update` machinery that materializes a write into
+//!   the DB once hooks have run.
+//! - `write/` -- transaction-agnostic CRUD (`*_in_conn` suffix
+//!   indicates the fn expects a connection in `ctx`).
+//! - `versions/` -- version listing, restore, and unpublish-with-
+//!   snapshot.
+//! - `auth/`, `jobs/`, `upload/` -- domain-specific service helpers.
+//! - `hooks/` -- read/write `*Hooks` traits + Lua impls invoked from
+//!   the service layer.
+//! - `email/`, `helpers/`, `user_settings/`, `document_info/` --
+//!   support submodules.
+//! - `error.rs` -- `ServiceError` enum + classification helpers
+//!   (`From<ServiceError> for Status` lives in `api/`).
+//!
+//! ## Conventions
+//!
+//! - Public service fns take `(ctx: &ServiceContext, input: ...)`.
+//!   Write ops open their own tx via `ctx.pool` + `ctx.runner()`;
+//!   Lua-bridged CRUD passes `ctx.conn` + `ctx.write_hooks` directly.
+//! - Transaction-agnostic helpers carry the `_in_conn` suffix; they
+//!   never open or commit a transaction themselves.
+//! - Optional setters on context/option builders take `Option<&T>`
+//!   (or `Option<T>` for owned handles) so a caller can pass through
+//!   a parent's optional field without `if let Some(x) = ...`.
 
 pub mod auth;
 mod collection;

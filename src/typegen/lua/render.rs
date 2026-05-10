@@ -285,10 +285,7 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
 mod tests {
     use super::super::test_helpers::{checkbox_field, select_field, text_field};
     use super::*;
-    use crate::core::{
-        FieldDefinition, FieldType,
-        field::{FieldTab, RelationshipConfig},
-    };
+    use crate::core::{FieldDefinition, FieldTab, FieldType, RelationshipConfig};
 
     #[test]
     fn render_collection_output() {

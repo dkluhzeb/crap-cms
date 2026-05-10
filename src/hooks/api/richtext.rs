@@ -7,8 +7,8 @@ use tracing::warn;
 use super::parse::fields::parse_fields;
 use crate::{
     core::{
-        FieldDefinition, SharedRegistry,
-        richtext::{RichtextNodeDef, render_html_custom_nodes, render_prosemirror_to_html},
+        FieldDefinition, RichtextNodeDef, SharedRegistry,
+        richtext::{render_html_custom_nodes, render_prosemirror_to_html},
     },
     hooks::lifecycle::InitPhase,
 };

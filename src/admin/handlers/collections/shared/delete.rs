@@ -17,11 +17,8 @@ use crate::{
     config::LocaleConfig,
     core::ReqContext,
     core::{
-        CollectionDefinition, Document,
-        auth::AuthUser,
-        cache::SharedCache,
-        event::{SharedEventTransport, SharedInvalidationTransport},
-        upload::SharedStorage,
+        AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedStorage,
     },
     db::DbPool,
     hooks::HookRunner,

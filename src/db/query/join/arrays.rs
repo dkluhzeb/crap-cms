@@ -232,7 +232,7 @@ pub fn find_array_rows(
 mod tests {
     use super::*;
     use crate::config::CrapConfig;
-    use crate::core::field::FieldTab;
+    use crate::core::FieldTab;
     use crate::db::{BoxedConnection, pool};
     use tempfile::TempDir;
 

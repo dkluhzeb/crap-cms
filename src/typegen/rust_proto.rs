@@ -565,7 +565,7 @@ fn sub_field_extraction(field: &FieldDefinition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::RelationshipConfig;
+    use crate::core::RelationshipConfig;
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)

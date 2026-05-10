@@ -50,7 +50,7 @@ pub(super) fn reconstruct_group_fields(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::query::join::hydrate::hydrate_document;
     use rusqlite::Connection;
     use serde_json::json;

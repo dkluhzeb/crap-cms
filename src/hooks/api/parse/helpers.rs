@@ -129,7 +129,7 @@ pub(super) fn parse_select_options(opts_tbl: &Table) -> Result<Vec<SelectOption>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::LocalizedString;
+    use crate::core::LocalizedString;
     use mlua::Lua;
 
     #[test]

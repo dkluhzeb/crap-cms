@@ -1,7 +1,6 @@
 //! Shared test fixtures for resolve/ submodules.
 
-use crate::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
-
+use crate::core::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
 pub(super) fn test_conn() -> (tempfile::TempDir, crate::db::BoxedConnection) {
     let dir = tempfile::TempDir::new().unwrap();
     let config = crate::config::CrapConfig::default();

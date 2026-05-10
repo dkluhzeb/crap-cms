@@ -19,10 +19,7 @@ use crate::{
             redirect_response, render_page, server_error, version_to_json,
         },
     },
-    core::{
-        CollectionDefinition, Document,
-        auth::{AuthUser, Claims},
-    },
+    core::{AuthUser, Claims, CollectionDefinition, Document},
     db::{ops, query::LocaleContext, query::PaginationResult},
     service::{ListVersionsInput, RunnerReadHooks, ServiceContext, list_versions},
 };

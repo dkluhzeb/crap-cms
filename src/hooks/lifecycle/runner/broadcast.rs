@@ -6,9 +6,9 @@ use tracing::{debug, warn};
 
 use crate::{
     core::{
-        DocumentFields, DocumentId, Slug,
-        collection::{Hooks, LiveSetting},
-        event::{EventOperation, EventTarget, EventUser, MutationEventInput, SharedEventTransport},
+        DocumentFields, DocumentId, Hooks, LiveSetting, MutationEventInput, SharedEventTransport,
+        Slug,
+        event::{EventOperation, EventTarget, EventUser},
     },
     hooks::{
         HookContext, HookEvent, HookRunner, api,

@@ -3,10 +3,7 @@
 use serde_json::json;
 
 use crate::{
-    core::{
-        DocumentFields,
-        field::{FieldDefinition, FieldType},
-    },
+    core::{DocumentFields, FieldDefinition, FieldType, LocalizedString, SelectOption},
     hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
 };
 
@@ -188,9 +185,6 @@ fn test_array_sub_field_email_format_enforced() {
 /// Regression: select option validation was not enforced inside Array sub-fields.
 #[test]
 fn test_array_sub_field_select_option_enforced() {
-    use crate::core::DocumentFields;
-    use crate::core::field::{LocalizedString, SelectOption};
-
     let lua = mlua::Lua::new();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")

@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::core::auth::Claims;
+use crate::core::Claims;
 
 /// Identifying data about the currently authenticated user.
 #[derive(Serialize, JsonSchema)]

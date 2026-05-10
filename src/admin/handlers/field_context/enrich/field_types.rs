@@ -28,10 +28,7 @@ use crate::{
             shared::auto_label_from_name,
         },
     },
-    core::{
-        field::{BlockDefinition, FieldDefinition, FieldTab, FieldType},
-        timezone::TIMEZONE_OPTIONS,
-    },
+    core::{BlockDefinition, FieldDefinition, FieldTab, FieldType, timezone::TIMEZONE_OPTIONS},
     db::query::helpers::utc_to_local,
 };
 

@@ -286,10 +286,7 @@ mod tests {
 
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::{
-        Document,
-        field::{FieldDefinition, FieldTab, FieldType},
-    };
+    use crate::core::{Document, FieldDefinition, FieldTab, FieldType};
     use crate::db::query::test_helpers::*;
 
     #[test]

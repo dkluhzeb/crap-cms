@@ -118,7 +118,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::FieldType;
+    use crate::core::FieldType;
     use serde_json::json;
 
     #[test]

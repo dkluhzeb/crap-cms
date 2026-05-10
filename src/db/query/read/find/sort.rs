@@ -135,7 +135,7 @@ pub(super) fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::CollectionDefinition;
+    use crate::core::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::FindQuery;
     use crate::db::query::read::find::find;

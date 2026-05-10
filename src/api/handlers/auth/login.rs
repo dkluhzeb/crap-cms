@@ -12,10 +12,7 @@ use crate::{
         content,
         handlers::{ContentService, convert::document_to_proto},
     },
-    core::{
-        CollectionDefinition, Document, Slug,
-        auth::{ClaimsBuilder, SharedPasswordProvider},
-    },
+    core::{CollectionDefinition, Document, SharedPasswordProvider, Slug, auth::ClaimsBuilder},
     db::DbPool,
     hooks::HookRunner,
     service::{self, ServiceContext, ServiceError, auth::authenticate_local},

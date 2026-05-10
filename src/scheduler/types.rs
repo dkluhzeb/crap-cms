@@ -3,7 +3,7 @@
 use crate::config::LocaleConfig;
 use crate::{
     config::JobsConfig,
-    core::{SharedRegistry, email::SharedEmailProvider, upload::SharedStorage},
+    core::{SharedEmailProvider, SharedRegistry, SharedStorage},
     db::DbPool,
     hooks::HookRunner,
 };

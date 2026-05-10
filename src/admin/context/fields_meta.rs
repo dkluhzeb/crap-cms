@@ -71,8 +71,7 @@ impl FieldMeta {
 mod tests {
     use super::*;
 
-    use crate::core::field::{FieldAdmin, FieldType, LocalizedString};
-
+    use crate::core::{FieldAdmin, FieldType, LocalizedString};
     #[test]
     fn from_def_includes_admin_info() {
         let field = FieldDefinition::builder("title", FieldType::Text)

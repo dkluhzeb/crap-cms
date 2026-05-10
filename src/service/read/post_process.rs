@@ -11,10 +11,7 @@ use crate::{
         cache::{CacheBackend, NoneCache},
         upload,
     },
-    db::{
-        DbConnection, LocaleContext,
-        query::{self, SharedPopulateSingleflight, Singleflight},
-    },
+    db::{DbConnection, LocaleContext, SharedPopulateSingleflight, Singleflight, query},
     hooks::lifecycle::AfterReadCtx,
     service::{ServiceContext, helpers, hooks::ReadHooksJoinGuard},
 };

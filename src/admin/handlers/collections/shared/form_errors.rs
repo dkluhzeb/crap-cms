@@ -17,10 +17,7 @@ use crate::{
             page_with_toast, split_sidebar_fields, translate_validation_errors,
         },
     },
-    core::{
-        DocumentFields, auth::AuthUser, collection::CollectionDefinition, field::FieldDefinition,
-        validate::ValidationError,
-    },
+    core::{AuthUser, CollectionDefinition, DocumentFields, FieldDefinition, ValidationError},
 };
 
 /// Collect hidden upload field values from form data for re-rendering after validation errors.

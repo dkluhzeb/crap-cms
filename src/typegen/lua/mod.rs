@@ -16,10 +16,7 @@ pub(super) use render::render;
 
 #[cfg(test)]
 pub(super) mod test_helpers {
-    use crate::core::{
-        FieldDefinition, FieldType,
-        field::{LocalizedString, SelectOption},
-    };
+    use crate::core::{FieldDefinition, FieldType, LocalizedString, SelectOption};
 
     pub fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)

@@ -7,8 +7,7 @@ use mlua::{Lua, Table};
 
 use crate::{
     core::{
-        FieldAdmin, FieldDefinition, FieldType,
-        field::{FieldAccess, FieldHooks, JoinConfig, McpFieldConfig},
+        FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig, McpFieldConfig,
     },
     db::query,
 };

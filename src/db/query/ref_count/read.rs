@@ -341,7 +341,7 @@ fn collect_blocks_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::CollectionDefinition;
+    use crate::core::CollectionDefinition;
     use crate::core::field::*;
     use crate::db::query::ref_count::test_helpers::*;
 

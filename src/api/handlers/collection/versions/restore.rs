@@ -13,8 +13,7 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Registry, auth::SharedTokenProvider, cache::SharedCache,
-        event::SharedEventTransport,
+        CollectionDefinition, Registry, SharedCache, SharedEventTransport, SharedTokenProvider,
     },
     db::DbPool,
     hooks::HookRunner,

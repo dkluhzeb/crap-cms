@@ -4,10 +4,7 @@
 use anyhow::Result;
 
 use crate::{
-    core::{
-        Document, DocumentFields, FieldDefinition, Registry, collection::Hooks,
-        validate::ValidationError,
-    },
+    core::{Document, DocumentFields, FieldDefinition, Hooks, Registry, ValidationError},
     db::{AccessResult, DbConnection},
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,

@@ -7,8 +7,7 @@ use tracing::warn;
 use crate::{
     core::{FieldDefinition, FieldType, Registry, validate::FieldError},
     hooks::lifecycle::validation::{
-        checks,
-        checks::is_valid_date_format,
+        checks::{self, is_valid_date_format},
         custom::run_validate_function_inner,
         is_empty_value,
         richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},

@@ -2,10 +2,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::core::{
-    collection::{CollectionDefinition, GlobalDefinition},
-    field::{FieldDefinition, FieldType},
-};
+use crate::core::{CollectionDefinition, FieldDefinition, FieldType, GlobalDefinition};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
 #[derive(Debug, Clone, Copy, PartialEq)]

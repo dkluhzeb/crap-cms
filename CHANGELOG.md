@@ -157,6 +157,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- **Inline `use` cleanup, codebase-wide.** CLAUDE.md's "tree-style
+  imports at the top of the file/module. Never use inline `use`
+  statements inside function bodies" rule had drifted in the
+  early-audited modules. Swept 33 violations across 25 files; each
+  inline `use crate::core::Foo;` style import inside a `#[test] fn`
+  body was lifted to the top of the surrounding `mod tests` block
+  (or to the file top for files like the `hooks/lifecycle/validation/
+  sub_fields/tests/*` test modules that are themselves the test
+  scope). Also flattened ~30 nested `core::{... field::{X, Y} ...}`
+  grouped-import patterns that the earlier deep-path sweep missed
+  (the pattern only matched at one level), so any leaf-module
+  re-exported type now lives directly inside the outer `core::{...}`
+  list. 3851 lib tests pass; clippy + fmt clean.
+
+- **Retroactive pass: applied late-playbook axes to the early-audited
+  modules.** The original `core/`, `db/`, `hooks/`, `service/`, `api/`
+  audits ran before axes 25 (`mod.rs` architecture sketch) and 26
+  (workspace-split prep — kill external `crate::module::sub::Foo`
+  imports) crystallised. This pass closes the gap:
+  - **`core/`: 183 external deep-path imports → ~30 namespace-only.**
+    Promoted `Access`, `Hooks`, `IndexDefinition`, `Labels`, `LiveMode`,
+    `LiveSetting`, `VersionsConfig` (from `core::collection`) and
+    `JoinConfig`, `to_title_case` (from `core::field`) and
+    `SharedStorage` (from `core::upload`) to top-level `crate::core::*`
+    re-exports. A Python-script-driven sweep then flattened 129
+    callers' `use crate::core::<sub>::Type` imports to
+    `use crate::core::Type`. Remaining ~30 deep paths are intentional
+    (cache/rate_limit/event/email namespace prefixes carry semantic
+    meaning per CLAUDE.md's exception, plus the few builder
+    direct-construction sites that need a separate caller refactor).
+  - **`db/`: 12 external deep-path imports → 0.** `LocaleContext`,
+    `LocaleMode`, and `Singleflight` were already top-level
+    re-exported; callers were just using the deep `db::query::*` form.
+    Same script flattened them.
+  - **`mod.rs` architecture sketches** added to `core/` (1 → 50
+    lines), `db/` (1 → 45), `hooks/` (1 → 35), `api/` (1 → 30),
+    `service/` (5 → 50). Matches the layout/conventions pattern the
+    later admin/, mcp/, scaffold/, scheduler/, config/, fmt/ audits
+    established.
+  - **`api/`: `start` and `GrpcStartParams` promoted** to
+    `crate::api::*`. The two callers in `commands/serve/startup.rs`
+    were going through `api::server::start` /
+    `api::server::GrpcStartParams::builder()`; now use the flat
+    forms.
+
 - `src/fmt/` code-quality cleanup pass. Inventory was structurally
   already clean (4 files, 1594 LOC, all under the 1000 soft limit, 0
   `#[allow]`, 0 `super::super`, 0 manual `Default`, 0 external deep

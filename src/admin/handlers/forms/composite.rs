@@ -3,8 +3,9 @@
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::field::{FieldDefinition, FieldType, flatten_array_sub_fields};
+use crate::core::{FieldDefinition, FieldType};
 
+use crate::core::field::flatten_array_sub_fields;
 /// Collect form entries into indexed rows, splitting each key into sub-key + value.
 fn collect_indexed_rows(
     form: &HashMap<String, String>,
@@ -128,8 +129,7 @@ pub(crate) fn parse_composite_form_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
-
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
     }

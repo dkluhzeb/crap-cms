@@ -52,7 +52,7 @@ mod tests {
 
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::core::{FieldDefinition, FieldType, RelationshipConfig};
     use crate::db::query::join::arrays::set_array_rows;
     use crate::db::query::join::hydrate::hydrate_document;
     use crate::db::query::join::relationships::{find_related_ids, set_related_ids};

@@ -113,7 +113,7 @@ fn check_one(field: &FieldDefinition, data_key: &str, value: &Value, errors: &mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::core::{FieldDefinition, FieldType, RelationshipConfig};
     use serde_json::json;
 
     fn polymorphic_field(has_many: bool, allowlist: &[&str]) -> FieldDefinition {

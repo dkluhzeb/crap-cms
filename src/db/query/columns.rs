@@ -161,7 +161,7 @@ fn collect_valid_filter_names(fields: &[FieldDefinition], valid: &mut HashSet<St
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::field::{FieldTab, FieldType};
+    use crate::core::{FieldTab, FieldType};
     use crate::db::query::test_helpers::*;
 
     #[test]

@@ -2,7 +2,7 @@
 
 use mlua::{Lua, Result as LuaResult, Table};
 
-use crate::core::collection::GlobalDefinition;
+use crate::core::GlobalDefinition;
 
 use super::collection::{
     access_to_lua, collection_hooks_to_lua, fields_to_lua, labels_to_lua, live_to_lua, mcp_to_lua,
@@ -28,12 +28,12 @@ pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResu
 mod tests {
     use super::*;
     use crate::core::{
+        FieldDefinition, FieldType, LocalizedString,
         collection::{Access, GlobalDefinition, LiveSetting, McpConfig},
-        field::{FieldDefinition, FieldType, LocalizedString},
     };
     use mlua::Lua;
 
-    use crate::core::collection::Labels;
+    use crate::core::Labels;
 
     #[test]
     fn test_global_config_to_lua_basic() {

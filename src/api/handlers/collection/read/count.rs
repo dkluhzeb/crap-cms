@@ -11,7 +11,7 @@ use crate::{
         content,
         handlers::{ContentService, collection::filter_builder::FilterBuilder},
     },
-    core::{CollectionDefinition, Registry, auth::SharedTokenProvider},
+    core::{CollectionDefinition, Registry, SharedTokenProvider},
     db::{AccessResult, DbPool, LocaleContext},
     hooks::HookRunner,
     service::{

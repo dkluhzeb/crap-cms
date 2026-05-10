@@ -67,6 +67,7 @@ impl CollectionUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::upload::{FormatQuality, ImageSizeBuilder};
 
     #[test]
     fn collection_upload_default() {
@@ -97,8 +98,6 @@ mod tests {
 
     #[test]
     fn system_field_names_with_sizes_and_formats() {
-        use crate::core::upload::{FormatQuality, ImageSizeBuilder};
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")

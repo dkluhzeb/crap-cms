@@ -24,13 +24,10 @@ use crate::{
         },
     },
     core::{
-        CollectionDefinition, Document, DocumentFields, auth::AuthUser, cache::SharedCache,
-        event::SharedEventTransport, upload,
+        AuthUser, CollectionDefinition, Document, DocumentFields, SharedCache,
+        SharedEventTransport, upload,
     },
-    db::{
-        DbPool,
-        query::{LocaleContext, LocaleMode},
-    },
+    db::{DbPool, LocaleContext, LocaleMode},
     hooks::HookRunner,
     service::{self, EmailContext, ServiceError},
 };

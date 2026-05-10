@@ -10,14 +10,8 @@ use crate::{
             EnrichCtx, EnrichOptions, enrich_types, nested::enrich_nested_fields,
         },
     },
-    core::{
-        DocumentFields, Registry,
-        field::{FieldDefinition, RelationshipConfig},
-    },
-    db::{
-        DbConnection,
-        query::{self, LocaleContext},
-    },
+    core::{DocumentFields, FieldDefinition, Registry, RelationshipConfig},
+    db::{DbConnection, LocaleContext, query},
 };
 
 /// Parse a "collection/id" composite string into a (collection, id) pair.
@@ -241,10 +235,7 @@ mod tests {
         admin::handlers::field_context::enrich::test_helpers::{
             build_value_contexts, enrich_field_contexts_values, make_field, make_test_state,
         },
-        core::{
-            DocumentFields,
-            field::{BlockDefinition, FieldTab, FieldType, LocalizedString},
-        },
+        core::{BlockDefinition, DocumentFields, FieldTab, FieldType, LocalizedString},
     };
 
     /// Regression: blocks inside Tabs were not populated from `doc_fields`

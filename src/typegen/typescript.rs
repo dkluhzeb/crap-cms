@@ -248,8 +248,8 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
-
+    use crate::core::FieldTab;
+    use crate::core::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
             .required(required)
@@ -779,7 +779,6 @@ mod tests {
 
     #[test]
     fn typescript_row_collapsible_tabs_promote_subfields() {
-        use crate::core::field::FieldTab;
         let col = make_col(
             "items",
             vec![

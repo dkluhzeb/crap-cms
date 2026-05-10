@@ -18,27 +18,19 @@ use crate::{
     },
     config::{AuthConfig, CrapConfig},
     core::{
-        Registry, SharedRegistry,
-        auth::{
-            Argon2PasswordProvider, JwtTokenProvider, SharedPasswordProvider, SharedTokenProvider,
-        },
+        Registry, SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider,
+        SharedRegistry, SharedTokenProvider,
+        auth::{Argon2PasswordProvider, JwtTokenProvider},
         cache::create_cache,
         email::create_email_provider,
-        event::{
-            SharedEventTransport, SharedInvalidationTransport, create_event_transport,
-            create_invalidation_transport,
-        },
+        event::{create_event_transport, create_invalidation_transport},
         rate_limit::{
             LoginRateLimiter, RateLimitBackend, RateLimitFactoryConfig, create_rate_limit_backend,
         },
         upload::{create_storage, format_filesize},
     },
-    db::{
-        DbConnection, DbPool, migrate, pool,
-        query::{SharedPopulateSingleflight, Singleflight},
-    },
-    hooks,
-    hooks::HookRunner,
+    db::{DbConnection, DbPool, SharedPopulateSingleflight, Singleflight, migrate, pool},
+    hooks::{self, HookRunner},
     scheduler, typegen,
 };
 

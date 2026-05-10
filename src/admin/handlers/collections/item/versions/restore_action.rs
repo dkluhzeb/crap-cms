@@ -12,10 +12,7 @@ use crate::{
         handlers::shared::{get_user_doc, htmx_redirect, paths, redirect_response},
     },
     config::LocaleConfig,
-    core::{
-        CollectionDefinition, Document, auth::AuthUser, cache::SharedCache,
-        event::SharedEventTransport,
-    },
+    core::{CollectionDefinition, Document, SharedCache, SharedEventTransport, auth::AuthUser},
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, ServiceError, restore_collection_version},

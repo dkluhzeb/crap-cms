@@ -170,11 +170,9 @@ mod tests {
 
     use crate::{
         core::{
-            CollectionDefinition, Document, FieldDefinition,
-            collection::{Auth, Hooks},
-            event::{InProcessInvalidationBus, SharedInvalidationTransport},
-            field::FieldType,
-            validate::ValidationError,
+            CollectionDefinition, Document, FieldDefinition, FieldType, Hooks,
+            SharedInvalidationTransport, ValidationError, collection::Auth,
+            event::InProcessInvalidationBus,
         },
         db::DbConnection,
         hooks::ValidationCtx,

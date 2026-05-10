@@ -372,7 +372,7 @@ fn rebuild_without_inline_unique(
 mod tests {
     use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::core::{FieldDefinition, FieldTab, FieldType};
     use crate::db::DbValue;
     use crate::db::migrate::collection::test_helpers::*;
     use crate::db::migrate::helpers::get_table_columns;

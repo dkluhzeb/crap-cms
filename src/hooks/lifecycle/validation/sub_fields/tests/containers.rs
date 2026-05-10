@@ -3,10 +3,7 @@
 use serde_json::json;
 
 use crate::{
-    core::{
-        DocumentFields,
-        field::{BlockDefinition, FieldDefinition, FieldTab, FieldType},
-    },
+    core::{BlockDefinition, DocumentFields, FieldDefinition, FieldTab, FieldType},
     hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
 };
 

@@ -190,9 +190,8 @@ pub(super) fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> LuaResult<Tab
 mod tests {
     use super::*;
     use crate::core::{
-        CollectionDefinition,
+        CollectionDefinition, FieldDefinition, FieldType, LocalizedString,
         collection::{Access, AdminConfig, Hooks, Labels, LiveSetting, McpConfig, VersionsConfig},
-        field::{FieldDefinition, FieldType, LocalizedString},
     };
     use mlua::{self, Lua, Value};
 

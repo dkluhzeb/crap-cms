@@ -22,13 +22,9 @@ use crate::{
         handlers::{ContentService, convert::json_to_prost_value},
     },
     core::{
-        Document, FieldDefinition, Registry,
-        auth::SharedTokenProvider,
-        collection::LiveMode,
-        event::{
-            EventOperation, EventReceiver, EventTarget, InvalidationReceiver, MutationEvent,
-            RecvError,
-        },
+        Document, EventReceiver, FieldDefinition, LiveMode, MutationEvent, Registry,
+        SharedTokenProvider,
+        event::{EventOperation, EventTarget, InvalidationReceiver, RecvError},
     },
     db::{
         AccessResult, DbConnection, DbPool, FilterClause,

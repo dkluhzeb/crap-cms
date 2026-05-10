@@ -379,6 +379,7 @@ pub fn process_image_entry(
 
 #[cfg(test)]
 mod tests {
+    use image::{ImageBuffer, ImageEncoder, Rgba};
     use std::fs;
 
     use super::*;
@@ -386,7 +387,6 @@ mod tests {
 
     /// Create a small test PNG image in memory.
     fn create_test_png(width: u32, height: u32) -> Vec<u8> {
-        use image::{ImageBuffer, ImageEncoder, Rgba};
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
             Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
         });

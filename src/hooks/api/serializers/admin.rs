@@ -112,8 +112,7 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> LuaResult<Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldAdmin, LocalizedString};
-
+    use crate::core::{FieldAdmin, LocalizedString};
     #[test]
     fn test_field_admin_to_lua_empty_returns_none() {
         let lua = mlua::Lua::new();

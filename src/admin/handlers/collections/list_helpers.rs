@@ -7,11 +7,7 @@ use crate::{
     admin::handlers::shared::{
         ListUrlContext, auto_label_from_name, is_column_eligible, url_decode,
     },
-    core::{
-        collection::CollectionDefinition,
-        document::Document,
-        field::{FieldDefinition, FieldType},
-    },
+    core::{FieldDefinition, FieldType, collection::CollectionDefinition, document::Document},
     db::query::{FilterClause, FilterOp},
 };
 
@@ -391,10 +387,10 @@ pub(super) fn op_to_param_name(op: &FilterOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::VersionsConfig;
     use crate::core::{
-        collection::*,
+        FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption, collection::*,
         document::DocumentBuilder,
-        field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption},
     };
 
     fn test_collection() -> CollectionDefinition {
@@ -593,8 +589,6 @@ mod tests {
 
     #[test]
     fn build_filter_fields_includes_status_with_drafts() {
-        use crate::core::collection::VersionsConfig;
-
         let mut def = test_collection();
         def.versions = Some(VersionsConfig::new(true, 10));
 

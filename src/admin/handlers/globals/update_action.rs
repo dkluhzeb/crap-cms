@@ -26,13 +26,10 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        Document, DocumentFields, ReqContext, auth::AuthUser, cache::SharedCache,
-        collection::GlobalDefinition, event::SharedEventTransport, validate::ValidationError,
+        AuthUser, Document, DocumentFields, GlobalDefinition, ReqContext, SharedCache,
+        SharedEventTransport, ValidationError,
     },
-    db::{
-        DbPool,
-        query::{LocaleContext, LocaleMode},
-    },
+    db::{DbPool, LocaleContext, LocaleMode},
     hooks::HookRunner,
     service::{self, ServiceContext, ServiceError},
 };

@@ -1,8 +1,8 @@
 //! Shared test setup for ref_count submodules.
 
 use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
+use crate::core::CollectionDefinition;
 use crate::core::Registry;
-use crate::core::collection::CollectionDefinition;
 use crate::db::{DbConnection, DbPool, DbValue, migrate, pool};
 
 use super::get_ref_count;

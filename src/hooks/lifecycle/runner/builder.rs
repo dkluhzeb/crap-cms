@@ -8,7 +8,7 @@ use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, SharedRegistry, event::SharedInvalidationTransport, upload},
+    core::{Registry, SharedInvalidationTransport, SharedRegistry, upload},
     db::query::SharedPopulateSingleflight,
     hooks::{
         self, HookRunner,

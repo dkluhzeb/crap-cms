@@ -3,8 +3,8 @@
 use tempfile::TempDir;
 
 use crate::config::{CrapConfig, LocaleConfig};
-use crate::core::collection::CollectionDefinition;
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::CollectionDefinition;
+use crate::core::{FieldDefinition, FieldType};
 use crate::db::{BoxedConnection, DbConnection, DbValue, pool};
 
 pub(super) fn text_field(name: &str) -> FieldDefinition {

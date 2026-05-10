@@ -6,9 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     admin::Translations,
-    core::{
-        DocumentFields, FieldAdmin, FieldDefinition, FieldType, field, validate::ValidationError,
-    },
+    core::{DocumentFields, FieldAdmin, FieldDefinition, FieldType, ValidationError, field},
     db::DbPool,
     hooks::HookRunner,
     service::{ServiceContext, document_info::get_ref_count},
@@ -141,10 +139,7 @@ pub fn lookup_ref_count(pool: &DbPool, slug: &str, id: &str) -> i64 {
 mod tests {
     use serde_json::json;
 
-    use crate::core::{
-        field::{FieldAdmin, FieldDefinition, FieldType},
-        validate::FieldError,
-    };
+    use crate::core::{FieldAdmin, FieldDefinition, FieldType, validate::FieldError};
 
     use super::*;
 

@@ -12,10 +12,7 @@ use tracing::error;
 
 use crate::{
     admin::{AdminState, Translations, handlers::shared::translate_validation_errors},
-    core::{
-        Document, DocumentFields, FieldDefinition, auth::AuthUser, collection::Hooks,
-        validate::ValidationError,
-    },
+    core::{AuthUser, Document, DocumentFields, FieldDefinition, Hooks, ValidationError},
     db::{DbPool, query::LocaleContext},
     hooks::HookRunner,
     service,

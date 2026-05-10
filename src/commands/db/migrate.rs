@@ -13,8 +13,7 @@ use crate::{
     config::CrapConfig,
     core::Registry,
     db::{DbPool, migrate as db_migrate, pool},
-    hooks,
-    hooks::HookRunner,
+    hooks::{self, HookRunner},
     scaffold,
 };
 

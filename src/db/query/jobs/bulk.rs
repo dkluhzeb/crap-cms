@@ -40,7 +40,7 @@ pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::job::JobStatus;
+    use crate::core::JobStatus;
     use crate::db::query::jobs::test_helpers::setup_db;
     use crate::db::query::jobs::{insert_job, list_job_runs};
 

@@ -4,10 +4,7 @@
 use mlua::{Lua, Result as LuaResult, Table};
 use serde_json::Value as JsonValue;
 
-use crate::core::{
-    FieldDefinition,
-    field::{FieldAccess, FieldHooks},
-};
+use crate::core::{FieldAccess, FieldDefinition, FieldHooks};
 
 use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
 
@@ -264,11 +261,10 @@ mod tests {
     use mlua::{self, Value};
     use serde_json::json;
 
-    use crate::core::field::{
+    use crate::core::{
         BlockDefinition, FieldAdmin, FieldTab, FieldType, LocalizedString, McpFieldConfig,
         RelationshipConfig, SelectOption,
     };
-
     #[test]
     fn test_field_config_to_lua_simple() {
         let lua = mlua::Lua::new();

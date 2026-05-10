@@ -13,10 +13,8 @@ use crate::{
             ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
         },
     },
-    core::{CollectionDefinition, Registry, auth::SharedTokenProvider, cache::SharedCache},
-    db::{
-        AccessResult, DbPool, FindQuery, LocaleContext, query, query::SharedPopulateSingleflight,
-    },
+    core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
+    db::{AccessResult, DbPool, FindQuery, LocaleContext, SharedPopulateSingleflight, query},
     hooks::HookRunner,
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };

@@ -67,8 +67,8 @@ pub(crate) fn check_unique(
 mod tests {
     use crate::config::LocaleConfig;
     use crate::core::DocumentFields;
-    use crate::core::field::{FieldDefinition, FieldType};
-    use crate::db::query::LocaleContext;
+    use crate::core::{FieldDefinition, FieldType};
+    use crate::db::LocaleContext;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
 

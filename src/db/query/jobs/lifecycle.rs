@@ -6,7 +6,7 @@ use std::cmp;
 use anyhow::{Context as _, Result};
 use nanoid::nanoid;
 
-use crate::core::job::JobRun;
+use crate::core::JobRun;
 use crate::db::{DbConnection, DbValue};
 
 /// Insert a new pending job run.
@@ -171,7 +171,7 @@ pub fn mark_stale(conn: &dyn DbConnection, id: &str, error: &str) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::job::JobStatus;
+    use crate::core::JobStatus;
     use crate::db::query::jobs::get_job_run;
     use crate::db::query::jobs::test_helpers::setup_db;
 

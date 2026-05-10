@@ -6,9 +6,10 @@ use anyhow::{Result, anyhow, bail};
 use cron::Schedule;
 use mlua::Table;
 
-use crate::core::job::{JobDefinition, JobDefinitionBuilder, JobLabels};
+use crate::core::{JobDefinition, JobLabels};
 
 use super::helpers::*;
+use crate::core::job::JobDefinitionBuilder;
 
 /// Parse a Lua table into a `JobDefinition`.
 pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition> {

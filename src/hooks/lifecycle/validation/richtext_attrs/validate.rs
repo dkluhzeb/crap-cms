@@ -181,9 +181,8 @@ mod tests {
     use super::super::before_validate::run_before_validate_on_node_attrs;
     use super::*;
     use crate::core::{
-        FieldDefinition, FieldType, LocalizedString, Registry,
-        field::{FieldAdmin, FieldHooks, SelectOption},
-        richtext::RichtextNodeDef,
+        FieldAdmin, FieldDefinition, FieldHooks, FieldType, LocalizedString, Registry,
+        SelectOption, richtext::RichtextNodeDef,
     };
 
     fn make_registry_with_cta() -> Registry {

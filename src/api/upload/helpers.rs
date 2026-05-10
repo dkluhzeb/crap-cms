@@ -13,8 +13,7 @@ use tracing::{error, warn};
 use crate::{
     admin::{AdminState, server::load_auth_user},
     core::{
-        CollectionDefinition, Document, DocumentFields,
-        auth::{self, AuthUser},
+        AuthUser, CollectionDefinition, Document, DocumentFields, auth,
         event::{EventOperation, EventTarget, EventUser},
     },
     db::AccessResult,

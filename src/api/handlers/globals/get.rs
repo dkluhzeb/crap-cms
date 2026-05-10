@@ -11,7 +11,7 @@ use crate::{
         content,
         handlers::{ContentService, convert::document_to_proto},
     },
-    core::{Registry, auth::SharedTokenProvider, collection::GlobalDefinition},
+    core::{Registry, SharedTokenProvider, collection::GlobalDefinition},
     db::{DbPool, LocaleContext},
     hooks::HookRunner,
     service::{GetGlobalInput, RunnerReadHooks, ServiceContext, get_global_document},

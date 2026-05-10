@@ -25,10 +25,7 @@ use crate::{
             shared::auto_label_from_name,
         },
     },
-    core::{
-        field::{FieldDefinition, FieldType},
-        timezone::TIMEZONE_OPTIONS,
-    },
+    core::{FieldDefinition, FieldType, timezone::TIMEZONE_OPTIONS},
     db::query::helpers::utc_to_local,
 };
 
@@ -737,11 +734,11 @@ fn construct_blocks(base: BaseFieldData, fc: &SingleFieldCtx) -> FieldContext {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::BlockDefinition;
     use std::collections::HashMap;
 
-    use crate::core::field::{FieldDefinition, FieldType};
-
     use super::build_single_field_context;
+    use crate::core::{FieldDefinition, FieldType};
 
     fn group_field(name: &str, localized: bool, children: Vec<FieldDefinition>) -> FieldDefinition {
         FieldDefinition {
@@ -838,8 +835,6 @@ mod tests {
     /// block sub-fields picks up the language too.
     #[test]
     fn code_subfield_inside_blocks_carries_language() {
-        use crate::core::field::BlockDefinition;
-
         let code = code_field("snippet", Some("javascript"));
         let block = BlockDefinition {
             block_type: "code_block".to_string(),
@@ -939,8 +934,6 @@ mod tests {
     /// ctx["languages"]) — verify the block-template rendering carries it.
     #[test]
     fn code_subfield_inside_blocks_carries_languages_allowlist() {
-        use crate::core::field::BlockDefinition;
-
         let code =
             code_field_with_languages("code", "javascript", vec!["javascript", "python", "html"]);
         let block = BlockDefinition {

@@ -13,11 +13,7 @@ use std::sync::Arc;
 
 use crate::{
     config::CrapConfig,
-    core::{
-        Registry,
-        cache::SharedCache,
-        event::{SharedEventTransport, SharedInvalidationTransport},
-    },
+    core::{Registry, SharedCache, SharedEventTransport, SharedInvalidationTransport},
     db::DbPool,
     hooks::HookRunner,
 };

@@ -10,11 +10,8 @@ use crate::{
     api::{content, handlers::ContentService},
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Registry,
-        auth::SharedTokenProvider,
-        cache::SharedCache,
-        event::{SharedEventTransport, SharedInvalidationTransport},
-        upload::SharedStorage,
+        CollectionDefinition, Registry, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport, SharedStorage, SharedTokenProvider,
     },
     db::DbPool,
     hooks::HookRunner,

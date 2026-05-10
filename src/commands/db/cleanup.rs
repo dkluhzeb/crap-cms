@@ -146,10 +146,7 @@ pub(super) fn find_orphan_columns(
 mod tests {
     use super::*;
     use crate::{
-        core::{
-            collection::CollectionDefinition,
-            field::{FieldDefinition, FieldType},
-        },
+        core::{FieldDefinition, FieldType, collection::CollectionDefinition},
         db::{BoxedConnection, pool},
     };
     use tempfile::TempDir;
@@ -333,7 +330,7 @@ mod tests {
                 "posts",
                 vec![
                     FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![crate::core::field::FieldTab::new(
+                        .tabs(vec![crate::core::FieldTab::new(
                             "Content",
                             vec![
                                 FieldDefinition::builder("row", FieldType::Row)

@@ -9,9 +9,7 @@ use tracing::error;
 use crate::{
     admin::AdminState,
     core::{
-        DocumentFields,
-        auth::AuthUser,
-        collection::CollectionDefinition,
+        AuthUser, CollectionDefinition, DocumentFields,
         upload::{
             CleanupGuard, QueuedConversion, UploadedFile, inject_upload_metadata, process_upload,
         },

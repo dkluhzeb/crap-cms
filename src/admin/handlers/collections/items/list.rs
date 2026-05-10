@@ -27,10 +27,7 @@ use crate::{
             },
         },
     },
-    core::{
-        CollectionDefinition, Document,
-        auth::{AuthUser, Claims},
-    },
+    core::{AuthUser, Claims, CollectionDefinition, Document},
     db::query::{self, FilterClause, FindQuery, LocaleContext},
     service::{
         FindDocumentsInput, PaginatedResult, RunnerReadHooks, ServiceContext, ServiceError,

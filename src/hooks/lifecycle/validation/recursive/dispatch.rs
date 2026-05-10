@@ -68,7 +68,7 @@ impl<'a> ValidationWalker<'a> {
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::core::DocumentFields;
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType, JoinConfig};
+    use crate::core::{FieldDefinition, FieldTab, FieldType, JoinConfig};
     use crate::db::InMemoryConn;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;

@@ -184,9 +184,9 @@ impl<'a> ValidationWalker<'a> {
 mod tests {
     use crate::config::LocaleConfig;
     use crate::core::DocumentFields;
-    use crate::core::field::{FieldAdmin, FieldDefinition, FieldType};
-    use crate::core::registry::Registry;
-    use crate::core::richtext::RichtextNodeDef;
+    use crate::core::Registry;
+    use crate::core::RichtextNodeDef;
+    use crate::core::{FieldAdmin, FieldDefinition, FieldType};
     use crate::db::{InMemoryConn, LocaleContext, LocaleMode};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;

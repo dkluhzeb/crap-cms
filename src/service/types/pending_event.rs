@@ -4,8 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     core::{
-        DocumentFields,
-        collection::{Hooks, LiveSetting},
+        DocumentFields, Hooks, LiveSetting,
         event::{EventOperation, EventTarget, EventUser},
     },
     hooks::lifecycle::PublishEventInput,

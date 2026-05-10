@@ -2,7 +2,7 @@
 
 use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
 use crate::core::Registry;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
+use crate::core::{CollectionDefinition, GlobalDefinition};
 use crate::db::{DbConnection, DbPool, DbValue, migrate, pool};
 
 pub(super) fn no_locale() -> LocaleConfig {

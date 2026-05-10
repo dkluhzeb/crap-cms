@@ -24,11 +24,7 @@ use crate::{
             service_error_to_admin_response, split_sidebar_fields, task_join_error_response,
         },
     },
-    core::{
-        Document, DocumentFields,
-        auth::{AuthUser, Claims},
-        collection::GlobalDefinition,
-    },
+    core::{AuthUser, Claims, Document, DocumentFields, collection::GlobalDefinition},
     db::DbPool,
     hooks::HookRunner,
     service::{GetGlobalInput, RunnerReadHooks, ServiceContext, ServiceError, get_global_document},
@@ -40,7 +36,7 @@ struct ReadParams {
     runner: HookRunner,
     slug: String,
     def: GlobalDefinition,
-    locale_ctx: Option<crate::db::query::LocaleContext>,
+    locale_ctx: Option<crate::db::LocaleContext>,
     user_doc: Option<Document>,
     user_ui_locale: Option<String>,
 }

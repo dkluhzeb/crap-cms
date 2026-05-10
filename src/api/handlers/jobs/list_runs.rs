@@ -9,7 +9,7 @@ use tracing::error;
 use crate::{
     api::handlers::convert::pagination_result_to_proto,
     api::{content, handlers::ContentService},
-    core::{JobRun, Registry, auth::SharedTokenProvider},
+    core::{JobRun, Registry, SharedTokenProvider},
     db::DbPool,
     service::{self, PaginatedResult},
 };

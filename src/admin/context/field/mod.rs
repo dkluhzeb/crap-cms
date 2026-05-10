@@ -13,7 +13,7 @@
 //!
 //! ## Design
 //!
-//! - Each [`FieldType`](crate::core::field::FieldType) variant has a
+//! - Each [`FieldType`](crate::core::FieldType) variant has a
 //!   corresponding [`FieldContext`] variant.
 //! - The enum is `#[serde(tag = "field_type", rename_all = "lowercase")]` —
 //!   internally tagged. Serialized JSON has `{"field_type": "text", ...flat
