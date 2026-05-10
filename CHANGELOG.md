@@ -157,6 +157,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/scheduler/` code-quality cleanup pass. Inventory was already in
+  good shape (4 files, 1688 LOC, 0 `#[allow]`, 0 `super::super`,
+  0 manual `Default` impls, 0 external deep-path imports). Concrete
+  changes:
+  - **Pure-ceremony `SchedulerParamsBuilder` deleted** in favour of
+    plain struct-literal construction. The builder existed to wrap a
+    7-arg `new()` plus three optional setters, but both call sites
+    (`crap-cms work` and `serve`'s startup) supplied every field
+    anyway -- the "optional" defaults were never used. `SchedulerParams`
+    fields are now `pub`; both call sites construct it via
+    `SchedulerParams { pool, hook_runner, registry, … }`. The builder
+    type and its top-level re-export are gone.
+  - **Wide-arg helpers refactored to typed `*Input<'_>` structs.**
+    Three helpers crossed the >4-arg threshold:
+      - `run_periodic_purges` (7 args -> `PurgeTickInput<'_>`)
+      - `purge_collection` (6 args -> `PurgeCollectionInput<'_>`)
+      - `spawn_job_execution` (6 args -> `SpawnJobInput<'_>`)
+    Call sites now read at a glance instead of counting positional
+    arguments.
+  - **Visibility tightened.** `RETENTION_PURGE_SLUG` and
+    `claim_retention_purge_tick` were `pub` but only used inside
+    `scheduler/` (loop_runner + runner's own tests). Demoted to
+    `pub(super)` and dropped from the `scheduler::*` re-export
+    block. The remaining re-exports (`start`, `execute_job`,
+    `check_cron_schedules`, `purge_soft_deleted`,
+    `recover_stale_jobs`, `SchedulerParams`) all have ≥1 external
+    consumer (call sites in `commands/work.rs`, `commands/serve/
+    startup.rs`, `tests/scheduler.rs`, `tests/db_soft_delete.rs`).
+  - **`mod.rs` architecture sketch** expanded from a one-line `//!`
+    to a 25-line layout/conventions map matching the admin/, mcp/,
+    commands/, scaffold/ pattern.
+  39 scheduler tests pass (32 unit + 7 integration); clippy clean.
+
 - `src/scaffold/` code-quality cleanup pass. Concrete changes:
   - **Seven inline templates moved to template files.** The module
     already had a Handlebars registry in `render.rs` and per-submodule

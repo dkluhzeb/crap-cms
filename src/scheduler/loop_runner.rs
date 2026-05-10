@@ -109,15 +109,15 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
                 last_cron_check = now;
                 purge_counter += 1;
 
-                run_periodic_purges(
-                    purge_counter,
+                run_periodic_purges(PurgeTickInput {
+                    counter: purge_counter,
                     auto_purge_secs,
-                    config.cron_interval as i64,
-                    &pool,
-                    &registry,
-                    &storage,
-                    &locale_config,
-                );
+                    cron_interval_secs: config.cron_interval as i64,
+                    pool: &pool,
+                    registry: &registry,
+                    storage: &storage,
+                    locale_config: &locale_config,
+                });
             }
             _ = heartbeat_ticker.tick() => {
                 update_heartbeats(&pool, &running_jobs);
@@ -158,26 +158,32 @@ fn recover_on_startup(pool: &DbPool, registry: &SharedRegistry) -> Result<()> {
     Ok(())
 }
 
-/// Run periodic purges (every 10 cron intervals).
-///
-/// In multi-node deployments the retention purge is gated by an atomic
-/// `_crap_cron_fired` claim — only one node runs the purge per cron window.
+/// Bundle of refs needed by the periodic-purge tick. Bundled into a
+/// struct so the call site reads at a glance instead of counting
+/// positional arguments.
 #[cfg(not(tarpaulin_include))]
-fn run_periodic_purges(
+struct PurgeTickInput<'a> {
     counter: u64,
     auto_purge_secs: Option<u64>,
     cron_interval_secs: i64,
-    pool: &DbPool,
-    registry: &SharedRegistry,
-    storage: &SharedStorage,
-    locale_config: &LocaleConfig,
-) {
-    if !counter.is_multiple_of(10) {
+    pool: &'a DbPool,
+    registry: &'a SharedRegistry,
+    storage: &'a SharedStorage,
+    locale_config: &'a LocaleConfig,
+}
+
+/// Run periodic purges (every 10 cron intervals).
+///
+/// In multi-node deployments the retention purge is gated by an atomic
+/// `_crap_cron_fired` claim -- only one node runs the purge per cron window.
+#[cfg(not(tarpaulin_include))]
+fn run_periodic_purges(p: PurgeTickInput<'_>) {
+    if !p.counter.is_multiple_of(10) {
         return;
     }
 
-    if let Some(secs) = auto_purge_secs
-        && let Ok(conn) = pool.get()
+    if let Some(secs) = p.auto_purge_secs
+        && let Ok(conn) = p.pool.get()
     {
         match job_query::purge_old_jobs(&conn, secs) {
             Ok(n) if n > 0 => info!("Auto-purged {} old job run(s)", n),
@@ -186,14 +192,14 @@ fn run_periodic_purges(
         }
     }
 
-    let Ok(mut conn) = pool.get() else {
+    let Ok(mut conn) = p.pool.get() else {
         return;
     };
 
     // The purge fires every 10 cron intervals, so the dedup window must cover
-    // that span — otherwise two nodes drifting by ~1 cron tick would each
+    // that span -- otherwise two nodes drifting by ~1 cron tick would each
     // claim a fresh window and run the purge twice.
-    let purge_window_secs = cron_interval_secs.saturating_mul(10);
+    let purge_window_secs = p.cron_interval_secs.saturating_mul(10);
 
     let claimed = match conn.transaction() {
         Ok(tx) => match claim_retention_purge_tick(&tx, Utc::now(), purge_window_secs) {
@@ -226,7 +232,7 @@ fn run_periodic_purges(
         return;
     }
 
-    match purge_soft_deleted(&conn, registry, &**storage, locale_config) {
+    match purge_soft_deleted(&conn, p.registry, &**p.storage, p.locale_config) {
         Ok(n) if n > 0 => info!("Purged {} expired soft-deleted doc(s)", n),
         Ok(_) => {}
         Err(e) => warn!("Soft-delete purge error: {}", e),
@@ -440,7 +446,14 @@ async fn poll_and_execute(
 
         let Some(job_def) = job_def else { continue };
 
-        spawn_job_execution(pool, hook_runner, running_jobs, email, &job_run, &job_def);
+        spawn_job_execution(SpawnJobInput {
+            pool,
+            hook_runner,
+            running_jobs,
+            email,
+            job_run: &job_run,
+            job_def: &job_def,
+        });
     }
 
     Ok(())
@@ -529,33 +542,35 @@ fn resolve_job_def(
     Ok(None)
 }
 
+struct SpawnJobInput<'a> {
+    pool: &'a DbPool,
+    hook_runner: &'a HookRunner,
+    running_jobs: &'a Arc<Mutex<Vec<String>>>,
+    email: &'a EmailQueueConfig,
+    job_run: &'a JobRun,
+    job_def: &'a JobDefinition,
+}
+
 /// Spawn a tokio task to execute a job with timeout enforcement.
 #[cfg(not(tarpaulin_include))]
-fn spawn_job_execution(
-    pool: &DbPool,
-    hook_runner: &HookRunner,
-    running_jobs: &Arc<Mutex<Vec<String>>>,
-    email: &EmailQueueConfig,
-    job_run: &JobRun,
-    job_def: &JobDefinition,
-) {
-    if let Ok(mut guard) = running_jobs.lock() {
-        guard.push(job_run.id.clone());
+fn spawn_job_execution(s: SpawnJobInput<'_>) {
+    if let Ok(mut guard) = s.running_jobs.lock() {
+        guard.push(s.job_run.id.clone());
     }
 
-    let pool = pool.clone();
-    let hook_runner = hook_runner.clone();
-    let running_jobs = running_jobs.clone();
-    let timeout_secs = job_def.timeout;
-    let should_retry = job_run.attempt < job_run.max_attempts;
-    let attempt = job_run.attempt;
+    let pool = s.pool.clone();
+    let hook_runner = s.hook_runner.clone();
+    let running_jobs = s.running_jobs.clone();
+    let timeout_secs = s.job_def.timeout;
+    let should_retry = s.job_run.attempt < s.job_run.max_attempts;
+    let attempt = s.job_run.attempt;
     let pool_timeout = pool.clone();
-    let job_id = job_run.id.clone();
-    let id_log = job_run.id.clone();
-    let slug_log = job_run.slug.clone();
-    let ep = email.provider.clone();
-    let job_def = job_def.clone();
-    let job_run = job_run.clone();
+    let job_id = s.job_run.id.clone();
+    let id_log = s.job_run.id.clone();
+    let slug_log = s.job_run.slug.clone();
+    let ep = s.email.provider.clone();
+    let job_def = s.job_def.clone();
+    let job_run = s.job_run.clone();
 
     tokio::spawn(async move {
         let timeout_dur = Duration::from_secs(timeout_secs);

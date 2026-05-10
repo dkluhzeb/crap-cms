@@ -322,7 +322,14 @@ pub fn purge_soft_deleted(
             continue;
         };
 
-        let purged = purge_collection(conn, slug, def, seconds, storage, locale_config)?;
+        let purged = purge_collection(PurgeCollectionInput {
+            conn,
+            slug,
+            def,
+            retention_seconds: seconds,
+            storage,
+            locale_config,
+        })?;
         total += purged;
     }
 
@@ -335,22 +342,24 @@ pub fn purge_soft_deleted(
 /// from disk after the DB deletes succeed. A crash between DB delete and
 /// file delete leaves orphaned files (safe), rather than orphaned DB records
 /// pointing to deleted files (unsafe).
-fn purge_collection(
-    conn: &dyn DbConnection,
-    slug: &str,
-    def: &CollectionDefinition,
+struct PurgeCollectionInput<'a> {
+    conn: &'a dyn DbConnection,
+    slug: &'a str,
+    def: &'a CollectionDefinition,
     retention_seconds: i64,
-    storage: &dyn StorageBackend,
-    locale_config: &LocaleConfig,
-) -> Result<u64> {
+    storage: &'a dyn StorageBackend,
+    locale_config: &'a LocaleConfig,
+}
+
+fn purge_collection(p: PurgeCollectionInput<'_>) -> Result<u64> {
     // Find docs past the retention threshold
-    let (offset_sql, offset_param) = conn.date_offset_expr(retention_seconds, 1);
+    let (offset_sql, offset_param) = p.conn.date_offset_expr(p.retention_seconds, 1);
     let threshold_sql = format!(
         "SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL \
          AND _deleted_at < {}",
-        slug, offset_sql
+        p.slug, offset_sql
     );
-    let rows = conn.query_all(&threshold_sql, &[offset_param])?;
+    let rows = p.conn.query_all(&threshold_sql, &[offset_param])?;
 
     let mut purged = 0u64;
     let mut upload_docs = Vec::new();
@@ -361,40 +370,40 @@ fn purge_collection(
             _ => continue,
         };
 
-        // Skip documents that are still referenced — protect referential integrity.
+        // Skip documents that are still referenced -- protect referential integrity.
         // Uses locked variant to prevent concurrent creates from incrementing ref count
         // between this check and the DELETE (Postgres only; SQLite serializes via IMMEDIATE).
-        let ref_count = query::ref_count::get_ref_count_locked(conn, slug, &id)?.unwrap_or(0);
+        let ref_count = query::ref_count::get_ref_count_locked(p.conn, p.slug, &id)?.unwrap_or(0);
         if ref_count > 0 {
             debug!(
                 "Skipping purge of {}/{}: referenced by {} document(s)",
-                slug, id, ref_count
+                p.slug, id, ref_count
             );
             continue;
         }
 
         // Decrement ref counts on targets before hard delete (CASCADE removes junction rows)
-        query::ref_count::before_hard_delete(conn, slug, &id, &def.fields, locale_config)?;
+        query::ref_count::before_hard_delete(p.conn, p.slug, &id, &p.def.fields, p.locale_config)?;
 
         // Collect upload file paths BEFORE deleting from DB
-        if def.is_upload_collection()
-            && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, slug, def, &id, None)
+        if p.def.is_upload_collection()
+            && let Ok(Some(doc)) = query::find_by_id_unfiltered(p.conn, p.slug, p.def, &id, None)
         {
             upload_docs.push(doc);
         }
 
         // Cancel pending image conversions
-        if def.is_upload_collection() {
-            let _ = query::images::delete_entries_for_document(conn, slug, &id);
+        if p.def.is_upload_collection() {
+            let _ = query::images::delete_entries_for_document(p.conn, p.slug, &id);
         }
 
         // Clean up FTS index before hard delete
-        if conn.supports_fts() {
-            query::fts::fts_delete(conn, slug, &id)?;
+        if p.conn.supports_fts() {
+            query::fts::fts_delete(p.conn, p.slug, &id)?;
         }
 
         // Hard delete the document from DB
-        query::delete(conn, slug, &id)?;
+        query::delete(p.conn, p.slug, &id)?;
         purged += 1;
     }
 
@@ -402,13 +411,13 @@ fn purge_collection(
     // If the process crashes here, we get orphaned files (harmless)
     // rather than DB records pointing to missing files (harmful).
     for doc in &upload_docs {
-        upload::delete_upload_files(storage, &doc.fields);
+        upload::delete_upload_files(p.storage, &doc.fields);
     }
 
     if purged > 0 {
         info!(
             "Purged {} expired soft-deleted doc(s) from '{}'",
-            purged, slug
+            purged, p.slug
         );
     }
 
@@ -420,7 +429,7 @@ fn purge_collection(
 /// fixed interval from the scheduler loop rather than a user-defined cron
 /// expression, but must still be deduped across instances in multi-node
 /// deployments.
-pub const RETENTION_PURGE_SLUG: &str = "__retention_purge";
+pub(super) const RETENTION_PURGE_SLUG: &str = "__retention_purge";
 
 /// Attempt to claim the retention-purge tick for this instance/window.
 ///
@@ -428,7 +437,7 @@ pub const RETENTION_PURGE_SLUG: &str = "__retention_purge";
 /// Uses the same `_crap_cron_fired` dedup table as user cron jobs.
 /// `window_seconds` must match the scheduler's purge cadence so two instances
 /// firing inside the same window still end up with exactly one winner.
-pub fn claim_retention_purge_tick(
+pub(super) fn claim_retention_purge_tick(
     conn: &dyn DbConnection,
     now: DateTime<Utc>,
     window_seconds: i64,

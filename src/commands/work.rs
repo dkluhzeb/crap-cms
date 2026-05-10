@@ -26,7 +26,7 @@ use crate::{
     core::{email::create_email_provider, upload::create_storage},
     db::{migrate, pool},
     hooks::{self, HookRunner},
-    scheduler::{self, SchedulerParamsBuilder},
+    scheduler::{self, SchedulerParams},
 };
 
 /// Worker PID filename (separate from server's crap.pid).
@@ -254,21 +254,18 @@ pub async fn run(
 
     log_worker_config(&queues, no_cron, jobs_config.max_concurrent);
 
-    scheduler::start(
-        SchedulerParamsBuilder::new(
-            db_pool,
-            hook_runner,
-            registry,
-            jobs_config,
-            shutdown,
-            storage,
-            cfg.locale.clone(),
-        )
-        .email_provider(email_provider)
-        .email_queue_timeout(cfg.email.queue_timeout)
-        .email_queue_concurrency(cfg.email.queue_concurrency)
-        .build(),
-    )
+    scheduler::start(SchedulerParams {
+        pool: db_pool,
+        hook_runner,
+        registry,
+        config: jobs_config,
+        shutdown,
+        storage,
+        locale_config: cfg.locale.clone(),
+        email_provider: Some(email_provider),
+        email_queue_timeout: cfg.email.queue_timeout,
+        email_queue_concurrency: cfg.email.queue_concurrency,
+    })
     .await?;
 
     helpers::remove_pid_file(&pid_config_dir, PID_FILENAME);

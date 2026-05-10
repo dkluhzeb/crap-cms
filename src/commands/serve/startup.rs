@@ -555,21 +555,18 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     let scheduler_handle = async {
         if run_scheduler {
-            scheduler::start(
-                scheduler::SchedulerParamsBuilder::new(
-                    pool.clone(),
-                    hook_runner.clone(),
-                    registry.clone(),
-                    cfg.jobs.clone(),
-                    shutdown.clone(),
-                    storage.clone(),
-                    cfg.locale.clone(),
-                )
-                .email_provider(create_email_provider(&cfg.email)?)
-                .email_queue_timeout(cfg.email.queue_timeout)
-                .email_queue_concurrency(cfg.email.queue_concurrency)
-                .build(),
-            )
+            scheduler::start(scheduler::SchedulerParams {
+                pool: pool.clone(),
+                hook_runner: hook_runner.clone(),
+                registry: registry.clone(),
+                config: cfg.jobs.clone(),
+                shutdown: shutdown.clone(),
+                storage: storage.clone(),
+                locale_config: cfg.locale.clone(),
+                email_provider: Some(create_email_provider(&cfg.email)?),
+                email_queue_timeout: cfg.email.queue_timeout,
+                email_queue_concurrency: cfg.email.queue_concurrency,
+            })
             .await
         } else {
             Ok(())
