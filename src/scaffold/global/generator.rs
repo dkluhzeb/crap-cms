@@ -1,13 +1,14 @@
-//! `make global` — generate global Lua files.
+//! `make global` -- generate global Lua files.
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::cli;
 use crate::scaffold::{
-    FieldStub, collection::write_field_lua, render::render, to_title_case, validate_slug,
+    FieldStub, collection::write_field_lua, guards::refuse_file_overwrite, paths, render::render,
+    to_title_case, validate_slug,
 };
 
 /// Handlebars context for the `global` template.
@@ -29,17 +30,11 @@ pub fn make_global(
 ) -> Result<()> {
     validate_slug(slug)?;
 
-    let globals_dir = config_dir.join("globals");
+    let globals_dir = paths::globals_dir(config_dir);
     fs::create_dir_all(&globals_dir).context("Failed to create globals/ directory")?;
 
     let file_path = globals_dir.join(format!("{}.lua", slug));
-
-    if file_path.exists() && !force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, force)?;
 
     let lua = render_global_lua(slug, fields)?;
 

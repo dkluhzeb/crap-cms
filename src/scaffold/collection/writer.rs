@@ -1,10 +1,11 @@
 //! Lua code generation for field definitions.
 
+use super::field_types::CONTAINER_TYPES;
 use super::parser::escape_lua_string;
-use super::types::{CONTAINER_TYPES, FieldStub};
+use super::stubs::FieldStub;
 
 /// Return type-specific Lua stub lines for non-container field types.
-pub fn type_specific_stub(field_type: &str) -> Option<&'static str> {
+fn type_specific_stub(field_type: &str) -> Option<&'static str> {
     match field_type {
         "select" | "radio" => {
             Some("options = { { label = \"Option 1\", value = \"option_1\" } },\n")

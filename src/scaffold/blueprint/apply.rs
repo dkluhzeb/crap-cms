@@ -6,6 +6,8 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::cli;
 
+use crate::scaffold::init::LUA_API_TYPES;
+
 use super::helpers::{blueprints_dir, copy_dir_recursive, validate_blueprint_name};
 use super::list::list_blueprint_names;
 use super::manifest::{check_blueprint_version, read_manifest};
@@ -32,7 +34,7 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
 
     if target.join("crap.toml").exists() {
         bail!(
-            "Directory '{}' already contains a crap.toml — refusing to overwrite",
+            "Directory '{}' already contains a crap.toml -- refusing to overwrite",
             target.display()
         );
     }
@@ -48,14 +50,11 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
         )
     })?;
 
-    // Regenerate types/crap.lua — blueprints skip types/ during save.
+    // Regenerate types/crap.lua -- blueprints skip types/ during save.
     let types_dir = target.join("types");
     fs::create_dir_all(&types_dir).context("Failed to create types/")?;
-    fs::write(
-        types_dir.join("crap.lua"),
-        super::super::init::LUA_API_TYPES,
-    )
-    .context("Failed to write types/crap.lua")?;
+    fs::write(types_dir.join("crap.lua"), LUA_API_TYPES)
+        .context("Failed to write types/crap.lua")?;
 
     let abs = target.canonicalize().unwrap_or_else(|_| target.clone());
     cli::success(&format!(

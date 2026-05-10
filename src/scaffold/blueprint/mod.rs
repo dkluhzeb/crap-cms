@@ -1,4 +1,4 @@
-//! Blueprint management — save, use, list, remove reusable config directory templates.
+//! Blueprint management -- save, use, list, remove reusable config directory templates.
 
 mod apply;
 mod helpers;

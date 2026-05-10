@@ -1,17 +1,18 @@
-//! `make job` — generate job Lua files.
+//! `make job` -- generate job Lua files.
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::cli;
-use crate::scaffold::{render::render, to_title_case, validate_slug};
+use crate::scaffold::guards::refuse_file_overwrite;
+use crate::scaffold::{paths, render::render, to_title_case, validate_slug};
 use crate::typegen::to_pascal_case;
 
 /// Handlebars context for the `job` template. Optional fields are skipped via
 /// `#[serde(skip_serializing_if = "Option::is_none")]` so `{{#if}}` blocks
-/// in the template behave as before — `Some("default")` queue or
+/// in the template behave as before -- `Some("default")` queue or
 /// `Some(60)` timeout were already filtered upstream.
 #[derive(Serialize)]
 struct JobTemplateContext<'a> {
@@ -45,17 +46,11 @@ pub struct MakeJobOptions<'a> {
 pub fn make_job(opts: &MakeJobOptions) -> Result<()> {
     validate_slug(opts.slug)?;
 
-    let jobs_dir = opts.config_dir.join("jobs");
+    let jobs_dir = paths::jobs_dir(opts.config_dir);
     fs::create_dir_all(&jobs_dir).context("Failed to create jobs/ directory")?;
 
     let file_path = jobs_dir.join(format!("{}.lua", opts.slug));
-
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let lua = render_job_lua(opts)?;
 

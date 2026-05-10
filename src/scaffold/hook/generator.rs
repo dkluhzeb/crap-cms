@@ -1,11 +1,15 @@
-//! `make hook` — generate hook Lua files.
+//! `make hook` -- generate hook Lua files.
 
 use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
 
-use crate::{cli, scaffold::render::render, typegen::to_pascal_case};
+use crate::{
+    cli,
+    scaffold::{guards::refuse_file_overwrite, paths, render::render},
+    typegen::to_pascal_case,
+};
 
 /// Handlebars context for the `hook_collection` template.
 #[derive(Serialize)]
@@ -47,7 +51,7 @@ struct ConditionTableContext<'a> {
     body: String,
 }
 
-// ── Types ────────────────────────────────────────────────────────────────
+// == Types ================================================================
 
 /// Hook type for the `make hook` command.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,7 +109,7 @@ impl HookType {
     }
 }
 
-/// Options for `make_hook()`. Fully resolved — no prompts.
+/// Options for `make_hook()`. Fully resolved -- no prompts.
 pub struct MakeHookOptions<'a> {
     pub config_dir: &'a Path,
     pub name: &'a str,
@@ -128,7 +132,7 @@ pub struct ConditionFieldInfo {
     pub select_options: Vec<String>,
 }
 
-// ── Template rendering ───────────────────────────────────────────────────
+// == Template rendering ===================================================
 
 /// Resolve the typed context annotation for collection/field hooks.
 fn hook_context_type(collection: &str, is_global: bool, prefix: &str) -> String {
@@ -268,7 +272,7 @@ fn render_condition_table(opts: &MakeHookOptions) -> Result<String> {
     )
 }
 
-// ── Validation ───────────────────────────────────────────────────────────
+// == Validation ===========================================================
 
 /// Validate all inputs before generating the hook file.
 fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
@@ -276,14 +280,14 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
 
     if opts.name.is_empty() || !opts.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         bail!(
-            "Invalid hook name '{}' — use alphanumeric characters and underscores only",
+            "Invalid hook name '{}' -- use alphanumeric characters and underscores only",
             opts.name
         );
     }
 
     if !opts.hook_type.valid_positions().contains(&opts.position) {
         bail!(
-            "Invalid position '{}' for {} hook — valid: {}",
+            "Invalid position '{}' for {} hook -- valid: {}",
             opts.position,
             opts.hook_type.label(),
             opts.hook_type.valid_positions().join(", ")
@@ -297,28 +301,23 @@ fn validate_inputs(opts: &MakeHookOptions) -> Result<()> {
     Ok(())
 }
 
-// ── Public entry point ───────────────────────────────────────────────────
+// == Public entry point ===================================================
 
 /// Generate a hook file at `<config_dir>/hooks/<collection>/<name>.lua`.
 pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
     validate_inputs(opts)?;
 
     let (hooks_dir, file_path) = if opts.hook_type == HookType::Access {
-        let dir = opts.config_dir.join("access");
+        let dir = paths::access_dir(opts.config_dir);
         (dir.clone(), dir.join(format!("{}.lua", opts.name)))
     } else {
-        let dir = opts.config_dir.join("hooks").join(opts.collection);
+        let dir = paths::collection_hooks_dir(opts.config_dir, opts.collection);
         (dir.clone(), dir.join(format!("{}.lua", opts.name)))
     };
 
     fs::create_dir_all(&hooks_dir).context("Failed to create hook subdirectory")?;
 
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let lua = render_hook_lua(opts)?;
 
@@ -389,7 +388,7 @@ mod tests {
         }
     }
 
-    // ── HookType tests ──────────────────────────────────────────────────
+    // == HookType tests ==================================================
 
     #[test]
     fn hook_type_from_str() {
@@ -432,7 +431,7 @@ mod tests {
         assert!(HookType::Condition.valid_positions().contains(&"table"));
     }
 
-    // ── Validation ──────────────────────────────────────────────────────
+    // == Validation ======================================================
 
     #[test]
     fn invalid_collection_slug() {
@@ -510,7 +509,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("--field"));
     }
 
-    // ── Overwrite ───────────────────────────────────────────────────────
+    // == Overwrite =======================================================
 
     #[test]
     fn refuses_overwrite() {
@@ -560,7 +559,7 @@ mod tests {
         );
     }
 
-    // ── Collection hooks ────────────────────────────────────────────────
+    // == Collection hooks ================================================
 
     #[test]
     fn collection_hook() {
@@ -687,7 +686,7 @@ mod tests {
         assert!(content.contains("crap.hook.Posts"));
     }
 
-    // ── Field hooks ─────────────────────────────────────────────────────
+    // == Field hooks =====================================================
 
     #[test]
     fn field_hook() {
@@ -727,7 +726,7 @@ mod tests {
         assert!(content.contains("crap.field_hook.global_site_settings"));
     }
 
-    // ── Access hooks ────────────────────────────────────────────────────
+    // == Access hooks ====================================================
 
     #[test]
     fn access_hook() {
@@ -749,7 +748,7 @@ mod tests {
         assert!(content.contains("crap.AccessContext"));
     }
 
-    // ── Condition hooks ─────────────────────────────────────────────────
+    // == Condition hooks =================================================
 
     #[test]
     fn condition_generic() {

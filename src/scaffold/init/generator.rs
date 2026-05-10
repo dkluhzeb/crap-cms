@@ -1,10 +1,11 @@
-//! `init` command — scaffold a new config directory.
+//! `init` command -- scaffold a new config directory.
 
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use serde::Serialize;
 
+use crate::scaffold::paths::INIT_SUBDIRS;
 use crate::scaffold::render::render;
 
 /// Handlebars context for the `crap_toml` template.
@@ -19,7 +20,7 @@ struct CrapTomlContext<'a> {
     locales_str: String,
 }
 
-// ── Static files (compiled in, no templating needed) ─────────────────────
+// == Static files (compiled in, no templating needed) =====================
 
 const STATIC_INIT_LUA: &str = include_str!("templates/init.lua.tpl");
 const STATIC_LUARC: &str = include_str!("templates/luarc.json.tpl");
@@ -27,10 +28,10 @@ const STATIC_GITIGNORE: &str = include_str!("templates/gitignore.tpl");
 const STATIC_STYLUA: &str = include_str!("templates/stylua.toml.tpl");
 const STATIC_MCP_JSON: &str = include_str!("templates/mcp.json.tpl");
 
-/// Embedded Lua API type definitions — compiled into the binary.
+/// Embedded Lua API type definitions -- compiled into the binary.
 pub(crate) const LUA_API_TYPES: &str = include_str!("../../../types/crap.lua");
 
-// ── Types ────────────────────────────────────────────────────────────────
+// == Types ================================================================
 
 /// Options for `init()`. Controls what gets written to `crap.toml`.
 pub struct InitOptions {
@@ -53,21 +54,7 @@ impl Default for InitOptions {
     }
 }
 
-/// Directories scaffolded inside the config root.
-const SUBDIRS: &[&str] = &[
-    "collections",
-    "globals",
-    "hooks",
-    "access",
-    "jobs",
-    "plugins",
-    "templates",
-    "static",
-    "migrations",
-    "types",
-];
-
-// ── Public entry point ───────────────────────────────────────────────────
+// == Public entry point ===================================================
 
 /// Scaffold a new config directory with minimum viable structure.
 ///
@@ -78,7 +65,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
 
     if target.join("crap.toml").exists() {
         bail!(
-            "Directory '{}' already contains a crap.toml — refusing to overwrite",
+            "Directory '{}' already contains a crap.toml -- refusing to overwrite",
             target.display()
         );
     }
@@ -97,7 +84,7 @@ fn create_directories(target: &std::path::Path) -> Result<()> {
     fs::create_dir_all(target)
         .with_context(|| format!("Failed to create directory '{}'", target.display()))?;
 
-    for subdir in SUBDIRS {
+    for subdir in INIT_SUBDIRS {
         fs::create_dir_all(target.join(subdir))
             .with_context(|| format!("Failed to create {}/", subdir))?;
     }
@@ -162,7 +149,7 @@ mod tests {
         assert!(target.join(".mcp.json").exists());
         assert!(target.join("types/crap.lua").exists());
 
-        for subdir in SUBDIRS {
+        for subdir in INIT_SUBDIRS {
             assert!(target.join(subdir).is_dir(), "{subdir}/ should exist");
         }
     }

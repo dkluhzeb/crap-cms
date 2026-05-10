@@ -1,22 +1,32 @@
-//! `make slot` — scaffold a slot-widget HBS file at
+//! `make slot` -- scaffold a slot-widget HBS file at
 //! `<config_dir>/templates/slots/<slot>/<file>.hbs`.
 //!
-//! Slots are additive — multiple files in the same slot directory render
+//! Slots are additive -- multiple files in the same slot directory render
 //! alongside each other in alphabetical order. The scaffold defaults the
 //! filename to a sensible widget name when omitted.
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
+use serde::Serialize;
 
 use crate::{
     cli,
-    scaffold::{to_title_case, validate_template_slug},
+    scaffold::{
+        guards::refuse_file_overwrite, paths, render, to_title_case, validate_template_slug,
+    },
 };
+
+#[derive(Serialize)]
+struct SlotCtx<'a> {
+    slot: &'a str,
+    file: &'a str,
+    title: String,
+}
 
 /// Built-in slots and their typical use cases. Used by the scaffold to
 /// nudge the user toward the right slot when they pass `--list`.
-pub const KNOWN_SLOTS: &[(&str, &str)] = &[
+const KNOWN_SLOTS: &[(&str, &str)] = &[
     (
         "head_extras",
         "extra <head> tags (OG, robots, PWA, analytics)",
@@ -58,22 +68,13 @@ pub fn make_slot(opts: &MakeSlotOptions) -> Result<()> {
     let file = opts.file.unwrap_or("widget");
     validate_template_slug(file)?;
 
-    let dir = opts
-        .config_dir
-        .join("templates")
-        .join("slots")
-        .join(opts.slot);
+    let dir = paths::templates_slot_dir(opts.config_dir, opts.slot);
     fs::create_dir_all(&dir).context("Failed to create slots/<name>/ directory")?;
 
     let file_path = dir.join(format!("{}.hbs", file));
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
-    let hbs = render_slot_hbs(opts.slot, file);
+    let hbs = render_slot_hbs(opts.slot, file)?;
     fs::write(&file_path, &hbs)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
 
@@ -85,44 +86,20 @@ pub fn make_slot(opts: &MakeSlotOptions) -> Result<()> {
         ));
     }
     cli::info(
-        "Restart crap-cms (or rely on dev-mode reload) — the slot file renders automatically.",
+        "Restart crap-cms (or rely on dev-mode reload) -- the slot file renders automatically.",
     );
 
     Ok(())
 }
 
-fn render_slot_hbs(slot: &str, file: &str) -> String {
-    let title = to_title_case(file);
-    format!(
-        r#"{{{{!--
-  Slot widget: {title}
-  Renders inside the `{slot}` slot, alongside any other contributions.
-
-  Filename order is render order (alphabetical). Prefix with NN- if you
-  need to control where this widget appears.
-
-  Page context (`{{{{user}}}}`, `{{{{nav}}}}`, `{{{{crap.site_name}}}}`,
-  …) is available here. For dynamic data, register a Lua function via
-  `crap.template_data.register("<name>", fn)` and pull it via
-  `{{{{data "<name>"}}}}` below.
---}}}}
-<div class="card">
-  <div class="card__header">
-    <h3>{title}</h3>
-  </div>
-  <div class="card__body">
-    <p>Slot widget. Edit
-      <code>templates/slots/{slot}/{file}.hbs</code> in your config dir.</p>
-
-    {{{{!-- {{{{#with (data "{file}_data")}}}}    --}}}}
-    {{{{!--   <p>{{{{this.value}}}}</p>          --}}}}
-    {{{{!-- {{{{/with}}}}                         --}}}}
-  </div>
-</div>
-"#,
-        slot = slot,
-        file = file,
-        title = title,
+fn render_slot_hbs(slot: &str, file: &str) -> Result<String> {
+    render::render(
+        "slot",
+        &SlotCtx {
+            slot,
+            file,
+            title: to_title_case(file),
+        },
     )
 }
 

@@ -1,4 +1,4 @@
-//! `make node` — scaffold a custom richtext-node Lua snippet.
+//! `make node` -- scaffold a custom richtext-node Lua snippet.
 
 mod generator;
 

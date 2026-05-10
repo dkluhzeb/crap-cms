@@ -1,59 +1,12 @@
-//! Data types and constants for collection scaffolding.
-
-/// Valid field types for collection definitions.
-pub const VALID_FIELD_TYPES: &[&str] = &[
-    "text",
-    "number",
-    "textarea",
-    "select",
-    "radio",
-    "checkbox",
-    "date",
-    "email",
-    "json",
-    "richtext",
-    "code",
-    "relationship",
-    "array",
-    "group",
-    "upload",
-    "blocks",
-    "row",
-    "collapsible",
-    "tabs",
-    "join",
-];
-
-/// Container field types that support nested subfields.
-pub const CONTAINER_TYPES: &[&str] = &["group", "array", "row", "collapsible"];
-
-/// Boolean flags for collection scaffolding.
-pub struct CollectionOptions {
-    pub no_timestamps: bool,
-    pub auth: bool,
-    pub upload: bool,
-    pub versions: bool,
-    pub force: bool,
-}
-
-impl CollectionOptions {
-    /// Create default options (all flags off).
-    pub fn new() -> Self {
-        Self {
-            no_timestamps: false,
-            auth: false,
-            upload: false,
-            versions: false,
-            force: false,
-        }
-    }
-}
-
-impl Default for CollectionOptions {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+//! In-memory representation of a parsed field tree, used by the parser
+//! and the wizard before lowering to Lua via the writer.
+//!
+//! `FieldStub` is the leaf/container shape; container fields hold either
+//! `Vec<FieldStub>` (group / array / row / collapsible), `Vec<BlockStub>`
+//! (blocks fields), or `Vec<TabStub>` (tabs fields). The block/tab
+//! shapes both bottom out at another `Vec<FieldStub>`, so the three
+//! types form a small mutually-referential hierarchy and live in one
+//! file.
 
 /// Stub for a field definition in the shorthand parser.
 pub struct FieldStub {

@@ -157,47 +157,121 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
-- `src/cli/` module audit per the alpha.9 playbook. Module is
-  small (5 files, 437 LOC) and structurally already clean: 0
-  `#[allow]`, 0 `super::super`, 0 manual `Default`, 0 external
-  deep-path imports, all files well under 1000 LOC. Concrete
-  work targeted **axis 23 (cross-module helper dedup) via the
-  axis-15 partial-fix-evidence heuristic**:
-  - `output.rs` had a private `glyph(unicode, ascii)` helper +
-    `unicode_supported()` + `UNICODE: OnceLock<bool>` cache for
-    the `CRAP_NO_UNICODE=1` / `CRAP_FORCE_UNICODE=1` /
-    `console::Term::wants_emoji()` resolution. The other two
-    rendering surfaces (`spinner.rs` and `theme.rs`)
-    hard-coded the Unicode glyphs (`"✓"`, `"⚠"`, `"✗"`)
-    without the fallback — a partial-fix exactly like the
-    `rust_proto::w!` find in the typegen audit. Lifted the
-    helper to a new `cli/glyphs.rs` module with named
-    accessors (`success()`, `warning()`, `error()`, `info()`,
-    `prompt()`, `bar()`); each returns the Unicode form when
-    the terminal supports it and the ASCII fallback otherwise.
-    Updated `output`, `spinner`, and `theme` to call through.
-    Net effect: `CRAP_NO_UNICODE=1` now uniformly forces ASCII
-    across every CLI surface (spinner finish messages,
-    dialoguer prompt prefixes, banner glyphs); previously only
-    plain-text output respected it. Tests updated to assert
-    "one of the two variants" rather than the literal Unicode
-    glyph, since the value depends on terminal capability.
-  Other axes verified N/A or already-clean: no spawn_blocking,
-  no own builders, no log-then-transform `map_err`, no
-  `match Some/None` registry lookups, no panic/`.unwrap()` /
-  `.expect()` in production (the single `.expect("valid
-  template")` in `Spinner::new` is on a known-good literal
-  template and is a fail-fast guard, not a wrong-variant
-  panic). All 5 top-level re-exports (`output::*` fns,
-  `Spinner`, `Table`, `crap_theme`) verified to have ≥2
-  external users.
+- `src/scaffold/` code-quality cleanup pass. Concrete changes:
+  - **Seven inline templates moved to template files.** The module
+    already had a Handlebars registry in `render.rs` and per-submodule
+    `templates/` folders for `collection/`, `global/`, `hook/`, `init/`,
+    `job/`, `migration/` — but six generators still inlined their
+    templates as Rust raw-string `format!()` calls. Moved to dedicated
+    files and registered:
+      - `component/templates/component.js.hbs` (Web Component skeleton)
+      - `theme/templates/theme.css.hbs` (CSS theme catalogue)
+      - `node/templates/node.lua.hbs` (richtext node registration)
+      - `field/templates/field.hbs.hbs` (per-field admin template)
+      - `field/templates/plugin.lua.hbs` (Lua plugin wrapper)
+      - `page/templates/page.hbs.hbs` (custom admin page)
+      - `slot/templates/slot.hbs.hbs` (slot widget)
+    Each generator now serializes a small context struct and calls
+    `render::render("<name>", &ctx)?` instead of carrying ~50 lines of
+    inline `format!(r#"..."#)` literal. The three `.hbs`-output
+    templates (page, slot, field's hbs) use Handlebars's `\{{...}}`
+    backslash escape to emit literal `{{...}}` sequences in the
+    produced file. **Net:** −267 LOC of inline template Rust code,
+    +7 hbs files where syntax highlighters work and the template can
+    be edited without Rust recompilation.
+  - **`super::super::` deep path resolved.** `blueprint/apply.rs`
+    reached `super::super::init::LUA_API_TYPES`. Replaced with a
+    top-of-file `use crate::scaffold::init::LUA_API_TYPES;`.
+  - **Manual `Default` collapsed to `#[derive(Default)]`.**
+    `CollectionOptions` had a hand-rolled `new()` (five `false` bools)
+    plus a `Default` impl forwarding to `new()`. All callers already
+    used `default()` or struct literals. `InitOptions::default` kept
+    its manual impl — its defaults are non-trivial (`admin_port:
+    3000`, `grpc_port: 50051`, …).
+  - **5-arg `templates_extract` → named-field params struct.** New
+    `TemplatesExtractParams<'_>`, re-exported at `scaffold::*` for the
+    one external caller. Test block grew a small `extract_one(tmp,
+    path, force)` helper that compresses six nearly-identical test
+    calls into one-liners.
+  - **`collection/types.rs` (5 unrelated types in one file) split**
+    into per-concept files: `field_types.rs` (`VALID_FIELD_TYPES` +
+    `CONTAINER_TYPES` consts), `collection_options.rs`
+    (`CollectionOptions`), `stubs.rs` (`FieldStub` + `FieldStubBuilder`
+    + `BlockStub` + `TabStub` — kept together because the three stub
+    types form a mutually-referential hierarchy via `FieldStub.fields`
+    / `.blocks` / `.tabs`).
+  - **Duplicated container-type list deduped.** `wizard.rs` carried a
+    private `WIZARD_CONTAINER_TYPES = &["group", "array", "row",
+    "collapsible"]` const identical to `collection::CONTAINER_TYPES`.
+    Wizard now imports the canonical list.
+  - **Submodule visibility tightened (12 of 17 modules).** `mod.rs`
+    declared all 17 submodules `pub mod` even though the module's
+    public API is the flat `scaffold::*` re-export block underneath.
+    Demoted to `pub(crate) mod`. The lone external deep-path import
+    (`commands::templates::shared` reaching
+    `scaffold::templates::EMBEDDED_*`) was rewritten via a new
+    `pub(crate) use self::templates::{EMBEDDED_STATIC,
+    EMBEDDED_TEMPLATES};` re-export.
+  - **`type_specific_stub` demoted from `pub` to private** (used only
+    inside `writer.rs`); dropped from the `pub use writer::{...}`
+    re-export. Same demotion for `KNOWN_SLOTS` (used only inside
+    `slot/generator.rs`).
+  - **Duplicated overwrite-guard pattern lifted** to a tiny
+    `scaffold/guards.rs::refuse_file_overwrite(path, force)` helper.
+    Eleven sites across the `make_*` generators that wrote
+    `if file_path.exists() && !opts.force { bail!("File '{}' already
+    exists -- use --force to overwrite", path.display()); }` now call
+    the helper instead. A typo in the message at one site can no
+    longer drift; future scaffold subcommands share the same
+    behaviour by default.
+  - **ASCII-only scaffolded output.** Swept all non-ASCII characters
+    (`—`, `…`, `─`, `→`) out of every `.hbs` / `.tpl` / `.lua`
+    template and the `.rs` files that scaffold them — `--`, `...`,
+    `=`, `->` respectively. The generated files (`make page`,
+    `make slot`, `make field`, `make theme`, `make component`,
+    `make node`, `make collection`, …) and the operator-facing CLI
+    error messages are now ASCII-only, predictable across terminals
+    that don't render UTF-8 reliably.
+  - **Magic-string path segments centralized** in a new
+    `scaffold/paths.rs`. Eighteen `.join("collections")` /
+    `.join("globals")` / `.join("templates").join("pages")` /
+    `.join("static").join("components")` etc. site across 11
+    generators replaced with named helpers (`paths::collections_dir`,
+    `paths::templates_pages_dir`, `paths::static_components_dir`, …).
+    The same module also owns the `INIT_SUBDIRS` list — single source
+    of truth shared by `init` (which creates the directories) and
+    every `make_*` generator (which writes into them). A typo at one
+    site can no longer silently break the contract.
+  - **`scaffold/mod.rs` architecture sketch** — top-of-module doc
+    expanded from a one-liner to a 30-line layout map covering
+    submodule conventions (template rendering via `render::*`, slug
+    validation rules, why submodules are `pub(crate)`).
 
-- `src/typegen/` module audit per the alpha.9 playbook. Inventory
-  found the module already structurally clean: 0 `#[allow]`,
-  0 `super::super`, 0 manual `Default`, 0 external deep-path
-  imports. Two file-size violations: `mod.rs` (505 LOC, 4
-  helpers + render dispatcher + `Language` enum + 23 tests) and
-  `lua.rs` (1146 LOC, 6 render fns + 40 tests). Concrete work:
+  All 207 scaffold tests pass; clippy clean.
+
+- `src/cli/` code-quality cleanup pass. Tiny module (5 files,
+  437 LOC), structurally already clean. The one real fix:
+  `output.rs` privately resolved the
+  `CRAP_NO_UNICODE=1` / `CRAP_FORCE_UNICODE=1` /
+  `console::Term::wants_emoji()` cascade for its glyphs, but
+  the other two rendering surfaces (`spinner.rs`, `theme.rs`)
+  hard-coded the Unicode glyphs (`"✓"`, `"⚠"`, `"✗"`) without
+  the fallback. Lifted the resolver to a new `cli/glyphs.rs`
+  module with named accessors (`success()`, `warning()`,
+  `error()`, `info()`, `prompt()`, `bar()`); each returns the
+  Unicode form when the terminal supports it and the ASCII
+  fallback otherwise. `output`, `spinner`, and `theme` now
+  call through. **Net effect:** `CRAP_NO_UNICODE=1` now
+  uniformly forces ASCII across every CLI surface (spinner
+  finish messages, dialoguer prompt prefixes, banner glyphs);
+  previously only plain-text output respected it. All 20 cli
+  tests pass; clippy clean.
+
+- `src/typegen/` code-quality cleanup pass. Module was
+  structurally clean to begin with; two files crossed the
+  1000-line soft limit (`mod.rs` at 505 LOC and `lua.rs` at
+  1146 LOC) and the per-language generators carried duplicated
+  boilerplate. Concrete work:
   - `mod.rs` split into four siblings:
     - `language.rs` — `Language` enum + `from_name`/
       `file_extension`/`all`/`label` accessors + 6 colocated
@@ -230,43 +304,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
       same coverage exists in `helpers.rs`.
   - Per-language sub-files (`typescript.rs`, `go.rs`,
     `python.rs`, `rust_types.rs`, `rust_proto.rs`) updated to
-    `use super::helpers::{…}` instead of `use crate::typegen::
-    {…}` (axis 8: shortest available path). The original
-    `crate::` paths worked because the helpers were in mod.rs
-    at the typegen root; after the split they live in
-    `super::helpers`.
-  - **Axis 15 (centralize repeated unwrap-shaped patterns) —
-    the big find.** The deep sweep surfaced 196 sites of
-    `writeln!(out, ...).expect("write to String")` (or
-    `.expect("write")`) duplicated across the per-language
-    generators. `rust_proto.rs` had a local `macro_rules! w`
-    workaround for this exact pattern but the other 5 files
-    didn't use it. Lifted the macro to `helpers.rs` as
-    `pub(super) use w` with two arms (`w!(out)` for blank
-    lines, `w!(out, fmt, args...)` for formatted), and used a
-    Python AST-aware script to convert all 196 sites across
-    `typescript.rs`, `go.rs`, `python.rs`, `rust_types.rs`,
-    `lua/render.rs`, `lua/field.rs`. The macro brings
-    `std::fmt::Write` into a local block scope (`use
-    ::std::fmt::Write as _;`) so callers don't need their own
-    `use std::fmt::Write;` — that import was then deleted from
-    7 files. The local `macro_rules!` + `use w;` pair in
-    `rust_proto.rs` was removed in favour of the shared one.
-    Net: -196 boilerplate lines, +1 macro definition, +7
-    `use super::helpers::{… w …};` import additions. `cargo
-    fmt` cleaned up the resulting import-line layouts.
-  Other axes verified N/A: no spawn_blocking (sync code), no
-  own builders, no Option-symmetric setters, no
-  log-then-transform `map_err`, no `match Some/None` registry
-  lookups (already use `let Some(...) = ... else { return };`).
-  175 typegen tests pass; clippy + full lib suite clean.
+    `use super::helpers::{…}` (the helpers' new home) instead
+    of going back through `crate::typegen::{…}`.
+  - **Centralized 196 sites of duplicated boilerplate.** Every
+    per-language generator had repeated calls of the shape
+    `writeln!(out, …).expect("write to String")`. `rust_proto.rs`
+    already had a private `w!` macro for this; the other five
+    files did not. Lifted that macro to `helpers.rs` (two arms:
+    `w!(out)` for blank lines, `w!(out, fmt, args…)` for
+    formatted) and converted all 196 sites in `typescript.rs`,
+    `go.rs`, `python.rs`, `rust_types.rs`, `lua/render.rs`,
+    `lua/field.rs`. The macro brings `std::fmt::Write` into a
+    local block scope so callers no longer need their own
+    `use std::fmt::Write;` — deleted from 7 files. **Net:**
+    −196 boilerplate lines, +1 shared macro.
+  All 175 typegen tests pass; clippy + full lib suite clean.
 
-- `src/commands/` module audit per the alpha.9 playbook. The
-  module was already in markedly better shape than the earlier
-  audit subjects — inventory found 0 `#[allow(...)]` escapes,
-  0 `super::super::` chains, 0 manual `Default` impls, 0
-  external `crate::commands::sub::*` deep imports, and 1 file
-  >1000 LOC. Concrete work:
+- `src/commands/` code-quality cleanup pass. Module was in
+  good shape to start with; one file crossed the 1000-line
+  soft limit and visibility had drifted. Concrete work:
   - `templates.rs` (1079 LOC, 7 public actions + ~10 helpers
     + 11 colocated tests) split into a folder per the
     "one file per `crap-cms templates <action>` subcommand"
@@ -284,90 +340,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     its own functions: 4 to `status.rs`, 5 to `layout.rs`,
     2 to `diff.rs`. Largest resulting file is `layout.rs` at
     563 LOC (the layout move tables dominate).
-  - Visibility tightening (axis 16). Sweep across the 8
-    subcommand subdirs found 54 `pub fn` / `pub struct` /
-    `pub enum` items with **zero external callers** outside
-    their own subdir; demoted to `pub(super)`. Cascaded
-    fallout: 4 `pub use` re-exports in `make/mod.rs`,
-    `db/mod.rs`, `user/mod.rs` referencing newly-private
-    items broke (`E0364: cannot widen private item`) — each
-    re-export was independently unused (no `crate::commands::
-    foo::bar` external grep hit), so the right answer was
-    to delete the re-export rather than restore the `pub`.
-    Items affected:
-    `try_load_registry`, `find_orphan_columns`, `user_verify`,
-    `user_unverify` — all genuinely module-internal helpers
-    that had been over-exposed. Deleted unused-pub fn
-    `cache_path` in `update/mod.rs` per axis 18 (its doc
-    comment said "Exposed for tests" but no test referenced
-    it; speculative API that never landed).
-  - Closure-to-fn-pointer (axis-2-style polish). 4 sites in
-    `user/modify.rs` converted from `.map_err(|e|
-    e.into_anyhow())` to `.map_err(ServiceError::into_anyhow)`,
-    matching the api/ + mcp/ pass.
-  - Axis 5 (param structs over wide signatures). 5 fns
-    refactored from positional-arg signatures to
-    `(p: *Params<'_>)` per "perfect readability for developers
-    — a struct with named fields is more visual than counting
-    to position 5":
-      - `user_create` (7 params → `UserCreateParams`)
+  - Visibility tightening. Sweep across the eight subcommand
+    subdirs found 54 `pub fn` / `pub struct` / `pub enum`
+    items with no external callers outside their own subdir;
+    demoted to `pub(super)`. Four `pub use` re-exports in
+    `make/mod.rs`, `db/mod.rs`, `user/mod.rs` pointed at these
+    newly-private items but were themselves never imported
+    externally — deleted along with the demotion. Items
+    affected: `try_load_registry`, `find_orphan_columns`,
+    `user_verify`, `user_unverify`. Also deleted the unused
+    `cache_path` fn in `update/mod.rs` (its doc comment said
+    "Exposed for tests" but no test ever referenced it).
+  - Closure-to-fn-pointer polish: 4 sites in `user/modify.rs`
+    converted from `.map_err(|e| e.into_anyhow())` to
+    `.map_err(ServiceError::into_anyhow)`, matching the
+    api/ + mcp/ passes.
+  - Five wide-arg fns refactored to named-field parameter
+    structs (a named-field struct reads at a glance; counting
+    to position 5 in a positional call does not):
+      - `user_create` (7 args → `UserCreateParams`)
       - `user_change_password` (7 → `UserChangePasswordParams`)
       - `user_delete` (6 → `UserDeleteParams`)
-      - `run_purge` (6 → `PurgeParams`, `pub(super)` private to trash.rs)
+      - `run_purge` (6 → `PurgeParams`, private to trash.rs)
       - `write_backup_manifest` (6 → `WriteManifestParams`,
         private to db/backup.rs)
-    Both call sites in `init.rs` (commands-internal first-user
-    prompt) and ~10 sites in `tests/cli_commands*.rs` updated
-    to struct-literal construction.
-  - Axis 7 (top-level re-export consistency) follow-up. The
-    user-management library entry points (`user_create`,
+    Both call sites in `init.rs` and the ~10 sites in
+    `tests/cli_commands*.rs` updated to struct-literal
+    construction.
+  - Promoted user-management entry points (`user_create`,
     `user_change_password`, `user_delete`, `user_list`,
-    `user_lock`, `user_unlock` + their `*Params` structs)
-    were reached at `commands::user::user_create` from 6+
-    integration-test sites, repeating the deep path twice
-    when `*Params` was also referenced in the same expression.
-    Promoted to `commands::*` top-level re-exports so callers
-    write `commands::user_create(commands::UserCreateParams {
-    ... })` instead of double-nested `commands::user::*`.
-    `init.rs`'s internal call site uses the promoted path too
-    for path consistency.
-  - Axis 8 (shortest available path). Swept inline deep-path
-    callsites across commands/ that violated CLAUDE.md's
-    "Keep module chains as short as possible — import and use
-    names directly":
-      - `chrono::Local::now()` → `Local::now()` (db/backup.rs)
-      - `chrono::Utc::now()` → `Utc::now()` (serve/startup.rs)
-      - `crate::commands::update::cache::*` → `update::cache::*`
-        with `commands::update` import (serve/startup.rs)
-      - `std::sync::OnceLock::new()` → `OnceLock::new()` (3
-        sites: commands/mcp.rs, admin/mod.rs, mcp/mod.rs test
-        block — left-over from earlier audit passes that
-        introduced the field but didn't import the type)
-      - `std::collections::BTreeMap` → `BTreeMap` (templates/
-        layout.rs)
-    `serde_json::*` and `tokio::*` callsites stay deep —
-    grepped codebase pattern shows they're treated as
-    "module prefix that adds semantic meaning" per CLAUDE.md's
-    explicit exception (e.g. `serde_json::to_string` reads as
-    "JSON serialize", `tokio::spawn` reads as "async runtime
-    spawn"; a bare `to_string` or `spawn` would lose that).
-  Other axes verified N/A: no `spawn_blocking` (commands are
-  sync top-level entry points), no Option-symmetric builders
-  (no own builders), no `match Some/None` registry lookups,
-  no log-then-transform `map_err` (the `anyhow!` ones in
-  `config_resolve` are error-message construction, not log
-  side-effects). `to_string_pretty` already used everywhere
-  JSON output is emitted (axis 11). Top-level re-exports
-  (`resolve_config_dir`, `load_config_and_sync`,
-  `parse_key_val`, action enums, `UpdateCmd`) all verified
-  to have ≥2 external users.
-  Beyond-playbook: 30-line architecture sketch added to
-  `commands/mod.rs` (layout convention, entry-point
-  convention, cross-cutting helpers, visibility convention)
-  matching the admin/ + mcp/ module-doc pattern.
+    `user_lock`, `user_unlock` and their `*Params` structs)
+    to top-level `commands::*` re-exports. Test files that
+    previously wrote `commands::user::user_create(commands::
+    user::UserCreateParams { … })` now write the flat form.
+  - Tightened import paths across `commands/`:
+    `chrono::Local::now()` → `Local::now()` (db/backup.rs);
+    `chrono::Utc::now()` → `Utc::now()` (serve/startup.rs);
+    `crate::commands::update::cache::*` → `update::cache::*`
+    via a top-of-file `commands::update` import
+    (serve/startup.rs); `std::sync::OnceLock::new()` →
+    `OnceLock::new()` (3 sites);
+    `std::collections::BTreeMap` → `BTreeMap`. `serde_json::*`
+    and `tokio::*` paths intentionally stay qualified — the
+    prefix carries semantic meaning (`serde_json::to_string`
+    reads as "JSON serialize", `tokio::spawn` as "async
+    runtime spawn") and CLAUDE.md explicitly exempts these.
+  Additionally: `commands/mod.rs` got a 30-line architecture
+  sketch (layout, entry-point convention, cross-cutting
+  helpers, visibility convention) matching the admin/ + mcp/
+  module-doc pattern.
 
-- `src/mcp/` module audit per the alpha.9 playbook. Three passes:
-  - Pass 1 (structural). All 7 `#[allow(clippy::too_many_arguments)]`
+- `src/mcp/` code-quality cleanup pass.
+  - **Structural cleanup.** All 7 `#[allow(clippy::too_many_arguments)]`
     escapes scattered across `tools/collection/{write/{create,
     update, delete, delete_many, update_many}, versions}.rs` and
     `tools/dispatch.rs::execute_tool` resolved at the root cause.
@@ -406,20 +430,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     (`make_registry`, `make_exec_ctx`) extracted to a new
     `tools/test_helpers.rs` reachable by every colocated test
     block.
-  - Pass 2 (admin/api/-pattern application). Cross-cutting
-    sweep — most patterns were already absent in mcp/ (no
-    `match registry.get(slug)` fallthroughs to convert; mcp
-    tools are sync, so no `spawn_blocking` antipatterns; no
-    `if let Some(...) { builder.x(Some(x)) }` Option-wrap
-    violations at builder call sites; no `.map_err(|e| {
-    error!(...); X })` log/transform mixes). Four
-    `.map_err(|e| e.into_anyhow())` closures (in
-    `find.rs`, `find_by_id.rs`, `count.rs`, `globals/get.rs`)
-    converted to function-pointer form
-    `.map_err(ServiceError::into_anyhow)` for parity with the
-    api/ pass.
-  - Pass 3 (beyond-playbook polish). Visibility tightening:
-    every `pub mod` under `mcp/` (protocol, resources, schema,
+  - **Pattern parity with admin/ and api/.** Most of those
+    patterns were already absent here — mcp tools are sync, so
+    no `spawn_blocking` antipatterns; no `if let Some(...) {
+    builder.x(Some(x)) }` redundant wrappers at builder call
+    sites; no `match registry.get(slug)` fallthroughs to
+    convert; no `.map_err(|e| { error!(...); X })`
+    log/transform mixes. Four `.map_err(|e| e.into_anyhow())`
+    closures (in `find.rs`, `find_by_id.rs`, `count.rs`,
+    `globals/get.rs`) converted to function-pointer form
+    `.map_err(ServiceError::into_anyhow)` for parity.
+  - **Visibility + dead code.** Every `pub mod` under `mcp/`
+    (protocol, resources, schema,
     server, stdio, tools) demoted to `pub(crate) mod` after
     confirming via grep that no external callers reach in.
     Top-level re-exports added for the actual external API
@@ -451,14 +473,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     operators visibility into which integrations connect with
     which protocol/feature flags, and incidentally makes every
     spec-modeled field a production read.
-  - Pass 3 follow-up — per-call audit trail. The 10
-    `info!("MCP <op> ...")` lines on write tools (the only
-    transport in the codebase that does layered success
-    logging — api/ has zero, admin/ has one) were already
-    deliberate: MCP is the one transport whose caller is a
-    model, so "what did Claude do to my data" is a real
-    operational question. The lines used to be unstructured
-    and didn't say *which* client made the call. Plumbed the
+  - **Per-call audit trail.** The 10 `info!("MCP <op> ...")`
+    lines on write tools were already deliberate — MCP is the
+    one transport whose caller is a model, so "what did Claude
+    do to my data" is a real operational question that justifies
+    layered success logging here (api/ has none, admin/ has one).
+    The lines used to be unstructured and didn't say *which*
+    client made the call. Plumbed the
     client identity through: new
     `McpServer::client_name: OnceLock<String>` populated by
     `handle_initialize` from `params.client_info.name`, and
@@ -479,8 +500,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `client_label` directly since its dispatch path doesn't go
     through `ToolExecCtx`.
 
-- `src/admin/` module audit per the alpha.9 playbook — first
-  pass: test colocation. The three monolithic sibling-file test
+- `src/admin/` code-quality cleanup, first pass: test
+  colocation. The three monolithic sibling-file test
   modules (`context/field/tests.rs` 626 LOC,
   `handlers/field_context/builder/tests.rs` 1133 LOC,
   `handlers/field_context/enrich/tests.rs` 1854 LOC) are gone.
@@ -532,8 +553,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   source-readability gain. Strict colocation — function visible
   alongside its tests — won the trade. Other files stay under
   1000 LOC even with their tests folded in.
-- `src/admin/` audit second pass: structural cleanup across the
-  alpha.9 playbook axes 1, 2/3, 5, 6, 8, 16/17/18, 25. All five
+- `src/admin/` cleanup, second pass: structural cleanup. All five
   `#[allow(...)]` escapes resolved at root cause:
   - `mod.rs::AdminState` `dead_code` allow was a stale legacy
     blanket; every field is read.
@@ -543,28 +563,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `call_inner`.
   - `handlers/collections/items/empty_trash.rs::empty_trash`
     `clippy::too_many_arguments` (10 args) replaced with
-    `EmptyTrashInput<'_>` typed input struct (axis 5).
+    `EmptyTrashInput<'_>` typed input struct.
   - The remaining two were on test files that no longer exist
     (deleted in the test-colocation pass).
-- `enrich/` builders colocated with their structs, three-struct
-  `enrich/context.rs` decomposed (axis 2/3): `enrich_options.rs`
+- `enrich/` builders colocated with their structs, and the
+  three-struct `enrich/context.rs` decomposed: `enrich_options.rs`
   holds `EnrichOptions` + `EnrichOptionsBuilder`; `sub_field_opts.rs`
   holds `SubFieldOpts` + `SubFieldOptsBuilder`; `enrich_ctx.rs`
   holds the module-internal `EnrichCtx`. The orphaned
   `enrich_options_builder.rs` / `sub_field_opts_builder.rs` /
   `context.rs` files are gone. Builders dropped from the module's
-  re-export surface (reachable via `Type::builder()` per the
-  playbook).
+  re-export surface (callers reach them via `Type::builder()`).
 - `EnrichOptionsBuilder::doc_id` now takes `Option<&'a str>`
-  (axis 6 symmetry). The single call site that did
+  to match the existing `Option<&...>` setters on the same
+  builder. The one call site that did
   `if let Some(id) = p.doc_id { enrich_opts = enrich_opts.doc_id(id); }`
-  collapses to `enrich_opts.doc_id(p.doc_id)`. The other call site
-  passes `Some(id)` explicitly.
-- One `super::super::MAX_FIELD_DEPTH` chain in
+  collapses to `enrich_opts.doc_id(p.doc_id)`.
+- A `super::super::MAX_FIELD_DEPTH` chain in
   `enrich/field_types.rs` rewritten to use the existing
-  field_context-level import (axis 8). Zero `super::super::`
+  field_context-level import. Zero `super::super::` chains
   remain in `src/admin/`.
-- Visibility tightening (axes 16/17/18). At `admin/mod.rs`:
+- Visibility tightening. At `admin/mod.rs`:
   `csp_nonce` demoted from `pub mod` to `mod` (the `pub use
   csp_nonce::{...}` re-exports cover the public surface);
   `context` and `server_builder` demoted to `pub(crate) mod`. At
@@ -576,7 +595,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   internal `schema_doc.rs` referenced the last three, and it now
   reaches them via deep path); `PaginationParams` /
   `SearchQuery` re-exports from `handlers/collections/mod.rs`.
-- Genuine dead code deleted (axis 18): `PageMeta::with_breadcrumbs`
+- Genuine dead code deleted: `PageMeta::with_breadcrumbs`
   + its test (handlers use `BasePageContext::with_breadcrumbs`
   which writes both `self.breadcrumbs` and `self.page.breadcrumbs`
   — the `PageMeta`-level helper was redundant and never called
@@ -586,7 +605,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `crap_mfa_pending` JWT cookie, not via the URL query string —
   full flow trace verified). `FieldContext::to_value` gated to
   `#[cfg(test)]` because only test code uses it.
-- Workspace-split prep (axis 25): the only two cross-module
+- Workspace-split prep: the only two cross-module
   imports into `admin` (`api::upload` and `service::upload`
   pulling `parse_multipart_form` and `extract_join_data_from_form`
   from `admin::handlers::forms`) are now top-level `crate::admin::Foo`
@@ -595,8 +614,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   outside `src/admin/`. Promotion stays `pub(crate)` since both
   callers live in this crate; a future workspace split flips it
   to `pub`.
-- `src/admin/` audit third pass: improvements not covered by the
-  playbook axes:
+- `src/admin/` cleanup, third pass: additional improvements:
   - **Cookie-name constants**: 16 raw `"crap_session"` /
     `"crap_session_exp"` / `"crap_mfa_pending"` / `"crap_csrf"` /
     `"crap_editor_locale"` literals across `auth/session.rs`,
@@ -660,11 +678,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     URLs, error response, spawn-blocking), and `AdminState`
     plumbing. Anchors newcomers without forcing them to
     reverse-engineer the layout.
-- `src/api/` module audit per the alpha.9 playbook. Module was
-  in better shape than `admin/` at the start (zero `super::super`,
-  zero deep-path imports from outside, zero manual `Default` impls,
-  all files under 1000 LOC). Three structured passes:
-  - Pass 1 — structural cleanup. Sole `#[allow(dead_code)]` on
+- `src/api/` code-quality cleanup pass. Module started in good
+  shape (zero `super::super`, zero deep-path imports from
+  outside, zero manual `Default` impls, all files under 1000
+  LOC). Concrete changes:
+  - **Structural cleanup.** Sole `#[allow(dead_code)]` on
     `ContentService` removed by tracing the one truly-dead
     `jwt_secret` field through the data flow: it was set by both
     `ContentServiceDeps` and `GrpcStartParams` but never read.
@@ -688,7 +706,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `Type::builder()`, not separate import). `pub mod
     rate_limit` demoted to `pub(crate) mod` (no external
     consumers).
-  - Pass 2 — pattern application from the `admin/` audit. Four
+  - **Pattern parity with the `admin/` cleanup.** Four
     `match registry.get_collection(&slug) { Some(d) => d.clone(),
     None => return X }` sites converted to
     `let Some(def) = ....cloned() else { return X };` (Rust 1.65+
@@ -718,17 +736,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `AccountActionBlockingInput`, plus an
     `account_action_input` constructor method that toggles
     `invalidation_transport` for the lock-only flow.
-  - Pass 3 — gRPC-specific helpers: nothing to add. The
-    existing `From<ServiceError> for Status` impl in
+  - **gRPC error mapping** — nothing new to add. The existing
+    `From<ServiceError> for Status` impl in
     `handlers/collection/error_mapping.rs` already covers every
-    variant with proper gRPC status code mapping (per-variant
-    tested with regression tests for the
-    `UniqueViolation`→`AlreadyExists` and
+    variant with the right gRPC status code (regression tests
+    pin the `UniqueViolation`→`AlreadyExists` and
     `InvalidToken`→`Unauthenticated` mappings). All 23
     `Status::from(ServiceError::classify(...))` /
     `Status::from(e.reclassify(...))` call sites use this impl
     — no inline matching to consolidate.
-  - Follow-up: `account_action_blocking` had one residual
+  - **Builder Option-symmetry.** `account_action_blocking` had
+    one residual
     `if let Some(transport) = input.invalidation_transport
     { builder = builder.invalidation_transport(Some(transport)); }`
     from the lock-only special case. Since
@@ -740,7 +758,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `.event_transport(Some(...))` call sites in the codebase
     were verified to source from non-Option values where the
     `Some(_)` wrap is intentional, not a violation.
-  - Follow-up: `reset_password.rs` /  `verify_email.rs` /
+  - **gRPC blocking-fn return types.** `reset_password.rs` /
+    `verify_email.rs` /
     `me.rs` / `login.rs` blocking fns previously returned
     `Result<_, anyhow::Error>` and the call site did the work
     of converting to `Status` via a second `.map_err(|e| {
@@ -758,10 +777,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     every `ServiceError` as 500 internal — they now map to
     their semantic gRPC variant). Call sites use the standard
     `??` pattern matching the rest of the api/ tree.
-  - Follow-up: codebase-wide `inspect_err`/`map_err`
-    separation. Logging is a side-effect and should not live
-    inside the closure that transforms the error type.
-    Twenty additional sites across api/ + admin/ + commands/
+  - **`inspect_err` / `map_err` separation, codebase-wide.**
+    Logging is a side effect and shouldn't live inside the
+    closure that transforms the error type. Twenty additional
+    sites across api/ + admin/ + commands/
     were converted from `.map_err(|e| { error!("...", e);
     SomeReturnError })` to `.inspect_err(|e| error!("...", e))
     .map_err(|_| SomeReturnError)`. Files touched:
@@ -920,8 +939,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   the form-input path (HTML forms genuinely produce strings; this
   wraps each value in `Value::String`). Lives in
   `service/types/write_input.rs` next to `WriteInput`.
-- Removed every `#[allow(...)]` escape hatch from `db/`, continuing
-  the alpha.9 audit playbook into the next module. The two
+- Removed every `#[allow(...)]` escape hatch from `db/`. The two
   `too_many_arguments` markers in `db/query/filter/resolve.rs` are
   gone: `resolve_array_filter`, `resolve_blocks_filter`, and
   `resolve_relationship_filter` now share a single typed
@@ -1055,19 +1073,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - Removed pure-ceremony `AlterCtxBuilder` in
   `db/migrate/collection/alter.rs` (3 panic-on-missing
   required fields, single call site) — replaced with plain
-  struct-literal construction of `AlterCtx`. Per the alpha.9
-  audit playbook: builders that exist solely to enforce
-  required fields lose to plain struct literals when the
-  struct is constructed in one place.
+  struct-literal construction of `AlterCtx`. Builders that
+  exist solely to enforce required fields lose to plain
+  struct literals when the struct is constructed in one
+  place.
 - `crate::db::PaginationResult` and `crate::db::Singleflight`
-  promoted to top-level db re-exports (each used >= 2 times
-  externally via the longer `db::query::` path). The five
-  external call sites in admin/, service/types/, and test
-  modules updated to import via `crate::db::*`. Per playbook
-  axis 7 (top-level re-export consistency).
-- `db/migrate/backfill_ref_counts.rs` arg-count cleanup per
-  playbook axis 5: introduced `BackfillCtx { conn,
-  locale_config }` invariant context threaded through every
+  promoted to top-level `db::*` re-exports (each used twice or
+  more externally through the longer `db::query::` path). The
+  five external call sites in admin/, service/types/, and test
+  modules updated to the short path.
+- `db/migrate/backfill_ref_counts.rs` argument-count cleanup:
+  introduced `BackfillCtx { conn, locale_config }` invariant
+  context threaded through every
   helper. `backfill_has_one` shrinks from 7 args to 4 (now
   takes `&FieldDefinition` and extracts `default_collection`/
   `is_polymorphic`/`is_localized` internally). `backfill_has_many`
@@ -1089,13 +1106,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `crate::db::query::*::test_helpers` form for consistency
   with the earlier ref_count split. Zero `super::super::`
   paths now anywhere in `src/db/`.
-- `src/service/` module audit per the alpha.9 playbook.
+- `src/service/` code-quality cleanup pass.
   Already-clean axes (zero `#[allow(...)]`, zero
   `super::super::` chains, zero inline-use in fn bodies, all
   files < 1000 LOC, builders colocated with types, no `>4`-arg
   fns) verified untouched. Active changes:
   - `service/types/service_context.rs` (702 LOC, 7 types)
-    split per axis 3 into `email_context.rs` (`EmailContext`),
+    split into `email_context.rs` (`EmailContext`),
     `pending_event.rs` (`PendingEvent` + `EventQueue` +
     `flush_queue`), `pending_verification.rs`
     (`PendingVerification` + `VerificationQueue` +
@@ -1107,22 +1124,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `ReadOptionsBuilder` (zero call sites, never constructed
     or passed as a parameter) and the entire `read/options.rs`
     file deleted.
-  - Axis 6 fix: `PersistOptionsBuilder.locale_config` takes
+  - Optional-setter symmetry fix:
+    `PersistOptionsBuilder.locale_config` takes
     `Option<&'a LocaleConfig>` (was `&'a LocaleConfig`),
     matching the `Option<&...>` shape on the other
-    optional-attachment methods. The two callers in
-    `service/write/{create,update}.rs` lost their `if let
-    Some(lctx) = ...` wrappers in favor of inline
+    optional-attachment methods on the same builder. The two
+    callers in `service/write/{create,update}.rs` lost their
+    `if let Some(lctx) = ...` wrappers in favor of inline
     `.locale_config(input.locale_ctx.map(|c| &c.config))`.
-  - Axis 7 cleanup: `*Builder` types (`WriteInputBuilder`,
+  - `*Builder` types (`WriteInputBuilder`,
     `ServiceContextBuilder`, `PersistOptionsBuilder`,
     `Find{ById,Documents}InputBuilder`,
     `CountDocumentsInputBuilder`, `LuaReadHooksBuilder`,
     `LuaWriteHooksBuilder`) dropped from
-    `crate::service::*` re-exports. Builders are now
-    accessed only via `Type::builder()` per the playbook;
-    no external caller imported them by name.
-  - Axes 16/17/18: visibility tightening across `service/`.
+    `crate::service::*` re-exports. Builders are accessed via
+    `Type::builder()`; no external caller imported them by
+    name.
+  - Visibility tightening across `service/`.
     Modules `document_info`, `helpers`, `hooks`,
     `user_settings`, `write`, `read` demoted from `pub mod`
     to `pub(crate) mod` (zero deep-path external users —
@@ -1141,7 +1159,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     inside their own files, so they become plain `fn`. The
     stale `pub use` re-exports for them in
     `collection/mod.rs` are deleted.
-  - Extras (beyond playbook):
+  - Additional cleanup:
     1. `ServiceContext::flush_event_queue` deleted — defined
        and documented but never called; all 9 callers use the
        free `flush_queue(ctx, &queue)` function instead.
@@ -1183,32 +1201,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
        (which return `()`) use `let Ok(def) = ... else {
        return };` to skip cleanly when the wrong def variant
        is wired up.
-- `src/hooks/` module audit per the alpha.9 playbook.
+- `src/hooks/` code-quality cleanup pass.
   Initial state: 28k LOC, 108 files, 6 files >1000 LOC.
   Final: 5327 tests pass, 0 failed; clippy clean. Active
   changes:
-  - Axis 1 (zero `#[allow]`): 4 of 5 removed at root cause —
-    stale `dead_code` on `HookEvent` (every variant in use),
-    `unreachable_code` in `HookDepthGuard` test (rewrote the
-    closure to a block scope so the early-return doesn't have
-    a dead `Ok(())` after it), `dead_code` on
-    `validate_timezone` deleted (function + tests; only used
-    by its own tests). The 5th
+  - Removed every `#[allow(...)]` escape hatch — 4 of 5 at
+    the root cause: stale `dead_code` on `HookEvent` (every
+    variant is in use), `unreachable_code` in the
+    `HookDepthGuard` test (rewrote the closure to a block
+    scope so the early return doesn't have a dead `Ok(())`
+    after it), `dead_code` on `validate_timezone` deleted
+    (function + tests; only used by its own tests). The 5th
     (`clippy::too_many_arguments` on
     `run_field_hooks_with_conn`) disappeared as a side effect
-    of axis 5 below. Also dropped `clippy::only_used_in_recursion`
-    by deleting the unused `lua: &Lua` param from
-    `lua_to_json` / `lua_to_json_inner` and propagating the
-    deletion through 5 helper fns + ~22 call sites.
-  - Axis 8 (zero `super::super`): 5 chains in
+    of the walker refactor below. Also dropped
+    `clippy::only_used_in_recursion` by deleting the unused
+    `lua: &Lua` param from `lua_to_json` / `lua_to_json_inner`
+    and propagating the deletion through 5 helper fns + ~22
+    call sites.
+  - Eliminated all `super::super::` chains: 5 in
     `api/{fields,email}.rs`, `api/serializers/{auth,upload}.rs`,
     `api/parse/relationship.rs` rewritten to `crate::hooks::*`.
-  - Axis 25 (deep-path scan): 4 hits — all in test mods —
+  - Deep-path import scan turned up 4 hits in test modules —
     fixed by promoting `DisplayConditionResult` to a top-level
-    re-export (`HookRunner` was already re-exported) and
-    rewriting the 4 callers to the short path. Zero deep-path
-    imports remain.
-  - Axis 5 (>4-arg fns → typed structs / walker pattern):
+    `hooks::*` re-export (`HookRunner` was already there) and
+    rewriting the 4 callers to the short path.
+  - Wide-arg fns refactored to typed structs or the walker
+    pattern:
     - `validate_nested_rows` / `validate_leaf_sub_field`
       (5 args each) bundle `(sf, qualified)` into a
       `SubFieldCall<'_>` struct.
@@ -1242,7 +1261,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
       receiver). Public callers construct the walker
       explicitly:
       `ValidationWalker::new(lua, data, ctx).walk(fields, "", false, &mut errors)`.
-  - Axis 3 (file-size splits, 6 files >1000 LOC):
+  - File-size splits — six files exceeded the 1000-line soft
+    limit:
     - `lifecycle/execution.rs` (1132) → `execution/`:
       `mod.rs` (declarations + re-exports only),
       `runtime.rs` (315 LOC, generic hook execution),
@@ -1286,20 +1306,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     - All `mod.rs` files post-split contain only `mod`
       declarations and `pub(crate) use` re-exports; zero
       business logic lives in `mod.rs` per CLAUDE.md.
-  - Axis 17 (drop stale re-exports):
-    `pub use validate::{validate_hook_references,
-    validate_locale_field_collisions}` from `hooks/mod.rs`
-    deleted — both functions are only called from `init.rs`
-    via `super::validate::*`, so the top-level re-export was
-    dead.
-  - Axis 1 follow-up: dropped the unused `lua: &Lua` param
+  - Stale re-exports dropped: `pub use validate::
+    {validate_hook_references, validate_locale_field_collisions}`
+    from `hooks/mod.rs` — both functions are only called from
+    `init.rs` via `super::validate::*`, so the top-level
+    re-export was dead.
+  - Dropped the unused `lua: &Lua` param
     from `parse_field_admin`, `lua_table_to_json_map`,
     `lua_table_to_auth_user`, `read_context_back`,
     `json_encode`, `parse_item`, `extract_data`,
     `read_hook_result` — none used `lua` for anything other
     than pre-cascade forwarding to `lua_to_json`. ~10 fn
     signatures + 30+ call sites simplified.
-  - Beyond-playbook: 4 `mod.rs` files in `hooks/` had
+  - Additional cleanup: 4 `mod.rs` files in `hooks/` had
     business logic in violation of CLAUDE.md "mod.rs files
     should contain no business logic." Extracted:
     `lifecycle/validation/mod.rs` (117 LOC) — `ValidationCtx`
@@ -1310,7 +1329,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     `get_tx_conn` helper + its test to `tx_conn.rs`. All
     four `mod.rs` files now contain only `mod` declarations
     and `pub use` re-exports.
-  - Beyond-playbook: deduped the 5-line `is_empty = match
+  - Additional cleanup: deduped the 5-line `is_empty = match
     value { None | Null | empty-String => true, ... }`
     pattern repeated in three validators (recursive scalar,
     sub_fields, richtext_attrs). Extracted to

@@ -1,19 +1,28 @@
-//! `make page` — scaffold a filesystem-routed custom admin page.
+//! `make page` -- scaffold a filesystem-routed custom admin page.
 //!
 //! Writes `<config_dir>/templates/pages/<slug>.hbs` (registers route
 //! `/admin/p/<slug>` automatically). Prints a copy-pasteable
 //! `crap.pages.register("<slug>", { ... })` snippet for `init.lua` so
 //! the user can add the sidebar entry without remembering the exact
-//! shape — sidebar registration is optional, the page routes either way.
+//! shape -- sidebar registration is optional, the page routes either way.
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
+use serde::Serialize;
 
 use crate::{
     cli,
-    scaffold::{to_title_case, validate_template_slug},
+    scaffold::{
+        guards::refuse_file_overwrite, paths, render, to_title_case, validate_template_slug,
+    },
 };
+
+#[derive(Serialize)]
+struct PageCtx<'a> {
+    slug: &'a str,
+    label: &'a str,
+}
 
 /// Options for `make_page`.
 pub struct MakePageOptions<'a> {
@@ -34,24 +43,19 @@ pub struct MakePageOptions<'a> {
 pub fn make_page(opts: &MakePageOptions) -> Result<()> {
     validate_template_slug(opts.slug)?;
 
-    let dir = opts.config_dir.join("templates").join("pages");
+    let dir = paths::templates_pages_dir(opts.config_dir);
     fs::create_dir_all(&dir).context("Failed to create templates/pages/ directory")?;
 
     let file_path = dir.join(format!("{}.hbs", opts.slug));
 
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let label = opts
         .label
         .map(str::to_string)
         .unwrap_or_else(|| to_title_case(opts.slug));
 
-    let hbs = render_page_hbs(opts.slug, &label);
+    let hbs = render_page_hbs(opts.slug, &label)?;
     fs::write(&file_path, &hbs)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
 
@@ -62,43 +66,8 @@ pub fn make_page(opts: &MakePageOptions) -> Result<()> {
     Ok(())
 }
 
-fn render_page_hbs(slug: &str, label: &str) -> String {
-    format!(
-        r#"{{{{!--
-  Custom admin page: {label}
-  Route: /admin/p/{slug}
-
-  Renders against the standard admin context. `crap.*` (build hash,
-  site name, etc.), `user`, `nav` are all available. Wrap dynamic data
-  via `crap.template_data.register("<name>", fn)` and pull from
-  `{{{{data "<name>"}}}}` here.
---}}}}
-{{{{#> layout/base}}}}
-  <h1>{label}</h1>
-
-  <div class="cards">
-    <div class="card">
-      <div class="card__header">
-        <span class="material-symbols-outlined">info</span>
-        <h3>Hello</h3>
-      </div>
-      <div class="card__body">
-        <p>This is the {slug} page. Edit
-          <code>templates/pages/{slug}.hbs</code> in your config dir to
-          replace this content.</p>
-
-        {{{{!-- Example: render dynamic data registered via Lua. --}}}}
-        {{{{!-- {{{{#with (data "{slug}_data")}}}}                       --}}}}
-        {{{{!--   <p>{{{{this.value}}}}</p>                              --}}}}
-        {{{{!-- {{{{/with}}}}                                            --}}}}
-      </div>
-    </div>
-  </div>
-{{{{/layout/base}}}}
-"#,
-        slug = slug,
-        label = label,
-    )
+fn render_page_hbs(slug: &str, label: &str) -> Result<String> {
+    render::render("page", &PageCtx { slug, label })
 }
 
 fn print_register_hint(opts: &MakePageOptions, label: &str) {

@@ -18,7 +18,7 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
 
     if !config_dir.join("crap.toml").exists() {
         bail!(
-            "Directory '{}' does not contain a crap.toml — not a valid config directory",
+            "Directory '{}' does not contain a crap.toml -- not a valid config directory",
             config_dir.display()
         );
     }
@@ -27,7 +27,7 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
 
     if target.exists() && !force {
         bail!(
-            "Blueprint '{}' already exists — use --force to overwrite",
+            "Blueprint '{}' already exists -- use --force to overwrite",
             name
         );
     }

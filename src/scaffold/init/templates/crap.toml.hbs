@@ -29,7 +29,7 @@ dev_mode = false
 
 # [admin.csp]                       # Content-Security-Policy header (enabled by default)
 # enabled = true
-# script_src ships without 'unsafe-inline' — a per-request nonce is emitted
+# script_src ships without 'unsafe-inline' -- a per-request nonce is emitted
 # instead and exposed to templates as {{crap.csp_nonce}}. Overlay templates
 # that use inline <script> MUST carry nonce="{{crap.csp_nonce}}".
 # script_src = ["'self'"]
@@ -62,7 +62,7 @@ secret = "{{{auth_secret}}}"
 
 [live]
 # enabled = true                # enable SSE + gRPC Subscribe for live mutation events
-# transport = "memory"          # "memory" (default) — in-process events, or "redis" — cross-node fanout via Redis pub/sub (requires --features redis, reuses cache.redis_url)
+# transport = "memory"          # "memory" (default) -- in-process events, or "redis" -- cross-node fanout via Redis pub/sub (requires --features redis, reuses cache.redis_url)
 # channel_capacity = 1024       # broadcast channel buffer size
 # max_sse_connections = 1000    # max concurrent SSE connections (0 = unlimited)
 # max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)

@@ -1,19 +1,18 @@
-//! Interactive field wizard — prompts for field definitions via CLI dialogs.
+//! Interactive field wizard -- prompts for field definitions via CLI dialogs.
 
 use anyhow::Context as _;
 use dialoguer::{Confirm, Input, Select};
 
 use crate::cli::{self, crap_theme};
-use crate::scaffold::collection::{BlockStub, FieldStub, TabStub, VALID_FIELD_TYPES};
+use crate::scaffold::collection::{
+    BlockStub, CONTAINER_TYPES, FieldStub, TabStub, VALID_FIELD_TYPES,
+};
 use crate::scaffold::to_title_case;
 
 /// Maximum nesting depth for the interactive field wizard.
 const MAX_WIZARD_DEPTH: usize = 4;
 
-/// Container field types that prompt for subfields.
-const WIZARD_CONTAINER_TYPES: &[&str] = &["group", "array", "row", "collapsible"];
-
-/// Interactive field wizard — prompts for field name, type, required, localized,
+/// Interactive field wizard -- prompts for field name, type, required, localized,
 /// and recursively prompts for subfields on container types. Returns the field stubs
 /// directly (empty vec = no fields).
 ///
@@ -23,13 +22,13 @@ pub fn interactive_field_wizard(locales_enabled: bool) -> anyhow::Result<Vec<Fie
     field_loop(locales_enabled, &[])
 }
 
-/// Recursive field prompt loop — collects fields until an empty name is entered.
+/// Recursive field prompt loop -- collects fields until an empty name is entered.
 #[cfg(not(tarpaulin_include))]
 fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Vec<FieldStub>> {
     let depth = breadcrumb.len();
     if depth >= MAX_WIZARD_DEPTH {
         cli::warning(&format!(
-            "{}Maximum nesting depth ({}) reached — cannot add subfields here.",
+            "{}Maximum nesting depth ({}) reached -- cannot add subfields here.",
             "  ".repeat(depth),
             MAX_WIZARD_DEPTH
         ));
@@ -88,7 +87,7 @@ fn field_loop(locales_enabled: bool, breadcrumb: &[String]) -> anyhow::Result<Ve
         let mut sub_blocks = Vec::new();
         let mut sub_tabs = Vec::new();
 
-        if WIZARD_CONTAINER_TYPES.contains(&field_type) {
+        if CONTAINER_TYPES.contains(&field_type) {
             let mut child_bc = breadcrumb.to_vec();
             child_bc.push(name.clone());
             sub_fields = field_loop(locales_enabled, &child_bc)?;

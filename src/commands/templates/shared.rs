@@ -2,7 +2,7 @@
 
 use include_dir::Dir;
 
-use crate::scaffold::templates::{EMBEDDED_STATIC, EMBEDDED_TEMPLATES};
+use crate::scaffold::{EMBEDDED_STATIC, EMBEDDED_TEMPLATES};
 
 /// Current crate version — what an overlay file's source-version header
 /// is compared against.

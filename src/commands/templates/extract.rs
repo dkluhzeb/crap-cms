@@ -16,5 +16,11 @@ pub fn extract(
     r#type: Option<String>,
     force: bool,
 ) -> Result<()> {
-    scaffold::templates_extract(config_dir, paths, all, r#type.as_deref(), force)
+    scaffold::templates_extract(scaffold::TemplatesExtractParams {
+        config_dir,
+        paths,
+        all,
+        type_filter: r#type.as_deref(),
+        force,
+    })
 }

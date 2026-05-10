@@ -1,4 +1,4 @@
-//! `make theme` — generate a theme CSS file at
+//! `make theme` -- generate a theme CSS file at
 //! `static/styles/themes/themes-<name>.css` with the documented token
 //! catalogue commented out, ready for the user to uncomment + tweak.
 //!
@@ -11,9 +11,18 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
+use serde::Serialize;
 
-use crate::{cli, scaffold::validate_template_slug};
+use crate::{
+    cli,
+    scaffold::{guards::refuse_file_overwrite, paths, render, validate_template_slug},
+};
+
+#[derive(Serialize)]
+struct ThemeCtx<'a> {
+    name: &'a str,
+}
 
 /// Options for `make_theme`.
 pub struct MakeThemeOptions<'a> {
@@ -26,19 +35,14 @@ pub struct MakeThemeOptions<'a> {
 pub fn make_theme(opts: &MakeThemeOptions) -> Result<()> {
     validate_template_slug(opts.name)?;
 
-    let dir = opts.config_dir.join("static").join("styles").join("themes");
+    let dir = paths::static_themes_dir(opts.config_dir);
     fs::create_dir_all(&dir).context("Failed to create static/styles/themes/ directory")?;
 
     let file_path = dir.join(format!("themes-{}.css", opts.name));
 
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
-    let css = render_theme_css(opts.name);
+    let css = render_theme_css(opts.name)?;
 
     fs::write(&file_path, &css)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
@@ -53,59 +57,8 @@ pub fn make_theme(opts: &MakeThemeOptions) -> Result<()> {
     Ok(())
 }
 
-/// Render the CSS file body. The output is intentionally a fully-commented
-/// token catalogue — uncomment lines to override individual tokens.
-/// Matches the structure of `static/styles/tokens.css` so a side-by-side
-/// view is straightforward.
-fn render_theme_css(name: &str) -> String {
-    format!(
-        r#"/**
- * Theme: {name}
- *
- * Activates on `<html data-theme="{name}">`. Override tokens below by
- * uncommenting and tweaking values. Anything you leave commented falls
- * back to the default theme (see `static/styles/themes/default.css`).
- *
- * Token catalogue mirrors `static/styles/tokens.css`. See
- * `docs/src/admin-ui/reference/css-variables.md` for the contract per
- * token.
- */
-
-html[data-theme="{name}"] {{
-  /* color-scheme: light;  /* or "dark" */
-
-  /* ── Brand ──────────────────────────────────────────────────── */
-  /* --color-primary:        #1677ff; */
-  /* --color-primary-hover:  #4096ff; */
-  /* --color-primary-active: #0958d9; */
-  /* --color-primary-bg:     rgba(22, 119, 255, 0.06); */
-
-  /* ── Status colours ─────────────────────────────────────────── */
-  /* --color-danger:    #ff4d4f; */
-  /* --color-success:   #52c41a; */
-  /* --color-warning:   #faad14; */
-
-  /* ── Text ───────────────────────────────────────────────────── */
-  /* --text-primary:    rgba(0, 0, 0, 0.88); */
-  /* --text-secondary:  rgba(0, 0, 0, 0.65); */
-  /* --text-tertiary:   rgba(0, 0, 0, 0.45); */
-
-  /* ── Surfaces ───────────────────────────────────────────────── */
-  /* --bg-body:      #f4f7fc; */
-  /* --bg-surface:   #f8f9fb; */
-  /* --bg-elevated:  #fff; */
-
-  /* ── Radii (uncomment to flatten/round the entire admin) ────── */
-  /* --radius-sm: 4px; */
-  /* --radius-md: 6px; */
-  /* --radius-lg: 8px; */
-
-  /* ── Fonts ──────────────────────────────────────────────────── */
-  /* --font-family: "Inter", system-ui, -apple-system, sans-serif; */
-}}
-"#,
-        name = name,
-    )
+fn render_theme_css(name: &str) -> Result<String> {
+    render::render("theme", &ThemeCtx { name })
 }
 
 #[cfg(test)]

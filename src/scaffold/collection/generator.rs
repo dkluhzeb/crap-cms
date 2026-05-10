@@ -1,15 +1,19 @@
-//! `make collection` — generate collection Lua files.
+//! `make collection` -- generate collection Lua files.
 
 use std::{fs, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::cli;
+use crate::scaffold::guards::refuse_file_overwrite;
+use crate::scaffold::paths;
 use crate::scaffold::render::render;
 
+use super::collection_options::CollectionOptions;
+use super::field_types::CONTAINER_TYPES;
 use super::parser::{pluralize, singularize};
-use super::types::{CONTAINER_TYPES, CollectionOptions, FieldStub};
+use super::stubs::FieldStub;
 use super::writer::write_field_lua;
 
 /// Handlebars context for the `collection` template.
@@ -39,17 +43,12 @@ pub fn make_collection(
 ) -> Result<()> {
     crate::scaffold::validate_slug(slug)?;
 
-    let collections_dir = config_dir.join("collections");
+    let collections_dir = paths::collections_dir(config_dir);
     fs::create_dir_all(&collections_dir).context("Failed to create collections/ directory")?;
 
     let file_path = collections_dir.join(format!("{}.lua", slug));
 
-    if file_path.exists() && !opts.force {
-        bail!(
-            "File '{}' already exists — use --force to overwrite",
-            file_path.display()
-        );
-    }
+    refuse_file_overwrite(&file_path, opts.force)?;
 
     let lua = render_collection_lua(slug, fields, opts)?;
 
@@ -140,7 +139,7 @@ mod tests {
         make_collection(config_dir, slug, parsed.as_deref(), opts)
     }
 
-    // ── Basic generation ────────────────────────────────────────────────
+    // == Basic generation ================================================
 
     #[test]
     fn make_default() {
@@ -204,7 +203,7 @@ mod tests {
         assert!(make_collection(tmp.path(), "posts", None, &opts).is_ok());
     }
 
-    // ── Feature flags ───────────────────────────────────────────────────
+    // == Feature flags ===================================================
 
     #[test]
     fn make_auth() {
@@ -303,7 +302,7 @@ mod tests {
         assert!(!content.contains("default_sort"));
     }
 
-    // ── Admin block ─────────────────────────────────────────────────────
+    // == Admin block =====================================================
 
     #[test]
     fn admin_block_expanded() {
@@ -328,7 +327,7 @@ mod tests {
         assert!(!content.contains("default_sort"));
     }
 
-    // ── Comment blocks ──────────────────────────────────────────────────
+    // == Comment blocks ==================================================
 
     #[test]
     fn access_block_in_output() {
@@ -366,7 +365,7 @@ mod tests {
         assert!(content.contains("-- Full auth config"));
     }
 
-    // ── Nested field generation ─────────────────────────────────────────
+    // == Nested field generation =========================================
 
     #[test]
     fn make_with_nested_fields() {
@@ -443,7 +442,7 @@ mod tests {
         assert_eq!(content.matches("localized = true").count(), 2);
     }
 
-    // ── Title field selection ───────────────────────────────────────────
+    // == Title field selection ===========================================
 
     #[test]
     fn all_container_fields_omit_use_as_title() {
@@ -479,7 +478,7 @@ mod tests {
         assert!(!content.contains("use_as_title"));
     }
 
-    // ── Type stubs ──────────────────────────────────────────────────────
+    // == Type stubs ======================================================
 
     #[test]
     fn complex_field_type_stubs() {
@@ -514,7 +513,7 @@ mod tests {
         assert!(content.contains("blocks = { { type = \"block_type\""));
     }
 
-    // ── Combined flags ──────────────────────────────────────────────────
+    // == Combined flags ==================================================
 
     #[test]
     fn make_auth_versions() {

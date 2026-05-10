@@ -1,4 +1,4 @@
-//! `make theme` command — scaffold a theme starter CSS file.
+//! `make theme` command -- scaffold a theme starter CSS file.
 
 mod generator;
 

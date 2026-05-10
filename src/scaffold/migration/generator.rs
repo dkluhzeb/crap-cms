@@ -1,4 +1,4 @@
-//! `make migration` — generate migration Lua files.
+//! `make migration` -- generate migration Lua files.
 
 use std::{fs, path::Path};
 
@@ -7,13 +7,14 @@ use chrono::Local;
 use serde_json::json;
 
 use crate::cli;
+use crate::scaffold::paths;
 use crate::scaffold::render::render;
 
 /// Create a new migration file at `<config_dir>/migrations/YYYYMMDDHHMMSS_name.lua`.
 pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
     validate_migration_name(name)?;
 
-    let migrations_dir = config_dir.join("migrations");
+    let migrations_dir = paths::migrations_dir(config_dir);
     fs::create_dir_all(&migrations_dir).context("Failed to create migrations/ directory")?;
 
     let timestamp = Local::now().format("%Y%m%d%H%M%S");
@@ -38,7 +39,7 @@ fn validate_migration_name(name: &str) -> Result<()> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
         bail!(
-            "Invalid migration name '{}' — use lowercase letters, digits, and underscores only",
+            "Invalid migration name '{}' -- use lowercase letters, digits, and underscores only",
             name
         );
     }

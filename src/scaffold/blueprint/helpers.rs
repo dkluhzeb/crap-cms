@@ -1,4 +1,4 @@
-//! Shared helpers for blueprint operations — filesystem, validation, paths.
+//! Shared helpers for blueprint operations -- filesystem, validation, paths.
 
 use std::{
     fs,
@@ -78,7 +78,7 @@ pub(super) fn validate_blueprint_name(name: &str) -> Result<()> {
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
         bail!(
-            "Invalid blueprint name '{}' — use alphanumeric characters, hyphens, and underscores only",
+            "Invalid blueprint name '{}' -- use alphanumeric characters, hyphens, and underscores only",
             name
         );
     }

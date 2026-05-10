@@ -1,0 +1,41 @@
+--- Custom richtext node: {{label}}
+---
+--- Registered automatically when this file is `require()`d from
+--- init.lua. Inserts as a {{kind}} node in the richtext block picker.
+---
+--- Attrs are typed via `crap.fields.*`. Allowed types: text, number,
+--- textarea, select, radio, checkbox, date, email, json, code.
+--- Render function returns the HTML the node serializes to; if
+--- omitted, the node falls through to a `<crap-node>` passthrough for
+--- client-side rendering.
+
+crap.richtext.register_node("{{name}}", {
+  label = "{{label}}",
+  inline = {{inline_str}},
+  attrs = {
+    crap.fields.text({
+      name = "text",
+      required = true,
+      admin = { label = "Text", placeholder = "Display text" },
+    }),
+    -- Add more attrs here. Examples:
+    -- crap.fields.text({ name = "url", required = true,
+    --                     admin = { label = "URL", placeholder = "https://..." } }),
+    -- crap.fields.select({
+    --   name = "style",
+    --   admin = { label = "Style" },
+    --   options = {
+    --     { label = "Primary", value = "primary" },
+    --     { label = "Secondary", value = "secondary" },
+    --   },
+    -- }),
+  },
+  searchable_attrs = { "text" },
+  render = function(attrs)
+    -- Server-side HTML output. Escape user-controlled strings.
+    return string.format(
+      '<span class="{{name}}">%s</span>',
+      attrs.text or ""
+    )
+  end,
+})
