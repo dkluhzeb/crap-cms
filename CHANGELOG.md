@@ -157,6 +157,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/config/` code-quality cleanup pass. Inventory was already in
+  good shape on the playbook structural axes (0 `#[allow]`, 0
+  `super::super`, 0 external deep-path imports, 0 wide-arg fns) but
+  three files were "shared.rs"-style multi-type homes. Concrete
+  changes:
+  - **`features.rs` (901 LOC, 17 unrelated types) decomposed into
+    `features/`** with one file per `[<section>]` table in
+    `crap.toml`: `email.rs`, `depth.rs`, `cache.rs`, `pagination.rs`,
+    `mcp.rs`, `upload.rs`, `locale.rs`, `jobs.rs`, `live.rs`,
+    `hooks.rs`, `access.rs`, `logging.rs`, `update.rs`. Genuinely
+    paired enums stay together (`SmtpTls` with `EmailConfig`,
+    `PaginationMode` with `PaginationConfig`, `LogRotation` with
+    `LoggingConfig`). Each file is 21-170 LOC with its own `Default`
+    and colocated tests. `features/mod.rs` re-exports keep the flat
+    `config::*` API unchanged.
+  - **`types.rs` (1162 LOC, over the 1000 soft limit) split**: the
+    `CrapConfig` struct + `load` / `test_default` / `validate`
+    orchestrator + version check + path helpers + permission warnings
+    stay in a slimmed `types.rs` (512 LOC). The 14 per-section
+    `validate_*` methods (with their ~30 colocated tests) move to a
+    new `validate.rs` (648 LOC) as additional `impl CrapConfig`
+    blocks. The orchestrator still calls them by name; visibility is
+    `pub(super)` since they're never invoked outside the
+    orchestrator.
+  - **`server.rs` (707 LOC, 5 types) decomposed into `server/`**:
+    `server_config.rs` (`ServerConfig` + paired `CompressionMode`),
+    `database.rs` (`DatabaseConfig`), `admin.rs` (`AdminConfig`),
+    `csp.rs` (`CspConfig` + the header-builder logic + 7 dedicated
+    tests). `CspConfig` is reachable via `AdminConfig::csp` but no
+    external caller imports it by name -- kept private to the
+    `server::admin` module.
+  - **`auth.rs` (423 LOC, 3 types) decomposed into `auth/`**:
+    `auth_config.rs` (`AuthConfig` + paired
+    `SessionCookieSameSite`), `password_policy.rs` (`PasswordPolicy`
+    with its standalone `validate()` and 12 strength tests).
+  - **`mod.rs` architecture sketch** expanded from a one-line `//!`
+    to a 30-line layout/conventions map covering submodule layout,
+    secret-newtype wrappers, default-impl conventions, and the
+    `#[serde(deny_unknown_fields)]` policy on every section.
+  217 config tests pass; clippy clean. Net file count: 11 -> 30.
+
 - `src/scheduler/` code-quality cleanup pass. Inventory was already in
   good shape (4 files, 1688 LOC, 0 `#[allow]`, 0 `super::super`,
   0 manual `Default` impls, 0 external deep-path imports). Concrete
