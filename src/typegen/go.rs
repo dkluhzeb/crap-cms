@@ -1,14 +1,12 @@
 //! Go type definition generator — structs with json tags for gRPC clients.
 
-use std::fmt::Write;
-
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
 };
 
-use crate::typegen::{
+use super::helpers::{
     SubTypeKind, collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
-    sorted_global_slugs, to_pascal_case,
+    sorted_global_slugs, to_pascal_case, w,
 };
 
 /// Render all Go type definitions.
@@ -43,28 +41,26 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
                 format!("the {} group field", stf.field.name)
             }
         };
-        writeln!(out, "// {} represents {}.", sub_pascal, kind_desc).expect("write to String");
-        writeln!(out, "type {} struct {{", sub_pascal).expect("write to String");
+        w!(out, "// {} represents {}.", sub_pascal, kind_desc);
+        w!(out, "type {} struct {{", sub_pascal);
         for sf in &stf.field.fields {
             write_field_with_context(out, sf, &pascal);
         }
-        writeln!(out, "}}\n").expect("write to String");
+        w!(out, "}}\n");
     }
 
     // Document struct (includes id, fields, and timestamps)
-    writeln!(out, "// {} represents a {} document.", pascal, col.slug).expect("write to String");
-    writeln!(out, "type {} struct {{", pascal).expect("write to String");
-    writeln!(out, "\tID        string  `json:\"id\"`").expect("write to String");
+    w!(out, "// {} represents a {} document.", pascal, col.slug);
+    w!(out, "type {} struct {{", pascal);
+    w!(out, "\tID        string  `json:\"id\"`");
     for f in &col.fields {
         write_field_with_context(out, f, &pascal);
     }
     if col.timestamps {
-        writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`")
-            .expect("write to String");
-        writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`")
-            .expect("write to String");
+        w!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`");
+        w!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`");
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 }
 
 /// Render type definitions for a single global.
@@ -82,23 +78,23 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
                 format!("the {} group field", stf.field.name)
             }
         };
-        writeln!(out, "// {} represents {}.", sub_pascal, kind_desc).expect("write to String");
-        writeln!(out, "type {} struct {{", sub_pascal).expect("write to String");
+        w!(out, "// {} represents {}.", sub_pascal, kind_desc);
+        w!(out, "type {} struct {{", sub_pascal);
         for sf in &stf.field.fields {
             write_field_with_context(out, sf, &pascal);
         }
-        writeln!(out, "}}\n").expect("write to String");
+        w!(out, "}}\n");
     }
 
-    writeln!(out, "// {} represents the {} global.", pascal, global.slug).expect("write to String");
-    writeln!(out, "type {} struct {{", pascal).expect("write to String");
-    writeln!(out, "\tID        string  `json:\"id\"`").expect("write to String");
+    w!(out, "// {} represents the {} global.", pascal, global.slug);
+    w!(out, "type {} struct {{", pascal);
+    w!(out, "\tID        string  `json:\"id\"`");
     for f in &global.fields {
         write_field_with_context(out, f, &pascal);
     }
-    writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`").expect("write to String");
-    writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`").expect("write to String");
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`");
+    w!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`");
+    w!(out, "}}\n");
 }
 
 /// Write a single field's type definition.
@@ -132,8 +128,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         && rc.is_polymorphic()
     {
         let targets = rc.all_collections().join(", ");
-        writeln!(out, "\t// Polymorphic relationship — targets: {}", targets)
-            .expect("write to String");
+        w!(out, "\t// Polymorphic relationship — targets: {}", targets);
     }
     let go_name = to_pascal_case(&field.name);
     let (go_type, omitempty) = field_to_go(field, parent_pascal);
@@ -142,7 +137,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
     } else {
         format!("`json:\"{}\"`", field.name)
     };
-    writeln!(out, "\t{:<9} {} {}", go_name, go_type, tag).expect("write to String");
+    w!(out, "\t{:<9} {} {}", go_name, go_type, tag);
 }
 
 /// Map a field definition to its Go type and pointer flag.

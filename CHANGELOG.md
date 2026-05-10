@@ -157,6 +157,75 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/typegen/` module audit per the alpha.9 playbook. Inventory
+  found the module already structurally clean: 0 `#[allow]`,
+  0 `super::super`, 0 manual `Default`, 0 external deep-path
+  imports. Two file-size violations: `mod.rs` (505 LOC, 4
+  helpers + render dispatcher + `Language` enum + 23 tests) and
+  `lua.rs` (1146 LOC, 6 render fns + 40 tests). Concrete work:
+  - `mod.rs` split into four siblings:
+    - `language.rs` — `Language` enum + `from_name`/
+      `file_extension`/`all`/`label` accessors + 6 colocated
+      tests.
+    - `helpers.rs` — `to_pascal_case`, `is_optional`,
+      `rel_has_many`, `sorted_*_slugs`, `SubTypeKind`,
+      `SubTypeField`, `collect_sub_type_fields` + 17 colocated
+      tests. `to_pascal_case` re-exported `pub(crate)` at the
+      typegen root for cross-module callers
+      (`scaffold::{job,hook}::generator`).
+    - `dispatch.rs` — file-output entry points (`generate`,
+      `generate_lang`, `generate_proto_conversion`) + the
+      private `render` per-language match dispatch + the
+      `LUA_API_TYPES` const.
+    - Resulting `mod.rs`: 40 LOC of declarations + re-exports +
+      30-line architecture doc.
+  - `lua.rs` (1146 LOC, the only language file over the 1000
+    soft limit; the other 5 are 742-914 LOC) split into a
+    `lua/` folder:
+    - `lua/mod.rs` — declarations + `pub(super) use render`
+      + shared `#[cfg(test)] pub(super) mod test_helpers`
+      (`text_field`, `select_field`, `checkbox_field`).
+    - `lua/render.rs` (760 LOC) — top-level `render` entry +
+      `render_template_data_types` + `render_collection` +
+      `render_global` + `render_find_overloads` + 17 colocated
+      render-level tests.
+    - `lua/field.rs` (343 LOC) — `write_field` +
+      `field_to_lua_type` + 22 colocated field-level tests.
+    - 1 duplicate test (`to_pascal_case_basic`) dropped — the
+      same coverage exists in `helpers.rs`.
+  - Per-language sub-files (`typescript.rs`, `go.rs`,
+    `python.rs`, `rust_types.rs`, `rust_proto.rs`) updated to
+    `use super::helpers::{…}` instead of `use crate::typegen::
+    {…}` (axis 8: shortest available path). The original
+    `crate::` paths worked because the helpers were in mod.rs
+    at the typegen root; after the split they live in
+    `super::helpers`.
+  - **Axis 15 (centralize repeated unwrap-shaped patterns) —
+    the big find.** The deep sweep surfaced 196 sites of
+    `writeln!(out, ...).expect("write to String")` (or
+    `.expect("write")`) duplicated across the per-language
+    generators. `rust_proto.rs` had a local `macro_rules! w`
+    workaround for this exact pattern but the other 5 files
+    didn't use it. Lifted the macro to `helpers.rs` as
+    `pub(super) use w` with two arms (`w!(out)` for blank
+    lines, `w!(out, fmt, args...)` for formatted), and used a
+    Python AST-aware script to convert all 196 sites across
+    `typescript.rs`, `go.rs`, `python.rs`, `rust_types.rs`,
+    `lua/render.rs`, `lua/field.rs`. The macro brings
+    `std::fmt::Write` into a local block scope (`use
+    ::std::fmt::Write as _;`) so callers don't need their own
+    `use std::fmt::Write;` — that import was then deleted from
+    7 files. The local `macro_rules!` + `use w;` pair in
+    `rust_proto.rs` was removed in favour of the shared one.
+    Net: -196 boilerplate lines, +1 macro definition, +7
+    `use super::helpers::{… w …};` import additions. `cargo
+    fmt` cleaned up the resulting import-line layouts.
+  Other axes verified N/A: no spawn_blocking (sync code), no
+  own builders, no Option-symmetric setters, no
+  log-then-transform `map_err`, no `match Some/None` registry
+  lookups (already use `let Some(...) = ... else { return };`).
+  175 typegen tests pass; clippy + full lib suite clean.
+
 - `src/commands/` module audit per the alpha.9 playbook. The
   module was already in markedly better shape than the earlier
   audit subjects — inventory found 0 `#[allow(...)]` escapes,

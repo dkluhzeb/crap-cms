@@ -3,15 +3,13 @@
 //! Generates `generated_proto.rs` with direct prost_types extraction:
 //! no JSON intermediate, no serde deserialization in the hot path.
 
-use std::fmt::Write;
-
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
 };
 
-use crate::typegen::{
+use super::helpers::{
     collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
-    sorted_global_slugs, to_pascal_case,
+    sorted_global_slugs, to_pascal_case, w,
 };
 
 /// Render proto conversion code for all collections and globals.
@@ -48,14 +46,6 @@ pub(super) fn render(registry: &Registry, proto_mod: &str) -> String {
 
     out
 }
-
-/// Helper macro to reduce writeln boilerplate.
-macro_rules! w {
-    ($out:expr, $($arg:tt)*) => {
-        writeln!($out, $($arg)*).expect("write to String")
-    };
-}
-use w;
 
 /// Render shared helper functions for field extraction.
 fn render_helpers(out: &mut String) {

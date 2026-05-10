@@ -1,14 +1,12 @@
 //! TypeScript type definition generator — interfaces for gRPC client wrappers.
 
-use std::fmt::Write;
-
 use crate::core::{
     CollectionDefinition, FieldDefinition, FieldType, Registry, collection::GlobalDefinition,
 };
 
-use crate::typegen::{
+use super::helpers::{
     collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
-    sorted_global_slugs, to_pascal_case,
+    sorted_global_slugs, to_pascal_case, w,
 };
 
 /// Render all TypeScript type definitions.
@@ -37,36 +35,36 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // Sub-types (Array rows and Group shapes)
     for stf in collect_sub_type_fields(&col.fields) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
-        writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
+        w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
             write_field(out, sf, &pascal);
         }
-        writeln!(out, "}}\n").expect("write to String");
+        w!(out, "}}\n");
     }
 
     // Input data interface
-    writeln!(out, "/** Input data for creating/updating a {} */", pascal).expect("write to String");
-    writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
+    w!(out, "/** Input data for creating/updating a {} */", pascal);
+    w!(out, "export interface {}Data {{", pascal);
     for f in &col.fields {
         write_field(out, f, &pascal);
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 
     // Document interface (extends data with id + timestamps)
-    writeln!(out, "/** {} document returned from the API */", pascal).expect("write to String");
-    writeln!(
+    w!(out, "/** {} document returned from the API */", pascal);
+    w!(
         out,
         "export interface {}Document extends {}Data {{",
-        pascal, pascal
-    )
-    .expect("write to String");
-    writeln!(out, "  id: string;").expect("write to String");
+        pascal,
+        pascal
+    );
+    w!(out, "  id: string;");
 
     if col.timestamps {
-        writeln!(out, "  created_at?: string;").expect("write to String");
-        writeln!(out, "  updated_at?: string;").expect("write to String");
+        w!(out, "  created_at?: string;");
+        w!(out, "  updated_at?: string;");
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 }
 
 /// Render type definitions for a single global.
@@ -76,31 +74,31 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     // Sub-types (Array rows and Group shapes)
     for stf in collect_sub_type_fields(&global.fields) {
         let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
-        writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
+        w!(out, "export interface {} {{", sub_pascal);
         for sf in &stf.field.fields {
             write_field(out, sf, &pascal);
         }
-        writeln!(out, "}}\n").expect("write to String");
+        w!(out, "}}\n");
     }
 
-    writeln!(out, "/** Input data for {} global */", pascal).expect("write to String");
-    writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
+    w!(out, "/** Input data for {} global */", pascal);
+    w!(out, "export interface {}Data {{", pascal);
     for f in &global.fields {
         write_field(out, f, &pascal);
     }
-    writeln!(out, "}}\n").expect("write to String");
+    w!(out, "}}\n");
 
-    writeln!(out, "/** {} global document */", pascal).expect("write to String");
-    writeln!(
+    w!(out, "/** {} global document */", pascal);
+    w!(
         out,
         "export interface {}Document extends {}Data {{",
-        pascal, pascal
-    )
-    .expect("write to String");
-    writeln!(out, "  id: string;").expect("write to String");
-    writeln!(out, "  created_at?: string;").expect("write to String");
-    writeln!(out, "  updated_at?: string;").expect("write to String");
-    writeln!(out, "}}\n").expect("write to String");
+        pascal,
+        pascal
+    );
+    w!(out, "  id: string;");
+    w!(out, "  created_at?: string;");
+    w!(out, "  updated_at?: string;");
+    w!(out, "}}\n");
 }
 
 /// Render the CollectionSlug union type.
@@ -115,8 +113,8 @@ fn render_collection_slug_type(out: &mut String, registry: &Registry) {
         .map(|s| format!("\"{}\"", s))
         .collect::<Vec<_>>()
         .join(" | ");
-    writeln!(out, "/** All collection slugs */").expect("write to String");
-    writeln!(out, "export type CollectionSlug = {};", union).expect("write to String");
+    w!(out, "/** All collection slugs */");
+    w!(out, "export type CollectionSlug = {};", union);
 }
 
 /// Write a JSDoc comment for polymorphic relationship fields.
@@ -126,12 +124,12 @@ fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: 
         && rc.is_polymorphic()
     {
         let targets = rc.all_collections().join(", ");
-        writeln!(
+        w!(
             out,
             "{}/** Polymorphic relationship — targets: {} */",
-            indent, targets
-        )
-        .expect("write to String");
+            indent,
+            targets
+        );
     }
 }
 
@@ -163,7 +161,7 @@ fn write_field(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
     write_polymorphic_comment(out, field, "  ");
     let ts_type = field_to_ts(field, parent_pascal);
     let opt = if is_optional(field) { "?" } else { "" };
-    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).expect("write to String");
+    w!(out, "  {}{}: {};", field.name, opt, ts_type);
 }
 
 /// Map a field definition to its TypeScript type string.
