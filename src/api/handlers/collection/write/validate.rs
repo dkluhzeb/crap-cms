@@ -9,7 +9,7 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, convert::prost_struct_to_json_map},
+        handlers::{ContentService, proto::prost_struct_to_json_map},
     },
     core::{CollectionDefinition, DocumentFields, Registry, SharedTokenProvider},
     db::{DbPool, LocaleContext},

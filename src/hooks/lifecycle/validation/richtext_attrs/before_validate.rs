@@ -12,7 +12,7 @@ use crate::{
         FieldDefinition, Registry,
         richtext::renderer::{extract_attr_value, html_escape_attr},
     },
-    hooks::{api, lifecycle::execution::resolve_hook_function},
+    hooks::{lifecycle::execution::resolve_hook_function, lua_api},
 };
 
 ///
@@ -224,7 +224,7 @@ fn run_attr_before_validate_hooks(
                 continue;
             }
         };
-        let lua_val = match api::json_to_lua(lua, &current) {
+        let lua_val = match lua_api::json_to_lua(lua, &current) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -237,7 +237,7 @@ fn run_attr_before_validate_hooks(
 
         match func.call::<mlua::Value>((lua_val, ctx_table)) {
             Ok(result) => {
-                if let Ok(json_val) = api::lua_to_json(&result) {
+                if let Ok(json_val) = lua_api::lua_to_json(&result) {
                     current = json_val;
                 }
             }

@@ -3,7 +3,6 @@
 pub mod access;
 mod context;
 pub(crate) mod converters;
-pub mod crud;
 mod execution;
 mod runner;
 mod types;
@@ -13,7 +12,9 @@ mod validation;
 pub use context::{HookContext, HookContextBuilder};
 pub use runner::{FieldHooksCall, FieldWriteCtx, HookRunner, HookRunnerBuilder, PublishEventInput};
 pub use types::{DisplayConditionResult, FieldHookEvent, HookEvent, InitPhase, LuaCrudInfra};
-// Internal types needed by sibling submodules (crud.rs, access.rs, context.rs).
+// Internal types needed by sibling submodules (access.rs, context.rs)
+// and by `lua_api/crud/` (the runtime CRUD layer was relocated there
+// to sit alongside the rest of the `crap.*` registration code).
 pub use execution::AfterReadCtx;
 pub(crate) use execution::{
     apply_after_read_inner, resolve_hook_function, run_field_hooks_inner, run_hooks_inner,

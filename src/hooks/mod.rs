@@ -7,7 +7,7 @@
 //! - `init.rs` -- VM creation (`init_lua`), config-dir loading
 //!   (`load_lua_dir`), and the sandbox restrictions (`sandbox_lua`)
 //!   applied to every hook VM.
-//! - `api/` -- the `crap.*` API surface registered into each VM:
+//! - `lua_api/` -- the `crap.*` API surface registered into each VM:
 //!   collections / globals / jobs CRUD, http, email, cache, fields,
 //!   richtext, json, log, version, etc. One file per `crap.<area>`.
 //! - `validate/` -- startup validation that hook references in
@@ -33,9 +33,9 @@
 //!   (`FieldHookWalker`, `ValidationWalker`) instead of >4 positional
 //!   args.
 
-pub mod api;
 mod init;
 pub mod lifecycle;
+pub mod lua_api;
 mod validate;
 
 pub use init::init_lua;

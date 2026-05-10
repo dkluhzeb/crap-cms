@@ -5,7 +5,7 @@ use std::time::Instant;
 use anyhow::{Result, anyhow};
 
 use crate::{
-    api::handlers::convert::parse_where_json,
+    api::handlers::proto::parse_where_json,
     cli::{self, Table},
     core::{CollectionDefinition, SharedRegistry},
     db::{

@@ -10,7 +10,7 @@ use crate::{
     core::{Document, DocumentFields, FieldDefinition, FieldType, document::DocumentBuilder},
     db::{AccessResult, DbConnection, query::helpers::prefixed_name},
     hooks::{
-        HookRunner, api,
+        HookRunner,
         lifecycle::{
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
@@ -19,6 +19,7 @@ use crate::{
             execution::resolve_hook_function,
             types::TxContextGuard,
         },
+        lua_api,
     },
 };
 
@@ -34,7 +35,7 @@ fn lua_table_to_auth_user(tbl: &mlua::Table) -> Result<Document> {
             continue;
         }
 
-        fields.insert(k, api::lua_to_json(&v)?);
+        fields.insert(k, lua_api::lua_to_json(&v)?);
     }
 
     let created_at: Option<String> = tbl.get("created_at").ok();

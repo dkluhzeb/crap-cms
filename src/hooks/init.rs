@@ -12,7 +12,7 @@ use crate::{
     hooks::lifecycle::InitPhase,
 };
 
-use super::api;
+use super::lua_api;
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns a populated SharedRegistry.
@@ -21,12 +21,12 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
 
     sandbox_lua(&lua)?;
 
-    lua.set_app_data(api::VmLabel("init".to_string()));
+    lua.set_app_data(lua_api::VmLabel("init".to_string()));
 
     let registry = Registry::shared();
 
     setup_package_paths(&lua, config_dir)?;
-    api::register_api(&lua, registry.clone(), config)?;
+    lua_api::register_api(&lua, registry.clone(), config)?;
 
     // Mark init phase so register-only APIs (`crap.pages.register`,
     // `crap.template_data.register`, …) accept calls. Cleared after
@@ -193,7 +193,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
         };
         let name = name.to_string_lossy();
         let label = lua
-            .app_data_ref::<api::VmLabel>()
+            .app_data_ref::<lua_api::VmLabel>()
             .map(|l| l.0.clone())
             .unwrap_or_else(|| "lua".into());
         debug!("[lua:{label}] Loading {kind}: {name}");

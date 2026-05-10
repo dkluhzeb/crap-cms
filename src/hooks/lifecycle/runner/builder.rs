@@ -12,13 +12,12 @@ use crate::{
     db::query::SharedPopulateSingleflight,
     hooks::{
         self, HookRunner,
-        api::{self, VmLabel},
         lifecycle::{
             InitPhase, LuaInvalidationTransport, LuaPopulateSingleflight, LuaStorage,
-            crud::register_crud_functions,
             execution::scan_registered_events,
             types::{DefaultDeny, HookDepth, LuaLocaleConfig, MaxHookDepth, MaxInstructions},
         },
+        lua_api::{self, VmLabel, crud::register_crud_functions},
     },
 };
 
@@ -194,7 +193,7 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
 
 /// Register the crap API and CRUD functions on the Lua VM.
 fn register_apis(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) -> Result<()> {
-    api::register_api(lua, registry.clone(), config)?;
+    lua_api::register_api(lua, registry.clone(), config)?;
 
     register_crud_functions(lua, registry, &config.locale, &config.pagination)?;
 

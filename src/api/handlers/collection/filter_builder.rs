@@ -3,7 +3,7 @@
 use tonic::Status;
 
 use crate::{
-    api::handlers::convert::parse_where_json,
+    api::handlers::proto::parse_where_json,
     core::FieldDefinition,
     db::{AccessResult, Filter, FilterClause, FilterOp, query::filter::normalize_filter_fields},
     service::{validate_access_constraints, validate_user_filters},

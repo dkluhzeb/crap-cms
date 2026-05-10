@@ -199,6 +199,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   no external callers; only `commands/mod.rs` needed updating
   (declarations, `pub use` lines, doc comment).
 
+- **`hooks/api/` renamed to `hooks/lua_api/`.** The original `api`
+  name collided in conversation with the top-level `api/` module
+  (gRPC). `lua_api` is what the directory actually is — the surface
+  registered onto every Lua VM as `crap.*`. Touched the directory
+  itself, `hooks/mod.rs` declarations + doc comment, `hooks/init.rs`,
+  and ~20 `hooks::api::*` import sites across `hooks/` and inside
+  `hooks/lua_api/` (siblings used absolute paths). No external
+  callers outside `hooks/`.
+
+- **`hooks/lifecycle/crud/` relocated to `hooks/lua_api/crud/`.**
+  The runtime CRUD surface (`crap.collections.{find,create,update,…}`,
+  `crap.globals.{get,update}`, `crap.jobs.queue`) was historically in
+  `lifecycle/` because it depends on the `TxContext` machinery, but
+  every other `crap.*` registration lived in `lua_api/`. The split
+  was leaky — `lua_api/email.rs` reached into
+  `lifecycle::crud::get_tx_conn` to grab the active transaction. With
+  the move, every `crap.*` registration site lives under one tree;
+  the `email.rs` leak collapses to a sibling import. Internal CRUD
+  files keep their `crate::hooks::lifecycle::{…}` imports for the
+  TxContext / converter / runner types they still need from
+  `lifecycle/`. `register_crud_functions` is now reached at
+  `hooks::lua_api::crud::register_crud_functions`; the one external
+  caller (`HookRunnerBuilder`) was updated. `lua_api/mod.rs` gained
+  an architecture sketch documenting the new layout.
+
 - **`db/{postgres,sqlite}.rs` moved into `db/backend/`.** The `db/`
   module root used to mix abstractions (`connection.rs`, `pool.rs`,
   `types.rs`, `ops.rs`, `document.rs`) with the two engine impls.

@@ -4,9 +4,9 @@ mod auth;
 mod collection;
 mod content_service;
 mod content_service_deps;
-pub(crate) mod convert;
 mod globals;
 mod jobs;
+pub(crate) mod proto;
 mod schema;
 mod subscribe;
 

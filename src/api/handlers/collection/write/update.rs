@@ -12,7 +12,7 @@ use crate::{
         handlers::{
             ContentService,
             collection::helpers::extract_auth_password,
-            convert::{document_to_proto, prost_struct_to_json_map},
+            proto::{document_to_proto, prost_struct_to_json_map},
         },
     },
     core::{

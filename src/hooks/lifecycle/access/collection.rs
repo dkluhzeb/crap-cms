@@ -11,12 +11,12 @@ use crate::{
     core::{Document, DocumentFields},
     db::{AccessResult, Filter, FilterClause, FilterOp},
     hooks::{
-        api,
         lifecycle::{
             DefaultDeny,
             converters::{document_to_lua_table, lua_parse_filter_op},
             execution::resolve_hook_function,
         },
+        lua_api,
     },
 };
 
@@ -63,7 +63,7 @@ pub(crate) fn check_access_with_lua(
         let data_table = lua.create_table()?;
 
         for (k, v) in doc_data {
-            data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+            data_table.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
         }
 
         ctx_table.set("data", data_table)?;

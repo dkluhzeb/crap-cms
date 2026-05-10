@@ -10,7 +10,7 @@ use crate::{
     api::{
         content,
         handlers::{
-            ContentService, collection::filter_builder::FilterBuilder, convert::document_to_proto,
+            ContentService, collection::filter_builder::FilterBuilder, proto::document_to_proto,
         },
     },
     core::{CollectionDefinition, Registry, SharedCache, SharedTokenProvider},
@@ -19,7 +19,7 @@ use crate::{
     service::{FindDocumentsInput, RunnerReadHooks, ServiceContext, ServiceError, find_documents},
 };
 
-use crate::api::handlers::convert::pagination_result_to_proto;
+use crate::api::handlers::proto::pagination_result_to_proto;
 
 /// Owned bundle for the `Find` spawn-blocking body.
 struct FindBlockingInput {

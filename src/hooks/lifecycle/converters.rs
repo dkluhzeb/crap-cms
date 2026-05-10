@@ -10,7 +10,7 @@ use crate::{
         Filter, FilterClause, FilterOp, FindQuery, PaginationResult,
         query::{cursor::CursorData, helpers::prefixed_name},
     },
-    hooks::api,
+    hooks::lua_api,
 };
 
 // ── Lua <-> Rust type conversion helpers ────────────────────────────────────
@@ -28,7 +28,7 @@ pub(crate) fn lua_table_to_json_map(tbl: &Table) -> LuaResult<HashMap<String, Js
             continue;
         }
 
-        map.insert(k, api::lua_to_json(&v)?);
+        map.insert(k, lua_api::lua_to_json(&v)?);
     }
 
     Ok(map)
@@ -320,7 +320,7 @@ pub(crate) fn document_to_lua_table(lua: &Lua, doc: &Document) -> LuaResult<Tabl
     tbl.set("id", &*doc.id)?;
 
     for (k, v) in &doc.fields {
-        tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+        tbl.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
     }
 
     if let Some(ref ts) = doc.created_at {

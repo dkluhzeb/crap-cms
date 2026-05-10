@@ -14,11 +14,11 @@ use crate::{
     core::{DocumentFields, FieldDefinition, FieldType, field::FieldHooks},
     db::query::helpers::prefixed_name,
     hooks::{
-        api,
         lifecycle::{
             FieldHookEvent, UiLocaleContext, UserContext, converters::document_to_lua_table,
             runner::FieldHooksCall,
         },
+        lua_api,
     },
 };
 
@@ -193,7 +193,7 @@ pub(crate) fn call_field_hook_ref(
     let func = resolve_hook_function(lua, hook_ref)?;
 
     // Convert the field value to Lua
-    let lua_value = api::json_to_lua(lua, &value)?;
+    let lua_value = lua_api::json_to_lua(lua, &value)?;
 
     // Build context table
     let ctx_table = lua.create_table()?;
@@ -204,7 +204,7 @@ pub(crate) fn call_field_hook_ref(
     let data_table = lua.create_table()?;
 
     for (k, v) in data {
-        data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+        data_table.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
     }
 
     ctx_table.set("data", data_table)?;
@@ -228,7 +228,7 @@ pub(crate) fn call_field_hook_ref(
     let result: Value = func.call((lua_value, ctx_table))?;
 
     // Convert result back to JSON
-    api::lua_to_json(&result)
+    lua_api::lua_to_json(&result)
         .map_err(|e| anyhow!("Field hook '{}' returned invalid value: {}", hook_ref, e))
 }
 

@@ -11,7 +11,7 @@ use super::helpers::build_bulk_filters;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, convert::prost_struct_to_json_map},
+        handlers::{ContentService, proto::prost_struct_to_json_map},
     },
     config::LocaleConfig,
     core::{

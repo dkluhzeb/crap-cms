@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use crate::{
     core::{Document, DocumentFields, FieldDefinition, FieldType, ReqContext},
     hooks::{
-        api,
         lifecycle::{HookDepth, converters::document_to_lua_table},
+        lua_api,
     },
 };
 
@@ -104,7 +104,7 @@ impl HookContext {
             self.context.clear();
 
             for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
-                if let Ok(json_val) = api::lua_to_json(&v) {
+                if let Ok(json_val) = lua_api::lua_to_json(&v) {
                     self.context.insert(k, json_val);
                 }
             }
@@ -117,7 +117,7 @@ fn hashmap_to_lua(lua: &Lua, map: &HashMap<String, JsonValue>) -> LuaResult<Tabl
     let tbl = lua.create_table()?;
 
     for (k, v) in map {
-        tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+        tbl.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
     }
 
     Ok(tbl)

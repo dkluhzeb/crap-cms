@@ -11,11 +11,12 @@ use crate::{
         event::{EventOperation, EventTarget, EventUser},
     },
     hooks::{
-        HookContext, HookEvent, HookRunner, api,
+        HookContext, HookEvent, HookRunner,
         lifecycle::execution::{
             call_before_broadcast_hook, call_registered_before_broadcast, get_hook_refs,
             resolve_hook_function,
         },
+        lua_api,
     },
 };
 
@@ -169,7 +170,7 @@ impl HookRunner {
                 ctx_table.set("operation", operation)?;
                 let data_table = lua.create_table()?;
                 for (k, v) in data {
-                    data_table.set(k.as_str(), api::json_to_lua(&lua, v)?)?;
+                    data_table.set(k.as_str(), lua_api::json_to_lua(&lua, v)?)?;
                 }
                 ctx_table.set("data", data_table)?;
 

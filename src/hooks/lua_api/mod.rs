@@ -1,0 +1,50 @@
+//! Registers the `crap.*` Lua API namespace exposed to user hook scripts:
+//! collections / globals / hooks / log / util / crypto / schema / etc.
+//!
+//! ## Submodule layout
+//!
+//! - One file per `crap.<area>` for the simple, no-DB-transaction
+//!   bits (auth, cache, crypto, email, env, fields, http, log, pages,
+//!   richtext, schema, template_data, vm_label, …).
+//! - **`crud/`** holds the runtime CRUD surface (`crap.collections.find`,
+//!   `crap.collections.create`, `crap.globals.update`, …) — the bits
+//!   that need the active transaction. They depend on the
+//!   `TxContext` machinery in `lifecycle/` (set by
+//!   `run_hooks_with_conn`) but conceptually belong here alongside the
+//!   rest of `crap.*` registration; they're physically grouped here
+//!   so a contributor looking up "where is `crap.collections.find()`
+//!   defined" lands in one tree.
+//! - **`parse/`** parses Lua tables → typed Rust definitions
+//!   (collection / global / job definitions, fields, blocks, etc.).
+//! - **`serializers/`** is the inverse — typed Rust → Lua tables.
+//! - **`register.rs`** is the single entry point called from
+//!   `init_lua` and `HookRunner`; it walks the per-module register
+//!   functions in fixed order.
+
+mod access;
+mod auth;
+mod collections;
+mod config;
+pub(crate) mod crud;
+mod crypto;
+mod email;
+mod env;
+mod fields;
+mod globals;
+mod hooks;
+mod http;
+mod jobs;
+mod log;
+pub(crate) mod pages;
+pub mod parse;
+mod register;
+pub(crate) mod richtext;
+mod schema;
+mod serializers;
+pub(crate) mod template_data;
+mod utils;
+mod vm_label;
+
+pub use register::register_api;
+pub(crate) use serializers::{json_to_lua, lua_to_json};
+pub use vm_label::VmLabel;

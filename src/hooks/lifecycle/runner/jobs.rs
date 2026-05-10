@@ -8,8 +8,9 @@ use crate::{
     core::Document,
     db::DbConnection,
     hooks::{
-        HookRunner, api,
+        HookRunner,
         lifecycle::{execution::resolve_hook_function, types::TxContextGuard},
+        lua_api,
     },
 };
 
@@ -35,7 +36,7 @@ impl HookRunner {
         // Parse data JSON into Lua table
         let data_value: JsonValue =
             serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
-        let data_lua = api::json_to_lua(&lua, &data_value)?;
+        let data_lua = lua_api::json_to_lua(&lua, &data_value)?;
         ctx.set("data", data_lua)?;
 
         // Job metadata
@@ -55,7 +56,7 @@ impl HookRunner {
         match return_val {
             Value::Nil => Ok(None),
             other => {
-                let json_val = api::lua_to_json(&other)?;
+                let json_val = lua_api::lua_to_json(&other)?;
 
                 Ok(Some(serde_json::to_string(&json_val)?))
             }

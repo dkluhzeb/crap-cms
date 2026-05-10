@@ -9,7 +9,7 @@ use tracing::error;
 use crate::{
     api::{
         content,
-        handlers::{ContentService, convert::document_to_proto},
+        handlers::{ContentService, proto::document_to_proto},
     },
     core::{Registry, SharedTokenProvider, collection::GlobalDefinition},
     db::{DbPool, LocaleContext},

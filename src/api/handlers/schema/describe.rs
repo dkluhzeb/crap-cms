@@ -4,7 +4,7 @@ use tonic::{Request, Response, Status};
 
 use crate::api::{
     content,
-    handlers::{ContentService, convert::field_def_to_proto},
+    handlers::{ContentService, proto::field_def_to_proto},
 };
 
 #[cfg(not(tarpaulin_include))]

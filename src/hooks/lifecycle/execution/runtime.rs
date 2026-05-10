@@ -11,8 +11,8 @@ use tracing::{debug, warn};
 use crate::{
     core::{DocumentFields, collection::Hooks},
     hooks::{
-        api,
         lifecycle::{HookEvent, context::HookContext},
+        lua_api,
     },
 };
 
@@ -162,7 +162,7 @@ pub(super) fn read_hook_result(ctx: &mut HookContext, tbl: &Table) -> Result<()>
 
         for pair in data_tbl.pairs::<String, Value>() {
             let (k, v) = pair?;
-            new_data.insert(k, api::lua_to_json(&v)?);
+            new_data.insert(k, lua_api::lua_to_json(&v)?);
         }
 
         ctx.data = new_data;

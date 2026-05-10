@@ -11,7 +11,7 @@ use tracing::warn;
 
 use crate::{
     core::ConditionExpr,
-    hooks::{api, lifecycle::DisplayConditionResult},
+    hooks::{lifecycle::DisplayConditionResult, lua_api},
 };
 
 use super::resolve_hook_function;
@@ -23,12 +23,12 @@ pub(crate) fn call_display_condition_with_lua(
     form_data: &JsonValue,
 ) -> Option<DisplayConditionResult> {
     let func = resolve_hook_function(lua, func_ref).ok()?;
-    let data_lua = api::json_to_lua(lua, form_data).ok()?;
+    let data_lua = lua_api::json_to_lua(lua, form_data).ok()?;
 
     match func.call::<Value>(data_lua) {
         Ok(Value::Boolean(b)) => Some(DisplayConditionResult::Bool(b)),
         Ok(val @ Value::Table(_)) => {
-            let json = api::lua_to_json(&val).ok()?;
+            let json = lua_api::lua_to_json(&val).ok()?;
 
             match serde_json::from_value::<ConditionExpr>(json) {
                 Ok(condition) => {

@@ -19,7 +19,7 @@ use tracing::{error, warn};
 use crate::{
     api::{
         content,
-        handlers::{ContentService, convert::json_to_prost_value},
+        handlers::{ContentService, proto::json_to_prost_value},
     },
     core::{
         Document, EventReceiver, FieldDefinition, LiveMode, MutationEvent, Registry,

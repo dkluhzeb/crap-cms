@@ -5,11 +5,11 @@ use mlua::{Lua, Value};
 use serde_json::Value as JsonValue;
 
 use crate::hooks::{
-    api,
     lifecycle::{
         UiLocaleContext, UserContext, converters::document_to_lua_table,
         execution::resolve_hook_function,
     },
+    lua_api,
 };
 
 /// Inner implementation of `run_validate_function` — operates on a locked `&Lua`.
@@ -29,13 +29,13 @@ pub(super) fn run_validate_function_inner(
     field_name: &str,
 ) -> Result<Option<String>> {
     let func = resolve_hook_function(lua, func_ref)?;
-    let lua_value = api::json_to_lua(lua, value)?;
+    let lua_value = lua_api::json_to_lua(lua, value)?;
     let ctx_table = lua.create_table()?;
     ctx_table.set("collection", collection)?;
     ctx_table.set("field_name", field_name)?;
     let data_table = lua.create_table()?;
     for (k, v) in data {
-        data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
+        data_table.set(k.as_str(), lua_api::json_to_lua(lua, v)?)?;
     }
     ctx_table.set("data", data_table)?;
 
