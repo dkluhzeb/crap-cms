@@ -2,8 +2,8 @@
 //!
 //! Supports SQLite (FTS5) and PostgreSQL (tsvector + GIN).
 
+mod extract;
 mod fields;
-mod prosemirror;
 mod search;
 mod sync;
 

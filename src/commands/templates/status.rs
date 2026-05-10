@@ -13,7 +13,7 @@ use semver::Version;
 
 use crate::{cli, scaffold::source_header::parse_source_version};
 
-use super::shared::{CRATE_VERSION, lookup_embedded};
+use super::helpers::{CRATE_VERSION, lookup_embedded};
 
 /// Per-file drift classification.
 enum Drift {

@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result};
 
 use crate::cli;
 
-use super::shared::lookup_embedded;
+use super::helpers::lookup_embedded;
 
 /// Per-file classification for `templates layout`.
 enum LayoutKind {

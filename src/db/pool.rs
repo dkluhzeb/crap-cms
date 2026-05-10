@@ -15,7 +15,7 @@ use crate::config::CrapConfig;
 
 use super::connection::BoxedConnection;
 #[cfg(feature = "sqlite")]
-use super::sqlite::SqliteConnection;
+use crate::db::backend::sqlite::SqliteConnection;
 
 /// Trait for pool backends.
 ///
@@ -91,7 +91,7 @@ pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
         #[cfg(feature = "sqlite")]
         "sqlite" => create_sqlite_pool(config_dir, config),
         #[cfg(feature = "postgres")]
-        "postgres" => super::postgres::create_pool(config),
+        "postgres" => crate::db::backend::postgres::create_pool(config),
         other => anyhow::bail!(
             "Unknown database backend '{}'. Supported: {}",
             other,

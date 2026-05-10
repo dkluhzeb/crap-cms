@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context as _, Result};
 
 use crate::core::{CollectionDefinition, Document, Registry};
+use crate::db::query::fts::extract::extract_prosemirror_text_with_nodes;
 use crate::db::query::fts::fields::{build_node_searchable_map, json_richtext_columns};
-use crate::db::query::fts::prosemirror::extract_prosemirror_text_with_nodes;
 use crate::db::query::fts::search::fts_table_name;
 use crate::db::{DbConnection, DbValue};
 

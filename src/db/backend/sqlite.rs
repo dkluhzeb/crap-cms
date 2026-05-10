@@ -10,11 +10,12 @@ use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use tracing::warn;
 
-use crate::core::FieldType;
-
-use super::{
-    connection::{ConnectionInner, DbConnection, TransactionInner},
-    types::{DbRow, DbValue},
+use crate::{
+    core::FieldType,
+    db::{
+        DbConnection, DbRow, DbValue,
+        connection::{ConnectionInner, TransactionInner},
+    },
 };
 
 // ── Shared SQLite dialect helpers ────────────────────────────────────────
@@ -613,7 +614,7 @@ impl InMemoryConn {
 }
 
 #[cfg(test)]
-impl super::connection::DbConnection for InMemoryConn {
+impl DbConnection for InMemoryConn {
     sqlite_ufcs_query_methods!(|s| &s.0);
     sqlite_shared_methods!();
 }

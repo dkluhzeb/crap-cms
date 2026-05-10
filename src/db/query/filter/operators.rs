@@ -203,7 +203,7 @@ pub(crate) fn build_filter_condition(
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
-    use crate::db::sqlite::InMemoryConn;
+    use crate::db::InMemoryConn;
     use crate::db::{
         DbValue,
         query::{Filter, FilterOp},

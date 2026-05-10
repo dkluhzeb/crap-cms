@@ -17,7 +17,7 @@
 //! Every subcommand exposes a `pub fn run(...)` (or `pub async fn
 //! run(...)`) reached by `main.rs` via `commands::<sub>::run`.
 //! Action enums for clap (`UserAction`, `MigrateAction`, …) live
-//! in `cli_types.rs` and are re-exported at the crate level so
+//! in `types.rs` and are re-exported at the crate level so
 //! `main.rs` parses them once and hands the resolved variant to
 //! `run`.
 //!
@@ -41,7 +41,6 @@
 //! to `pub(super)` from the start.
 
 pub mod bench;
-pub mod config_resolve;
 pub mod db;
 pub mod export;
 pub mod fmt;
@@ -51,6 +50,7 @@ pub mod jobs;
 pub mod logs;
 pub mod make;
 pub mod mcp;
+pub mod resolve_config;
 pub mod serve;
 pub mod status;
 pub mod templates;
@@ -60,15 +60,15 @@ pub mod update;
 pub mod user;
 pub mod work;
 
-mod cli_types;
 mod helpers;
+mod types;
 
-pub use cli_types::{
+pub use helpers::load_config_and_sync;
+pub use resolve_config::resolve_config_dir;
+pub use types::{
     BenchAction, BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction,
     MigrateAction, TemplatesAction, TrashAction, UserAction, parse_key_val,
 };
-pub use config_resolve::resolve_config_dir;
-pub use helpers::load_config_and_sync;
 pub use update::UpdateCmd;
 
 // User-management library entry points + their `*Params` structs.

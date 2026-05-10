@@ -157,10 +157,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
-- **Stutter-rename pass (file-structure audit, section B).** Files
-  whose names repeated their parent directory got their prefixes
-  dropped — the prefix is informative inside the type name
-  (`FieldDefinition`, `AuthConfig`) but redundant inside the path.
+- **Stutter-rename pass.** Files whose names repeated their parent
+  directory got their prefixes dropped — the prefix is informative
+  inside the type name (`FieldDefinition`, `AuthConfig`) but
+  redundant inside the path.
   Renames: `core/auth/auth_user.rs` → `user.rs`,
   `core/collection/collection_definition.rs` → `definition.rs`,
   `core/field/{field_admin,field_definition}.rs` →
@@ -177,8 +177,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `service/hooks/{read_hooks,write_hooks}.rs` → `{read,write}.rs`.
   No type names changed. `commands/export/{export_cmd,import_cmd}.rs`
   were left as-is — `module_inception` clippy fires on
-  `commands/export/export.rs`; the parent dir needs its own restructure
-  (planned section C) before those two can shed the `_cmd` suffix.
+  `commands/export/export.rs`; renaming those two needs the parent
+  dir restructured first.
+
+- **Keyword-name and unclear-name fixes.**
+  `core/document/type.rs` → `kind.rs` drops the `r#type` keyword
+  workaround in `core/document/mod.rs`. `db/query/fts/prosemirror.rs`
+  → `extract.rs`; the `prosemirror` prefix already lives in the
+  exported function names (`extract_prosemirror_text`, etc.) and the
+  parent `fts/` module supplies the search context.
+  `commands/update/{use_action,where_action}.rs` left as-is — the
+  `_action` suffix there is also a keyword workaround (`use` and
+  `where` are reserved).
+
+- **`commands/cli_types.rs` and `config_resolve.rs` renamed.**
+  `cli_types.rs` → `types.rs` — the `cli_` prefix was dead weight
+  (already inside `commands/`, and the separate top-level `cli/`
+  module owns CLI presentation, not action enums). `config_resolve.rs`
+  → `resolve_config.rs` — verb-first reads as the action it performs
+  (`commands::resolve_config::resolve_config_dir`). Both files have
+  no external callers; only `commands/mod.rs` needed updating
+  (declarations, `pub use` lines, doc comment).
+
+- **`db/{postgres,sqlite}.rs` moved into `db/backend/`.** The `db/`
+  module root used to mix abstractions (`connection.rs`, `pool.rs`,
+  `types.rs`, `ops.rs`, `document.rs`) with the two engine impls.
+  Backends now collect under `db/backend/{postgres,sqlite}.rs` behind
+  a thin `db/backend/mod.rs` that carries the existing
+  `#[cfg(feature = "...")]` gates. `db/mod.rs` declares `pub mod
+  backend` and updates the test-only `pub use sqlite::InMemoryConn`
+  re-export to `pub use backend::sqlite::InMemoryConn`. Internal
+  imports inside the moved files swap `super::{connection,types,pool}`
+  for their re-exported short paths (`crate::db::{DbConnection,
+  DbRow, DbValue, BoxedConnection, DbPool}`); only the non-re-exported
+  `ConnectionInner`, `TransactionInner`, and `PoolBackend` keep their
+  full `crate::db::{connection,pool}::*` paths. Three external call
+  sites updated (`db/pool.rs` ×2, `db/query/filter/operators.rs` ×1).
+  Both `--features sqlite` (default) and `--features postgres` build
+  clean.
+
+- **`helpers.rs` over `shared.rs`.**
+  `commands/templates/shared.rs` → `helpers.rs`; updated three
+  importers and the `mod.rs` doc comment. `hooks/api/parse/shared.rs`
+  was left as-is because it sits next to a separate `helpers.rs`
+  (primitive table getters) and itself holds higher-level definition
+  parsers — merging would push past 800 lines and erase a meaningful
+  split.
 
 - **Inline `use` cleanup, codebase-wide.** CLAUDE.md's "tree-style
   imports at the top of the file/module. Never use inline `use`

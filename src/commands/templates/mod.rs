@@ -14,14 +14,14 @@
 //!   between the user's copy and the embedded default.
 //!
 //! One file per `crap-cms templates <action>` subcommand, plus
-//! `shared.rs` for helpers reused by `status` and `diff`
+//! `helpers.rs` for helpers reused by `status` and `diff`
 //! (`split_kind`, `lookup_embedded`, the `CRATE_VERSION` constant).
 
 mod diff;
 mod extract;
+mod helpers;
 mod layout;
 mod list;
-mod shared;
 mod status;
 
 pub use diff::diff;

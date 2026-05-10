@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 use anyhow::{Context as _, Result, bail};
 use similar::{ChangeTag, TextDiff};
 
-use super::shared::{lookup_embedded, split_kind};
+use super::helpers::{lookup_embedded, split_kind};
 
 /// Run `crap-cms templates diff` for a single overlay path. The path is
 /// relative to the config dir (e.g. `templates/layout/base.hbs` or

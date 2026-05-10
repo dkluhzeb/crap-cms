@@ -7,8 +7,8 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::config::LocaleConfig;
 use crate::core::CollectionDefinition;
+use crate::db::query::fts::extract::extract_prosemirror_text;
 use crate::db::query::fts::fields::{get_fts_columns, json_richtext_columns};
-use crate::db::query::fts::prosemirror::extract_prosemirror_text;
 use crate::db::query::fts::search::fts_table_name;
 use crate::db::query::is_valid_identifier;
 use crate::db::{DbConnection, DbValue};

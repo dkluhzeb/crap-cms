@@ -16,12 +16,14 @@ use tokio::task::block_in_place;
 use tokio_postgres::{Client, NoTls, Statement, types::Type};
 use tracing::{error, info};
 
-use crate::{config::CrapConfig, core::FieldType};
-
-use super::{
-    connection::{BoxedConnection, ConnectionInner, DbConnection, TransactionInner},
-    pool::DbPool,
-    types::{DbRow, DbValue},
+use crate::{
+    config::CrapConfig,
+    core::FieldType,
+    db::{
+        BoxedConnection, DbConnection, DbPool, DbRow, DbValue,
+        connection::{ConnectionInner, TransactionInner},
+        pool::PoolBackend,
+    },
 };
 
 // ── Shared trait methods (non-query) ─────────────────────────────────────
@@ -318,7 +320,7 @@ struct PgPoolBackend {
     pool: CachedPool,
 }
 
-impl super::pool::PoolBackend for PgPoolBackend {
+impl PoolBackend for PgPoolBackend {
     fn get(&self) -> Result<BoxedConnection> {
         let obj = block_in_place(|| tokio::runtime::Handle::current().block_on(self.pool.get()))
             .map_err(|e| anyhow!("Failed to get Postgres connection: {}", e))?;

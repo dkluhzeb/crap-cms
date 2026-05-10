@@ -8,8 +8,9 @@
 //!   interface used by every higher layer.
 //! - `pool.rs` -- [`DbPool`] (Arc'd `dyn PoolBackend`); `pool.get()` →
 //!   [`BoxedConnection`].
-//! - `sqlite/`, `postgres/` -- per-engine `PoolBackend` + connection
-//!   impls, migrations runner, and engine-specific tuning.
+//! - `backend/{sqlite,postgres}.rs` -- per-engine `PoolBackend` +
+//!   connection impls, migrations runner, and engine-specific tuning.
+//!   Gated by the `sqlite` / `postgres` cargo features.
 //! - `migrate/` -- schema migration runner, collection sync, join-table
 //!   provisioning, FTS table sync, ref-count backfill.
 //! - `query/` -- read + write helpers shared across the service layer:
@@ -34,16 +35,13 @@
 //!   trait (`placeholder()`, `now_expr()`, `kind()`, etc.) instead of
 //!   `if conn.kind() == "sqlite"` branching at call sites.
 
+pub mod backend;
 pub mod connection;
 pub mod document;
 pub mod migrate;
 pub mod ops;
 pub mod pool;
-#[cfg(feature = "postgres")]
-pub mod postgres;
 pub mod query;
-#[cfg(feature = "sqlite")]
-pub mod sqlite;
 pub mod types;
 
 pub use connection::{BoxedConnection, BoxedTransaction, DbConnection};
@@ -55,4 +53,4 @@ pub use query::{
 pub use types::{DbRow, DbValue};
 
 #[cfg(all(test, feature = "sqlite"))]
-pub use sqlite::InMemoryConn;
+pub use backend::sqlite::InMemoryConn;
