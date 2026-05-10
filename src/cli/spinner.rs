@@ -5,6 +5,8 @@ use std::time::Duration;
 use console::{Term, style};
 use indicatif::{ProgressBar, ProgressStyle};
 
+use super::glyphs;
+
 /// A spinner for long-running CLI operations.
 ///
 /// Uses `ProgressBar::hidden()` when stdout is not a terminal (e.g., piped output).
@@ -44,20 +46,26 @@ impl Spinner {
 
     /// Finish with a success message: `✓ msg` in green.
     pub fn finish_success(&self, msg: &str) {
-        self.bar
-            .finish_with_message(format!("{} {}", style("✓").green().bold(), msg));
+        self.bar.finish_with_message(format!(
+            "{} {}",
+            style(glyphs::success()).green().bold(),
+            msg
+        ));
     }
 
     /// Finish with a warning message: `⚠ msg` in yellow.
     pub fn finish_warning(&self, msg: &str) {
-        self.bar
-            .finish_with_message(format!("{} {}", style("⚠").yellow().bold(), msg));
+        self.bar.finish_with_message(format!(
+            "{} {}",
+            style(glyphs::warning()).yellow().bold(),
+            msg
+        ));
     }
 
     /// Finish with an error message: `✗ msg` in red.
     pub fn finish_error(&self, msg: &str) {
         self.bar
-            .finish_with_message(format!("{} {}", style("✗").red().bold(), msg));
+            .finish_with_message(format!("{} {}", style(glyphs::error()).red().bold(), msg));
     }
 }
 

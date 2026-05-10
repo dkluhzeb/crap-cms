@@ -157,6 +157,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Internal
 
+- `src/cli/` module audit per the alpha.9 playbook. Module is
+  small (5 files, 437 LOC) and structurally already clean: 0
+  `#[allow]`, 0 `super::super`, 0 manual `Default`, 0 external
+  deep-path imports, all files well under 1000 LOC. Concrete
+  work targeted **axis 23 (cross-module helper dedup) via the
+  axis-15 partial-fix-evidence heuristic**:
+  - `output.rs` had a private `glyph(unicode, ascii)` helper +
+    `unicode_supported()` + `UNICODE: OnceLock<bool>` cache for
+    the `CRAP_NO_UNICODE=1` / `CRAP_FORCE_UNICODE=1` /
+    `console::Term::wants_emoji()` resolution. The other two
+    rendering surfaces (`spinner.rs` and `theme.rs`)
+    hard-coded the Unicode glyphs (`"✓"`, `"⚠"`, `"✗"`)
+    without the fallback — a partial-fix exactly like the
+    `rust_proto::w!` find in the typegen audit. Lifted the
+    helper to a new `cli/glyphs.rs` module with named
+    accessors (`success()`, `warning()`, `error()`, `info()`,
+    `prompt()`, `bar()`); each returns the Unicode form when
+    the terminal supports it and the ASCII fallback otherwise.
+    Updated `output`, `spinner`, and `theme` to call through.
+    Net effect: `CRAP_NO_UNICODE=1` now uniformly forces ASCII
+    across every CLI surface (spinner finish messages,
+    dialoguer prompt prefixes, banner glyphs); previously only
+    plain-text output respected it. Tests updated to assert
+    "one of the two variants" rather than the literal Unicode
+    glyph, since the value depends on terminal capability.
+  Other axes verified N/A or already-clean: no spawn_blocking,
+  no own builders, no log-then-transform `map_err`, no
+  `match Some/None` registry lookups, no panic/`.unwrap()` /
+  `.expect()` in production (the single `.expect("valid
+  template")` in `Spinner::new` is on a known-good literal
+  template and is a fail-fast guard, not a wrong-variant
+  panic). All 5 top-level re-exports (`output::*` fns,
+  `Spinner`, `Table`, `crap_theme`) verified to have ≥2
+  external users.
+
 - `src/typegen/` module audit per the alpha.9 playbook. Inventory
   found the module already structurally clean: 0 `#[allow]`,
   0 `super::super`, 0 manual `Default`, 0 external deep-path
