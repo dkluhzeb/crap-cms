@@ -199,6 +199,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   no external callers; only `commands/mod.rs` needed updating
   (declarations, `pub use` lines, doc comment).
 
+- **`commands/mod.rs` flat-vs-folder rule made explicit.** The
+  doc-comment now codifies what the layout already followed
+  implicitly: single-action subcommand → flat file (`fmt.rs`,
+  `init.rs`, `work.rs`, …); multi-action subcommand → folder
+  (`db/`, `user/`, `make/`, …). Default to a flat file; promote to
+  a folder the first time a second action lands. No file moves.
+
+- **`service/collection/` renamed to `service/collections/`.** All
+  other noun-feature dirs in `service/` (`globals/`, `jobs/`,
+  `versions/`, `hooks/`, `types/`) are plural — `collection/` was
+  the lone singular outlier. "Collections" is the framework's named
+  feature surface, same category as the others. Verbs (`read/`,
+  `write/`, `persist/`) stay singular. Zero blast radius for callers:
+  the file already re-exported every public item at
+  `crate::service::*`, so only `service/mod.rs` saw the change. Two
+  other apparent singular/plural inconsistencies (`admin/handlers/
+  collections/` lone-plural; `db/query/{jobs,versions}/` plural-
+  while-siblings-singular) turned out to be correctly applying the
+  three-way rule (singular for operations + subsystems, plural for
+  named CMS features) — left as-is.
+
+- **`ServiceContext` promoted out of `service/types/`.** Moved
+  `service/types/service_context.rs` (591 lines) to
+  `service/context.rs`. `ServiceContext` is the central runtime
+  context bundle threaded through 129 call sites, not a request /
+  result data class — sitting in `types/` next to 18-line
+  `*_input.rs` files mixed two concerns. The remaining `types/` is
+  now coherent (request shapes, results, queue infra, two domain
+  contexts). Zero blast radius for callers: `crate::service::
+  ServiceContext` was already the canonical import path via
+  `service/mod.rs` re-export, so only `service/mod.rs` and
+  `service/types/mod.rs` saw the change. `Def` enum (the variant
+  selector that lives alongside `ServiceContext`) moved with it.
+  Filename follows the established stutter-rename pattern
+  (`core/auth/auth_user.rs` → `user.rs`): the `service_` prefix is
+  redundant once inside `service/`.
+
+- **`hooks/validate.rs` renamed to `hooks/startup_checks.rs`.**
+  The old name overlapped with `hooks/lifecycle/validation/` (per-write
+  field validation) — different time and scope. The renamed file holds
+  the post-init correctness passes (`validate_hook_references`,
+  `validate_locale_field_collisions`) that walk the registry once at
+  boot. Two call sites in `hooks/init.rs` updated; `hooks/mod.rs` doc
+  comment now contrasts the two modules.
+
 - **`hooks/api/` renamed to `hooks/lua_api/`.** The original `api`
   name collided in conversation with the top-level `api/` module
   (gRPC). `lua_api` is what the directory actually is — the surface

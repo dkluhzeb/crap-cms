@@ -11,7 +11,7 @@
 //!   layer: `ServiceContext` + builder, `WriteInput`, `WriteResult`,
 //!   `PersistOptions`, `Find*Input`, `*Result`, `Def` (collection
 //!   vs global tag), `EmailContext`, the event/verification queues.
-//! - `collection/` -- public CRUD entry points for collections:
+//! - `collections/` -- public CRUD entry points for collections:
 //!   `create_document`, `update_document`, `delete_document`,
 //!   `undelete_document`, `unpublish_document`, plus the bulk
 //!   variants (`create_many`, `update_many`, `delete_many`).
@@ -47,7 +47,8 @@
 //!   a parent's optional field without `if let Some(x) = ...`.
 
 pub mod auth;
-mod collection;
+mod collections;
+mod context;
 pub(crate) mod document_info;
 mod email;
 mod error;
@@ -63,16 +64,17 @@ pub(crate) mod user_settings;
 pub(crate) mod versions;
 pub(crate) mod write;
 
+pub use context::{Def, ServiceContext};
 pub use error::ServiceError;
 pub(crate) use types::AfterChangeInput;
 pub use types::{
-    CountDocumentsInput, Def, EmailContext, EventQueue, FindByIdInput, FindDocumentsInput,
+    CountDocumentsInput, EmailContext, EventQueue, FindByIdInput, FindDocumentsInput,
     GetGlobalInput, ListVersionsInput, PaginatedResult, PersistOptions, SearchDocumentsInput,
-    ServiceContext, VerificationQueue, WriteInput, WriteResult, values_from_strings,
+    VerificationQueue, WriteInput, WriteResult, values_from_strings,
 };
 pub(crate) use types::{flush_queue, flush_verification_queue};
 
-pub use collection::{
+pub use collections::{
     CreateManyItem, CreateManyOptions, CreateManyResult, DeleteManyOptions, DeleteManyResult,
     UpdateManyOptions, UpdateManyResult, create_document, create_many, delete_document,
     delete_many, undelete_document, unpublish_document, update_document, update_many,

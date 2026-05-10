@@ -1,16 +1,26 @@
 //! CLI command handlers. Each submodule handles one top-level
 //! subcommand of the `crap-cms` binary.
 //!
-//! # Layout
+//! # Layout — flat-vs-folder rule
 //!
-//! Each subcommand is either a flat file (`init.rs`, `mcp.rs`,
-//! `logs.rs`, …) or a folder when it has multiple actions
-//! (`db/{migrate,backup,restore,console,cleanup}`, `user/`,
-//! `make/`, `serve/`, `update/`, `templates/`, `bench/`,
-//! `export/`, `status/`). Per-folder layout is "one file per
-//! `crap-cms <cmd> <action>` subaction" plus `mod.rs` (re-exports
-//! only) and `dispatch.rs` (matches the action enum to a handler);
-//! sometimes a `helpers.rs` for cross-action utilities.
+//! - **Single-action subcommand → flat file.** `crap-cms fmt`,
+//!   `crap-cms init`, `crap-cms work`, etc. live in
+//!   `fmt.rs`, `init.rs`, `work.rs`. Currently flat:
+//!   `fmt`, `images`, `init`, `jobs`, `logs`, `mcp`, `trash`,
+//!   `typegen`, `work`.
+//! - **Multi-action subcommand → folder.** `db/`, `user/`,
+//!   `make/`, `serve/`, `update/`, `templates/`, `bench/`,
+//!   `export/`, `status/` each have multiple `crap-cms <cmd>
+//!   <action>` subactions. Folder layout is "one file per
+//!   `<cmd> <action>` subaction" plus `mod.rs` (re-exports only)
+//!   and `dispatch.rs` (matches the action enum to a handler);
+//!   sometimes a `helpers.rs` for cross-action utilities.
+//!
+//! When adding a new command, default to a flat file; promote to a
+//! folder the first time you add a second action. The `helpers.rs`,
+//! `types.rs`, and `resolve_config.rs` files at this module's root
+//! are *not* commands — they're cross-cutting infrastructure shared
+//! by every subcommand (see "Cross-cutting helpers" below).
 //!
 //! # Entry-point convention
 //!
