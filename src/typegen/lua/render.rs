@@ -4,9 +4,9 @@
 use crate::{
     core::{CollectionDefinition, Registry, Slug, collection::GlobalDefinition},
     db::query::get_column_names,
+    typegen::helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w},
 };
 
-use super::super::helpers::{SubTypeKind, collect_sub_type_fields, to_pascal_case, w};
 use super::field::write_field;
 
 /// Render all Lua type definitions.

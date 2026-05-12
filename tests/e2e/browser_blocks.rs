@@ -276,7 +276,6 @@ fn make_media_def() -> CollectionDefinition {
 fn create_media(app: &TestApp, filename: &str) -> String {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("media").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();

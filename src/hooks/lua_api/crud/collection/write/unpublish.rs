@@ -1,12 +1,14 @@
 //! Unpublish operation — reverts a published document to draft status.
 
+use std::sync::Arc;
+
 use mlua::{Error::RuntimeError, Lua, Table};
 use serde_json::Value;
 
 use anyhow::Result;
 
 use crate::{
-    core::{CollectionDefinition, Document, SharedRegistry},
+    core::{CollectionDefinition, Document, Registry},
     db::{DbConnection, query},
     hooks::{
         HookContext, HookEvent,
@@ -181,7 +183,7 @@ impl<'a> UnpublishCtxBuilder<'a> {
 /// Standalone `crap.collections.unpublish(collection, id, opts?)`.
 fn unpublish_document_lua(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     collection: String,
     id: String,
     opts: Option<Table>,
@@ -205,15 +207,11 @@ fn unpublish_document_lua(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "update");
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .hooks_enabled(hooks_enabled)
         .build();
 
@@ -236,7 +234,7 @@ fn unpublish_document_lua(
 
 /// Register `crap.collections.unpublish(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_unpublish(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+pub(crate) fn register_unpublish(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let unpublish_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
             unpublish_document_lua(lua, &registry, collection, id, opts)

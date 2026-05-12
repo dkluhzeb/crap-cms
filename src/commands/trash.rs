@@ -9,17 +9,13 @@ use crate::{
     cli::{self, Table},
     commands::helpers::init_stack,
     config::CrapConfig,
-    core::{CollectionDefinition, Document, SharedRegistry, upload, upload::StorageBackend},
+    core::{CollectionDefinition, Document, Registry, upload, upload::StorageBackend},
     db::{DbConnection, DbPool, DbValue, query},
 };
 
 /// Validate that a collection exists and has soft_delete enabled.
-fn validate_soft_delete(registry: &SharedRegistry, slug: &str) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let def = reg
+fn validate_soft_delete(registry: &Registry, slug: &str) -> Result<()> {
+    let def = registry
         .collections
         .get(slug)
         .ok_or_else(|| anyhow!("Collection '{}' not found", slug))?;
@@ -33,17 +29,13 @@ fn validate_soft_delete(registry: &SharedRegistry, slug: &str) -> Result<()> {
 
 /// Collect slugs of collections that have `soft_delete = true`.
 /// If `filter` is provided, only return that collection (validating it exists and supports soft delete).
-fn resolve_collections(registry: &SharedRegistry, filter: Option<&str>) -> Result<Vec<String>> {
+fn resolve_collections(registry: &Registry, filter: Option<&str>) -> Result<Vec<String>> {
     if let Some(slug) = filter {
         validate_soft_delete(registry, slug)?;
         return Ok(vec![slug.to_string()]);
     }
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let mut slugs: Vec<String> = reg
+    let mut slugs: Vec<String> = registry
         .collections
         .iter()
         .filter(|(_, def)| def.soft_delete)
@@ -74,7 +66,7 @@ fn deleted_filter() -> query::FindQuery {
 
 /// List trashed (soft-deleted) documents across collections.
 fn run_list(
-    registry: &SharedRegistry,
+    registry: &Registry,
     pool: &DbPool,
     cfg: &CrapConfig,
     collection: Option<&str>,
@@ -86,9 +78,6 @@ fn run_list(
         return Ok(());
     }
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
     let conn = pool.get().context("Failed to get DB connection")?;
     let locale_ctx = query::LocaleContext::from_locale_string(None, &cfg.locale)?;
     let fq = deleted_filter();
@@ -97,7 +86,7 @@ fn run_list(
     let mut total = 0usize;
 
     for slug in &slugs {
-        let Some(def) = reg.collections.get(slug.as_str()) else {
+        let Some(def) = registry.collections.get(slug.as_str()) else {
             continue;
         };
 
@@ -187,7 +176,7 @@ fn parse_threshold(older_than: &str) -> Result<Option<i64>> {
 /// `TrashAction::Purge` variant fields so the call site reads
 /// declaratively rather than positionally.
 struct PurgeParams<'a> {
-    registry: &'a SharedRegistry,
+    registry: &'a Registry,
     pool: &'a DbPool,
     storage: &'a dyn StorageBackend,
     collection: Option<&'a str>,
@@ -206,15 +195,11 @@ fn run_purge(p: PurgeParams<'_>) -> Result<()> {
 
     let threshold_secs = parse_threshold(p.older_than)?;
 
-    let reg = p
-        .registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
     let mut conn = p.pool.get().context("Failed to get DB connection")?;
     let mut total = 0u64;
 
     for slug in &slugs {
-        let Some(def) = reg.collections.get(slug.as_str()) else {
+        let Some(def) = p.registry.collections.get(slug.as_str()) else {
             continue;
         };
 
@@ -308,13 +293,10 @@ fn find_purge_candidates(
 }
 
 /// Restore a single soft-deleted document.
-fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
+fn run_restore(registry: &Registry, pool: &DbPool, collection: &str, id: &str) -> Result<()> {
     validate_soft_delete(registry, collection)?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-    let def = reg
+    let def = registry
         .collections
         .get(collection)
         .with_context(|| format!("Collection '{}' not found", collection))?;
@@ -344,7 +326,7 @@ fn run_restore(registry: &SharedRegistry, pool: &DbPool, collection: &str, id: &
 
 /// Permanently delete all trashed documents in a collection.
 fn run_empty(
-    registry: &SharedRegistry,
+    registry: &Registry,
     pool: &DbPool,
     storage: &dyn StorageBackend,
     collection: &str,
@@ -352,15 +334,11 @@ fn run_empty(
 ) -> Result<()> {
     validate_soft_delete(registry, collection)?;
 
-    let def = {
-        let reg = registry
-            .read()
-            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-        reg.collections
-            .get(collection)
-            .with_context(|| format!("Collection '{}' not found", collection))?
-            .clone()
-    };
+    let def = registry
+        .collections
+        .get(collection)
+        .with_context(|| format!("Collection '{}' not found", collection))?
+        .clone();
 
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let fq = deleted_filter();

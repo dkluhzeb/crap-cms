@@ -21,7 +21,7 @@ pub struct TestApp {
     pub _tmp: tempfile::TempDir,
     pub router: axum::Router,
     pub pool: crap_cms::db::DbPool,
-    pub registry: crap_cms::core::SharedRegistry,
+    pub registry: std::sync::Arc<crap_cms::core::Registry>,
     pub jwt_secret: JwtSecret,
 }
 
@@ -51,9 +51,9 @@ pub fn setup_app_with_config(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -61,12 +61,13 @@ pub fn setup_app_with_config(
             reg.register_global(def.clone());
         }
     }
+    let registry = Registry::snapshot(&shared);
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -76,16 +77,16 @@ pub fn setup_app_with_config(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(|d| d.is_auth_collection());
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -142,9 +143,7 @@ pub fn setup_app_with_config(
 }
 
 pub fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = app.registry.get_collection("users").unwrap().clone();
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();

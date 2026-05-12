@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.validate` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::LocaleContext,
     hooks::lua_api::crud::{get_tx_conn, helpers::*},
     service::{LuaWriteHooks, ServiceError, ValidateContext, WriteInput, validate_document},
@@ -14,7 +16,7 @@ use crate::{
 /// Core logic for `crap.collections.validate`.
 fn validate_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: String,
     data_table: Table,
@@ -36,15 +38,11 @@ fn validate_inner(
 
     let ExtractedData { data, password } = extract_data(&data_table, &def)?;
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .build();
 
     let operation = if exclude_id.is_some() {
@@ -97,7 +95,7 @@ fn validate_inner(
 pub(crate) fn register_validate(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

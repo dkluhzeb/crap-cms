@@ -4,7 +4,7 @@ use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::core::{
-    CollectionDefinition, FieldDefinition, GlobalDefinition, Labels, SharedRegistry,
+    CollectionDefinition, FieldDefinition, GlobalDefinition, Labels, Registry, RegistryRead,
 };
 
 /// Convert `Labels` to a Lua table with optional `singular` and `plural` keys.
@@ -23,24 +23,16 @@ fn labels_to_lua_table(lua: &Lua, labels: &Labels) -> LuaResult<Table> {
 }
 
 /// Look up a single collection by slug and return its Lua table (or Nil).
-fn get_collection(lua: &Lua, registry: &SharedRegistry, slug: String) -> LuaResult<Value> {
-    let r = registry
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-    match r.get_collection(&slug) {
+fn get_collection(lua: &Lua, registry: &Registry, slug: String) -> LuaResult<Value> {
+    match registry.get_collection(&slug) {
         Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
         None => Ok(Value::Nil),
     }
 }
 
 /// Look up a single global by slug and return its Lua table (or Nil).
-fn get_global(lua: &Lua, registry: &SharedRegistry, slug: String) -> LuaResult<Value> {
-    let r = registry
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-    match r.get_global(&slug) {
+fn get_global(lua: &Lua, registry: &Registry, slug: String) -> LuaResult<Value> {
+    match registry.get_global(&slug) {
         Some(def) => Ok(Value::Table(global_def_to_lua_table(lua, def)?)),
         None => Ok(Value::Nil),
     }
@@ -75,14 +67,10 @@ fn slug_labels_table(lua: &Lua, slug: &str, labels: &Labels) -> LuaResult<Table>
 }
 
 /// List all collections as an array of `{ slug, labels }` tables.
-fn list_collections_fn(lua: &Lua, registry: &SharedRegistry) -> LuaResult<Table> {
-    let r = registry
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
+fn list_collections_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
-    for (i, def) in r.collections.values().enumerate() {
+    for (i, def) in registry.collections.values().enumerate() {
         tbl.set(i + 1, slug_labels_table(lua, &def.slug, &def.labels)?)?;
     }
 
@@ -90,14 +78,10 @@ fn list_collections_fn(lua: &Lua, registry: &SharedRegistry) -> LuaResult<Table>
 }
 
 /// List all globals as an array of `{ slug, labels }` tables.
-fn list_globals_fn(lua: &Lua, registry: &SharedRegistry) -> LuaResult<Table> {
-    let r = registry
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
+fn list_globals_fn(lua: &Lua, registry: &Registry) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
-    for (i, def) in r.globals.values().enumerate() {
+    for (i, def) in registry.globals.values().enumerate() {
         tbl.set(i + 1, slug_labels_table(lua, &def.slug, &def.labels)?)?;
     }
 
@@ -105,31 +89,45 @@ fn list_globals_fn(lua: &Lua, registry: &SharedRegistry) -> LuaResult<Table> {
 }
 
 /// Register `crap.schema` — read-only collection/global introspection.
-pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
+/// Generic over [`RegistryRead`] so init (`SharedRegistry`) and runtime
+/// (`Arc<Registry>`) share one body.
+pub(super) fn register_schema<R: RegistryRead>(lua: &Lua, crap: &Table, registry: R) -> Result<()> {
     let schema_table = lua.create_table()?;
 
     let reg = registry.clone();
     schema_table.set(
         "get_collection",
-        lua.create_function(move |lua, slug: String| get_collection(lua, &reg, slug))?,
+        lua.create_function(move |lua, slug: String| {
+            reg.with(|r| get_collection(lua, r, slug))
+                .map_err(|e| RuntimeError(e.to_string()))?
+        })?,
     )?;
 
     let reg = registry.clone();
     schema_table.set(
         "get_global",
-        lua.create_function(move |lua, slug: String| get_global(lua, &reg, slug))?,
+        lua.create_function(move |lua, slug: String| {
+            reg.with(|r| get_global(lua, r, slug))
+                .map_err(|e| RuntimeError(e.to_string()))?
+        })?,
     )?;
 
     let reg = registry.clone();
     schema_table.set(
         "list_collections",
-        lua.create_function(move |lua, ()| list_collections_fn(lua, &reg))?,
+        lua.create_function(move |lua, ()| {
+            reg.with(|r| list_collections_fn(lua, r))
+                .map_err(|e| RuntimeError(e.to_string()))?
+        })?,
     )?;
 
-    let reg = registry.clone();
+    let reg = registry;
     schema_table.set(
         "list_globals",
-        lua.create_function(move |lua, ()| list_globals_fn(lua, &reg))?,
+        lua.create_function(move |lua, ()| {
+            reg.with(|r| list_globals_fn(lua, r))
+                .map_err(|e| RuntimeError(e.to_string()))?
+        })?,
     )?;
 
     crap.set("schema", schema_table)?;
@@ -311,7 +309,7 @@ fn field_def_to_lua_table(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
 mod tests {
     use super::*;
     use crate::core::{
-        CollectionDefinition, Registry, SharedRegistry,
+        CollectionDefinition, Registry,
         collection::GlobalDefinition,
         field::{
             BlockDefinition, FieldDefinition, FieldType, JoinConfig, LocalizedString,
@@ -319,9 +317,9 @@ mod tests {
         },
     };
     use mlua::Lua;
-    use std::sync::{Arc, RwLock};
+    use std::sync::Arc;
 
-    fn make_registry_with_collection() -> SharedRegistry {
+    fn make_registry_with_collection() -> Arc<Registry> {
         let mut reg = Registry::new();
         let mut posts = CollectionDefinition::new("posts");
         posts.labels.singular = Some(LocalizedString::Plain("Post".to_string()));
@@ -342,15 +340,14 @@ mod tests {
         settings.labels.singular = Some(LocalizedString::Plain("Setting".to_string()));
         settings.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
         reg.register_global(settings);
-        Arc::new(RwLock::new(reg))
+        Arc::new(reg)
     }
 
     #[test]
     fn collection_def_to_lua_table_basic() {
         let lua = Lua::new();
         let reg = make_registry_with_collection();
-        let r = reg.read().unwrap();
-        let def = r.get_collection("posts").unwrap();
+        let def = reg.get_collection("posts").unwrap();
         let tbl = collection_def_to_lua_table(&lua, def).unwrap();
 
         let slug: String = tbl.get("slug").unwrap();
@@ -376,8 +373,7 @@ mod tests {
     fn field_def_to_lua_table_with_relationship() {
         let lua = Lua::new();
         let reg = make_registry_with_collection();
-        let r = reg.read().unwrap();
-        let def = r.get_collection("posts").unwrap();
+        let def = reg.get_collection("posts").unwrap();
         let tags_field = &def.fields[1];
         let tbl = field_def_to_lua_table(&lua, tags_field).unwrap();
 
@@ -652,7 +648,7 @@ mod tests {
         branding.labels.singular = Some(LocalizedString::Plain("Brand".to_string()));
         // no plural label
         reg.register_global(branding);
-        let registry = Arc::new(RwLock::new(reg));
+        let registry = Arc::new(reg);
 
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();

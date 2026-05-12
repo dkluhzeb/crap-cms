@@ -14,6 +14,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Runtime `crap.<x>.define` error message harmonized.** The
+  previous "for a NEW collection" / "Re-defining an already-registered
+  collection is allowed" branching collapses to a single message:
+  `must be called from a definition file or init.lua. To change a
+  registered <x>, edit the file and restart the process.` Applies to
+  `crap.collections.define`, `crap.globals.define`, `crap.jobs.define`.
+  `crap.richtext.register_node`'s message stays as-is (it was
+  already strict).
+
 - `EmailRenderer::render` is now generic over `T: Serialize`. Built-in
   templates have typed contexts in `crate::core::email`:
   `PasswordResetEmailContext`, `VerifyEmailContext`,
@@ -189,6 +198,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `commands/update/{use_action,where_action}.rs` left as-is — the
   `_action` suffix there is also a keyword workaround (`use` and
   `where` are reserved).
+
+- **Registry definition APIs are now strictly init-only at runtime.**
+  `crap.collections.define`, `crap.globals.define`, `crap.jobs.define`,
+  and `crap.richtext.register_node` all reject calls outside the
+  init phase, for both new and existing slugs. Previously
+  `collections`/`globals`/`jobs` allowed existing-slug redefinition at
+  runtime — the test-only artefact that justified that branch
+  (`tests/lua_api_filters.rs` redefine tests evaluating against the
+  runtime VM) has been rewritten to set `InitPhase` before the
+  redefine call. New helper `HookRunner::eval_lua_init_with_conn` +
+  `tests/lua_api_filters.rs::eval_lua_init` mirror the init-time
+  evaluation path. The "documented round-trip pattern" comment in
+  `lua_api/collections.rs` is dropped — real plugin loops over
+  `crap.collections.config.list()` run from `init.lua` (or files it
+  requires) where `InitPhase` is set throughout, so the strict guard
+  never fires for legitimate plugin code. Mirrors the policy
+  `crap.richtext.register_node` has had since inception.
+
+- **`hooks::init::load_lua_dir` now caches into `package.loaded`.**
+  Each `<config_dir>/{collections,globals,jobs}/foo.lua` is evaluated
+  once at boot and its return value (or `true` for files without
+  `return`) is stored at `package.loaded["<dir>.<stem>"]`. The job
+  dispatcher's later `require("jobs.foo")` hits the cache instead of
+  re-evaluating the file's top-level — which is what made the strict
+  guard tractable for `crap.jobs.define`, since handler files
+  conventionally mix `crap.jobs.define(...)` at the top with the
+  handler function in the returned module table.
+
+- **`RegistryRead` trait + crud reads use `Arc<Registry>`.** New
+  `core::RegistryRead` trait abstracts over `SharedRegistry`
+  (locks per call) and `Arc<Registry>` (no lock). `crap.access.*` and
+  `crap.schema.*` registration functions are generic over the trait
+  so init and runtime VMs share one body. The runtime CRUD layer
+  (`hooks::lua_api::crud::*`) was migrated to take `Arc<Registry>`
+  directly — `HookRunnerBuilder` snapshots the populated registry
+  once at construction and hands the snapshot to
+  `register_crud_functions`. CRUD reads from Lua hooks (find,
+  find_by_id, count, etc.) are now lock-free.
 
 - **`commands/cli_types.rs` and `config_resolve.rs` renamed.**
   `cli_types.rs` → `types.rs` — the `cli_` prefix was dead weight

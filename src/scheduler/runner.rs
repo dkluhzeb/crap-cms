@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, JobDefinition, JobRun, SharedRegistry,
+        CollectionDefinition, JobDefinition, JobRun, Registry,
         email::{EmailJobData, EmailProvider, SYSTEM_EMAIL_JOB},
         upload::{self, StorageBackend},
     },
@@ -154,20 +154,16 @@ fn execute_system_email(
 /// Check cron schedules and insert pending jobs for due ones.
 pub fn check_cron_schedules(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     last_check: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let mut conn = pool.get().context("Failed to get DB connection for cron")?;
     let tx = conn
         .transaction_immediate()
         .context("Failed to start cron check transaction")?;
 
-    for (slug, def) in &reg.jobs {
+    for (slug, def) in &registry.jobs {
         let schedule_str = match &def.schedule {
             Some(s) => s,
             None => continue,
@@ -237,16 +233,12 @@ pub fn check_cron_schedules(
 }
 
 /// Recover stale jobs on startup.
-pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &SharedRegistry) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
+pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &Registry) -> Result<()> {
     // Find all running jobs — on startup, these are stale (server was restarted)
     let stale = job_query::find_stale_jobs(conn, 0)?;
 
     for job in &stale {
-        let timeout = reg
+        let timeout = registry
             .jobs
             .get(job.slug.as_str())
             .map(|d| d.timeout)
@@ -293,17 +285,13 @@ pub(crate) fn parse_retention_seconds(s: &str) -> Option<i64> {
 /// Upload files are cleaned up before deletion.
 pub fn purge_soft_deleted(
     conn: &dyn DbConnection,
-    registry: &SharedRegistry,
+    registry: &Registry,
     storage: &dyn StorageBackend,
     locale_config: &LocaleConfig,
 ) -> Result<u64> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let mut total = 0u64;
 
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         if !def.soft_delete {
             continue;
         }
@@ -461,6 +449,8 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
 
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::Timelike;
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
@@ -597,15 +587,15 @@ mod tests {
 
     // ── recover_stale_jobs ──────────────────────────────────────────────
 
-    fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> SharedRegistry {
-        let registry = Registry::shared();
+    fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> Arc<Registry> {
+        let shared = Registry::shared();
         {
-            let mut reg = registry.write().unwrap();
+            let mut reg = shared.write().unwrap();
             for job in jobs {
                 reg.register_job(job);
             }
         }
-        registry
+        Registry::snapshot(&shared)
     }
 
     #[test]

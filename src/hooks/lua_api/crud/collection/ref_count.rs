@@ -1,21 +1,18 @@
 //! Registration of `crap.collections.ref_count` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
-    core::SharedRegistry,
+    core::Registry,
     hooks::lua_api::crud::{get_tx_conn, helpers::*},
     service::{ServiceContext, document_info},
 };
 
 /// Core logic for `crap.collections.ref_count`.
-fn ref_count_inner(
-    lua: &Lua,
-    reg: &SharedRegistry,
-    collection: String,
-    id: String,
-) -> LuaResult<i64> {
+fn ref_count_inner(lua: &Lua, reg: &Registry, collection: String, id: String) -> LuaResult<i64> {
     // SAFETY: pointer valid for hook call duration — see TxContext pattern
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
@@ -30,7 +27,7 @@ fn ref_count_inner(
 
 /// Register `crap.collections.ref_count(collection, id)`.
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_ref_count(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+pub(crate) fn register_ref_count(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let ref_count_fn = lua.create_function(move |lua, (collection, id): (String, String)| {
         ref_count_inner(lua, &registry, collection, id)
     })?;

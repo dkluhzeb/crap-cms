@@ -433,7 +433,7 @@ pub async fn sse_handler(
     };
 
     let hook_runner = state.hook_runner.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let subscriber_user_doc = auth_user.as_ref().map(|ext| ext.0.user_doc.clone());
     let subscriber_user_id = auth_user.as_ref().map(|ext| ext.0.claims.sub.to_string());
     let send_timeout = Duration::from_millis(state.subscriber_send_timeout_ms);
@@ -559,32 +559,24 @@ mod tests {
         let config_dir = fixture_dir();
         let config = CrapConfig::test_default();
 
-        // init_lua loads the fixture's collections + hooks into a SharedRegistry.
-        let shared = crate::hooks::init_lua(&config_dir, &config).expect("init lua");
+        // init_lua loads the fixture's collections + hooks into a snapshot Arc.
+        let mut registry = crate::hooks::init_lua(&config_dir, &config).expect("init lua");
 
-        // Replace the registered "articles" with a stripped-down posts collection
-        // that has the field-level read deny we need for this test.
-        {
-            let mut reg = shared.write().unwrap();
-            reg.register_collection(make_posts_with_secret_field());
-        }
+        // Inject a stripped-down posts collection with the field-level read deny
+        // this test needs. `Arc::make_mut` clones if not uniquely owned (no other
+        // clones exist yet at this point) and returns &mut Registry.
+        Arc::make_mut(&mut registry).register_collection(make_posts_with_secret_field());
 
         let runner = HookRunner::builder()
             .config_dir(&config_dir)
-            .registry(shared.clone())
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .expect("build runner");
 
-        let posts = shared
-            .read()
-            .unwrap()
-            .get_collection("posts")
-            .unwrap()
-            .clone();
-        let registry_snapshot = Registry::snapshot(&shared);
+        let posts = registry.get_collection("posts").unwrap().clone();
 
-        (runner, registry_snapshot, posts)
+        (runner, registry, posts)
     }
 
     #[test]

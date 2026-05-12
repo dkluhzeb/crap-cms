@@ -505,9 +505,9 @@ mod tests {
                 reg.register_global(g.clone());
             }
         }
-        migrate::sync_all(&db_pool, &registry_shared, locale).expect("sync");
-
         let registry = (*crate::core::Registry::snapshot(&registry_shared)).clone();
+        migrate::sync_all(&db_pool, &registry, locale).expect("sync");
+
         (tmp, db_pool, registry)
     }
 

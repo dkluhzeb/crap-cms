@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 
 use crate::{
     cli,
@@ -27,10 +27,6 @@ pub fn run(config_dir: &Path, run_check: bool) -> Result<()> {
 
     migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let conn = pool.get().context("Failed to get database connection")?;
 
     cli::header("Project Status");
@@ -42,29 +38,29 @@ pub fn run(config_dir: &Path, run_check: bool) -> Result<()> {
     display::print_server_info(&cfg);
 
     println!();
-    display::print_collections(&reg, &conn);
+    display::print_collections(&registry, &conn);
 
     println!();
-    display::print_globals(&reg);
+    display::print_globals(&registry);
 
     println!();
-    display::print_versions(&reg);
+    display::print_versions(&registry);
 
     println!();
-    display::print_access(&cfg, &reg);
+    display::print_access(&cfg, &registry);
 
     println!();
-    display::print_hooks(&reg);
+    display::print_hooks(&registry);
 
     println!();
-    display::print_live(&cfg, &reg);
+    display::print_live(&cfg, &registry);
 
     println!();
     display::print_migrations(&config_dir, &pool);
-    display::print_jobs(&reg, &conn, &config_dir);
+    display::print_jobs(&registry, &conn, &config_dir);
 
     if run_check {
-        check::run_checks(&cfg, &reg, &conn, &pool, &config_dir);
+        check::run_checks(&cfg, &registry, &conn, &pool, &config_dir);
     }
 
     Ok(())

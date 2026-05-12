@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
@@ -15,7 +16,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -28,7 +29,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .unwrap();
@@ -46,11 +47,9 @@ fn make_user(id: &str, role: &str) -> Document {
 /// Seed items: two owned by "editor-1", one by "other-1", all with notes.
 fn seed_items(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
 ) -> Vec<String> {
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("items").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("items").unwrap().clone();
 
     let rows = vec![
         ("Item A", "editor-1", "draft", "secret-a"),

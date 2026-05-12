@@ -420,7 +420,7 @@ impl ContentService {
             access,
             requested_ops,
             hook_runner: self.hook_runner.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
         };
 
         spawn_pump(
@@ -456,7 +456,7 @@ impl ContentService {
         let input = ResolveSubscribeAccessBlockingInput {
             pool: self.pool.clone(),
             token_provider: self.token_provider.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
             hook_runner: self.hook_runner.clone(),
             token,
             collections_req,

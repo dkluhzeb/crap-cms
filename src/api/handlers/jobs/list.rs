@@ -45,7 +45,7 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let token_provider = self.token_provider.clone();
-        let registry = self.registry.clone();
+        let registry = Arc::clone(&self.registry);
 
         task::spawn_blocking(move || {
             list_jobs_auth_check_blocking(&pool, &token_provider, &registry, token)

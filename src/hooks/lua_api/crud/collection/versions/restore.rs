@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.restore_version` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     hooks::{
         lifecycle::converters::document_to_lua_table,
         lua_api::crud::{get_tx_conn, helpers::*},
@@ -16,7 +18,7 @@ use crate::{
 /// Core logic for `crap.collections.restore_version`.
 fn restore_version_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: String,
     id: String,
@@ -56,7 +58,7 @@ fn restore_version_inner(
 pub(crate) fn register_restore_version(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

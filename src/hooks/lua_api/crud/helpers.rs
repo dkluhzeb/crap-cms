@@ -10,8 +10,8 @@ use tracing::warn;
 use crate::{
     config::LocaleConfig,
     core::{
-        CollectionDefinition, Document, DocumentFields, GlobalDefinition,
-        SharedInvalidationTransport, SharedRegistry,
+        CollectionDefinition, Document, DocumentFields, GlobalDefinition, Registry,
+        SharedInvalidationTransport,
     },
     db::{AccessResult, FilterClause, query::SharedPopulateSingleflight},
     hooks::lifecycle::{
@@ -82,29 +82,18 @@ pub(crate) fn hook_locale_config(lua: &Lua) -> Option<LocaleConfig> {
     lua.app_data_ref::<LuaLocaleConfig>().map(|lc| lc.0.clone())
 }
 
-/// Look up a collection definition from the shared registry, returning a
+/// Look up a collection definition from the registry snapshot, returning a
 /// `RuntimeError` if not found.
-pub(crate) fn resolve_collection(
-    reg: &SharedRegistry,
-    slug: &str,
-) -> LuaResult<CollectionDefinition> {
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {:#}", e)))?;
-
-    r.get_collection(slug)
+pub(crate) fn resolve_collection(reg: &Registry, slug: &str) -> LuaResult<CollectionDefinition> {
+    reg.get_collection(slug)
         .cloned()
         .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", slug)))
 }
 
-/// Look up a global definition from the shared registry, returning a
+/// Look up a global definition from the registry snapshot, returning a
 /// `RuntimeError` if not found.
-pub(crate) fn resolve_global(reg: &SharedRegistry, slug: &str) -> LuaResult<GlobalDefinition> {
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
-    r.get_global(slug)
+pub(crate) fn resolve_global(reg: &Registry, slug: &str) -> LuaResult<GlobalDefinition> {
+    reg.get_global(slug)
         .cloned()
         .ok_or_else(|| RuntimeError(format!("Global '{}' not found", slug)))
 }

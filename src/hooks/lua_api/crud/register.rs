@@ -1,21 +1,23 @@
 //! Top-level CRUD function registration for `crap.collections`, `crap.globals`, and `crap.jobs`.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Lua, Table};
 
 use crate::{
     config::{LocaleConfig, PaginationConfig},
-    core::SharedRegistry,
+    core::Registry,
 };
 
 use super::{collection, globals, jobs};
 
 /// Runtime config bundle threaded through the CRUD-function registration pass.
 ///
-/// All three references point into long-lived startup config so passing them
-/// individually adds noise without any borrow-flexibility win.
+/// The registry is an `Arc<Registry>` (snapshot, cheaply cloned per call);
+/// configs are borrowed because they're long-lived startup state.
 struct CrudRegisterCtx<'a> {
-    registry: &'a SharedRegistry,
+    registry: &'a Arc<Registry>,
     locale_config: &'a LocaleConfig,
     pagination_config: &'a PaginationConfig,
 }
@@ -28,7 +30,7 @@ struct CrudRegisterCtx<'a> {
 #[cfg(not(tarpaulin_include))]
 pub(crate) fn register_crud_functions(
     lua: &Lua,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
     pagination_config: &PaginationConfig,
 ) -> Result<()> {
@@ -60,57 +62,77 @@ fn register_collection_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<
     collection::read::find::register_find(
         lua,
         &collections,
-        registry.clone(),
+        Arc::clone(registry),
         locale_config,
         pagination_config,
     )?;
     collection::read::find_by_id::register_find_by_id(
         lua,
         &collections,
-        registry.clone(),
+        Arc::clone(registry),
         locale_config,
     )?;
-    collection::read::count::register_count(lua, &collections, registry.clone(), locale_config)?;
+    collection::read::count::register_count(
+        lua,
+        &collections,
+        Arc::clone(registry),
+        locale_config,
+    )?;
 
     // Write operations
-    collection::write::create::register_create(lua, &collections, registry.clone(), locale_config)?;
-    collection::write::update::register_update(lua, &collections, registry.clone(), locale_config)?;
-    collection::write::delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
-    collection::write::undelete::register_undelete(lua, &collections, registry.clone())?;
-    collection::write::unpublish::register_unpublish(lua, &collections, registry.clone())?;
+    collection::write::create::register_create(
+        lua,
+        &collections,
+        Arc::clone(registry),
+        locale_config,
+    )?;
+    collection::write::update::register_update(
+        lua,
+        &collections,
+        Arc::clone(registry),
+        locale_config,
+    )?;
+    collection::write::delete::register_delete(
+        lua,
+        &collections,
+        Arc::clone(registry),
+        locale_config,
+    )?;
+    collection::write::undelete::register_undelete(lua, &collections, Arc::clone(registry))?;
+    collection::write::unpublish::register_unpublish(lua, &collections, Arc::clone(registry))?;
     collection::write::validate::register_validate(
         lua,
         &collections,
-        registry.clone(),
+        Arc::clone(registry),
         locale_config,
     )?;
 
     // Bulk operations
-    collection::bulk::create_many::register_create_many(lua, &collections, registry.clone())?;
+    collection::bulk::create_many::register_create_many(lua, &collections, Arc::clone(registry))?;
     collection::bulk::update_many::register_update_many(
         lua,
         &collections,
-        registry.clone(),
+        Arc::clone(registry),
         locale_config,
     )?;
     collection::bulk::delete_many::register_delete_many(
         lua,
         &collections,
-        registry.clone(),
+        Arc::clone(registry),
         locale_config,
     )?;
 
     // Version operations
-    collection::versions::list::register_list_versions(lua, &collections, registry.clone())?;
+    collection::versions::list::register_list_versions(lua, &collections, Arc::clone(registry))?;
     collection::versions::restore::register_restore_version(
         lua,
         &collections,
-        registry.clone(),
+        Arc::clone(registry),
         locale_config,
     )?;
 
     // Document info
-    collection::ref_count::register_ref_count(lua, &collections, registry.clone())?;
+    collection::ref_count::register_ref_count(lua, &collections, Arc::clone(registry))?;
 
     Ok(())
 }
@@ -126,15 +148,20 @@ fn register_global_functions(lua: &Lua, crap: &Table, ctx: &CrudRegisterCtx<'_>)
 
     let globals_table: Table = crap.get("globals")?;
 
-    globals::get::register_globals_get(lua, &globals_table, registry.clone(), locale_config)?;
-    globals::update::register_globals_update(lua, &globals_table, registry.clone(), locale_config)?;
+    globals::get::register_globals_get(lua, &globals_table, Arc::clone(registry), locale_config)?;
+    globals::update::register_globals_update(
+        lua,
+        &globals_table,
+        Arc::clone(registry),
+        locale_config,
+    )?;
 
     Ok(())
 }
 
 /// Register `crap.jobs.*` functions.
 #[cfg(not(tarpaulin_include))]
-fn register_job_functions(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
+fn register_job_functions(lua: &Lua, crap: &Table, registry: Arc<Registry>) -> Result<()> {
     let jobs: Table = crap.get("jobs")?;
 
     jobs::queue::register_jobs_queue(lua, &jobs, registry)?;

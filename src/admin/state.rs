@@ -116,7 +116,7 @@ impl AdminState {
     pub(crate) fn mcp_server(&self) -> McpServer {
         McpServer {
             pool: self.pool.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
             runner: self.hook_runner.clone(),
             config: self.config.clone(),
             config_dir: self.config_dir.clone(),

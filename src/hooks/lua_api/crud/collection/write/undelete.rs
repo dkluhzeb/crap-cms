@@ -1,10 +1,12 @@
 //! Registration of `crap.collections.undelete` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
-    core::SharedRegistry,
+    core::Registry,
     hooks::lua_api::crud::{get_tx_conn, helpers::*},
     service::{LuaWriteHooks, ServiceContext, undelete_document},
 };
@@ -15,7 +17,7 @@ use crate::{
 /// `service::undelete_document` which handles access checks internally.
 fn undelete_document_lua(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     collection: &str,
     id: &str,
     opts: &Option<Table>,
@@ -58,7 +60,7 @@ fn undelete_document_lua(
 
 /// Register `crap.collections.undelete(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_undelete(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+pub(crate) fn register_undelete(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let undelete_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
             undelete_document_lua(lua, &registry, &collection, &id, &opts)

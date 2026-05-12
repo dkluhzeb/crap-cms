@@ -1,10 +1,12 @@
 //! Registration of `crap.collections.list_versions` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
-    core::SharedRegistry,
+    core::Registry,
     hooks::{
         lifecycle::converters::pagination_result_to_lua_table,
         lua_api::crud::{get_tx_conn, helpers::*},
@@ -15,7 +17,7 @@ use crate::{
 /// Core logic for `crap.collections.list_versions`.
 fn list_versions_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     collection: String,
     id: String,
     opts: Option<Table>,
@@ -84,7 +86,7 @@ fn list_versions_inner(
 pub(crate) fn register_list_versions(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
 ) -> Result<()> {
     let list_versions_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {

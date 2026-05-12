@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::job::JobStatus;
@@ -14,7 +15,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -29,7 +30,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -41,27 +42,26 @@ fn setup() -> (
 #[test]
 fn job_definitions_loaded_from_lua() {
     let (_tmp, _pool, registry, _runner) = setup();
-    let reg = registry.read().unwrap();
 
     assert!(
-        reg.get_job("test_create_post").is_some(),
+        registry.get_job("test_create_post").is_some(),
         "test_create_post job should be defined"
     );
     assert!(
-        reg.get_job("test_failing_job").is_some(),
+        registry.get_job("test_failing_job").is_some(),
         "test_failing_job should be defined"
     );
     assert!(
-        reg.get_job("test_echo_job").is_some(),
+        registry.get_job("test_echo_job").is_some(),
         "test_echo_job should be defined"
     );
 
-    let def = reg.get_job("test_create_post").unwrap();
+    let def = registry.get_job("test_create_post").unwrap();
     assert_eq!(def.handler, "jobs.test_job.create_post");
     assert_eq!(def.retries, 1);
     assert_eq!(def.timeout, 30);
 
-    let fail_def = reg.get_job("test_failing_job").unwrap();
+    let fail_def = registry.get_job("test_failing_job").unwrap();
     assert_eq!(fail_def.retries, 2);
 }
 
@@ -300,9 +300,7 @@ fn execute_job_that_creates_document() {
     tx.commit().expect("Commit");
 
     // Verify the post was created
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("posts").unwrap().clone();
 
     let conn2 = pool.get().expect("DB connection");
     let docs =

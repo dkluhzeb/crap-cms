@@ -90,7 +90,7 @@ impl ContentService {
         AccountActionBlockingInput {
             pool: self.pool.clone(),
             token_provider: self.token_provider.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
             db_kind: self.db_kind.clone(),
             collection: req.collection.clone(),
             id: req.id.clone(),

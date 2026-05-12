@@ -37,7 +37,6 @@ fn make_list_def() -> CollectionDefinition {
 fn create_list_post(app: &TestApp, title: &str) {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -71,7 +70,6 @@ fn make_list_def_with_drafts() -> CollectionDefinition {
 fn create_post_with_system_status(app: &TestApp, title: &str, system_status: &str) {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -93,7 +91,6 @@ fn create_post_with_system_status(app: &TestApp, title: &str, system_status: &st
 fn create_list_post_with_status(app: &TestApp, title: &str, status: &str) {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();

@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.find_by_id` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::LocaleContext,
     hooks::{
         lifecycle::converters::document_to_lua_table,
@@ -17,7 +19,7 @@ use crate::{
 /// Core logic for `crap.collections.find_by_id`.
 fn find_by_id_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: String,
     id: String,
@@ -50,9 +52,6 @@ fn find_by_id_inner(
                 .collect()
         });
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
@@ -69,7 +68,7 @@ fn find_by_id_inner(
     let input = FindByIdInput::builder(&id)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(&r))
+        .registry(Some(reg))
         .select(select.as_deref())
         .use_draft(use_draft)
         .singleflight(hook_populate_singleflight(lua))
@@ -88,7 +87,7 @@ fn find_by_id_inner(
 pub(crate) fn register_find_by_id(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

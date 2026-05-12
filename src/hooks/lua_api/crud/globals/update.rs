@@ -1,5 +1,7 @@
 //! Registration of `crap.globals.update` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 use serde_json::Value;
@@ -8,7 +10,7 @@ use crate::service::values_from_strings;
 
 use crate::{
     config::LocaleConfig,
-    core::{DocumentFields, SharedRegistry},
+    core::{DocumentFields, Registry},
     db::LocaleContext,
     hooks::{
         lifecycle::converters::*,
@@ -27,7 +29,7 @@ struct GlobalsUpdateInput {
 /// Core logic for `crap.globals.update`.
 fn globals_update_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     input: GlobalsUpdateInput,
 ) -> mlua::Result<Table> {
@@ -70,14 +72,11 @@ fn globals_update_inner(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &slug, "update");
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .hooks_enabled(hooks_enabled)
         .build();
 
@@ -109,7 +108,7 @@ fn globals_update_inner(
 pub(crate) fn register_globals_update(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

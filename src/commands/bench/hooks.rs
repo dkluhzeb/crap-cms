@@ -2,12 +2,12 @@
 
 use std::time::Instant;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use dialoguer::MultiSelect;
 
 use crate::{
     cli::{self, Table, crap_theme},
-    core::{Registry, SharedRegistry, collection::Hooks},
+    core::{Registry, collection::Hooks},
     db::DbConnection,
     hooks::HookRunner,
 };
@@ -141,7 +141,7 @@ fn select_hooks(
 
 /// Parameters for the hook benchmark.
 pub(super) struct HookBenchParams<'a> {
-    pub registry: &'a SharedRegistry,
+    pub registry: &'a Registry,
     pub runner: &'a HookRunner,
     pub conn: &'a dyn DbConnection,
     pub collection: Option<&'a str>,
@@ -154,12 +154,9 @@ pub(super) struct HookBenchParams<'a> {
 
 /// Run the hook benchmark.
 pub fn run(params: &HookBenchParams) -> Result<()> {
-    let reg = params
-        .registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {e}"))?;
+    let reg = params.registry;
 
-    let all_hooks = collect_hooks(&reg, params.collection);
+    let all_hooks = collect_hooks(reg, params.collection);
 
     if all_hooks.is_empty() {
         cli::dim("No hooks found.");

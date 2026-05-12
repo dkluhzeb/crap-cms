@@ -1,9 +1,11 @@
 //! Scheduler types -- parameters and internal config structs.
 
+use std::sync::Arc;
+
 use crate::config::LocaleConfig;
 use crate::{
     config::JobsConfig,
-    core::{SharedEmailProvider, SharedRegistry, SharedStorage},
+    core::{Registry, SharedEmailProvider, SharedStorage},
     db::DbPool,
     hooks::HookRunner,
 };
@@ -16,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 pub struct SchedulerParams {
     pub pool: DbPool,
     pub hook_runner: HookRunner,
-    pub registry: SharedRegistry,
+    pub registry: Arc<Registry>,
     pub config: JobsConfig,
     pub shutdown: CancellationToken,
     pub storage: SharedStorage,

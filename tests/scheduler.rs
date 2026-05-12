@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::job::{JobDefinition, JobStatus};
@@ -15,7 +16,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -30,7 +31,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -61,10 +62,7 @@ fn execute_job_echo_completes_successfully() {
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
-    let job_def = {
-        let reg = registry.read().unwrap();
-        reg.get_job("test_echo_job").unwrap().clone()
-    };
+    let job_def = registry.get_job("test_echo_job").unwrap().clone();
 
     let job_run = &claimed[0];
     scheduler::execute_job(&pool, &runner, &job_def, job_run, None).expect("execute_job");
@@ -101,17 +99,12 @@ fn execute_job_creates_document() {
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
-    let job_def = {
-        let reg = registry.read().unwrap();
-        reg.get_job("test_create_post").unwrap().clone()
-    };
+    let job_def = registry.get_job("test_create_post").unwrap().clone();
 
     scheduler::execute_job(&pool, &runner, &job_def, &claimed[0], None).expect("execute_job");
 
     // Verify the document was created
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("posts").unwrap().clone();
 
     let conn = pool.get().expect("DB connection");
     let docs =
@@ -232,8 +225,7 @@ fn check_cron_schedules_fires_test_cron_job() {
 
     // Verify the test_cron_job definition was loaded
     {
-        let reg = registry.read().unwrap();
-        let def = reg
+        let def = registry
             .get_job("test_cron_job")
             .expect("test_cron_job should be defined");
         assert_eq!(def.schedule.as_deref(), Some("* * * * *"));

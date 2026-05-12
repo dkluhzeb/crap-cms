@@ -42,7 +42,7 @@ pub(super) fn setup_db(
             reg.register_global(g.clone());
         }
     }
-    migrate::sync_all(&db_pool, &registry_shared, locale).expect("sync");
+    migrate::sync_all(&db_pool, &registry_shared.read().unwrap(), locale).expect("sync");
 
     let registry = (*Registry::snapshot(&registry_shared)).clone();
     (tmp, db_pool, registry)

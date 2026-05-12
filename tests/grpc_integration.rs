@@ -136,16 +136,18 @@ fn setup_service_inner(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let (registry, hook_config_dir) = match fixture_dir.as_deref() {
+    let (shared, hook_config_dir) = match fixture_dir.as_deref() {
         Some(fd) => {
-            let reg = crap_cms::hooks::init_lua(fd, &config).expect("init lua from fixture");
-            (reg, fd.to_path_buf())
+            let init_snap = crap_cms::hooks::init_lua(fd, &config).expect("init lua from fixture");
+            let shared = Registry::shared();
+            *shared.write().unwrap() = (*init_snap).clone();
+            (shared, fd.to_path_buf())
         }
         None => (Registry::shared(), tmp.path().to_path_buf()),
     };
 
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -154,11 +156,12 @@ fn setup_service_inner(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(&hook_config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -168,7 +171,7 @@ fn setup_service_inner(
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Arc::clone(&registry))
             .hook_runner(hook_runner)
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())

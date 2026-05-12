@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
@@ -22,7 +23,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -37,7 +38,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -46,15 +47,13 @@ fn setup() -> (
 
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     data: &DocumentFields,
 ) -> Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -68,9 +67,7 @@ fn create_article(
 #[test]
 fn before_change_hook_modifies_data() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Test Title  "));
@@ -113,9 +110,7 @@ fn before_change_hook_modifies_data() {
 #[test]
 fn before_validate_trims_title() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Spaces Around  "));
@@ -154,9 +149,7 @@ fn before_validate_trims_title() {
 #[test]
 fn field_before_change_transforms_value() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Hello World"));
@@ -187,9 +180,7 @@ fn field_before_change_transforms_value() {
 #[test]
 fn registered_hook_fires_for_all_collections() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
@@ -231,9 +222,7 @@ fn hook_error_rolls_back_conceptually() {
     // If a before_change hook returns an error, the caller should not commit.
     // We test this by verifying hook errors propagate correctly.
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let _def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let _def = registry.get_collection("articles").unwrap().clone();
 
     // Run the Lua directly to simulate a hook that errors
     let conn = pool.get().expect("DB connection");
@@ -252,9 +241,7 @@ fn hook_error_rolls_back_conceptually() {
 #[test]
 fn run_before_write_full_lifecycle() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  My Article  "));
@@ -310,9 +297,7 @@ fn run_before_write_full_lifecycle() {
 #[test]
 fn run_before_write_fails_on_validation_error() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Missing required title
     let ctx = HookContext {
@@ -635,9 +620,7 @@ fn apply_after_read_transforms_doc() {
     data.insert("body".to_string(), json!("Some body text"));
     let doc = create_article(&pool, &registry, &data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // apply_after_read should run the after_read hook which adds _was_read marker
     let ar_ctx = AfterReadCtx {
@@ -677,9 +660,7 @@ fn apply_after_read_many_transforms_all() {
     data2.insert("title".to_string(), json!("Article Two"));
     let doc2 = create_article(&pool, &registry, &data2);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let docs = vec![doc1, doc2];
     let ar_ctx = AfterReadCtx {
@@ -746,9 +727,7 @@ fn apply_after_read_no_hooks_returns_same() {
 #[test]
 fn fire_before_read_executes() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // fire_before_read should succeed without error for articles
     // (articles collection does not have before_read hooks, but it should not error)

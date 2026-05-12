@@ -295,7 +295,7 @@ async fn edit_form_populates_values() {
     let cookie = make_auth_cookie(&app, &user_id, "edit@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();

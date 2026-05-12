@@ -105,7 +105,12 @@ fn setup_global_with_joins() -> (tempfile::TempDir, crap_cms::db::DbPool, Global
         reg.register_global(def.clone());
         reg.register_collection(posts_def);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -556,7 +561,12 @@ fn global_alter_table_adds_new_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def_v1.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1 failed");
 
     // Write data
     let mut conn = pool.get().expect("DB connection");
@@ -577,7 +587,12 @@ fn global_alter_table_adds_new_columns() {
         reg.globals.clear();
         reg.register_global(def_v2.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2 failed");
 
     // Old data should still be there, new column should exist
     let conn = pool.get().expect("DB connection");
@@ -607,7 +622,12 @@ fn global_alter_table_adds_join_tables() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def_v1);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1 failed");
 
     // Second sync: add array field
     let mut def_v2 = GlobalDefinition::new("growing");
@@ -623,7 +643,12 @@ fn global_alter_table_adds_join_tables() {
         reg.globals.clear();
         reg.register_global(def_v2.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2 failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2 failed");
 
     // Join table should exist
     let conn = pool.get().expect("DB connection");
@@ -806,7 +831,12 @@ fn collection_alter_adds_group_sub_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1");
 
     // Write initial data
     let conn = pool.get().unwrap();
@@ -827,7 +857,12 @@ fn collection_alter_adds_group_sub_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2");
 
     // Verify sub-columns exist
     let columns: HashSet<String> = conn
@@ -897,7 +932,12 @@ fn global_alter_adds_group_sub_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def_v1.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v1");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v1");
 
     // Write initial data
     let conn = pool.get().unwrap();
@@ -922,7 +962,12 @@ fn global_alter_adds_group_sub_columns() {
         reg.globals.clear();
         reg.register_global(def_v2.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync v2");
 
     // Verify sub-columns exist
     let columns: HashSet<String> = conn
@@ -999,7 +1044,7 @@ fn collection_alter_adds_localized_group_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &lc).expect("Sync v1");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &lc).expect("Sync v1");
 
     // Verify non-localized sub-column
     let conn = pool.get().unwrap();
@@ -1028,7 +1073,7 @@ fn collection_alter_adds_localized_group_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &lc).expect("Sync v2");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &lc).expect("Sync v2");
 
     // Verify new locale columns were added
     let columns_v2: HashSet<String> = conn

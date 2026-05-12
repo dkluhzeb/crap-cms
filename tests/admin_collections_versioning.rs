@@ -66,7 +66,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -87,9 +87,9 @@ fn setup_app_with_config(
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -98,11 +98,12 @@ fn setup_app_with_config(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -112,16 +113,16 @@ fn setup_app_with_config(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(|d| d.is_auth_collection());
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -178,9 +179,8 @@ fn setup_app_with_config(
 }
 
 fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
+    let reg = &app.registry;
     let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -327,7 +327,7 @@ async fn update_action_validation_error() {
     let cookie = make_auth_cookie(&app, &user_id, "update_val@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -385,7 +385,7 @@ async fn update_action_post_with_method_delete() {
     let cookie = make_auth_cookie(&app, &user_id, "meth_del@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -491,7 +491,7 @@ async fn versioned_collection_edit_shows_versions() {
     let cookie = make_auth_cookie(&app, &user_id, "editver@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -526,7 +526,7 @@ async fn versioned_collection_update_unpublish() {
     let cookie = make_auth_cookie(&app, &user_id, "unpub@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -692,7 +692,7 @@ async fn versioned_collection_versions_page() {
     let cookie = make_auth_cookie(&app, &user_id, "verpage@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -727,7 +727,7 @@ async fn non_versioned_collection_versions_page_redirects() {
     let cookie = make_auth_cookie(&app, &user_id, "nover@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -764,7 +764,7 @@ async fn restore_version_non_versioned_redirects() {
     let cookie = make_auth_cookie(&app, &user_id, "restnv@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();

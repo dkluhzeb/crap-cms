@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::Registry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use std::sync::Arc;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -38,7 +39,7 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -52,7 +53,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -76,8 +77,7 @@ fn parse_collection_minimal() {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles should be registered");
     assert_eq!(def.slug, "articles");
@@ -124,8 +124,7 @@ crap.collections.define("everything", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("everything")
         .expect("everything should be registered");
     assert_eq!(def.fields.len(), 10);
@@ -167,8 +166,7 @@ crap.collections.define("users", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("users")
         .expect("users should be registered");
     assert!(def.is_auth_collection(), "should be auth collection");
@@ -207,8 +205,7 @@ crap.collections.define("members", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("members")
         .expect("members should be registered");
     assert!(def.is_auth_collection());
@@ -241,8 +238,7 @@ crap.globals.define("settings", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_global("settings")
         .expect("settings should be registered");
     assert_eq!(def.slug, "settings");
@@ -285,8 +281,7 @@ crap.collections.define("media", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("media")
         .expect("media should be registered");
     assert!(def.is_upload_collection());
@@ -326,8 +321,7 @@ crap.collections.define("users", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("users")
         .expect("users should be registered");
     assert!(def.is_auth_collection());
@@ -360,8 +354,7 @@ crap.collections.define("events", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("events")
         .expect("events should be registered");
     match &def.live {
@@ -394,8 +387,7 @@ crap.collections.define("private", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("private")
         .expect("private should be registered");
     assert!(matches!(
@@ -434,8 +426,7 @@ crap.collections.define("pages", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("pages")
         .expect("pages should be registered");
     let blocks_field = def
@@ -478,8 +469,7 @@ crap.collections.define("polls", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("polls")
         .expect("polls should be registered");
     let answer_field = def
@@ -527,8 +517,7 @@ crap.collections.define("articles", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles should be registered");
 
@@ -562,8 +551,7 @@ crap.collections.define("docs", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("docs")
         .expect("docs should be registered");
     assert!(def.has_versions(), "versions=true should enable versions");
@@ -601,8 +589,7 @@ crap.collections.define("posts", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("posts")
         .expect("posts should be registered");
     assert!(def.has_versions(), "should have versions");
@@ -634,8 +621,7 @@ crap.collections.define("notes", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("notes")
         .expect("notes should be registered");
     assert!(
@@ -666,8 +652,7 @@ crap.collections.define("plain", {
 
     let config = CrapConfig::test_default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("plain")
         .expect("plain should be registered");
     assert!(

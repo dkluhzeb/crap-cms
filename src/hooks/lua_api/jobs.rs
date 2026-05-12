@@ -1,22 +1,32 @@
-//! `crap.jobs` namespace — job definition.
+//! `crap.jobs` namespace — job definition (init only at runtime).
+
+use std::sync::Arc;
 
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
-    core::SharedRegistry,
+    core::{Registry, SharedRegistry},
     hooks::{lifecycle::InitPhase, lua_api::parse},
 };
 
-/// Register `crap.jobs.define` — job definition.
-pub(super) fn register_jobs(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
+const DEFINE_INIT_ONLY_ERROR: &str = "crap.jobs.define must be called from a definition file or \
+     init.lua. To change a registered job, edit the file and restart the process.";
+
+/// Init-time registration: registers `crap.jobs.define` (write-capable).
+/// The common Lua plugin layout that mixes `crap.jobs.define(...)` and
+/// handler functions in a single `jobs/foo.lua` file is supported via
+/// `package.loaded` caching in `init::load_lua_dir`: the file's
+/// top-level runs exactly once at boot, and the dispatcher's later
+/// `require("jobs.foo")` hits the cache instead of re-evaluating.
+pub(super) fn register_jobs_init(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
     let t = lua.create_table()?;
 
-    let reg = registry.clone();
+    let reg = registry;
     t.set(
         "define",
         lua.create_function(move |lua, (slug, config): (String, Table)| {
-            define(lua, &reg, &slug, &config)
+            define_init(lua, &reg, &slug, &config)
         })?,
     )?;
 
@@ -25,35 +35,39 @@ pub(super) fn register_jobs(lua: &Lua, crap: &Table, registry: SharedRegistry) -
     Ok(())
 }
 
-/// Parse and register a job definition.
-fn define(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
-    // Job definitions wire into the scheduler at startup — the scheduler
-    // reads from `SharedRegistry` once and never re-scans. A NEW runtime
-    // registration silently fails to enroll the cron entry, and the
-    // queue worker never picks up the handler. Refuse those.
-    //
-    // Re-defining an EXISTING slug at runtime is allowed — matches the
-    // `crap.collections.define` / `crap.globals.define` round-trip
-    // pattern, and supports the common Lua plugin layout that mixes
-    // `crap.jobs.define(...)` calls and handler functions in a single
-    // `jobs/foo.lua` file (the job dispatcher `require`s it at runtime
-    // to call the handler, re-executing the top-level define). The
-    // registry update lands; the scheduler enrollment stays as it was.
-    if lua.app_data_ref::<InitPhase>().is_none() {
-        let already_registered = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {e:#}")))?
-            .get_job(slug)
-            .is_some();
+/// Pool-VM registration: `define` is a no-op stub. Pool VMs DO
+/// re-run `jobs/*.lua` (handler functions live there as Lua module
+/// returns), but the top-level `crap.jobs.define` call lands here as
+/// a no-op since the init_lua VM already wrote the job to the
+/// registry. The handler module return (`return M`) still produces
+/// per-VM function handles via `require`.
+pub(super) fn register_jobs_pool_init(
+    lua: &Lua,
+    crap: &Table,
+    _registry: Arc<Registry>,
+) -> Result<()> {
+    let t = lua.create_table()?;
 
-        if !already_registered {
-            return Err(RuntimeError(
-                "crap.jobs.define must be called from a definition file or init.lua \
-                 for a NEW job — runtime registration does not enroll the scheduler \
-                 or queue worker. Re-defining an already-registered job is allowed."
-                    .into(),
-            ));
-        }
+    t.set(
+        "define",
+        lua.create_function(|lua, _: (String, Table)| -> mlua::Result<()> {
+            if lua.app_data_ref::<InitPhase>().is_none() {
+                return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
+            }
+            Ok(())
+        })?,
+    )?;
+
+    crap.set("jobs", t)?;
+
+    Ok(())
+}
+
+/// Init-time define: parses + registers the job. The strict InitPhase
+/// guard rejects any caller that landed here outside init.
+fn define_init(lua: &Lua, reg: &SharedRegistry, slug: &str, config: &Table) -> mlua::Result<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(DEFINE_INIT_ONLY_ERROR.into()));
     }
 
     let def = parse::parse_job_definition(slug, config)
@@ -78,7 +92,7 @@ mod tests {
         let lua = Lua::new();
         let crap = lua.create_table().unwrap();
         let registry: SharedRegistry = Arc::new(RwLock::new(Registry::new()));
-        register_jobs(&lua, &crap, registry.clone()).unwrap();
+        register_jobs_init(&lua, &crap, Arc::clone(&registry)).unwrap();
         lua.globals().set("crap", crap).unwrap();
         (lua, registry)
     }
@@ -110,28 +124,14 @@ mod tests {
         );
     }
 
-    /// Regression: `crap.jobs.define` for an ALREADY-registered slug must
-    /// succeed outside the init phase, not error. Two motivating use
-    /// cases collapse to the same code path:
-    ///
-    /// 1. Lua plugins commonly mix definitions and handlers in a single
-    ///    file (`jobs/foo.lua`: `crap.jobs.define(...)` at the top,
-    ///    handler functions in the returned module table). The job
-    ///    dispatcher `require`s that file at runtime to call the
-    ///    handler, which re-executes the top-level `define`. With the
-    ///    strict guard, the `tests/jobs.rs` `test_job.lua` fixture
-    ///    panics on every dispatcher invocation.
-    ///
-    /// 2. The documented `config.get → modify → define` round-trip
-    ///    that `crap.collections.define` / `crap.globals.define` also
-    ///    support — the registry update lands, scheduler enrollment
-    ///    stays as it was at startup.
-    ///
-    /// The strict guard still fires for a NEW slug, since runtime
-    /// registration of a previously-unknown job genuinely doesn't
-    /// enroll the scheduler.
+    /// `crap.jobs.define` is rejected at runtime for both new and existing
+    /// slugs. The "mix definition + handler in jobs/foo.lua" plugin pattern
+    /// is supported via `package.loaded` caching in `init::load_lua_dir`:
+    /// the file's top-level (including the `define` call) runs exactly once
+    /// at boot with `InitPhase` set, and the dispatcher's later
+    /// `require("jobs.foo")` hits the cache without re-evaluating.
     #[test]
-    fn redefine_already_registered_at_runtime_is_allowed() {
+    fn runtime_define_rejected_for_existing_slug() {
         let (lua, registry) = lua_with_jobs();
 
         // Phase 1: register a job under InitPhase (the canonical path).
@@ -149,28 +149,27 @@ mod tests {
         .expect("init-time define should succeed");
         lua.remove_app_data::<InitPhase>();
 
-        // Phase 2: redefine with new fields (`retries = 5`) outside the
-        // init phase — simulates both the dispatcher's `require()` and
-        // the round-trip pattern.
-        lua.load(
-            r#"
-            crap.jobs.define("send_email", {
-              handler = "jobs.email.send",
-              retries = 5,
-              timeout = 30,
-            })
-        "#,
-        )
-        .exec()
-        .expect("runtime re-define of an already-registered job must succeed");
+        // Phase 2: a runtime redefine must be rejected.
+        let err = lua
+            .load(
+                r#"
+                crap.jobs.define("send_email", {
+                  handler = "jobs.email.send",
+                  retries = 5,
+                  timeout = 30,
+                })
+            "#,
+            )
+            .exec()
+            .expect_err("runtime define for existing slug must be rejected");
+        assert!(
+            err.to_string().contains("init.lua"),
+            "error should mention init.lua: {err}"
+        );
 
-        // The new fields are reflected in the registry.
+        // The original registration is preserved.
         let reg = registry.read().unwrap();
         let def = reg.get_job("send_email").expect("still registered");
-        assert_eq!(def.handler, "jobs.email.send");
-        assert_eq!(
-            def.retries, 5,
-            "redefine must update the registry entry, not no-op"
-        );
+        assert_eq!(def.retries, 1, "registry entry untouched by rejected call");
     }
 }

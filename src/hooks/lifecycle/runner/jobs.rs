@@ -9,7 +9,7 @@ use crate::{
     db::DbConnection,
     hooks::{
         HookRunner,
-        lifecycle::{execution::resolve_hook_function, types::TxContextGuard},
+        lifecycle::{InitPhase, execution::resolve_hook_function, types::TxContextGuard},
         lua_api,
     },
 };
@@ -77,5 +77,29 @@ impl HookRunner {
         lua.load(code)
             .eval::<String>()
             .map_err(|e| anyhow!("{}", e))
+    }
+
+    /// Like [`eval_lua_with_conn`] but with [`InitPhase`] set on the VM,
+    /// mirroring the state during `init.lua` and definition-file loading.
+    /// Used by integration tests that exercise definition-file APIs
+    /// (`crap.collections.define`, `crap.globals.define`,
+    /// `crap.jobs.define`, `crap.richtext.register_node`) which are
+    /// init-only at runtime.
+    pub fn eval_lua_init_with_conn(
+        &self,
+        code: &str,
+        conn: &dyn DbConnection,
+        user: Option<&Document>,
+    ) -> Result<String> {
+        let lua = self.pool.acquire()?;
+        let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None, None);
+
+        lua.set_app_data(InitPhase);
+        let r = lua
+            .load(code)
+            .eval::<String>()
+            .map_err(|e| anyhow!("{}", e));
+        lua.remove_app_data::<InitPhase>();
+        r
     }
 }

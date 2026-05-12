@@ -4,7 +4,21 @@ Background job definition and queuing.
 
 ## crap.jobs.define(slug, config)
 
-Define a background job. Call in `init.lua` or `jobs/*.lua` files.
+Define a background job. **Init-only:** call this from `jobs/*.lua`,
+`init.lua`, or any file loaded by `require` from those. The scheduler
+enrolls jobs once at startup; runtime registration would never reach
+the cron or queue worker, so it's rejected outright:
+
+> `crap.jobs.define must be called from a definition file or
+> init.lua. To change a registered job, edit the file and restart
+> the process.`
+
+The common "define + handler in one file" layout (top-level
+`crap.jobs.define(...)` plus `function M.run(ctx) ... end` returned
+as a module) works fine: `init` loads each `jobs/foo.lua` once and
+caches its return value in `package.loaded["jobs.foo"]`. When the
+dispatcher later does `require("jobs.foo")` to call the handler, it
+hits the cache and the top-level `define` does **not** re-run.
 
 **Parameters:**
 - `slug` (string) — Unique job identifier

@@ -308,7 +308,7 @@ async fn edit_in_non_default_locale_shows_localized_values() {
         fallback: true,
     };
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();

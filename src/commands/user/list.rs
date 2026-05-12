@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     cli::{self, Table},
-    core::SharedRegistry,
+    core::Registry,
     db::{DbPool, query},
     service::{self, ServiceContext},
 };
@@ -13,7 +13,7 @@ use super::helpers::load_auth_collection;
 
 /// List users in an auth collection.
 #[cfg(not(tarpaulin_include))]
-pub fn user_list(pool: &DbPool, registry: &SharedRegistry, collection: &str) -> Result<()> {
+pub fn user_list(pool: &DbPool, registry: &Registry, collection: &str) -> Result<()> {
     let def = load_auth_collection(registry, collection)?;
     let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
 

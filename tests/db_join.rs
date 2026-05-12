@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::DocumentFields;
@@ -55,16 +56,17 @@ fn setup_articles() -> (
     CollectionDefinition,
 ) {
     let (_tmp, pool) = create_test_pool();
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     let def = make_articles_with_join_tables();
     let mut tags_def = CollectionDefinition::new("tags");
     tags_def.timestamps = true;
     tags_def.fields = vec![make_field("name", FieldType::Text)];
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def.clone());
         reg.register_collection(tags_def);
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
     (_tmp, pool, def)
 }
@@ -570,22 +572,23 @@ fn make_posts_with_category() -> CollectionDefinition {
 fn setup_posts_categories() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    Arc<Registry>,
     CollectionDefinition,
     CollectionDefinition,
 ) {
     let (_tmp, pool) = create_test_pool();
-    let shared_registry = Registry::shared();
+    let shared = Registry::shared();
     let cats_def = make_categories_def();
     let posts_def = make_posts_with_category();
     {
-        let mut reg = shared_registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(cats_def.clone());
         reg.register_collection(posts_def.clone());
     }
-    migrate::sync_all(&pool, &shared_registry, &CrapConfig::default().locale).expect("Sync failed");
+    let registry = Registry::snapshot(&shared);
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
 
-    (_tmp, pool, shared_registry, posts_def, cats_def)
+    (_tmp, pool, registry, posts_def, cats_def)
 }
 
 #[test]
@@ -611,7 +614,7 @@ fn populate_depth_0_leaves_ids() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(0),
@@ -642,7 +645,7 @@ fn populate_depth_1_hydrates_has_one() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -700,7 +703,7 @@ fn populate_depth_1_hydrates_has_many() {
 
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -744,7 +747,7 @@ fn populate_circular_ref_stops() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "categories", &cats_def),
+        &query::PopulateContext::new(&conn, &registry, "categories", &cats_def),
         &mut cat_a,
         &mut visited,
         &query::PopulateOpts::new(10),
@@ -775,7 +778,7 @@ fn populate_missing_related_doc_becomes_null() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(1),
@@ -817,7 +820,7 @@ fn populate_respects_field_max_depth() {
     let mut visited = HashSet::new();
     // Even with depth=5, the limited_cat field has max_depth=0, so it shouldn't populate
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(5),
@@ -862,7 +865,7 @@ fn populate_respects_field_max_depth_1_stops_nested_relations() {
     let mut visited = HashSet::new();
     // Request depth=3 — but `capped_cat` has max_depth = 1, so the cap wins.
     query::populate_relationships(
-        &query::PopulateContext::new(&conn, &registry.read().unwrap(), "posts_v2", &posts_def),
+        &query::PopulateContext::new(&conn, &registry, "posts_v2", &posts_def),
         &mut post,
         &mut visited,
         &query::PopulateOpts::new(3),
@@ -937,7 +940,8 @@ fn populate_with_localized_related_collection() {
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &shared_registry, &locale_config).expect("Sync failed");
+    migrate::sync_all(&pool, &shared_registry.read().unwrap(), &locale_config)
+        .expect("Sync failed");
 
     let locale_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),

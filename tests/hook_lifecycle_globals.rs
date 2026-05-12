@@ -6,6 +6,7 @@
 //! affects the observable result.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
@@ -26,7 +27,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -41,7 +42,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("build runner");
@@ -51,13 +52,11 @@ fn setup() -> (
 
 fn seed_global_tagline(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     slug: &str,
     tagline: &str,
 ) {
-    let reg = registry.read().unwrap();
-    let def = reg.get_global(slug).expect("global not found").clone();
-    drop(reg);
+    let def = registry.get_global(slug).expect("global not found").clone();
 
     let mut data = DocumentFields::new();
     data.insert("tagline".to_string(), json!(tagline));
@@ -73,9 +72,7 @@ fn seed_global_tagline(
 #[test]
 fn global_before_validate_hook_fires() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  Padded Title  "));
@@ -105,9 +102,7 @@ fn global_before_validate_hook_fires() {
 #[test]
 fn global_before_change_hook_fires() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("site_name".to_string(), json!("POISON"));
@@ -141,9 +136,7 @@ fn global_after_read_hook_fires() {
     // verify after_read uppercases it on the read path.
     seed_global_tagline(&pool, &registry, "site_settings", "hello world");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
     let conn = pool.get().unwrap();
     let rh = RunnerReadHooks::new(&runner, &conn);
@@ -167,9 +160,7 @@ fn global_after_read_hook_fires() {
 #[test]
 fn global_read_access_denied_for_non_admin() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("restricted").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("restricted").unwrap().clone();
 
     // Editor user (not admin) — admin_only returns false.
     let mut editor_fields = DocumentFields::new();
@@ -202,9 +193,7 @@ fn global_read_access_denied_for_non_admin() {
 #[test]
 fn global_update_access_denied_for_non_admin() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("restricted").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("restricted").unwrap().clone();
 
     let mut editor_fields = DocumentFields::new();
     editor_fields.insert("role".to_string(), serde_json::json!("editor"));

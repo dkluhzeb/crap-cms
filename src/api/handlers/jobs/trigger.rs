@@ -85,7 +85,7 @@ impl ContentService {
             pool: self.pool.clone(),
             hook_runner: self.hook_runner.clone(),
             token_provider: self.token_provider.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
             data_json: req.data_json.unwrap_or_else(|| "{}".to_string()),
             slug: req.slug.clone(),
             token,

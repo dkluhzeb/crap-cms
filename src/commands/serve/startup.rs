@@ -19,7 +19,7 @@ use crate::{
     config::{AuthConfig, CrapConfig},
     core::{
         Registry, SharedEventTransport, SharedInvalidationTransport, SharedPasswordProvider,
-        SharedRegistry, SharedTokenProvider,
+        SharedTokenProvider,
         auth::{Argon2PasswordProvider, JwtTokenProvider},
         cache::create_cache,
         email::create_email_provider,
@@ -109,12 +109,8 @@ fn resolve_jwt_secret_from_file(config_dir: &Path) -> Result<String> {
 }
 
 /// Log information about loaded collections, type definitions, and auth status.
-fn log_startup_info(registry: &SharedRegistry, cfg: &CrapConfig) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let auth_collections: Vec<_> = reg
+fn log_startup_info(registry: &Registry, cfg: &CrapConfig) -> Result<()> {
+    let auth_collections: Vec<_> = registry
         .collections
         .values()
         .filter(|d| d.is_auth_collection())
@@ -133,7 +129,7 @@ fn log_startup_info(registry: &SharedRegistry, cfg: &CrapConfig) -> Result<()> {
     // Warn about per-collection max_file_size exceeding the global body limit
     let global_max = cfg.upload.max_file_size;
 
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         if let Some(ref upload_cfg) = def.upload
             && let Some(collection_max) = upload_cfg.max_file_size
             && collection_max > global_max
@@ -177,21 +173,12 @@ fn log_update_notice(cfg: &CrapConfig) {
 }
 
 /// Log a nudge if health checks find issues.
-fn log_health_check_nudge(
-    cfg: &CrapConfig,
-    registry: &SharedRegistry,
-    pool: &DbPool,
-    config_dir: &Path,
-) {
-    let Ok(reg) = registry.read() else {
-        return;
-    };
-
+fn log_health_check_nudge(cfg: &CrapConfig, registry: &Registry, pool: &DbPool, config_dir: &Path) {
     let Ok(conn) = pool.get() else {
         return;
     };
 
-    let n = crate::commands::status::check::count_warnings(cfg, &reg, &conn, pool, config_dir);
+    let n = crate::commands::status::check::count_warnings(cfg, registry, &conn, pool, config_dir);
 
     if n > 0 {
         warn!("{n} health check warning(s) found — run `crap-cms status --check` for details.");
@@ -221,52 +208,40 @@ fn log_security_warnings(cfg: &CrapConfig) {
 }
 
 /// Initialize Lua VM, log loaded collections, and generate type definitions.
-fn init_lua_and_typegen(config_dir: &Path, cfg: &CrapConfig) -> Result<SharedRegistry> {
+fn init_lua_and_typegen(config_dir: &Path, cfg: &CrapConfig) -> Result<Arc<Registry>> {
     let registry = hooks::init_lua(config_dir, cfg).context("Failed to initialize Lua VM")?;
 
-    {
-        let reg = registry
-            .read()
-            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+    let n_hooks: usize = registry
+        .collections
+        .values()
+        .map(|c| {
+            c.hooks.before_validate.len()
+                + c.hooks.before_change.len()
+                + c.hooks.after_change.len()
+                + c.hooks.before_read.len()
+                + c.hooks.after_read.len()
+                + c.hooks.before_delete.len()
+                + c.hooks.after_delete.len()
+                + c.hooks.before_broadcast.len()
+        })
+        .sum();
 
-        let n_hooks: usize = reg
-            .collections
-            .values()
-            .map(|c| {
-                c.hooks.before_validate.len()
-                    + c.hooks.before_change.len()
-                    + c.hooks.after_change.len()
-                    + c.hooks.before_read.len()
-                    + c.hooks.after_read.len()
-                    + c.hooks.before_delete.len()
-                    + c.hooks.after_delete.len()
-                    + c.hooks.before_broadcast.len()
-            })
-            .sum();
+    info!(
+        "Loaded {} collection(s), {} global(s), {} hook(s)",
+        registry.collections.len(),
+        registry.globals.len(),
+        n_hooks,
+    );
 
-        info!(
-            "Loaded {} collection(s), {} global(s), {} hook(s)",
-            reg.collections.len(),
-            reg.globals.len(),
-            n_hooks,
-        );
-
-        for (slug, col) in &reg.collections {
-            debug!("  Collection '{}': {} field(s)", slug, col.fields.len());
-        }
+    for (slug, col) in &registry.collections {
+        debug!("  Collection '{}': {} field(s)", slug, col.fields.len());
     }
 
     // Auto-generate Lua type definitions on startup
-    {
-        let reg = registry
-            .read()
-            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-        match typegen::generate(config_dir, &reg) {
-            Ok(path) => info!("Generated type definitions: {}", path.display()),
-            Err(e) => warn!("Failed to generate type definitions: {}", e),
-        }
-    }
+    typegen::generate(config_dir, &registry)
+        .inspect(|path| info!("Generated type definitions: {}", path.display()))
+        .inspect_err(|e| warn!("Failed to generate type definitions: {}", e))
+        .ok();
 
     Ok(registry)
 }
@@ -441,7 +416,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     let hook_runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .invalidation_transport(invalidation_transport.clone())
         .populate_singleflight(populate_singleflight.clone())
@@ -456,7 +431,6 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     log_update_notice(&cfg);
     log_health_check_nudge(&cfg, &registry, &pool, &config_dir);
 
-    let registry_snapshot = Registry::snapshot(&registry);
     let storage = create_storage(&config_dir, &cfg.upload)?;
     let cache = create_cache(&cfg.cache)?;
     let token_provider: SharedTokenProvider = Arc::new(JwtTokenProvider::new(&jwt_secret));
@@ -492,7 +466,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .config(cfg.clone())
                     .config_dir(config_dir.clone())
                     .pool(pool.clone())
-                    .registry(registry_snapshot.clone())
+                    .registry(Arc::clone(&registry))
                     .hook_runner(hook_runner.clone())
                     .jwt_secret(jwt_secret.clone())
                     .event_transport(event_transport.clone())
@@ -520,7 +494,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                 &grpc_addr,
                 api::server::GrpcStartParams::builder()
                     .pool(pool.clone())
-                    .registry(registry_snapshot.clone())
+                    .registry(Arc::clone(&registry))
                     .hook_runner(hook_runner.clone())
                     .config(cfg.clone())
                     .config_dir(config_dir.clone())
@@ -550,7 +524,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
             scheduler::start(scheduler::SchedulerParams {
                 pool: pool.clone(),
                 hook_runner: hook_runner.clone(),
-                registry: registry.clone(),
+                registry: Arc::clone(&registry),
                 config: cfg.jobs.clone(),
                 shutdown: shutdown.clone(),
                 storage: storage.clone(),

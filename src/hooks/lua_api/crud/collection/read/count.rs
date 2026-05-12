@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.count` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::{
         LocaleContext,
         query::{self, filter::normalize_filter_fields},
@@ -20,7 +22,7 @@ use crate::{
 /// Core logic for `crap.collections.count`.
 fn count_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: String,
     query_table: Option<Table>,
@@ -72,7 +74,7 @@ fn count_inner(
 pub(crate) fn register_count(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

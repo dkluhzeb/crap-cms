@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use chrono::Utc;
 use tokio::{
     select,
@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     config::LocaleConfig,
-    core::{JobDefinition, JobRun, SharedRegistry, SharedStorage, email::SYSTEM_EMAIL_JOB, upload},
+    core::{JobDefinition, JobRun, Registry, SharedStorage, email::SYSTEM_EMAIL_JOB, upload},
     db::{
         BoxedConnection, DbConnection, DbPool, DbValue,
         query::{self, images as image_query, jobs as job_query},
@@ -75,7 +75,7 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
             _ = poll_ticker.tick() => {
                 let pool = pool.clone();
                 let hook_runner = hook_runner.clone();
-                let registry = registry.clone();
+                let registry = Arc::clone(&registry);
                 let running_jobs = running_jobs.clone();
                 let max_concurrent = config.max_concurrent;
 
@@ -136,7 +136,7 @@ pub async fn start(params: SchedulerParams) -> Result<()> {
 
 /// Recover stale jobs and image queue entries on startup.
 #[cfg(not(tarpaulin_include))]
-fn recover_on_startup(pool: &DbPool, registry: &SharedRegistry) -> Result<()> {
+fn recover_on_startup(pool: &DbPool, registry: &Registry) -> Result<()> {
     let conn = pool
         .get()
         .context("Scheduler: failed to get DB connection for recovery")?;
@@ -161,7 +161,7 @@ struct PurgeTickInput<'a> {
     auto_purge_secs: Option<u64>,
     cron_interval_secs: i64,
     pool: &'a DbPool,
-    registry: &'a SharedRegistry,
+    registry: &'a Registry,
     storage: &'a SharedStorage,
     locale_config: &'a LocaleConfig,
 }
@@ -416,7 +416,7 @@ fn record_conversion_success(
 async fn poll_and_execute(
     pool: &DbPool,
     hook_runner: &HookRunner,
-    registry: &SharedRegistry,
+    registry: &Registry,
     max_concurrent: usize,
     running_jobs: &Arc<Mutex<Vec<String>>>,
     email: &EmailQueueConfig,
@@ -455,12 +455,8 @@ async fn poll_and_execute(
 
 /// Read per-slug concurrency limits from the registry.
 #[cfg(not(tarpaulin_include))]
-fn read_job_concurrency(registry: &SharedRegistry) -> Result<HashMap<String, u32>> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    Ok(reg
+fn read_job_concurrency(registry: &Registry) -> Result<HashMap<String, u32>> {
+    Ok(registry
         .jobs
         .iter()
         .map(|(slug, def)| (slug.to_string(), def.concurrency))
@@ -496,16 +492,12 @@ fn claim_pending_jobs(
 /// Resolve the job definition for a claimed job run.
 #[cfg(not(tarpaulin_include))]
 fn resolve_job_def(
-    registry: &SharedRegistry,
+    registry: &Registry,
     job_run: &JobRun,
     pool: &DbPool,
     email: &EmailQueueConfig,
 ) -> Result<Option<JobDefinition>> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    if let Some(def) = reg.get_job(&job_run.slug) {
+    if let Some(def) = registry.get_job(&job_run.slug) {
         return Ok(Some(def.clone()));
     }
 

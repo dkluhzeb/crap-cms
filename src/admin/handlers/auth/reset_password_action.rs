@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     extract::{ConnectInfo, Form, State},
@@ -106,7 +107,7 @@ pub async fn reset_password_action(
     }
 
     let pool = state.pool.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let token = form.token.clone();
     let password = form.password.clone();
 

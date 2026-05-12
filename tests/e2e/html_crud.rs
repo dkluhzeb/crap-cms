@@ -130,7 +130,7 @@ async fn update_redirects_with_updated_data() {
     let cookie = make_auth_cookie(&app, &user_id, "update@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -188,7 +188,7 @@ async fn delete_removes_from_list() {
     let cookie = make_auth_cookie(&app, &user_id, "delete@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -246,7 +246,7 @@ async fn list_page_shows_documents() {
     let cookie = make_auth_cookie(&app, &user_id, "list@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("posts").unwrap().clone()
     };
     for title in &["Alpha Post", "Beta Post", "Gamma Post"] {

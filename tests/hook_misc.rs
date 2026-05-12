@@ -5,6 +5,7 @@
 //! run_job_handler, and related standalone lifecycle tests.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
@@ -21,7 +22,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -36,7 +37,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -46,15 +47,13 @@ fn setup() -> (
 #[allow(dead_code)]
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     data: &DocumentFields,
 ) -> crap_cms::core::Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -234,9 +233,7 @@ fn run_system_hooks_with_invalid_ref_fails() {
 #[test]
 fn run_hooks_no_conn_fires_collection_and_registered() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
@@ -307,9 +304,7 @@ fn run_migration_executes_lua_file() {
     tx.commit().unwrap();
 
     // Verify the migration ran by checking the article was created
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let count =
         crap_cms::db::ops::count_documents(&pool, "articles", &def, &[], None).expect("count");
@@ -522,7 +517,7 @@ fn run_migration_up_standalone() {
 
     let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new");
@@ -551,8 +546,7 @@ fn run_migration_up_standalone() {
         .expect("migration up should succeed");
 
     // Verify the document was created
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").expect("articles");
+    let def = registry.get_collection("articles").expect("articles");
     let docs = crap_cms::db::ops::find_documents(
         &pool,
         "articles",

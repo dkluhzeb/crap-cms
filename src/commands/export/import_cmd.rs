@@ -225,10 +225,6 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         cli::warning(&warning.replace("config requires", "export file was created with"));
     }
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
         if !export_file.collections.contains_key(slug) {
             bail!("Collection '{}' not found in import file", slug);
@@ -241,7 +237,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
     let mut total_imported = 0usize;
 
     for slug in &slugs {
-        let def = reg.get_collection(slug).ok_or_else(|| {
+        let def = registry.get_collection(slug).ok_or_else(|| {
             anyhow!(
                 "Collection '{}' exists in import file but not in schema",
                 slug

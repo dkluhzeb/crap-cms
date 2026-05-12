@@ -4,10 +4,12 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use dialoguer::{Input, Select};
 use std::path::Path;
 
+use std::sync::Arc;
+
 use crate::{
     cli::crap_theme,
     commands::MakeAction,
-    core::{FieldType, SharedRegistry},
+    core::{FieldType, Registry},
     scaffold::{self, ConditionFieldInfo, HookType, MakeHookOptions},
 };
 
@@ -86,12 +88,12 @@ fn resolve_hook_type(hook_type: Option<String>) -> Result<HookType> {
 #[cfg(not(tarpaulin_include))]
 fn resolve_hook_collection(
     collection: Option<String>,
-    registry: &Option<SharedRegistry>,
+    registry: &Option<Arc<Registry>>,
 ) -> Result<(String, bool)> {
     if let Some(c) = collection {
         let is_global = registry
             .as_ref()
-            .and_then(|r| r.read().ok())
+            .map(|r| &**r)
             .map(|reg| reg.globals.contains_key(c.as_str()))
             .unwrap_or(false);
 
@@ -100,7 +102,7 @@ fn resolve_hook_collection(
 
     let (collection_slugs, global_slugs) = registry
         .as_ref()
-        .and_then(|r| r.read().ok())
+        .map(|r| &**r)
         .map(|reg| {
             let mut cs: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
             cs.sort();
@@ -185,7 +187,7 @@ fn resolve_hook_position(position: Option<String>, hook_type: &HookType) -> Resu
 fn resolve_hook_field(
     field: Option<String>,
     hook_type: &HookType,
-    registry: &Option<SharedRegistry>,
+    registry: &Option<Arc<Registry>>,
     collection: &str,
 ) -> Result<Option<String>> {
     if *hook_type != HookType::Field {
@@ -196,14 +198,10 @@ fn resolve_hook_field(
         return Ok(Some(f));
     }
 
-    let field_names: Option<Vec<String>> =
-        registry
-            .as_ref()
-            .and_then(|r| r.read().ok())
-            .and_then(|reg| {
-                reg.get_collection(collection)
-                    .map(|def| def.fields.iter().map(|f| f.name.clone()).collect())
-            });
+    let field_names: Option<Vec<String>> = registry.as_ref().map(|r| &**r).and_then(|reg| {
+        reg.get_collection(collection)
+            .map(|def| def.fields.iter().map(|f| f.name.clone()).collect())
+    });
 
     if let Some(names) = field_names.filter(|n| !n.is_empty()) {
         let selection = Select::with_theme(&crap_theme())
@@ -242,7 +240,7 @@ fn resolve_hook_name(name: Option<String>, position: &str) -> Result<String> {
 fn resolve_condition_field(
     hook_type: &HookType,
     field: &Option<String>,
-    registry: &Option<SharedRegistry>,
+    registry: &Option<Arc<Registry>>,
     collection: &str,
 ) -> Result<Option<ConditionFieldInfo>> {
     if *hook_type != HookType::Condition {
@@ -285,10 +283,10 @@ fn resolve_condition_field(
 
 /// Load condition-eligible field infos from the registry.
 pub(super) fn load_field_infos_from_registry(
-    registry: &Option<SharedRegistry>,
+    registry: &Option<Arc<Registry>>,
     collection: &str,
 ) -> Option<Vec<ConditionFieldInfo>> {
-    let reg = registry.as_ref()?.read().ok()?;
+    let reg = registry.as_ref()?;
     let def = reg.get_collection(collection)?;
 
     Some(

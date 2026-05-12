@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.create` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::LocaleContext,
     hooks::{
         lifecycle::converters::*,
@@ -17,7 +19,7 @@ use crate::{
 /// Execute the `crap.collections.create` operation.
 fn create_document_lua(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: String,
     data_table: Table,
@@ -42,14 +44,11 @@ fn create_document_lua(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, &collection, "create");
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .hooks_enabled(hooks_enabled)
         .build();
 
@@ -80,7 +79,7 @@ fn create_document_lua(
 pub(crate) fn register_create(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

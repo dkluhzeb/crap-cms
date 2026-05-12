@@ -69,16 +69,17 @@ fn setup_db(
 ) -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    Arc<crap_cms::core::Registry>,
 ) {
     let (tmp, pool) = create_test_pool();
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &defs {
             reg.register_collection(def.clone());
         }
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
     (tmp, pool, registry)
 }
@@ -87,7 +88,7 @@ struct TestSetup {
     _tmp: tempfile::TempDir,
     service: ContentService,
     _pool: crap_cms::db::DbPool,
-    _registry: crap_cms::core::SharedRegistry,
+    _registry: Arc<crap_cms::core::Registry>,
     _runner: HookRunner,
 }
 
@@ -97,18 +98,19 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     config.database.path = "test.db".to_string();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &defs {
             reg.register_collection(def.clone());
         }
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("hook runner");
@@ -117,7 +119,7 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Registry::snapshot(&shared))
             .hook_runner(hook_runner.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
@@ -1377,16 +1379,17 @@ fn service_update_draft_uses_locale_context() {
     config.locale = locale_config.clone();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def.clone());
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &locale_config).expect("sync");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("hook runner");

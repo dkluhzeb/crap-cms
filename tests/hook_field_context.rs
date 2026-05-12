@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::Document;
@@ -22,7 +23,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -37,7 +38,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -46,15 +47,13 @@ fn setup() -> (
 
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     data: &DocumentFields,
 ) -> Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -119,9 +118,7 @@ fn field_after_read_hook_transforms_value() {
     data.insert("title".to_string(), json!("After Read Test"));
     let doc = create_article(&pool, &registry, &data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Apply after_read hooks (collection-level after_read adds _was_read marker)
     let ar_ctx = AfterReadCtx {
@@ -144,9 +141,7 @@ fn field_after_read_hook_transforms_value() {
 fn run_after_write_runs_hooks_with_crud_access() {
     // run_after_write runs after-hooks inside the transaction with CRUD access.
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -179,9 +174,7 @@ fn run_after_write_runs_hooks_with_crud_access() {
 #[test]
 fn before_broadcast_no_hooks_passes_through() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Broadcast Test"));
@@ -251,9 +244,7 @@ fn validate_required_field_errors() {
     // Create a collection definition with a required field, try creating a
     // document without it, and verify that the validation error propagates.
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Build data WITHOUT the required "title" field
     let mut data = DocumentFields::new();
@@ -307,9 +298,7 @@ fn after_read_hooks_fire() {
     create_data.insert("body".to_string(), json!("Some body content"));
     let doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // The articles collection has an after_read hook that adds _was_read = "true"
     let ar_ctx = AfterReadCtx {
@@ -344,9 +333,7 @@ fn hook_error_rolls_back_transaction() {
     // via the CRUD lifecycle that triggers the hook, and verify the doc was
     // NOT created (transaction rolled back).
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // First verify the collection is empty
     let initial_count =
@@ -395,9 +382,7 @@ fn field_after_read_hooks_transform_values() {
     data.insert("body".to_string(), json!("Some body"));
     let doc = create_article(&pool, &registry, &data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // apply_after_read should run field-level after_read hooks (uppercase_value on title)
     // AND collection-level after_read hooks (_was_read marker)
@@ -437,9 +422,7 @@ fn field_after_read_hooks_with_apply_after_read_many() {
     d2.insert("title".to_string(), json!("second article"));
     let doc2 = create_article(&pool, &registry, &d2);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let ar_ctx = AfterReadCtx {
         hooks: &def.hooks,
@@ -467,9 +450,7 @@ fn field_after_read_hooks_with_apply_after_read_many() {
 #[test]
 fn run_after_write_runs_field_after_change_hooks() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test Article"));
@@ -510,9 +491,7 @@ fn run_after_write_runs_field_after_change_hooks() {
 fn run_after_write_with_non_after_change_event() {
     // When event is not AfterChange, field hooks should NOT run
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
@@ -550,9 +529,7 @@ fn run_after_write_with_non_after_change_event() {
 #[test]
 fn run_field_hooks_without_conn() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("test title"));
@@ -581,9 +558,7 @@ fn run_field_hooks_without_conn() {
 #[test]
 fn hook_context_passes_locale_and_draft() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
@@ -616,9 +591,7 @@ fn hook_context_passes_locale_and_draft() {
 #[test]
 fn hook_context_table_flows_through() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Test"));
@@ -655,9 +628,7 @@ fn hook_context_table_flows_through() {
 #[test]
 fn field_before_validate_hook_trims_title() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("  spaced title  "));
@@ -706,9 +677,7 @@ fn check_live_setting_function_returns_nil_means_false() {
 #[test]
 fn multiple_field_hooks_run_in_sequence() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // The title field has:
     //   before_validate: trim_value
@@ -758,9 +727,7 @@ fn multiple_field_hooks_run_in_sequence() {
 #[test]
 fn run_before_write_with_user_context() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut user_fields = DocumentFields::new();
     user_fields.insert("role".to_string(), json!("admin"));
@@ -987,9 +954,7 @@ fn field_after_change_modifications_flow_on_update() {
 #[test]
 fn nested_group_field_hooks_execute() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("nested_hooks").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("nested_hooks").unwrap().clone();
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -1023,9 +988,7 @@ fn nested_group_field_hooks_execute() {
 #[test]
 fn nested_row_field_hooks_execute() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("nested_hooks").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("nested_hooks").unwrap().clone();
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -1058,9 +1021,7 @@ fn nested_row_field_hooks_execute() {
 #[test]
 fn nested_group_after_read_hooks_execute() {
     let (_tmp, _pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("nested_hooks").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("nested_hooks").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("seo__title".to_string(), json!("hello world"));
@@ -1122,9 +1083,7 @@ fn before_broadcast_mutation_does_not_affect_stored_doc() {
     );
 
     // The stored doc must be untouched — read back via the same pool.
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let conn = pool.get().expect("DB connection");
     let stored = query::find_by_id(&conn, "articles", &def, &doc.id, None)

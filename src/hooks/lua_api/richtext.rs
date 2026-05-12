@@ -147,11 +147,7 @@ fn register_node(lua: &Lua, registry: &SharedRegistry, name: String, spec: Table
     // builder sees them consistently. A runtime call from a hook would
     // only land in the current VM and fragment across the pool.
     if lua.app_data_ref::<InitPhase>().is_none() {
-        return Err(RuntimeError(
-            "crap.richtext.register_node must be called from init.lua or a definition file \
-             — runtime registration only lands in one VM of the pool"
-                .into(),
-        ));
+        return Err(RuntimeError(REGISTER_NODE_INIT_ONLY_ERROR.into()));
     }
 
     validate_node_name(&name)?;
@@ -216,19 +212,22 @@ fn render(lua: &Lua, content: String) -> LuaResult<String> {
     }
 }
 
-/// Register the `crap.richtext` namespace on the `crap` global table.
-///
-/// Creates:
-/// - `_crap_richtext_nodes` Lua global table (stores full specs including render functions)
-/// - `crap.richtext.register_node(name, spec)` — registers a custom node type
-/// - `crap.richtext.render(content_string)` — renders custom nodes to HTML
-pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> anyhow::Result<()> {
+const REGISTER_NODE_INIT_ONLY_ERROR: &str = "crap.richtext.register_node must be called from \
+     init.lua or a definition file — runtime registration only lands in one VM of the pool";
+
+/// Init-time registration of `crap.richtext`: write-capable
+/// `register_node` + `render`. Used by the init-phase Lua VM.
+pub fn register_richtext_init(
+    lua: &Lua,
+    crap: &Table,
+    registry: SharedRegistry,
+) -> anyhow::Result<()> {
     let nodes_storage = lua.create_table()?;
     lua.set_named_registry_value("_crap_richtext_nodes", nodes_storage)?;
 
     let richtext_table = lua.create_table()?;
 
-    let reg_clone = registry.clone();
+    let reg_clone = registry;
     let register_node_fn = lua.create_function(move |lua, (name, spec): (String, Table)| {
         register_node(lua, &reg_clone, name, spec)
     })?;
@@ -238,6 +237,64 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
     richtext_table.set("render", render_fn)?;
 
     crap.set("richtext", richtext_table)?;
+
+    Ok(())
+}
+
+/// Pool-VM registration of `crap.richtext`: `register_node` does the
+/// per-VM Lua-side storage (which `render` needs to find the node's
+/// render function) but skips the shared-registry write — the
+/// init_lua VM already populated the registry. Pool VMs run
+/// `init.lua` (and anything it requires), so any
+/// `crap.richtext.register_node(...)` calls hit this path with
+/// `InitPhase` set, populating the per-VM Lua-side table.
+pub fn register_richtext_pool_init(
+    lua: &Lua,
+    crap: &Table,
+    _registry: std::sync::Arc<crate::core::Registry>,
+) -> anyhow::Result<()> {
+    let nodes_storage = lua.create_table()?;
+    lua.set_named_registry_value("_crap_richtext_nodes", nodes_storage)?;
+
+    let richtext_table = lua.create_table()?;
+
+    let register_node_fn = lua.create_function(|lua, (name, spec): (String, Table)| {
+        register_node_pool(lua, name, spec)
+    })?;
+    richtext_table.set("register_node", register_node_fn)?;
+
+    let render_fn = lua.create_function(|lua, content: String| render(lua, content))?;
+    richtext_table.set("render", render_fn)?;
+
+    crap.set("richtext", richtext_table)?;
+
+    Ok(())
+}
+
+/// Pool-VM `register_node`: validates + stores the node entry in the
+/// VM's named-registry table (so `render` can find it), skips the
+/// shared-registry write. The shared registry was already populated
+/// by the init_lua VM.
+fn register_node_pool(lua: &Lua, name: String, spec: Table) -> LuaResult<()> {
+    if lua.app_data_ref::<InitPhase>().is_none() {
+        return Err(RuntimeError(REGISTER_NODE_INIT_ONLY_ERROR.into()));
+    }
+
+    validate_node_name(&name)?;
+
+    let label: String = spec.get::<String>("label").unwrap_or_else(|_| name.clone());
+    let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
+    // Parse attrs to validate the spec (errors surface here), but
+    // discard the result — the shared registry already has the
+    // canonical `RichtextNodeDef`.
+    let _ = parse_node_attrs(lua, &name, &spec)?;
+
+    let has_render = spec
+        .get::<Value>("render")
+        .map(|v| matches!(v, Value::Function(_)))
+        .unwrap_or(false);
+
+    store_node_in_lua(lua, &name, &label, inline, has_render, &spec)?;
 
     Ok(())
 }
@@ -309,6 +366,8 @@ fn warn_irrelevant_node_attr_features(node_name: &str, f: &FieldDefinition) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::core::Registry;
     use crate::hooks::lua_api::fields::register_fields;
@@ -318,7 +377,7 @@ mod tests {
         let registry = Registry::shared();
         let crap = lua.create_table().unwrap();
         register_fields(&lua, &crap).unwrap();
-        register_richtext(&lua, &crap, registry.clone()).unwrap();
+        register_richtext_init(&lua, &crap, Arc::clone(&registry)).unwrap();
         lua.globals().set("crap", crap).unwrap();
         // Mimic init-time loading so register_node accepts the call.
         lua.set_app_data(InitPhase);
@@ -749,7 +808,7 @@ mod tests {
         let registry = Registry::shared();
         let crap = lua.create_table().unwrap();
         register_fields(&lua, &crap).unwrap();
-        register_richtext(&lua, &crap, registry.clone()).unwrap();
+        register_richtext_init(&lua, &crap, Arc::clone(&registry)).unwrap();
         lua.globals().set("crap", crap).unwrap();
         // No `set_app_data(InitPhase)` — simulating a runtime hook.
 

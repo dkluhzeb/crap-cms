@@ -57,7 +57,12 @@ fn seed_posts() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Status values: "" means pass empty string → coerce_value converts to NULL.
     // Omitting the field entirely would use the column DEFAULT ('draft'), not NULL.
@@ -441,7 +446,12 @@ fn contains_filter_escapes_percent() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Create two documents: one with "50% off" and one with "100 items"
     let titles = vec!["50% off", "100 items"];
@@ -479,7 +489,12 @@ fn contains_filter_escapes_underscore() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Create two documents: "a_b" and "axb"
     let titles = vec!["a_b", "axb"];
@@ -639,7 +654,12 @@ fn setup_filterable() -> (
         reg.register_collection(def.clone());
         reg.register_collection(tags_def);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -1058,7 +1078,12 @@ fn numeric_greater_than_with_actual_integers_in_db() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("sync");
 
     let rows: Vec<(&str, &str)> = vec![
         ("one", "1"),
@@ -1164,7 +1189,7 @@ fn filter_localized_field_in_array_routes_to_locale_column() {
     }
 
     let locale_config = locale_config_en_de();
-    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("sync");
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
 
@@ -1292,7 +1317,7 @@ fn seed_l10n_articles_fixture() -> (
     }
 
     let locale_config = locale_config_en_de();
-    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("sync");
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
 

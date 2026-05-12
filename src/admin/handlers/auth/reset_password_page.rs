@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{Query, State},
     response::Response,
@@ -45,7 +47,7 @@ pub async fn reset_password_page(
     Query(query): Query<ResetPasswordQuery>,
 ) -> Response {
     let pool = state.pool.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let token = query.token.clone();
 
     let valid = task::spawn_blocking(move || is_valid_reset_token(&pool, &registry, &token))

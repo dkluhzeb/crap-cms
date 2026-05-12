@@ -72,6 +72,7 @@ pub use field::{
     validate_template_name,
 };
 pub use job::{JobDefinition, JobLabels, JobRun, JobStatus};
+pub(crate) use registry::RegistryRead;
 pub use registry::{Registry, SharedRegistry};
 pub use req_context::ReqContext;
 pub use richtext::RichtextNodeDef;

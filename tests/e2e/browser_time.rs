@@ -38,7 +38,6 @@ async fn time_element_renders_formatted() {
     {
         let reg = app.registry.read().unwrap();
         let def = reg.get_collection("posts").unwrap().clone();
-        drop(reg);
 
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();

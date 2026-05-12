@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::{
     cli,
-    core::{Document, SharedRegistry},
+    core::{Document, Registry},
     db::{DbPool, query},
     service::{self, ServiceContext},
 };
@@ -16,7 +16,7 @@ use super::helpers::{get_user_email, resolve_user};
 #[cfg(not(tarpaulin_include))]
 pub(super) fn user_info(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,

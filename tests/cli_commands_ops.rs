@@ -24,8 +24,12 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
-fn full_setup() -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+/// Returns (TempDir, DbPool, Arc<Registry>).
+fn full_setup() -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -100,7 +104,7 @@ fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
 fn full_setup_with_jobs() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
 ) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
@@ -142,9 +146,7 @@ return M
 #[test]
 fn cmd_user_lock_by_email() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -177,9 +179,7 @@ fn cmd_user_lock_by_email() {
 #[test]
 fn cmd_user_lock_by_id() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -199,9 +199,7 @@ fn cmd_user_lock_by_id() {
 #[test]
 fn cmd_user_unlock_by_email() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -234,9 +232,7 @@ fn cmd_user_unlock_by_email() {
 #[test]
 fn cmd_user_delete_with_confirm_by_email() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -259,8 +255,7 @@ fn cmd_user_delete_with_confirm_by_email() {
     .unwrap();
 
     // Verify deleted
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap();
+    let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
     let found = query::find_by_id(&conn, "users", def, &id, None).unwrap();
     assert!(found.is_none(), "user should be deleted");
@@ -269,9 +264,7 @@ fn cmd_user_delete_with_confirm_by_email() {
 #[test]
 fn cmd_user_delete_with_confirm_by_id() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -293,8 +286,7 @@ fn cmd_user_delete_with_confirm_by_id() {
     })
     .unwrap();
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap();
+    let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
     let found = query::find_by_id(&conn, "users", def, &id, None).unwrap();
     assert!(found.is_none(), "user should be deleted");
@@ -320,9 +312,7 @@ fn cmd_user_delete_nonexistent_email_errors() {
 #[test]
 fn cmd_user_change_password_by_email() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -356,9 +346,7 @@ fn cmd_user_change_password_by_email() {
 #[test]
 fn cmd_user_change_password_by_id() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     let doc = create_user(
         &pool,
@@ -746,8 +734,7 @@ fn cmd_status_with_data() {
 
     // Create some data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();
@@ -1070,8 +1057,7 @@ fn cmd_migrate_fresh_with_confirm() {
         let db_pool = pool::create_pool(&config_dir, &cfg).unwrap();
         migrate::sync_all(&db_pool, &registry, &cfg.locale).unwrap();
 
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();
@@ -1095,8 +1081,7 @@ fn cmd_migrate_fresh_with_confirm() {
     let cfg = CrapConfig::load(&config_dir).unwrap();
     let registry = hooks::init_lua(&config_dir, &cfg).unwrap();
     let db_pool = pool::create_pool(&config_dir, &cfg).unwrap();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
     let count = ops::count_documents(&db_pool, "posts", def, &[], None).unwrap();
     assert_eq!(count, 0, "data should be gone after fresh");
 }
@@ -1108,8 +1093,7 @@ fn cmd_backup_with_output_dir() {
 
     // Create data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();

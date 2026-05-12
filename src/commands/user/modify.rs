@@ -6,7 +6,7 @@ use dialoguer::{Confirm, Password};
 use crate::{
     cli::{self, crap_theme},
     config::{LocaleConfig, PasswordPolicy},
-    core::SharedRegistry,
+    core::Registry,
     db::{DbPool, query},
     service::{self, ServiceContext, ServiceError},
 };
@@ -16,7 +16,7 @@ use super::helpers::{get_user_email, require_verify_email, resolve_user};
 /// Args for [`user_delete`].
 pub struct UserDeleteParams<'a> {
     pub pool: &'a DbPool,
-    pub registry: &'a SharedRegistry,
+    pub registry: &'a Registry,
     pub collection: &'a str,
     pub email: Option<String>,
     pub id: Option<String>,
@@ -47,10 +47,7 @@ pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
     }
 
     let mut conn = p.pool.get().context("Failed to get database connection")?;
-    let reg = p
-        .registry
-        .read()
-        .map_err(|_| anyhow!("Failed to read registry"))?;
+    let reg = p.registry;
     let def = reg
         .get_collection(p.collection)
         .ok_or_else(|| anyhow!("Collection '{}' not found in registry", p.collection))?;
@@ -79,7 +76,7 @@ pub fn user_delete(p: UserDeleteParams<'_>) -> Result<()> {
 #[cfg(not(tarpaulin_include))]
 pub fn user_lock(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -108,7 +105,7 @@ pub fn user_lock(
 #[cfg(not(tarpaulin_include))]
 pub fn user_unlock(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -137,7 +134,7 @@ pub fn user_unlock(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn user_verify(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -167,7 +164,7 @@ pub(super) fn user_verify(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn user_unverify(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -197,7 +194,7 @@ pub(super) fn user_unverify(
 /// Args for [`user_change_password`].
 pub struct UserChangePasswordParams<'a> {
     pub pool: &'a DbPool,
-    pub registry: &'a SharedRegistry,
+    pub registry: &'a Registry,
     pub collection: &'a str,
     pub email: Option<String>,
     pub id: Option<String>,

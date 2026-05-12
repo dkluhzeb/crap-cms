@@ -23,8 +23,12 @@ fn fixture_dir() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
-fn full_setup() -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+/// Returns (TempDir, DbPool, Arc<Registry>).
+fn full_setup() -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -106,8 +110,7 @@ fn cmd_export_all() {
 
     // Seed some posts
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
@@ -147,9 +150,8 @@ fn cmd_export_collection_filter() {
 
     // Seed posts and a user
     {
-        let reg = registry.read().unwrap();
-        let posts_def = reg.get_collection("posts").unwrap();
-        let users_def = reg.get_collection("users").unwrap();
+        let posts_def = registry.get_collection("posts").unwrap();
+        let users_def = registry.get_collection("users").unwrap();
 
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -216,8 +218,7 @@ fn cmd_import_roundtrip() {
     // Seed data
     let mut original_ids = Vec::new();
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         for i in 0..3 {
@@ -246,8 +247,7 @@ fn cmd_import_roundtrip() {
 
     // Verify empty
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let conn = pool.get().unwrap();
         let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
         assert_eq!(docs.len(), 0, "posts should be empty after delete");
@@ -258,8 +258,7 @@ fn cmd_import_roundtrip() {
 
     // Verify data restored
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let conn = pool.get().unwrap();
         let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
         assert_eq!(docs.len(), 3, "should have 3 posts after import");
@@ -292,8 +291,7 @@ fn cmd_user_create_via_library() {
     .unwrap();
 
     // Verify user was created in DB
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap();
+    let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
     let found = query::find_by_email(&conn, "users", def, "lib_create@example.com")
         .unwrap()
@@ -326,8 +324,7 @@ fn cmd_user_create_extra_fields() {
     })
     .unwrap();
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap();
+    let def = registry.get_collection("users").unwrap();
     let conn = pool.get().unwrap();
     let found = query::find_by_email(&conn, "users", def, "extra@example.com")
         .unwrap()
@@ -491,8 +488,7 @@ fn cmd_backup_creates_snapshot() {
 
     // Create some data so the DB has content
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();
@@ -584,9 +580,8 @@ return M
 
     // Verify the job is registered
     {
-        let reg = registry.read().unwrap();
         assert!(
-            reg.get_job("cleanup").is_some(),
+            registry.get_job("cleanup").is_some(),
             "cleanup job should be registered"
         );
     }
@@ -667,9 +662,8 @@ fn load_config_and_sync_works() {
     drop(conn);
 
     // Verify registry has expected collections
-    let reg = registry.read().unwrap();
-    assert!(reg.get_collection("posts").is_some());
-    assert!(reg.get_collection("users").is_some());
+    assert!(registry.get_collection("posts").is_some());
+    assert!(registry.get_collection("users").is_some());
 }
 
 #[test]
@@ -838,9 +832,7 @@ fn try_load_field_infos_bad_dir() {
 #[test]
 fn cmd_user_list() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("users").unwrap().clone();
 
     // Create some users
     create_user(

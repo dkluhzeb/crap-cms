@@ -81,7 +81,7 @@ mod tests {
         let config = CrapConfig::default();
         HookRunner::builder()
             .config_dir(tmp.path())
-            .registry(crate::core::Registry::shared())
+            .registry(std::sync::Arc::new(crate::core::Registry::default()))
             .config(&config)
             .build()
             .expect("runner")

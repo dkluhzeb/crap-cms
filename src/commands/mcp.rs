@@ -1,13 +1,15 @@
 //! `mcp` command — start the MCP stdio server.
 
-use std::{path::Path, sync::OnceLock};
+use std::{
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{Context as _, Result};
 use tracing::info;
 
 use crate::{
     config::CrapConfig,
-    core::Registry,
     db::{migrate, pool},
     hooks::{self, HookRunner},
     mcp,
@@ -35,17 +37,15 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     let hook_runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()?;
-
-    let registry_snapshot = Registry::snapshot(&registry);
 
     info!("MCP server starting (stdio mode)");
 
     let server = mcp::McpServer {
         pool,
-        registry: registry_snapshot,
+        registry,
         runner: hook_runner,
         config: cfg,
         config_dir,

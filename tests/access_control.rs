@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::Document;
@@ -18,7 +19,7 @@ use serde_json::{Value, json};
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
@@ -33,7 +34,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .unwrap();
@@ -56,8 +57,7 @@ fn access_config_parsed_from_lua() {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
-    let reg = registry.read().unwrap();
-    let posts = reg
+    let posts = registry
         .get_collection("posts")
         .expect("posts collection not found");
 
@@ -85,8 +85,7 @@ fn field_access_parsed_from_lua() {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
-    let reg = registry.read().unwrap();
-    let posts = reg
+    let posts = registry
         .get_collection("posts")
         .expect("posts collection not found");
 
@@ -238,8 +237,7 @@ fn field_write_no_field_access_allows_all() {
     let conn = pool.get().unwrap();
     let editor = make_user_doc("editor-1", "editor");
 
-    let reg = registry.read().unwrap();
-    let posts = reg.get_collection("posts").unwrap();
+    let posts = registry.get_collection("posts").unwrap();
 
     let denied = runner.check_field_write_access(&posts.fields, Some(&editor), "update", &conn);
     // No field-level access controls in posts definition
@@ -255,8 +253,7 @@ fn field_read_no_config_allows_all() {
     let (_tmp, pool, registry, runner) = setup();
     let conn = pool.get().unwrap();
 
-    let reg = registry.read().unwrap();
-    let posts = reg.get_collection("posts").unwrap();
+    let posts = registry.get_collection("posts").unwrap();
 
     // No field has read access configured, so nothing should be denied
     let denied = runner.check_field_read_access(&posts.fields, None, &conn);
@@ -273,9 +270,7 @@ fn field_read_no_config_allows_all() {
 fn constrained_find_filters_results() {
     let (_tmp, pool, registry, _runner) = setup();
 
-    let reg = registry.read().unwrap();
-    let posts = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
+    let posts = registry.get_collection("posts").unwrap().clone();
 
     // Create posts with different _status values via the versioning system
     let post_data = vec![
@@ -323,9 +318,7 @@ fn constrained_find_filters_results() {
 fn access_check_plus_db_query_end_to_end() {
     let (_tmp, pool, registry, runner) = setup();
 
-    let reg = registry.read().unwrap();
-    let posts = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
+    let posts = registry.get_collection("posts").unwrap().clone();
 
     // Create some posts
     for (i, slug) in ["e2e-post-1", "e2e-post-2"].iter().enumerate() {
@@ -567,7 +560,7 @@ fn row_fixture_dir() -> PathBuf {
 fn row_setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = row_fixture_dir();
@@ -580,7 +573,7 @@ fn row_setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .unwrap();
@@ -590,14 +583,12 @@ fn row_setup() -> (
 /// Seed articles directly via `query::create` to bypass access checks.
 fn seed_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     slug: &str,
     author_id: &str,
     title: &str,
 ) -> String {
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection(slug).unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection(slug).unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!(title));
@@ -796,7 +787,7 @@ fn default_deny_true_no_access_ref_returns_denied() {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .unwrap();
@@ -837,9 +828,7 @@ fn access_hook_filter_table_on_global_read_is_rejected() {
     let (_tmp, pool, registry, runner) = row_setup();
     let user_a = make_user_doc("user_a", "editor");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
     let conn = pool.get().unwrap();
     let hooks = RunnerReadHooks::new(&runner, &conn);
@@ -863,9 +852,7 @@ fn access_hook_filter_table_on_global_update_is_rejected() {
     let (_tmp, pool, registry, runner) = row_setup();
     let user_a = make_user_doc("user_a", "editor");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("site_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("site_settings").unwrap().clone();
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -891,13 +878,14 @@ fn access_hook_filter_table_on_global_update_is_rejected() {
 /// Returns (doc_id, first_version_id).
 fn seed_versioned_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     author_id: &str,
     title: &str,
 ) -> (String, String) {
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!(title));
@@ -930,9 +918,10 @@ fn access_hook_filter_table_on_list_versions_enforces_parent_match() {
     let (_tmp, pool, registry, runner) = row_setup();
     let (id, _) = seed_versioned_article(&pool, &registry, "user_b", "Other's doc");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
 
     // user_a (not the author) should be denied because own_rows enforces
     // { author_id = user_a } against the parent row, which doesn't match.
@@ -975,9 +964,10 @@ fn access_hook_filter_table_on_restore_version_enforces_parent_match() {
     let (_tmp, pool, registry, runner) = row_setup();
     let (id, version_id) = seed_versioned_article(&pool, &registry, "user_b", "Other's doc");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
     let lc = LocaleConfig::default();
 
     // user_a must not restore user_b's version — Constrained { author_id = user_a }
@@ -1018,9 +1008,10 @@ fn access_hook_filter_table_on_restore_version_enforces_parent_match() {
 fn restore_collection_version_rejects_snapshot_violating_required_field() {
     let (_tmp, pool, registry, runner) = row_setup();
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
 
     // Seed a valid live row so restore has a target.
     let mut data = DocumentFields::new();
@@ -1078,9 +1069,7 @@ fn access_hook_filter_table_on_job_trigger_is_rejected() {
     let (_tmp, pool, registry, runner) = row_setup();
     let user_a = make_user_doc("user_a", "editor");
 
-    let reg = registry.read().unwrap();
-    let job_def = reg.get_job("constrained_job").unwrap().clone();
-    drop(reg);
+    let job_def = registry.get_job("constrained_job").unwrap().clone();
 
     let conn = pool.get().unwrap();
     let ctx = ServiceContext::slug_only("constrained_job")
@@ -1110,14 +1099,15 @@ fn access_hook_filter_table_on_job_trigger_is_rejected() {
 /// unless `include_drafts = true`.
 fn seed_versioned_article_with_status(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     author_id: &str,
     title: &str,
     status: &str,
 ) -> String {
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!(title));
@@ -1150,9 +1140,10 @@ fn search_documents_excludes_drafts_by_default() {
         seed_versioned_article_with_status(&pool, &registry, "user_a", "Published", "published");
     let _draft = seed_versioned_article_with_status(&pool, &registry, "user_a", "Draft", "draft");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
 
     let user_a = make_user_doc("user_a", "editor");
     let conn = pool.get().unwrap();
@@ -1194,9 +1185,10 @@ fn search_documents_includes_drafts_when_opted_in() {
         seed_versioned_article_with_status(&pool, &registry, "user_a", "Published", "published");
     let _draft = seed_versioned_article_with_status(&pool, &registry, "user_a", "Draft", "draft");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("versioned_articles").unwrap().clone();
-    drop(reg);
+    let def = registry
+        .get_collection("versioned_articles")
+        .unwrap()
+        .clone();
 
     let user_a = make_user_doc("user_a", "editor");
     let conn = pool.get().unwrap();

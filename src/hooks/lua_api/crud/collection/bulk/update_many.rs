@@ -1,10 +1,12 @@
 //! Registration of `crap.collections.update_many` Lua function.
 
+use std::sync::Arc;
+
 use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, DocumentFields, SharedRegistry},
+    core::{CollectionDefinition, DocumentFields, Registry},
     db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::{
         lifecycle::converters::{
@@ -50,7 +52,7 @@ fn build_update_filters(
 /// ref count updates, FTS sync, and version snapshots.
 fn update_many_documents(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: &str,
     query_table: &Table,
@@ -93,15 +95,11 @@ fn update_many_documents(
         .collect();
     data.extend(composite_data);
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .hooks_enabled(hooks_enabled)
         .run_validation(run_hooks)
         .build();
@@ -135,7 +133,7 @@ fn update_many_documents(
 pub(crate) fn register_update_many(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> anyhow::Result<()> {
     let lc = locale_config.clone();

@@ -8,7 +8,7 @@ use tracing::{debug, info};
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, SharedInvalidationTransport, SharedRegistry, upload},
+    core::{Registry, SharedInvalidationTransport, upload},
     db::query::SharedPopulateSingleflight,
     hooks::{
         self, HookRunner,
@@ -26,7 +26,7 @@ use super::vm_pool::VmPool;
 /// Builder for [`HookRunner`]. Created via [`HookRunner::builder`].
 pub struct HookRunnerBuilder<'a> {
     config_dir: Option<&'a Path>,
-    registry: Option<SharedRegistry>,
+    registry: Option<Arc<Registry>>,
     config: Option<&'a CrapConfig>,
     invalidation_transport: Option<SharedInvalidationTransport>,
     populate_singleflight: Option<SharedPopulateSingleflight>,
@@ -48,7 +48,7 @@ impl<'a> HookRunnerBuilder<'a> {
         self
     }
 
-    pub fn registry(mut self, registry: SharedRegistry) -> Self {
+    pub fn registry(mut self, registry: Arc<Registry>) -> Self {
         self.registry = Some(registry);
         self
     }
@@ -94,7 +94,7 @@ impl<'a> HookRunnerBuilder<'a> {
         for i in 0..pool_size {
             vms.push(create_lua_vm(
                 config_dir,
-                registry.clone(),
+                Arc::clone(&registry),
                 config,
                 i + 1,
                 invalidation_transport.clone(),
@@ -119,12 +119,10 @@ impl<'a> HookRunnerBuilder<'a> {
             }
         );
 
-        let registry_snapshot = Registry::snapshot(&registry);
-
         Ok(HookRunner {
             pool: Arc::new(VmPool::new(vms)),
             registered_events: Arc::new(registered_events),
-            registry: registry_snapshot,
+            registry,
         })
     }
 }
@@ -133,7 +131,7 @@ impl<'a> HookRunnerBuilder<'a> {
 /// collection/global/job loading, and init.lua execution.
 fn create_lua_vm(
     config_dir: &Path,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     config: &CrapConfig,
     vm_index: usize,
     invalidation_transport: Option<SharedInvalidationTransport>,
@@ -167,8 +165,17 @@ fn create_lua_vm(
     // gets a clear error instead of a silent no-op or per-VM fragmentation.
     lua.set_app_data(InitPhase);
 
-    load_def_dir(&lua, config_dir, "collection")?;
-    load_def_dir(&lua, config_dir, "global")?;
+    // Pool VMs skip `collections/` and `globals/` files — those files
+    // only call `crap.<x>.define`, which writes to the shared registry.
+    // The init_lua VM already populated the registry; pool VMs hold
+    // the resulting `Arc<Registry>` snapshot. Re-running these files
+    // here would only double-write idempotently.
+    //
+    // `jobs/` IS re-run because its files contain handler functions
+    // (`local M = {} ; function M.run(ctx) ... end ; return M`) that
+    // produce per-VM Lua state — the `M.run` handle is bound to this
+    // VM and the dispatcher's later `require("jobs.foo")` must hit
+    // this VM's `package.loaded` cache to find it.
     load_def_dir(&lua, config_dir, "job")?;
 
     execute_init_lua(&lua, config_dir, vm_index)?;
@@ -191,10 +198,13 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
         .context("Failed to set package paths")
 }
 
-/// Register the crap API and CRUD functions on the Lua VM.
-fn register_apis(lua: &Lua, registry: SharedRegistry, config: &CrapConfig) -> Result<()> {
-    lua_api::register_api(lua, registry.clone(), config)?;
-
+/// Register the crap API and CRUD functions on pool Lua VMs. Pool VMs
+/// hold the `Arc<Registry>` snapshot for both the API surface and the
+/// CRUD layer — the registry is fully populated by the time HookRunner
+/// is built, and `crap.<x>.define` calls during pool VM init are
+/// no-ops (the init_lua VM already wrote those defs).
+fn register_apis(lua: &Lua, registry: Arc<Registry>, config: &CrapConfig) -> Result<()> {
+    lua_api::register_api_pool_init(lua, Arc::clone(&registry), config)?;
     register_crud_functions(lua, registry, &config.locale, &config.pagination)?;
 
     Ok(())
@@ -250,11 +260,15 @@ fn execute_init_lua(lua: &Lua, config_dir: &Path, vm_index: usize) -> Result<()>
 }
 
 /// Load Lua definition files from `{config_dir}/{kind}s/` if the directory exists.
+/// Passes the plural directory name as the `package.loaded` cache-key
+/// prefix so `require("jobs.foo")` hits the cache populated for
+/// `<config_dir>/jobs/foo.lua`.
 fn load_def_dir(lua: &Lua, config_dir: &Path, kind: &str) -> Result<()> {
-    let dir = config_dir.join(format!("{kind}s"));
+    let dir_name = format!("{kind}s");
+    let dir = config_dir.join(&dir_name);
 
     if dir.exists() {
-        hooks::load_lua_dir(lua, &dir, kind)?;
+        hooks::load_lua_dir(lua, &dir, &dir_name)?;
     }
 
     Ok(())

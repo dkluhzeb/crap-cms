@@ -50,7 +50,12 @@ fn seed_posts() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let rows: Vec<(&str, &str)> = vec![
         ("Alpha Post", "published"),
@@ -116,7 +121,12 @@ fn setup_global() -> (tempfile::TempDir, crap_cms::db::DbPool, GlobalDefinition)
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -160,7 +170,12 @@ fn setup_articles() -> (
         reg.register_collection(def.clone());
         reg.register_collection(tags_def);
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -175,7 +190,12 @@ fn coerce_number_invalid_returns_null() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     let mut data = DocumentFields::new();
     data.insert("score".to_string(), json!("abc"));
@@ -197,7 +217,12 @@ fn coerce_number_empty_returns_null() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     let mut data = DocumentFields::new();
     data.insert("score".to_string(), json!(""));
@@ -235,7 +260,12 @@ fn checkbox_default_when_field_missing() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     // Create without providing "enabled" — should default to 0
     let mut data = DocumentFields::new();
@@ -286,7 +316,12 @@ fn sync_creates_auth_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Verify auth columns exist by using them
     let mut conn = pool.get().expect("conn");
@@ -335,7 +370,12 @@ fn alter_adds_new_field_column() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("First sync");
 
     // Add a new field
     def.fields.push(make_field("excerpt", FieldType::Text));
@@ -343,7 +383,12 @@ fn alter_adds_new_field_column() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Second sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Second sync");
 
     // Verify we can use the new column
     let mut data = DocumentFields::new();
@@ -375,7 +420,12 @@ fn alter_adds_auth_columns_on_upgrade() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("First sync");
 
     // Upgrade to auth
     def.auth = Some(Auth {
@@ -387,7 +437,12 @@ fn alter_adds_auth_columns_on_upgrade() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Second sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Second sync");
 
     // Verify auth columns work
     let mut data = DocumentFields::new();
@@ -423,7 +478,7 @@ fn sync_adds_locale_columns() {
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &registry, &locale_config).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("Sync");
 
     // Create with locale context — should write to title__en
     let locale_ctx = query::LocaleContext {
@@ -480,7 +535,12 @@ fn setup_group_collection() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
     (_tmp, pool, def)
 }
 
@@ -608,7 +668,12 @@ fn count_all_documents() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Insert 3 documents
     for i in 0..3 {
@@ -634,7 +699,12 @@ fn count_with_filter() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let statuses = ["published", "draft", "published"];
     for (i, status) in statuses.iter().enumerate() {
@@ -665,7 +735,12 @@ fn count_empty_collection() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let conn = pool.get().expect("DB connection");
     let total = query::count(&conn, "posts", &def, &[], None).expect("Count failed");
@@ -683,7 +758,12 @@ fn ops_count_documents() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     for i in 0..3 {
         let mut data = DocumentFields::new();
@@ -718,7 +798,12 @@ fn contains_filter_escapes_percent() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Create two documents: one with "50% off" and one with "100 items"
     let titles = vec!["50% off", "100 items"];
@@ -756,7 +841,12 @@ fn contains_filter_escapes_underscore() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Create two documents: "a_b" and "axb"
     let titles = vec!["a_b", "axb"];
@@ -858,8 +948,12 @@ fn migrate_default_value_with_quotes() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
-        .expect("Sync should not fail on default value with quotes");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync should not fail on default value with quotes");
 
     // Create a document without providing the publisher field — should use the default
     let mut data = DocumentFields::new();
@@ -889,7 +983,12 @@ fn create_checkbox_truthy_values() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     // All truthy values should store as 1
     for truthy in &["on", "true", "1", "yes"] {
@@ -926,7 +1025,12 @@ fn create_checkbox_falsy_values() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     // All falsy values should store as 0
     for falsy in &["off", "false", "0"] {
@@ -960,7 +1064,12 @@ fn create_number_invalid_stores_null() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     let mut data = DocumentFields::new();
     data.insert("score".to_string(), json!("abc"));
@@ -983,7 +1092,12 @@ fn create_text_empty_stores_null() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Has empty status"));

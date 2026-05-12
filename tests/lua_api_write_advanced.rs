@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::Registry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use std::sync::Arc;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -40,7 +41,7 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -54,7 +55,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -1134,8 +1135,7 @@ crap.jobs.define("cleanup", {
 
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let reg = registry.read().unwrap();
-    let job = reg.get_job("cleanup").expect("cleanup job");
+    let job = registry.get_job("cleanup").expect("cleanup job");
     assert_eq!(job.handler, "hooks.jobs.cleanup");
     assert_eq!(job.schedule, Some("0 0 * * *".to_string()));
     assert_eq!(job.queue, "maintenance");

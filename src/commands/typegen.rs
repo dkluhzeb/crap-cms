@@ -19,13 +19,10 @@ pub fn run(
     // Load config + Lua VM to get registry
     let cfg = config::CrapConfig::load(&config_dir).context("Failed to load config")?;
     let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     if lang_str == "all" {
         for lang in typegen::Language::all() {
-            let path = typegen::generate_lang(&config_dir, &reg, *lang, output_dir)
+            let path = typegen::generate_lang(&config_dir, &registry, *lang, output_dir)
                 .with_context(|| format!("Failed to generate {} types", lang.label()))?;
 
             cli::success(&format!("Generated {}", path.display()));
@@ -38,7 +35,7 @@ pub fn run(
             )
         })?;
 
-        let path = typegen::generate_lang(&config_dir, &reg, lang, output_dir)
+        let path = typegen::generate_lang(&config_dir, &registry, lang, output_dir)
             .context("Failed to generate type definitions")?;
 
         cli::success(&format!("Generated {}", path.display()));
@@ -46,8 +43,9 @@ pub fn run(
 
     // Generate proto conversion code if requested (Rust only)
     if let Some(proto_path) = proto_mod {
-        let path = typegen::generate_proto_conversion(&config_dir, &reg, proto_path, output_dir)
-            .context("Failed to generate proto conversion code")?;
+        let path =
+            typegen::generate_proto_conversion(&config_dir, &registry, proto_path, output_dir)
+                .context("Failed to generate proto conversion code")?;
 
         cli::success(&format!("Generated {}", path.display()));
     }

@@ -54,7 +54,6 @@ fn make_rel_posts_def() -> CollectionDefinition {
 fn create_category(app: &TestApp, name: &str) -> String {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("categories").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();

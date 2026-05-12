@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use crate::{
     api::handlers::proto::parse_where_json,
     cli::{self, Table},
-    core::{CollectionDefinition, SharedRegistry},
+    core::{CollectionDefinition, Registry},
     db::{
         DbConnection, DbValue, FindQuery,
         query::{
@@ -21,16 +21,12 @@ use super::helpers::format_duration;
 
 /// Run query benchmarks on all (or filtered) collections.
 pub fn run(
-    registry: &SharedRegistry,
+    registry: &Registry,
     conn: &dyn DbConnection,
     collection: Option<&str>,
     explain: bool,
     where_clause: Option<&str>,
 ) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {e}"))?;
-
     let filters = match where_clause {
         Some(json_str) => {
             let parsed = parse_where_json(json_str).map_err(|e| anyhow!("Invalid --where: {e}"))?;
@@ -46,7 +42,7 @@ pub fn run(
     let mut table = Table::new(vec!["Collection", "Rows", "Time", "Read hooks"]);
     let mut explain_output: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
-    let mut slugs: Vec<_> = reg.collections.keys().collect();
+    let mut slugs: Vec<_> = registry.collections.keys().collect();
     slugs.sort();
 
     for slug in slugs {
@@ -56,7 +52,7 @@ pub fn run(
             continue;
         }
 
-        let def = &reg.collections[slug];
+        let def = &registry.collections[slug];
 
         let find_query = match &filters {
             Some(f) => FindQuery::builder()

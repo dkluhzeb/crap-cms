@@ -29,7 +29,6 @@ fn make_confirm_def() -> CollectionDefinition {
 fn create_post(app: &TestApp, title: &str) -> String {
     let reg = app.registry.read().unwrap();
     let def = reg.get_collection("posts").unwrap().clone();
-    drop(reg);
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();

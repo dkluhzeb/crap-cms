@@ -49,8 +49,12 @@ fn full_crud_cycle() {
     }
 
     // Sync schema
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
-        .expect("Failed to sync schema");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Failed to sync schema");
 
     // Create
     let mut data = DocumentFields::new();
@@ -114,7 +118,12 @@ fn sync_schema_adds_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("First sync failed");
 
     // Add a field
     def.fields
@@ -123,7 +132,12 @@ fn sync_schema_adds_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Second sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Second sync failed");
 
     // Verify we can use the new column
     let mut data = DocumentFields::new();
@@ -149,7 +163,12 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("First sync");
 
     // Insert a row (no timestamp columns exist)
     let mut data = DocumentFields::new();
@@ -167,8 +186,12 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
-        .expect("Second sync with timestamps");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Second sync with timestamps");
 
     // Verify we can query (the bug: SELECT ... created_at, updated_at would fail)
     let find_query = query::FindQuery::default();
@@ -180,9 +203,9 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
 
     // Existing row has NULL timestamps (added via ALTER TABLE with no default)
     assert!(docs[0].created_at.is_none());
+    drop(conn);
 
     // New rows get timestamps set by the query layer
-    drop(conn);
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
     let mut data2 = DocumentFields::new();
@@ -201,7 +224,12 @@ fn count_documents() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Insert 3 documents
     for i in 0..3 {
@@ -226,7 +254,12 @@ fn filter_rejects_invalid_field_name() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let find_query = query::FindQuery::builder()
         .filters(vec![query::FilterClause::Single(query::Filter {
@@ -254,7 +287,12 @@ fn order_by_rejects_invalid_field_name() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let find_query = query::FindQuery::builder()
         .order_by(Some("nonexistent".to_string()))
@@ -279,7 +317,12 @@ fn sql_injection_in_filter_field_blocked() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     let find_query = query::FindQuery::builder()
         .filters(vec![query::FilterClause::Single(query::Filter {
@@ -314,7 +357,12 @@ fn seed_posts() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Status values: "" means pass empty string → coerce_value converts to NULL.
     // Omitting the field entirely would use the column DEFAULT ('draft'), not NULL.
@@ -380,7 +428,12 @@ fn setup_auth_collection() -> (
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
 
     // Insert a test user
     let mut data = DocumentFields::new();
@@ -625,7 +678,12 @@ fn setup_global() -> (tempfile::TempDir, crap_cms::db::DbPool, GlobalDefinition)
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync failed");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync failed");
     (_tmp, pool, def)
 }
 
@@ -724,7 +782,12 @@ fn coerce_checkbox_values() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     // "on" → 1
     let mut data = DocumentFields::new();
@@ -756,7 +819,12 @@ fn coerce_number_valid() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync");
+    migrate::sync_all(
+        &pool,
+        &registry.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("Sync");
 
     let mut data = DocumentFields::new();
     data.insert("score".to_string(), json!("42.5"));

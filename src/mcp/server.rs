@@ -278,12 +278,12 @@ mod tests {
             }
         }
 
-        migrate::sync_all(&db_pool, &shared, &config.locale).expect("sync schema");
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).expect("sync schema");
 
         let registry = Registry::snapshot(&shared);
         let runner = HookRunner::builder()
             .config_dir(tmp.path())
-            .registry(shared)
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .expect("hook runner");

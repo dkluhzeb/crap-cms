@@ -2,6 +2,7 @@
 //! runner, and dispatch to the per-action handler.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 
@@ -29,7 +30,7 @@ pub fn run(config_dir: &Path, action: BenchAction) -> Result<()> {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()
         .context("Failed to create HookRunner")?;

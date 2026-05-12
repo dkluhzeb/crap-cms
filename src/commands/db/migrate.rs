@@ -1,9 +1,6 @@
 //! `migrate` subcommand: schema sync, Lua data migrations, rollback, fresh.
 
-use std::{
-    path::Path,
-    sync::{Arc, RwLock},
-};
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -48,7 +45,7 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
 fn migrate_up(
     config_dir: &Path,
     cfg: &CrapConfig,
-    registry: &Arc<RwLock<Registry>>,
+    registry: &Arc<Registry>,
     pool: &DbPool,
 ) -> Result<()> {
     let spin = Spinner::new("Syncing schema...");
@@ -67,7 +64,7 @@ fn migrate_up(
 
     let hook_runner = HookRunner::builder()
         .config_dir(config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(registry))
         .config(cfg)
         .build()?;
 
@@ -83,7 +80,7 @@ fn migrate_up(
 fn migrate_down(
     config_dir: &Path,
     cfg: &CrapConfig,
-    registry: &Arc<RwLock<Registry>>,
+    registry: &Arc<Registry>,
     pool: &DbPool,
     steps: usize,
 ) -> Result<()> {
@@ -98,7 +95,7 @@ fn migrate_down(
 
     let hook_runner = HookRunner::builder()
         .config_dir(config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(registry))
         .config(cfg)
         .build()?;
 
@@ -165,7 +162,7 @@ fn migrate_list(config_dir: &Path, pool: &DbPool) -> Result<()> {
 fn migrate_fresh(
     config_dir: &Path,
     cfg: &CrapConfig,
-    registry: &Arc<RwLock<Registry>>,
+    registry: &Arc<Registry>,
     pool: &DbPool,
     confirm: bool,
 ) -> Result<()> {
@@ -190,7 +187,7 @@ fn migrate_fresh(
     if !all_files.is_empty() {
         let hook_runner = HookRunner::builder()
             .config_dir(config_dir)
-            .registry(registry.clone())
+            .registry(Arc::clone(registry))
             .config(cfg)
             .build()?;
 

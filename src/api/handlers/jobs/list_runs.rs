@@ -75,7 +75,7 @@ impl ContentService {
         let input = ListJobRunsBlockingInput {
             pool: self.pool.clone(),
             token_provider: self.token_provider.clone(),
-            registry: self.registry.clone(),
+            registry: Arc::clone(&self.registry),
             token,
             slug: req.slug.clone(),
             status: req.status.clone(),

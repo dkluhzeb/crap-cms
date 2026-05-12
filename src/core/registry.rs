@@ -20,8 +20,48 @@ pub struct Registry {
     pub richtext_nodes: HashMap<String, RichtextNodeDef>,
 }
 
-/// Thread-safe shared reference to the registry.
+/// Thread-safe shared reference to the registry. Used during init when
+/// definitions are being mutated; runtime VMs hold an `Arc<Registry>`
+/// snapshot instead.
 pub type SharedRegistry = Arc<RwLock<Registry>>;
+
+/// Read-only registry handle. Implemented for both [`SharedRegistry`]
+/// (init-phase, locks per call) and `Arc<Registry>` (runtime snapshot,
+/// no lock), so registration helpers can stay flavour-agnostic and a
+/// single function body covers both phases. Each call to [`with`]
+/// borrows the underlying [`Registry`] for the duration of the closure.
+pub trait RegistryRead: Clone + Send + Sync + 'static {
+    /// Invoke `f` with a borrow of the underlying [`Registry`]. Returns
+    /// `Err` if the underlying lock is poisoned (only possible for the
+    /// `SharedRegistry` implementation).
+    fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned>;
+}
+
+/// Returned by [`RegistryRead::with`] when the underlying lock is
+/// poisoned. Only the `SharedRegistry` implementation can produce this.
+#[derive(Debug, Clone, Copy)]
+pub struct RegistryLockPoisoned;
+
+impl std::fmt::Display for RegistryLockPoisoned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Registry lock poisoned")
+    }
+}
+
+impl std::error::Error for RegistryLockPoisoned {}
+
+impl RegistryRead for SharedRegistry {
+    fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned> {
+        let r = self.read().map_err(|_| RegistryLockPoisoned)?;
+        Ok(f(&r))
+    }
+}
+
+impl RegistryRead for Arc<Registry> {
+    fn with<R>(&self, f: impl FnOnce(&Registry) -> R) -> Result<R, RegistryLockPoisoned> {
+        Ok(f(self))
+    }
+}
 
 impl Registry {
     /// Create an empty registry with no collections or globals.

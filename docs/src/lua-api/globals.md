@@ -4,7 +4,13 @@ Global (singleton document) definition and runtime operations.
 
 ## crap.globals.define(slug, config)
 
-Define a new global. Call this in global definition files (`globals/*.lua`).
+Define a new global. **Init-only:** call this from `globals/*.lua`,
+`init.lua`, or any file loaded by `require` from those — i.e. while
+the `InitPhase` marker is set on the VM. Runtime calls error with:
+
+> `crap.globals.define must be called from a definition file or
+> init.lua. To change a registered global, edit the file and restart
+> the process.`
 
 ```lua
 crap.globals.define("site_settings", {
@@ -21,11 +27,12 @@ See [Globals](../globals/overview.md) for the full config reference.
 ## crap.globals.config.get(slug)
 
 Get a global's current definition as a Lua table. The returned table is round-trip
-compatible with `define()` — you can modify it and pass it back.
+compatible with `define()` — you can modify it and pass it back, **inside init**.
 
 Returns `nil` if the global doesn't exist.
 
 ```lua
+-- inside a definition file or init.lua
 local def = crap.globals.config.get("site_settings")
 if def then
     def.fields[#def.fields + 1] = crap.fields.textarea({ name = "footer_text" })
@@ -35,9 +42,12 @@ end
 
 ## crap.globals.config.list()
 
-Get all registered globals as a slug-keyed table. Iterate with `pairs()`.
+Get all registered globals as a slug-keyed table. Iterate with
+`pairs()`. The realistic bulk-modify pattern runs from `init.lua` (or
+a file it `require`s) where the strict guard on `define` doesn't fire.
 
 ```lua
+-- inside init.lua / a plugin loaded by init.lua
 for slug, def in pairs(crap.globals.config.list()) do
     -- Add a "last_updated_by" field to every global
     def.fields[#def.fields + 1] = crap.fields.text({ name = "last_updated_by" })

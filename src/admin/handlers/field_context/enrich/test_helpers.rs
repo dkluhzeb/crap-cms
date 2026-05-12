@@ -7,7 +7,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock, atomic::AtomicUsize},
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use r2d2_sqlite::SqliteConnectionManager;
@@ -116,15 +116,14 @@ pub(super) fn make_test_state() -> AdminState {
     let tmp = tempfile::tempdir().unwrap();
     let manager = SqliteConnectionManager::memory();
     let pool = DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
-    let shared_reg = Arc::new(RwLock::new(Registry::default()));
+    let registry: Arc<Registry> = Arc::new(Registry::default());
     let config = CrapConfig::default();
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(shared_reg.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .unwrap();
-    let registry = Arc::new(shared_reg.read().unwrap().clone());
     let hbs = Arc::new(handlebars::Handlebars::new());
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = Arc::new(LoginRateLimiter::new(5, 300));

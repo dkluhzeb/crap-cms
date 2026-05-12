@@ -5,6 +5,7 @@
 //! Split from cli_integration.rs for faster parallel compilation.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
@@ -29,8 +30,12 @@ fn crap_bin() -> PathBuf {
 }
 
 /// Copy fixture dir to a temp dir, init Lua, create pool, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
-fn full_setup() -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+/// Returns (TempDir, DbPool, Arc<Registry>).
+fn full_setup() -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -85,8 +90,7 @@ fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
 #[test]
 fn roundtrip_data_preserved() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
 
     // Create some data
     {
@@ -171,12 +175,11 @@ fn roundtrip_data_preserved() {
 #[test]
 fn roundtrip_multiple_collections() {
     let (_tmp, pool, registry) = full_setup();
-    let reg = registry.read().unwrap();
 
     // Seed both collections
     {
-        let posts_def = reg.get_collection("posts").unwrap();
-        let users_def = reg.get_collection("users").unwrap();
+        let posts_def = registry.get_collection("posts").unwrap();
+        let users_def = registry.get_collection("users").unwrap();
 
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -196,7 +199,7 @@ fn roundtrip_multiple_collections() {
     // Export both
     let conn = pool.get().unwrap();
     let mut collections_data = serde_json::Map::new();
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
         let docs_json: Vec<serde_json::Value> = docs
             .into_iter()
@@ -224,9 +227,8 @@ fn typegen_lua() {
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
-    let reg = registry.read().unwrap();
 
-    let path = typegen::generate(&config_dir, &reg).unwrap();
+    let path = typegen::generate(&config_dir, &registry).unwrap();
     assert!(path.exists());
     assert!(path.to_string_lossy().ends_with("generated.lua"));
 
@@ -242,10 +244,9 @@ fn typegen_all_languages() {
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
-    let reg = registry.read().unwrap();
 
     for lang in typegen::Language::all() {
-        let path = typegen::generate_lang(&config_dir, &reg, *lang, None).unwrap();
+        let path = typegen::generate_lang(&config_dir, &registry, *lang, None).unwrap();
         assert!(path.exists(), "file should exist for {:?}", lang);
         let expected_ext = format!("generated.{}", lang.file_extension());
         assert!(
@@ -369,7 +370,7 @@ return M
     // Apply migration
     let hook_runner = hooks::lifecycle::HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()
         .unwrap();
@@ -419,8 +420,7 @@ fn migrate_fresh() {
 
     // Seed data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();
@@ -434,8 +434,7 @@ fn migrate_fresh() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).unwrap();
 
     // Verify data is gone but tables exist
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
     let count = ops::count_documents(&db_pool, "posts", def, &[], None).unwrap();
     assert_eq!(count, 0, "data should be gone after fresh");
 }
@@ -457,8 +456,7 @@ fn backup_snapshot() {
 
     // Create a document so the DB has data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();
@@ -863,8 +861,7 @@ fn cmd_restore_roundtrip() {
 
     // Create data
     {
-        let reg = registry.read().unwrap();
-        let def = reg.get_collection("posts").unwrap();
+        let def = registry.get_collection("posts").unwrap();
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let mut data = DocumentFields::new();
@@ -899,8 +896,7 @@ fn cmd_restore_roundtrip() {
 
     // Verify data is intact
     let pool2 = pool::create_pool(&config_dir, &cfg).expect("create pool");
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").unwrap();
+    let def = registry.get_collection("posts").unwrap();
     let conn = pool2.get().unwrap();
     let results = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(results.len(), 1);
@@ -1162,11 +1158,15 @@ fn templates_extract_via_binary() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Helper: scaffold a fresh project, add a collection with given Lua, load config, sync schema.
-/// Returns (TempDir, DbPool, SharedRegistry).
+/// Returns (TempDir, DbPool, Arc<Registry>).
 fn setup_with_collection(
     slug: &str,
     lua_content: &str,
-) -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+) -> (
+    tempfile::TempDir,
+    DbPool,
+    std::sync::Arc<crap_cms::core::Registry>,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
@@ -1231,8 +1231,7 @@ fn nested_group_scaffold_to_schema_sync() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema with nested group");
 
     // Verify collection was registered
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles should exist in registry");
     assert!(def.fields.iter().any(|f| f.name == "seo"));
@@ -1262,8 +1261,7 @@ fn nested_array_scaffold_to_schema_sync() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema with nested array");
 
     // Verify structure
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("products").unwrap();
+    let def = registry.get_collection("products").unwrap();
     let array_field = def.fields.iter().find(|f| f.name == "items").unwrap();
     assert_eq!(
         array_field.field_type,
@@ -1365,8 +1363,7 @@ fn fts_excludes_container_fields_from_searchable() {
     let (_tmp, pool, registry) = setup_with_collection("test_fts", lua);
 
     // If we get here, FTS sync didn't crash. Verify title is searchable.
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("test_fts").unwrap();
+    let def = registry.get_collection("test_fts").unwrap();
 
     // Verify the FTS fields exclude the array field
     let fts_fields = crap_cms::db::query::fts::get_fts_fields(def);
@@ -1529,21 +1526,19 @@ fn init_no_input_full_roundtrip() {
 
     // Verify collections registered
     {
-        let reg = registry.read().unwrap();
-        let users_def = reg
+        let users_def = registry
             .get_collection("users")
             .expect("users collection should be registered");
         assert!(users_def.auth.is_some(), "users should have auth flag");
 
-        let media_def = reg
+        let media_def = registry
             .get_collection("media")
             .expect("media collection should be registered");
         assert!(media_def.upload.is_some(), "media should have upload flag");
     }
 
     // Create a user programmatically
-    let reg = registry.read().unwrap();
-    let users_def = reg.get_collection("users").unwrap();
+    let users_def = registry.get_collection("users").unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -1565,10 +1560,10 @@ fn init_no_input_full_roundtrip() {
     )
     .unwrap();
     assert_eq!(users.len(), 1);
+    drop(conn);
 
     // Create a document in media collection
-    let media_def = reg.get_collection("media").unwrap();
-    drop(conn);
+    let media_def = registry.get_collection("media").unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -1673,8 +1668,7 @@ fn init_scaffold_nested_collection_full_crud() {
     let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap();
+    let def = registry.get_collection("articles").unwrap();
 
     // Create a document with title
     {
@@ -1690,10 +1684,10 @@ fn init_scaffold_nested_collection_full_crud() {
     let conn = db_pool.get().unwrap();
     let docs = query::find(&conn, "articles", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(docs.len(), 1);
+    drop(conn);
 
     // Create a user
-    let users_def = reg.get_collection("users").unwrap();
-    drop(conn);
+    let users_def = registry.get_collection("users").unwrap();
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -1747,8 +1741,7 @@ fn init_with_locales_and_nested_localized_crud() {
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
 
     // Verify collection registered with localized fields
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").unwrap();
+    let def = registry.get_collection("pages").unwrap();
     let title_field = def.fields.iter().find(|f| f.name == "title").unwrap();
     assert!(title_field.localized, "title field should be localized");
 
@@ -1942,8 +1935,7 @@ fn nested_fields_with_locales_e2e() {
         .expect("sync schema with localized nested fields");
 
     // Verify FTS columns are properly expanded for localized text fields
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").unwrap();
+    let def = registry.get_collection("pages").unwrap();
     let fts_cols = crap_cms::db::query::fts::get_fts_columns(def, &cfg.locale).unwrap();
     // "title" is localized text → should expand to title__en, title__de
     assert!(

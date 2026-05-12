@@ -1,11 +1,13 @@
 //! Registration of `crap.globals.get` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::LocaleContext,
     hooks::{
         lifecycle::converters::document_to_lua_table,
@@ -17,7 +19,7 @@ use crate::{
 /// Core logic for `crap.globals.get`.
 fn globals_get_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     slug: String,
     opts: Option<Table>,
@@ -59,7 +61,7 @@ fn globals_get_inner(
 pub(crate) fn register_globals_get(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

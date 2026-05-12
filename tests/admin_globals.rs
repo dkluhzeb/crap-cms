@@ -79,7 +79,7 @@ struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
     pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
+    registry: std::sync::Arc<crap_cms::core::Registry>,
     jwt_secret: JwtSecret,
 }
 
@@ -130,21 +130,20 @@ fn setup_app_inner(
     // fixture's collections/globals/hooks via `hooks::init_lua` and then use
     // the fixture dir as the HookRunner's config_dir. Otherwise stick with the
     // programmatic registration path the rest of the suite relies on.
-    let (registry, hook_config_dir) = match fixture_dir.as_deref() {
+    let (shared, hook_config_dir) = match fixture_dir.as_deref() {
         Some(fd) => {
-            let reg = hooks::init_lua(fd, &config).expect("init lua from fixture");
-            (reg, fd.to_path_buf())
+            let init_snap = hooks::init_lua(fd, &config).expect("init lua from fixture");
+            let shared = Registry::shared();
+            *shared.write().unwrap() = (*init_snap).clone();
+            (shared, fd.to_path_buf())
         }
-        None => {
-            let reg = Registry::shared();
-            (reg, tmp.path().to_path_buf())
-        }
+        None => (Registry::shared(), tmp.path().to_path_buf()),
     };
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &collections {
             reg.register_collection(def.clone());
         }
@@ -153,11 +152,12 @@ fn setup_app_inner(
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner = HookRunner::builder()
         .config_dir(&hook_config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("create hook runner");
@@ -167,16 +167,16 @@ fn setup_app_inner(
         .expect("create handlebars");
     let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
-    let has_auth = {
-        let reg = registry.read().unwrap();
-        reg.collections.values().any(|d| d.is_auth_collection())
-    };
+    let has_auth = registry
+        .collections
+        .values()
+        .any(|d| d.is_auth_collection());
 
     let state = AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
         pool: db_pool.clone(),
-        registry: Registry::snapshot(&registry),
+        registry: Arc::clone(&registry),
         handlebars,
         hook_runner,
         jwt_secret: "test-jwt-secret".into(),
@@ -247,9 +247,7 @@ fn create_test_user_with_role(
     password: &str,
     role: Option<&str>,
 ) -> String {
-    let reg = app.registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
+    let def = app.registry.get_collection("users").unwrap().clone();
 
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -839,10 +837,7 @@ async fn dashboard_renders_collection_counts() {
     let user_id = create_test_user(&app, "dashcount@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "dashcount@test.com");
 
-    let def = {
-        let reg = app.registry.read().unwrap();
-        reg.get_collection("posts").unwrap().clone()
-    };
+    let def = app.registry.get_collection("posts").unwrap().clone();
     for title in &["Post A", "Post B"] {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -961,14 +956,12 @@ fn global_read_admin_via_service_layer_allowed() {
 
     let runner = HookRunner::builder()
         .config_dir(&fixture)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_global("restricted_settings").unwrap().clone();
-    drop(reg);
+    let def = registry.get_global("restricted_settings").unwrap().clone();
 
     let mut admin_fields = std::collections::HashMap::new();
     admin_fields.insert("role".to_string(), serde_json::json!("admin"));

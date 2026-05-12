@@ -287,7 +287,7 @@ async fn group_group_crud_roundtrip() {
 
     // Insert a doc with nested group data via flat column names
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("companies").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -544,7 +544,7 @@ async fn five_level_group_crud_roundtrip() {
     let cookie = make_auth_cookie(&app, &user_id, "deep5rt@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("orgs").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -809,7 +809,7 @@ async fn nested_groups_locale_roundtrip() {
         fallback: true,
     };
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("products").unwrap().clone()
     };
 
@@ -1560,7 +1560,7 @@ async fn group_array_crud_roundtrip() {
     // Verify via DB — use find to get ID, then find_by_id for full hydration
     let conn = app.pool.get().unwrap();
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("candidates").unwrap().clone()
     };
     let docs = crap_cms::db::query::find(
@@ -1664,7 +1664,7 @@ async fn group_collapsible_array_crud_roundtrip() {
     // Verify via DB — use find_by_id for full hydration
     let conn = app.pool.get().unwrap();
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("products").unwrap().clone()
     };
     let docs = crap_cms::db::query::find(
@@ -1814,7 +1814,7 @@ async fn group_array_blocks_crud_roundtrip() {
     // Verify via DB
     let conn = app.pool.get().unwrap();
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("projects").unwrap().clone()
     };
     let docs = crap_cms::db::query::find(
@@ -1974,7 +1974,7 @@ async fn group_layout_array_blocks_crud_roundtrip() {
 
     let conn = app.pool.get().unwrap();
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("dashboards").unwrap().clone()
     };
     let docs = crap_cms::db::query::find(
@@ -2077,7 +2077,7 @@ async fn localized_group_array_blocks_crud_roundtrip() {
     let cookie = make_auth_cookie(&app, &user_id, "lgab1@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("pages").unwrap().clone()
     };
 
@@ -2373,7 +2373,7 @@ async fn mixed_locale_group_crud_roundtrip() {
     let _cookie = make_auth_cookie(&app, &user_id, "mlg2@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
 
@@ -2619,7 +2619,7 @@ async fn deep_blocks_nesting_crud_roundtrip() {
     // Verify via DB
     let conn = app.pool.get().unwrap();
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("layouts").unwrap().clone()
     };
     let docs = crap_cms::db::query::find(
@@ -2752,7 +2752,7 @@ async fn double_nested_group_array_crud_roundtrip() {
     let _cookie = make_auth_cookie(&app, &user_id, "dng2@test.com");
 
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("reports").unwrap().clone()
     };
 

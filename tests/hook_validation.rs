@@ -5,6 +5,7 @@
 //! structures, and related edge cases.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::DocumentFields;
@@ -21,7 +22,7 @@ fn fixture_dir() -> PathBuf {
 fn setup() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    std::sync::Arc<crap_cms::core::Registry>,
     HookRunner,
 ) {
     let config_dir = fixture_dir();
@@ -36,7 +37,7 @@ fn setup() -> (
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("Failed to create HookRunner");
@@ -45,15 +46,13 @@ fn setup() -> (
 
 fn create_article(
     pool: &crap_cms::db::DbPool,
-    registry: &crap_cms::core::SharedRegistry,
+    registry: &std::sync::Arc<crap_cms::core::Registry>,
     data: &DocumentFields,
 ) -> crap_cms::core::Document {
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("articles")
         .expect("articles not found")
         .clone();
-    drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
@@ -71,9 +70,7 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
 #[test]
 fn validate_required_present_passes() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid Title"));
@@ -93,9 +90,7 @@ fn validate_required_present_passes() {
 #[test]
 fn validate_required_missing_fails() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let data = DocumentFields::new(); // title is missing
 
@@ -119,9 +114,7 @@ fn validate_required_missing_fails() {
 #[test]
 fn validate_required_empty_string_fails() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("")); // empty string
@@ -147,9 +140,7 @@ fn validate_unique_passes_when_no_conflict() {
     create_data.insert("title".to_string(), json!("Unique Title"));
     let _doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Validate a different title — should pass
     let mut data = DocumentFields::new();
@@ -176,9 +167,7 @@ fn validate_unique_fails_on_duplicate() {
     create_data.insert("title".to_string(), json!("Duplicate Title"));
     let _doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Validate same title — should fail
     let mut data = DocumentFields::new();
@@ -211,9 +200,7 @@ fn validate_unique_excludes_self_on_update() {
     create_data.insert("title".to_string(), json!("My Title"));
     let doc = create_article(&pool, &registry, &create_data);
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Validate same title with exclude_id = self — should pass (updating own doc)
     let mut data = DocumentFields::new();
@@ -238,9 +225,7 @@ fn validate_unique_excludes_self_on_update() {
 #[test]
 fn custom_validate_function_passes() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid"));
@@ -261,9 +246,7 @@ fn custom_validate_function_passes() {
 #[test]
 fn custom_validate_function_fails() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid"));
@@ -289,9 +272,7 @@ fn custom_validate_function_fails() {
 #[test]
 fn custom_validate_returns_error_message() {
     let (_tmp, pool, registry, runner) = setup();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     let mut data = DocumentFields::new();
     data.insert("title".to_string(), json!("Valid"));

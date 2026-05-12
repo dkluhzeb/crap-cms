@@ -16,7 +16,7 @@
 use anyhow::{Result, bail};
 use mlua::Lua;
 
-use crate::core::{Access, FieldDefinition, Hooks, SharedRegistry};
+use crate::core::{Access, FieldDefinition, Hooks, Registry};
 use crate::hooks::lifecycle::resolve_hook_function;
 
 /// Validate every statically-known hook and access reference in the registry.
@@ -26,14 +26,10 @@ use crate::hooks::lifecycle::resolve_hook_function;
 ///
 /// Must be called after `init_lua` so `require(...)` can locate modules
 /// under `{config_dir}/hooks/` (path configured by `setup_package_paths`).
-pub fn validate_hook_references(lua: &Lua, registry: &SharedRegistry) -> Result<()> {
+pub fn validate_hook_references(lua: &Lua, registry: &Registry) -> Result<()> {
     let mut missing: Vec<String> = Vec::new();
 
-    let Ok(reg) = registry.read() else {
-        bail!("Registry lock poisoned during hook validation");
-    };
-
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         check_hooks(
             lua,
             &def.hooks,
@@ -54,7 +50,7 @@ pub fn validate_hook_references(lua: &Lua, registry: &SharedRegistry) -> Result<
         );
     }
 
-    for (slug, def) in &reg.globals {
+    for (slug, def) in &registry.globals {
         check_hooks(lua, &def.hooks, &format!("global '{slug}'"), &mut missing);
         check_access(lua, &def.access, &format!("global '{slug}'"), &mut missing);
         check_field_list(lua, &def.fields, &format!("global '{slug}'"), &mut missing);
@@ -99,21 +95,14 @@ fn check_hooks(lua: &Lua, hooks: &Hooks, source: &str, out: &mut Vec<String>) {
 /// pattern `{field}__{locale}`. If a user defines a literal field named
 /// `title__en` while `en` is a configured locale, the generated localized
 /// column for `title` would be `title__en` — a silent collision. Fail startup.
-pub fn validate_locale_field_collisions(
-    registry: &SharedRegistry,
-    locales: &[String],
-) -> Result<()> {
+pub fn validate_locale_field_collisions(registry: &Registry, locales: &[String]) -> Result<()> {
     if locales.is_empty() {
         return Ok(());
     }
 
-    let Ok(reg) = registry.read() else {
-        bail!("Registry lock poisoned during locale-collision validation");
-    };
-
     let mut collisions: Vec<String> = Vec::new();
 
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         walk_fields_for_collisions(
             &def.fields,
             locales,
@@ -122,7 +111,7 @@ pub fn validate_locale_field_collisions(
         );
     }
 
-    for (slug, def) in &reg.globals {
+    for (slug, def) in &registry.globals {
         walk_fields_for_collisions(
             &def.fields,
             locales,
@@ -266,7 +255,7 @@ mod tests {
         let registry = Registry::shared();
         registry.write().unwrap().register_collection(def);
 
-        let err = validate_hook_references(&lua, &registry).unwrap_err();
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("posts"), "expected slug in msg: {msg}");
         assert!(msg.contains("before_change"), "expected kind in msg: {msg}");
@@ -288,7 +277,7 @@ mod tests {
         let registry = Registry::shared();
         registry.write().unwrap().register_collection(def);
 
-        let err = validate_hook_references(&lua, &registry).unwrap_err();
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("title"), "expected field name: {msg}");
         assert!(msg.contains("access.read"), "expected kind: {msg}");
@@ -303,7 +292,7 @@ mod tests {
         let registry = Registry::shared();
         registry.write().unwrap().register_collection(def);
 
-        validate_hook_references(&lua, &registry).expect("no refs means no errors");
+        validate_hook_references(&lua, &registry.read().unwrap()).expect("no refs means no errors");
     }
 
     /// A field literally named `{name}__{locale}` collides with the generated
@@ -317,7 +306,8 @@ mod tests {
         registry.write().unwrap().register_collection(def);
 
         let locales = vec!["en".to_string(), "de".to_string()];
-        let err = validate_locale_field_collisions(&registry, &locales).unwrap_err();
+        let err =
+            validate_locale_field_collisions(&registry.read().unwrap(), &locales).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("title__en"), "expected field name: {msg}");
         assert!(msg.contains("__en"), "expected locale suffix: {msg}");
@@ -332,7 +322,8 @@ mod tests {
         let registry = Registry::shared();
         registry.write().unwrap().register_collection(def);
 
-        validate_locale_field_collisions(&registry, &[]).expect("no locales = no check");
+        validate_locale_field_collisions(&registry.read().unwrap(), &[])
+            .expect("no locales = no check");
     }
 
     /// Unrelated suffixes are fine.
@@ -348,7 +339,7 @@ mod tests {
 
         // `fr` is not in the list, so `title__fr` is just a literal name.
         let locales = vec!["en".to_string(), "de".to_string()];
-        validate_locale_field_collisions(&registry, &locales)
+        validate_locale_field_collisions(&registry.read().unwrap(), &locales)
             .expect("no collision when suffix does not match an enabled locale");
     }
 
@@ -363,7 +354,7 @@ mod tests {
         let registry = Registry::shared();
         registry.write().unwrap().register_collection(def);
 
-        let err = validate_hook_references(&lua, &registry).unwrap_err();
+        let err = validate_hook_references(&lua, &registry.read().unwrap()).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("access.read"), "expected kind: {msg}");
         assert!(msg.contains("hooks.gone"), "expected ref: {msg}");

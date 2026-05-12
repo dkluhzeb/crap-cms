@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.find` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
 
 use crate::{
     config::{LocaleConfig, PaginationConfig},
-    core::{CollectionDefinition, SharedRegistry},
+    core::{CollectionDefinition, Registry},
     db::{
         FindQuery, LocaleContext,
         query::{self, filter::normalize_filter_fields},
@@ -66,7 +68,7 @@ fn prepare_find_query(
 /// Core logic for `crap.collections.find`.
 fn find_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     params: &FindParams,
     collection: String,
@@ -100,10 +102,6 @@ fn find_inner(
         find_query.order_by = Some("-_deleted_at".to_string());
     }
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
     let hooks = LuaReadHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
@@ -120,7 +118,7 @@ fn find_inner(
     let input = FindDocumentsInput::builder(&find_query)
         .depth(depth)
         .locale_ctx(locale_ctx.as_ref())
-        .registry(Some(&r))
+        .registry(Some(reg))
         .select(find_query.select.as_deref())
         .cursor_enabled(params.pg_cursor)
         .trash(is_trash)
@@ -139,7 +137,7 @@ fn find_inner(
 pub(crate) fn register_find(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
     pagination_config: &PaginationConfig,
 ) -> Result<()> {

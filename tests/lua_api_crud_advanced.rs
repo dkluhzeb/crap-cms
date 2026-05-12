@@ -1,7 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::{DocumentFields, ReqContext, SharedRegistry};
+use crap_cms::core::{DocumentFields, Registry, ReqContext};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
@@ -41,7 +42,7 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -55,7 +56,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -725,13 +726,12 @@ crap.collections.define("items", {
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
 
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("items").expect("items");
+    let def = registry.get_collection("items").expect("items");
 
     let mut data = DocumentFields::new();
     data.insert("name".to_string(), json!("test"));
@@ -809,9 +809,7 @@ fn after_hook_has_crud_access() {
     use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
 
     let (_tmp, pool, registry, runner) = setup_with_db();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Build hooks with an after_change hook that creates a side-effect document
     let hooks = Hooks {
@@ -878,9 +876,7 @@ fn after_hook_error_rolls_back() {
     use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
 
     let (_tmp, pool, registry, runner) = setup_with_db();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Build hooks with an after_change hook that errors
     let hooks = Hooks {

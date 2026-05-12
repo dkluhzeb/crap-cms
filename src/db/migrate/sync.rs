@@ -1,10 +1,10 @@
 //! Top-level schema sync: creates system tables and syncs all collections/globals.
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::{DbConnection, DbPool},
 };
 
@@ -16,11 +16,7 @@ use super::{backfill_ref_counts, collection, global};
 /// transaction start (not first write), so concurrent `sync_all` calls are serialized
 /// by the database engine. Combined with `busy_timeout` (default 30s), the second caller
 /// waits rather than failing.
-pub fn sync_all(
-    pool: &DbPool,
-    registry: &SharedRegistry,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
+pub fn sync_all(pool: &DbPool, registry: &Registry, locale_config: &LocaleConfig) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
     let tx = conn
         .transaction_immediate()
@@ -28,21 +24,16 @@ pub fn sync_all(
 
     create_system_tables(&tx)?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    for (slug, def) in &reg.collections {
+    for (slug, def) in &registry.collections {
         collection::sync_collection_table(&tx, slug, def, locale_config)?;
     }
 
-    for (slug, def) in &reg.globals {
+    for (slug, def) in &registry.globals {
         global::sync_global_table(&tx, slug, def, locale_config)?;
     }
 
-    backfill_ref_counts::backfill_if_needed(&tx, &reg, locale_config)?;
+    backfill_ref_counts::backfill_if_needed(&tx, registry, locale_config)?;
 
-    drop(reg);
     tx.commit()
         .context("Failed to commit migration transaction")?;
 

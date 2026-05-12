@@ -14,6 +14,14 @@ collections, globals, registers hooks, or any combination.
 This works because `crap.collections.define()` and `crap.globals.define()` overwrite —
 calling either twice for the same slug replaces the first definition with the second.
 
+**All `crap.*.define` calls are init-only.** They must run while the
+VM is in init phase: definition files, `init.lua`, and any file
+loaded by `require` from those. Calling `define` from a runtime hook
+(during a request) is rejected with a clear error pointing back to
+`init.lua`. The plugin pattern below works because plugins are
+`require`-d from `init.lua` and run with the init-phase marker still
+set — the strict guard never fires for legitimate plugin code.
+
 ## Load Order
 
 Files are loaded in this fixed order at server start:

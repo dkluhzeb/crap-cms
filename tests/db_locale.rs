@@ -52,7 +52,7 @@ fn setup_localized() -> (
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &registry, &locale_config).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("Sync");
     (_tmp, pool, def, locale_config)
 }
 
@@ -322,7 +322,7 @@ fn setup_localized_joins() -> (
         locales: vec!["en".to_string(), "de".to_string()],
         fallback: true,
     };
-    migrate::sync_all(&pool, &registry, &locale_config).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config).expect("Sync");
     (_tmp, pool, def, locale_config)
 }
 
@@ -1590,7 +1590,7 @@ fn collection_localized_group_migration_creates_locale_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
     let columns: HashSet<String> = conn
@@ -1630,7 +1630,7 @@ fn collection_localized_group_write_and_read() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -1722,7 +1722,7 @@ fn global_localized_group_migration_creates_locale_columns() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
     let columns: HashSet<String> = conn
@@ -1762,7 +1762,7 @@ fn global_localized_group_write_and_read() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -1826,7 +1826,7 @@ fn global_localized_group_fallback() {
         let mut reg = registry.write().unwrap();
         reg.register_global(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
+    migrate::sync_all(&pool, &registry.read().unwrap(), &locale_config()).expect("Sync");
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),

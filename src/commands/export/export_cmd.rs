@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 use chrono::Utc;
 use serde_json::{Map, Value};
 
@@ -24,27 +24,23 @@ pub fn export(
 ) -> Result<()> {
     let (pool, registry) = load_config_and_sync(config_dir)?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let conn = pool.get().context("Failed to get database connection")?;
 
     let mut collections_data = Map::new();
 
     let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
-        if reg.get_collection(slug).is_none() {
+        if registry.get_collection(slug).is_none() {
             bail!("Collection '{}' not found", slug);
         }
         vec![slug.clone()]
     } else {
-        let mut s: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
+        let mut s: Vec<String> = registry.collections.keys().map(|s| s.to_string()).collect();
         s.sort();
         s
     };
 
     for slug in &slugs {
-        let def = &reg.collections[slug.as_str()];
+        let def = &registry.collections[slug.as_str()];
         let find_query = query::FindQuery::default();
 
         let mut docs = query::find(&conn, slug, def, &find_query, None)?;

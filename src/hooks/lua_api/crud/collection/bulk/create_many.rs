@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.create_many` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::{
-    core::{DocumentFields, SharedRegistry},
+    core::{DocumentFields, Registry},
     hooks::{
         lifecycle::converters::{
             document_to_lua_table, lua_table_to_hashmap, lua_table_to_json_map,
@@ -45,7 +47,7 @@ fn parse_item(item_table: &Table) -> mlua::Result<CreateManyItem> {
 /// ref count updates, FTS sync, and version snapshots.
 fn create_many_documents(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     collection: &str,
     items_table: &Table,
     opts: &Option<Table>,
@@ -79,15 +81,11 @@ fn create_many_documents(
         items.push(parse_item(&item_table)?);
     }
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .hooks_enabled(hooks_enabled)
         .run_validation(run_hooks)
         .build();
@@ -126,7 +124,7 @@ fn create_many_documents(
 pub(crate) fn register_create_many(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
 ) -> Result<()> {
     let create_many_fn = lua.create_function(
         move |lua, (collection, items_table, opts): (String, Table, Option<Table>)| {

@@ -62,16 +62,17 @@ fn setup_db(
 ) -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    crap_cms::core::SharedRegistry,
+    Arc<crap_cms::core::Registry>,
 ) {
     let (tmp, pool) = create_test_pool();
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &defs {
             reg.register_collection(def.clone());
         }
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
     (tmp, pool, registry)
 }
@@ -80,7 +81,7 @@ struct TestSetup {
     _tmp: tempfile::TempDir,
     service: ContentService,
     pool: crap_cms::db::DbPool,
-    _registry: crap_cms::core::SharedRegistry,
+    _registry: Arc<crap_cms::core::Registry>,
     runner: HookRunner,
 }
 
@@ -90,18 +91,19 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     config.database.path = "test.db".to_string();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in &defs {
             reg.register_collection(def.clone());
         }
     }
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync");
 
     let hook_runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("hook runner");
@@ -110,7 +112,7 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
     let service = ContentService::new(
         ContentServiceDeps::builder()
             .pool(db_pool.clone())
-            .registry(Registry::snapshot(&registry))
+            .registry(Arc::clone(&registry))
             .hook_runner(hook_runner.clone())
             .config(config.clone())
             .config_dir(tmp.path().to_path_buf())
@@ -524,12 +526,12 @@ fn restore_version_clears_locale_columns() {
 
     // Setup DB with locale-aware migration
     let (tmp, db_pool) = create_test_pool();
-    let registry = crap_cms::core::Registry::shared();
+    let shared = crap_cms::core::Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&db_pool, &registry, &locale_config).expect("sync");
+    migrate::sync_all(&db_pool, &shared.read().unwrap(), &locale_config).expect("sync");
     let conn = db_pool.get().unwrap();
 
     // Create document with English title
@@ -757,12 +759,17 @@ fn restore_version_with_group_fields() {
 fn restore_global_version_with_group_fields() {
     let gdef = make_versioned_global_group_def();
     let (_tmp, pool) = create_test_pool();
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_global(gdef.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("sync");
+    migrate::sync_all(
+        &pool,
+        &shared.read().unwrap(),
+        &CrapConfig::default().locale,
+    )
+    .expect("sync");
     let conn = pool.get().unwrap();
 
     // Set original group data
@@ -842,12 +849,12 @@ fn restore_version_with_localized_group_fields() {
     };
 
     let (_tmp, pool) = create_test_pool();
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &locale_config).expect("sync");
+    migrate::sync_all(&pool, &shared.read().unwrap(), &locale_config).expect("sync");
     let conn = pool.get().unwrap();
 
     let en_ctx = query::LocaleContext {

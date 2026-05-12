@@ -1,5 +1,7 @@
 //! Shared helper functions used across multiple command handlers.
 
+use std::sync::Arc;
+
 use anyhow::{Context as _, Result};
 use std::{
     fs,
@@ -9,7 +11,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::CrapConfig,
-    core::SharedRegistry,
+    core::Registry,
     db::{DbPool, migrate, pool},
     hooks::{self, HookRunner},
 };
@@ -21,7 +23,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 /// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
-pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, SharedRegistry)> {
+pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, Arc<Registry>)> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -43,7 +45,7 @@ pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, SharedRegistry
 
 /// Load config, init Lua, create pool, sync schema, and return all three.
 /// Used by commands that need the config (jobs, trash).
-pub fn init_stack(config_dir: &Path) -> Result<(CrapConfig, SharedRegistry, DbPool)> {
+pub fn init_stack(config_dir: &Path) -> Result<(CrapConfig, Arc<Registry>, DbPool)> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());

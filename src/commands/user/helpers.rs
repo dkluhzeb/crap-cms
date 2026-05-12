@@ -1,13 +1,14 @@
 //! Shared helpers for user management commands.
 
+use std::collections::HashMap;
+
 use anyhow::{Context as _, Result, anyhow, bail};
 use dialoguer::Select;
 use serde_json::Value;
-use std::collections::HashMap;
 
 use crate::{
     cli::{self, crap_theme},
-    core::{CollectionDefinition, Document, SharedRegistry, field::FieldType},
+    core::{CollectionDefinition, Document, Registry, field::FieldType},
     db::{BoxedConnection, DbPool, query},
 };
 
@@ -25,14 +26,10 @@ pub(super) fn get_user_email(doc: &Document) -> &str {
 /// Load and validate an auth collection definition from the registry.
 /// Returns the cloned definition (lock is released before returning).
 pub(super) fn load_auth_collection(
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
 ) -> Result<CollectionDefinition> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let def = reg
+    let def = registry
         .get_collection(collection)
         .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
 
@@ -63,7 +60,7 @@ pub(super) fn require_verify_email(def: &CollectionDefinition, collection: &str)
 #[cfg(not(tarpaulin_include))]
 pub(super) fn resolve_user(
     pool: &DbPool,
-    registry: &SharedRegistry,
+    registry: &Registry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,

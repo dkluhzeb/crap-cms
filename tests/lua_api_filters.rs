@@ -1,7 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::{DocumentFields, SharedRegistry};
+use crap_cms::core::{DocumentFields, Registry};
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
@@ -36,12 +37,26 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
         .expect("eval failed")
 }
 
+/// Like [`eval_lua`] but with `InitPhase` set on the VM, mirroring init-time
+/// loading. Use for tests that call definition-registration APIs
+/// (`crap.{collections,globals,jobs}.define`).
+fn eval_lua_init(runner: &HookRunner, code: &str) -> String {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::test_default();
+    config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
+    let conn = pool.get().expect("conn");
+    runner
+        .eval_lua_init_with_conn(code, &conn, None)
+        .expect("eval failed")
+}
+
 // ── Helper: setup with real DB tables ────────────────────────────────────────
 
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -55,7 +70,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -76,7 +91,7 @@ fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
 fn setup_versioned_db() -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    SharedRegistry,
+    Arc<Registry>,
     HookRunner,
 ) {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -112,7 +127,7 @@ crap.collections.define("articles", {
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -285,33 +300,36 @@ fn collections_config_get_includes_picker_appearance() {
     assert_eq!(result, "dayAndTime");
 }
 
+/// Pool-VM define is a no-op (with `InitPhase` set). The init_lua VM
+/// owns the writable registry; pool VMs re-running definition files
+/// or `init.lua` would otherwise double-write idempotently — pointless
+/// work, so the pool-init `define` stub returns `Ok` without touching
+/// the registry. This test pins that behavior: a redefine call from
+/// inside a pool VM completes successfully but does NOT mutate the
+/// snapshot the pool VM holds.
 #[test]
-fn collections_config_get_roundtrip_redefine() {
+fn collections_define_is_noop_in_pool_vm_init() {
     let runner = setup_lua();
-    // Get the definition, modify it, redefine, and get again to verify round-trip
-    let result = eval_lua(
+    let result = eval_lua_init(
         &runner,
         r#"
-        local def = crap.collections.config.get("articles")
-        -- Add a new field
-        def.fields[#def.fields + 1] = { name = "extra", type = "text" }
-        -- Redefine
-        crap.collections.define("articles", def)
-        -- Get again
-        local def2 = crap.collections.config.get("articles")
-        local parts = {}
-        parts[#parts + 1] = tostring(#def2.fields)
-        parts[#parts + 1] = def2.fields[#def2.fields].name
-        parts[#parts + 1] = def2.labels.singular
-        parts[#parts + 1] = def2.hooks.before_change[1]
-        return table.concat(parts, "|")
+        local before = crap.collections.config.get("articles")
+        local original_field_count = #before.fields
+
+        -- Modify a local copy and call define — the call must succeed.
+        before.fields[#before.fields + 1] = { name = "extra", type = "text" }
+        crap.collections.define("articles", before)
+
+        -- The snapshot the pool VM reads is unchanged.
+        local after = crap.collections.config.get("articles")
+        return tostring(#after.fields) .. "|" .. tostring(original_field_count)
     "#,
     );
     let parts: Vec<&str> = result.split('|').collect();
-    assert_eq!(parts[0], "8"); // 7 original + 1 new
-    assert_eq!(parts[1], "extra");
-    assert_eq!(parts[2], "Article"); // labels preserved
-    assert_eq!(parts[3], "hooks.article_hooks.before_change"); // hooks preserved
+    assert_eq!(
+        parts[0], parts[1],
+        "pool-VM define must not mutate snapshot"
+    );
 }
 
 // ── crap.globals.config.get() / crap.globals.config.list() ──────────────────────────────
@@ -346,23 +364,26 @@ fn globals_config_get_returns_labels_and_fields() {
 }
 
 #[test]
-fn globals_config_get_roundtrip_redefine() {
+fn globals_define_is_noop_in_pool_vm_init() {
     let runner = setup_lua();
-    let result = eval_lua(
+    let result = eval_lua_init(
         &runner,
         r#"
-        local def = crap.globals.config.get("settings")
-        def.fields[#def.fields + 1] = { name = "footer_text", type = "text" }
-        crap.globals.define("settings", def)
-        local def2 = crap.globals.config.get("settings")
-        local parts = {}
-        parts[#parts + 1] = tostring(#def2.fields)
-        parts[#parts + 1] = def2.fields[#def2.fields].name
-        parts[#parts + 1] = def2.labels.singular
-        return table.concat(parts, "|")
+        local before = crap.globals.config.get("settings")
+        local original_field_count = #before.fields
+
+        before.fields[#before.fields + 1] = { name = "footer_text", type = "text" }
+        crap.globals.define("settings", before)
+
+        local after = crap.globals.config.get("settings")
+        return tostring(#after.fields) .. "|" .. tostring(original_field_count)
     "#,
     );
-    assert_eq!(result, "3|footer_text|Settings");
+    let parts: Vec<&str> = result.split('|').collect();
+    assert_eq!(
+        parts[0], parts[1],
+        "pool-VM define must not mutate snapshot"
+    );
 }
 
 #[test]
@@ -387,23 +408,29 @@ fn globals_list_returns_slug_keyed_map() {
     );
 }
 
+/// `crap.globals.config.list()` is callable and returns all registered
+/// globals — verified from a pool VM. The actual bulk-modify pattern
+/// only mutates the registry from `init.lua` (init_lua VM); see the
+/// unit tests in `lua_api/globals.rs` for that side.
 #[test]
-fn globals_list_can_modify_and_redefine() {
+fn globals_list_iteration_works_in_pool_vm() {
     let runner = setup_lua();
-    let result = eval_lua(
+    let result = eval_lua_init(
         &runner,
         r#"
+        local found = {}
         for slug, def in pairs(crap.globals.config.list()) do
-            if slug == "settings" then
-                def.fields[#def.fields + 1] = { name = "plugin_field", type = "text" }
-                crap.globals.define(slug, def)
-            end
+            found[#found + 1] = slug
         end
-        local updated = crap.globals.config.get("settings")
-        return updated.fields[#updated.fields].name
+        table.sort(found)
+        return table.concat(found, ",")
     "#,
     );
-    assert_eq!(result, "plugin_field");
+    assert!(
+        result.contains("settings"),
+        "expected 'settings' in {}",
+        result
+    );
 }
 
 #[test]
@@ -428,24 +455,29 @@ fn collections_list_returns_all_collections() {
     );
 }
 
+/// `crap.collections.config.list()` is callable from a pool VM and
+/// returns every registered collection. The bulk-modify pattern from
+/// a plugin (loop list → modify → define) only mutates the registry
+/// during init_lua; see unit tests in `lua_api/collections.rs`.
 #[test]
-fn collections_list_can_filter_and_redefine() {
+fn collections_list_iteration_works_in_pool_vm() {
     let runner = setup_lua();
-    // Simulate a plugin that adds a field to every collection
-    let result = eval_lua(
+    let result = eval_lua_init(
         &runner,
         r#"
+        local found = {}
         for slug, def in pairs(crap.collections.config.list()) do
-            if slug == "articles" then
-                def.fields[#def.fields + 1] = { name = "plugin_field", type = "text" }
-                crap.collections.define(slug, def)
-            end
+            found[#found + 1] = slug
         end
-        local updated = crap.collections.config.get("articles")
-        return updated.fields[#updated.fields].name
+        table.sort(found)
+        return table.concat(found, ",")
     "#,
     );
-    assert_eq!(result, "plugin_field");
+    assert!(
+        result.contains("articles"),
+        "expected 'articles' in {}",
+        result
+    );
 }
 
 // ── Dot-notation filter e2e tests ────────────────────────────────────────────
@@ -650,9 +682,7 @@ fn lua_create_unique_constraint_violation() {
 #[test]
 fn lua_validate_fields_with_custom_validator() {
     let (_tmp, pool, registry, runner) = setup_with_db();
-    let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").unwrap().clone();
-    drop(reg);
+    let def = registry.get_collection("articles").unwrap().clone();
 
     // Valid: positive number should pass
     let mut conn = pool.get().unwrap();
@@ -698,7 +728,7 @@ fn setup_localized_lua_db(
 ) -> (
     tempfile::TempDir,
     crap_cms::db::DbPool,
-    SharedRegistry,
+    Arc<Registry>,
     HookRunner,
 ) {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -734,7 +764,7 @@ crap.collections.define("posts", {
 
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -1005,7 +1035,7 @@ return M
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -1142,7 +1172,7 @@ return M
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -1251,7 +1281,7 @@ return M
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");
@@ -1329,7 +1359,7 @@ return M
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
     let runner = HookRunner::builder()
         .config_dir(tmp.path())
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("runner");

@@ -45,6 +45,6 @@ pub(crate) mod template_data;
 mod utils;
 mod vm_label;
 
-pub use register::register_api;
+pub use register::{register_api, register_api_pool_init};
 pub(crate) use serializers::{json_to_lua, lua_to_json};
 pub use vm_label::VmLabel;

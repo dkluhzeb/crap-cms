@@ -1,11 +1,13 @@
 //! Registration of `crap.collections.delete_many` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, SharedRegistry, upload},
+    core::{CollectionDefinition, Registry, upload},
     db::{FilterClause, LocaleContext, query::filter::normalize_filter_fields},
     hooks::{
         lifecycle::{LuaStorage, converters::lua_table_to_find_query},
@@ -68,7 +70,7 @@ fn build_delete_filters(
 /// Referenced documents are skipped (not errored).
 fn delete_many_documents(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     lc: &LocaleConfig,
     collection: &str,
     query_table: &Table,
@@ -100,15 +102,11 @@ fn delete_many_documents(
 
     let (hooks_enabled, _guard) = check_hook_depth(lua, run_hooks, collection, "delete_many");
 
-    let r = reg
-        .read()
-        .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-
     let write_hooks = LuaWriteHooks::builder(lua)
         .user(user.as_ref())
         .ui_locale(ui_locale.as_deref())
         .override_access(override_access)
-        .registry(Some(&r))
+        .registry(Some(reg))
         .hooks_enabled(hooks_enabled)
         .build();
 
@@ -157,7 +155,7 @@ fn delete_many_documents(
 pub(crate) fn register_delete_many(
     lua: &Lua,
     table: &Table,
-    registry: SharedRegistry,
+    registry: Arc<Registry>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let lc = locale_config.clone();

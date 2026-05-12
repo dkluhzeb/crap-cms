@@ -3,6 +3,7 @@
 //! Used in multi-server deployments where app servers run `serve --no-scheduler`
 //! and one or more dedicated workers run `work`.
 
+use std::sync::Arc;
 use std::{path::Path, process};
 #[cfg(unix)]
 use std::{
@@ -231,7 +232,7 @@ pub async fn run(
 
     let hook_runner = HookRunner::builder()
         .config_dir(config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&cfg)
         .build()?;
 

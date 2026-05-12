@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 
 use crate::{
     cli,
@@ -33,12 +33,8 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 
     migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
     let conn = pool.get().context("Failed to get database connection")?;
-    let orphans = find_orphan_columns(&conn as &dyn DbConnection, &reg, &cfg.locale)?;
+    let orphans = find_orphan_columns(&conn as &dyn DbConnection, &registry, &cfg.locale)?;
 
     if orphans.is_empty() {
         cli::success("No orphan columns found. All columns match Lua definitions.");

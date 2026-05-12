@@ -4,7 +4,20 @@ Collection definition and runtime CRUD operations.
 
 ## crap.collections.define(slug, config)
 
-Define a new collection. Call this in collection definition files (`collections/*.lua`).
+Define a new collection. **Init-only:** call this from
+`collections/*.lua`, `init.lua`, or any file loaded by `require` from
+those — i.e. while the `InitPhase` marker is set on the VM. Runtime
+calls (from a hook callback firing during a request) error with:
+
+> `crap.collections.define must be called from a definition file or
+> init.lua. To change a registered collection, edit the file and
+> restart the process.`
+
+Schema changes need the migration runner and route wiring to re-run,
+which only happens at startup; runtime registration would land in the
+in-memory registry without the matching table, admin route, or
+scheduler enrollment, so the call is rejected outright. (Mirrors the
+behaviour `crap.richtext.register_node` has had since inception.)
 
 ```lua
 crap.collections.define("posts", {
@@ -20,11 +33,12 @@ See [Collection Definition Schema](../collections/definition-schema.md) for all 
 ## crap.collections.config.get(slug)
 
 Get a collection's current definition as a Lua table. The returned table is round-trip
-compatible with `define()` — you can modify it and pass it back.
+compatible with `define()` — you can modify it and pass it back, **inside init**.
 
 Returns `nil` if the collection doesn't exist.
 
 ```lua
+-- inside a definition file or init.lua
 local def = crap.collections.config.get("posts")
 if def then
     -- Add a field
@@ -35,9 +49,13 @@ end
 
 ## crap.collections.config.list()
 
-Get all registered collections as a slug-keyed table. Iterate with `pairs()`.
+Get all registered collections as a slug-keyed table. Iterate with
+`pairs()`. The realistic plugin pattern — bulk-attach a hook or field
+across every collection — runs from `init.lua` (or a file it
+`require`s) where the strict guard on `define` doesn't fire.
 
 ```lua
+-- inside init.lua / a plugin loaded by init.lua
 for slug, def in pairs(crap.collections.config.list()) do
     if def.upload then
         -- Add alt_text to every upload collection

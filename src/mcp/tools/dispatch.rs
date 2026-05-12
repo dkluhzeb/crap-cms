@@ -471,6 +471,8 @@ pub(in crate::mcp) fn execute_tool(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use serde_json::json;
 
     use super::*;
@@ -673,11 +675,11 @@ mod tests {
 
         let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
         let shared = Registry::shared();
-        migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).unwrap();
         let registry = Registry::snapshot(&shared);
         let runner = HookRunner::builder()
             .config_dir(tmp.path())
-            .registry(shared)
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .unwrap();
@@ -701,11 +703,11 @@ mod tests {
 
         let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
         let shared = Registry::shared();
-        migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).unwrap();
         let registry = Registry::snapshot(&shared);
         let runner = HookRunner::builder()
             .config_dir(tmp.path())
-            .registry(shared)
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .unwrap();
@@ -729,11 +731,11 @@ mod tests {
         }
 
         let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
-        migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).unwrap();
         let registry = Registry::snapshot(&shared);
         let runner = HookRunner::builder()
             .config_dir(tmp.path())
-            .registry(shared)
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .unwrap();
@@ -765,11 +767,11 @@ mod tests {
         }
 
         let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
-        migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+        migrate::sync_all(&db_pool, &shared.read().unwrap(), &config.locale).unwrap();
         let registry = Registry::snapshot(&shared);
         let runner = HookRunner::builder()
             .config_dir(tmp.path())
-            .registry(shared)
+            .registry(Arc::clone(&registry))
             .config(&config)
             .build()
             .unwrap();

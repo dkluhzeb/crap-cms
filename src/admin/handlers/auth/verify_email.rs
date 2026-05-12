@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Error;
 use axum::{
@@ -77,7 +78,7 @@ pub async fn verify_email(
     }
 
     let pool = state.pool.clone();
-    let registry = state.registry.clone();
+    let registry = Arc::clone(&state.registry);
     let token = query.token;
 
     let result =

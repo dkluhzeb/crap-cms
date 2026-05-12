@@ -146,7 +146,7 @@ async fn save_draft_button_carries_formnovalidate() {
 
     // Edit page (existing document → uses the editing-flow draft button).
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();
@@ -285,7 +285,7 @@ async fn edit_form_shows_version_sidebar() {
 
     // Create a doc via query::create
     let def = {
-        let reg = app.registry.read().unwrap();
+        let reg = &*app.registry;
         reg.get_collection("articles").unwrap().clone()
     };
     let mut conn = app.pool.get().unwrap();

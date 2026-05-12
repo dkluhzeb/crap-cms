@@ -1,25 +1,23 @@
 //! `jobs` command — manage background jobs.
 
+use std::path::Path;
+
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
-use std::path::Path;
 
 use crate::{
     cli::{self, Table},
     commands::{JobsAction, helpers::init_stack},
     config::{CrapConfig, parse_duration_string},
-    core::{SharedRegistry, job::JobStatus},
+    core::{Registry, job::JobStatus},
     db::{DbPool, pool, query},
 };
 
 /// List all defined jobs with recent run status summary.
-fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+fn run_list(registry: &Registry, pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    if reg.jobs.is_empty() {
+    if registry.jobs.is_empty() {
         cli::info("No jobs defined.");
 
         return Ok(());
@@ -27,11 +25,11 @@ fn run_list(registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
 
     let mut table = Table::new(vec!["Job", "Schedule", "Queue", "Recent Runs"]);
 
-    let mut slugs: Vec<_> = reg.jobs.keys().collect();
+    let mut slugs: Vec<_> = registry.jobs.keys().collect();
     slugs.sort();
 
     for slug in slugs {
-        let def = &reg.jobs[slug];
+        let def = &registry.jobs[slug];
         let schedule = def.schedule.as_deref().unwrap_or("-").to_string();
         let recent = query::jobs::list_job_runs(&conn, Some(slug), None, 5, 0).unwrap_or_default();
 
@@ -156,13 +154,10 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
 }
 
 /// Check job system health: stale, failed, pending, never-completed.
-fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+fn run_healthcheck(cfg: &CrapConfig, registry: &Registry, pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
-    let defined_count = reg.jobs.len();
+    let defined_count = registry.jobs.len();
 
     // Stale jobs: running but heartbeat expired (heartbeat_interval * 3)
     let stale_threshold = cfg.jobs.heartbeat_interval * 3;
@@ -177,7 +172,7 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
 
     // Check for scheduled jobs with no recent runs
     let mut no_recent_runs = Vec::new();
-    for (slug, def) in &reg.jobs {
+    for (slug, def) in &registry.jobs {
         if def.schedule.is_some() {
             let last = query::jobs::last_completed_run(&conn, slug)?;
 
@@ -227,17 +222,8 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
 
 /// Trigger a job manually by slug, queuing it for the scheduler.
 #[cfg(not(tarpaulin_include))]
-fn run_trigger(
-    registry: &SharedRegistry,
-    pool: &DbPool,
-    slug: &str,
-    data: Option<String>,
-) -> Result<()> {
-    let reg = registry
-        .read()
-        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-
-    let job_def = reg
+fn run_trigger(registry: &Registry, pool: &DbPool, slug: &str, data: Option<String>) -> Result<()> {
+    let job_def = registry
         .get_job(slug)
         .ok_or_else(|| anyhow!("Job '{}' not defined", slug))?;
 

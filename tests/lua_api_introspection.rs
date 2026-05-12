@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::SharedRegistry;
+use crap_cms::core::Registry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use std::sync::Arc;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -38,7 +39,7 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
 /// Returns (tempdir, pool, registry, runner). The tempdir must be kept alive for the DB.
 #[allow(dead_code)]
-fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
+fn setup_with_db() -> (tempfile::TempDir, DbPool, Arc<Registry>, HookRunner) {
     let config_dir = fixture_dir();
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
@@ -52,7 +53,7 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 
     let runner = HookRunner::builder()
         .config_dir(&config_dir)
-        .registry(registry.clone())
+        .registry(Arc::clone(&registry))
         .config(&config)
         .build()
         .expect("HookRunner::new failed");
@@ -937,8 +938,7 @@ crap.collections.define("pages", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("pages")
         .expect("pages should be registered");
     let field = def.fields.iter().find(|f| f.name == "content").unwrap();
@@ -968,8 +968,7 @@ crap.collections.define("pages", {
     let config = CrapConfig::test_default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
-    let reg = registry.read().unwrap();
-    let def = reg
+    let def = registry
         .get_collection("pages")
         .expect("pages should be registered");
     let field = def.fields.iter().find(|f| f.name == "content").unwrap();

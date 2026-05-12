@@ -3,12 +3,14 @@
 //! Tests the query layer and service layer together: soft-delete, restore,
 //! find filtering, count filtering, FTS cleanup, and auto-purge.
 
+use std::sync::Arc;
+
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::DocumentFields;
+use crap_cms::core::Registry;
 use crap_cms::core::collection::CollectionDefinition;
 use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::upload::create_storage;
-use crap_cms::core::{Registry, SharedRegistry};
 use crap_cms::db::{DbConnection, DbPool, DbValue, FindQuery, migrate, ops, pool, query};
 use crap_cms::scheduler::purge_soft_deleted;
 
@@ -35,20 +37,21 @@ fn make_hard_delete_def() -> CollectionDefinition {
 
 fn create_pool_and_migrate(
     defs: Vec<CollectionDefinition>,
-) -> (tempfile::TempDir, DbPool, SharedRegistry) {
+) -> (tempfile::TempDir, DbPool, Arc<Registry>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
 
-    let registry = Registry::shared();
+    let shared = Registry::shared();
     {
-        let mut reg = registry.write().unwrap();
+        let mut reg = shared.write().unwrap();
         for def in defs {
             reg.register_collection(def);
         }
     }
 
+    let registry = Registry::snapshot(&shared);
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     (tmp, db_pool, registry)

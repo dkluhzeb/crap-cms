@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::{
     cli::{self, crap_theme},
     config::PasswordPolicy,
-    core::{DocumentFields, SharedRegistry},
+    core::{DocumentFields, Registry},
     db::{DbPool, query},
     hooks::lifecycle::is_valid_email_format,
 };
@@ -33,7 +33,7 @@ fn validate_email_input(email: &str) -> Result<()> {
 /// pool/registry handles and the configured password policy.
 pub struct UserCreateParams<'a> {
     pub pool: &'a DbPool,
-    pub registry: &'a SharedRegistry,
+    pub registry: &'a Registry,
     pub collection: &'a str,
     pub email: Option<String>,
     pub password: Option<String>,

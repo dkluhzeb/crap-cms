@@ -1,10 +1,12 @@
 //! Registration of `crap.jobs.queue` Lua function.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use mlua::{Error::RuntimeError, Lua, Table, Value};
 
 use crate::{
-    core::SharedRegistry,
+    core::Registry,
     db::{AccessResult, query},
     hooks::{
         lifecycle::access::check_access_with_lua,
@@ -16,7 +18,7 @@ use crate::{
 /// Core logic for `crap.jobs.queue`.
 fn queue_job_inner(
     lua: &Lua,
-    reg: &SharedRegistry,
+    reg: &Registry,
     slug: String,
     data: Option<Table>,
 ) -> mlua::Result<String> {
@@ -24,14 +26,10 @@ fn queue_job_inner(
     let conn_ptr = get_tx_conn(lua)?;
     let conn = unsafe { &*conn_ptr };
 
-    let job_def = {
-        let r = reg
-            .read()
-            .map_err(|e| RuntimeError(format!("Registry lock: {e:#}")))?;
-        r.get_job(&slug)
-            .cloned()
-            .ok_or_else(|| RuntimeError(format!("Job '{}' not defined", slug)))?
-    };
+    let job_def = reg
+        .get_job(&slug)
+        .cloned()
+        .ok_or_else(|| RuntimeError(format!("Job '{}' not defined", slug)))?;
 
     if job_def.access.is_some() {
         let user_doc = hook_user(lua);
@@ -80,11 +78,7 @@ fn queue_job_inner(
 
 /// Register `crap.jobs.queue(slug, data?)`.
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_jobs_queue(
-    lua: &Lua,
-    table: &Table,
-    registry: SharedRegistry,
-) -> Result<()> {
+pub(crate) fn register_jobs_queue(lua: &Lua, table: &Table, registry: Arc<Registry>) -> Result<()> {
     let queue_fn = lua.create_function(move |lua, (slug, data): (String, Option<Table>)| {
         queue_job_inner(lua, &registry, slug, data)
     })?;
