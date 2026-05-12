@@ -22,9 +22,7 @@ fn queue_job_inner(
     slug: String,
     data: Option<Table>,
 ) -> mlua::Result<String> {
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let job_def = reg
         .get_job(&slug)

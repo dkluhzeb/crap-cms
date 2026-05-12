@@ -22,9 +22,7 @@ fn validate_inner(
     data_table: Table,
     opts: Option<Table>,
 ) -> LuaResult<Table> {
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let ui_locale = hook_ui_locale(lua);

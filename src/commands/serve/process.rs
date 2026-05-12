@@ -3,8 +3,6 @@
 #[cfg(unix)]
 use anyhow::bail;
 use anyhow::{Context as _, Result};
-#[cfg(unix)]
-use std::io;
 use std::{env, path::Path, process};
 #[cfg(unix)]
 use std::{
@@ -15,26 +13,13 @@ use std::{
 use tracing::debug;
 
 use crate::cli;
+#[cfg(unix)]
+use crate::commands::helpers::send_signal;
 
 use super::pid::write_pid_file;
 #[cfg(unix)]
 use super::pid::{check_existing_pid, is_process_running, read_pid, remove_pid_file};
 use super::startup::{ServeMode, validate_config_dir};
-
-/// Send a signal to a process by PID.
-#[cfg(unix)]
-fn send_signal(pid: u32, sig: i32) -> Result<()> {
-    let pid_i32 = i32::try_from(pid).context("PID too large for i32")?;
-    // SAFETY: kill(2) is safe to call with any pid/signal combination.
-    let ret = unsafe { libc::kill(pid_i32, sig) };
-
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-            .with_context(|| format!("Failed to send signal {sig} to PID {pid}"))
-    }
-}
 
 /// Re-exec the current binary as a detached background process.
 #[cfg(not(tarpaulin_include))]

@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+#[cfg(unix)]
+use std::io;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -200,14 +202,32 @@ pub fn read_pid(config_dir: &Path, filename: &str) -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// Send a signal to a process by PID.
+///
+/// Returns `Ok(())` if `kill(2)` returned 0, otherwise an error wrapping the
+/// underlying OS error. The single canonical wrapper around `libc::kill` —
+/// other call sites should go through this helper rather than calling
+/// `libc::kill` directly.
+#[cfg(unix)]
+pub fn send_signal(pid: u32, sig: i32) -> Result<()> {
+    let pid_i32 = i32::try_from(pid).context("PID too large for i32")?;
+    // SAFETY: kill(2) is safe to call with any pid/signal combination.
+    let ret = unsafe { libc::kill(pid_i32, sig) };
+
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+            .with_context(|| format!("Failed to send signal {sig} to PID {pid}"))
+    }
+}
+
 /// Check if a process with the given PID is running.
+///
+/// Sends signal 0 (no-op probe); succeeds iff the kernel can deliver to that PID.
 #[cfg(unix)]
 pub fn is_process_running(pid: u32) -> bool {
-    let Ok(pid_i32) = i32::try_from(pid) else {
-        return false;
-    };
-
-    unsafe { libc::kill(pid_i32, 0) == 0 }
+    send_signal(pid, 0).is_ok()
 }
 
 /// Check if a PID file exists and warn if the process is still running.

@@ -20,7 +20,7 @@ use tracing::info;
 use tracing::{debug, warn};
 
 #[cfg(unix)]
-use crate::commands::helpers::{is_process_running, read_pid};
+use crate::commands::helpers::{is_process_running, read_pid, send_signal};
 use crate::{
     cli,
     commands::helpers::{self, load_and_validate_config, run_on_init_hooks, spawn_shutdown_signal},
@@ -50,12 +50,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         );
     }
 
-    unsafe {
-        libc::kill(
-            i32::try_from(pid).context("PID out of range")?,
-            libc::SIGTERM,
-        )
-    };
+    send_signal(pid, libc::SIGTERM)?;
 
     let deadline = Instant::now() + Duration::from_secs(10);
 
@@ -75,12 +70,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
         "Worker {pid} did not stop within 10s, sending SIGKILL"
     ));
 
-    unsafe {
-        libc::kill(
-            i32::try_from(pid).context("PID out of range")?,
-            libc::SIGKILL,
-        )
-    };
+    let _ = send_signal(pid, libc::SIGKILL);
 
     sleep(Duration::from_millis(500));
 

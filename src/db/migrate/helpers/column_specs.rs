@@ -36,21 +36,15 @@ pub(in crate::db::migrate) fn collect_column_specs<'a>(
     let mut specs = Vec::new();
 
     // walk_leaf_fields is infallible here — the closure never errors.
-    // SAFETY: walk_leaf_fields only passes references derived from its `fields`
-    // parameter, which has lifetime `'a`. The closure's anonymous field lifetime
-    // is actually `'a`, but the compiler can't prove it through the mutable
-    // closure boundary (invariance of `&mut Vec<ColumnSpec<'a>>`). We re-derive
-    // the `'a` lifetime via a pointer round-trip.
     let _ = walk_leaf_fields(
         fields,
         "",
         false,
-        &mut |field, prefix, inherited_localized| {
+        &mut |field: &'a FieldDefinition, prefix, inherited_localized| {
             if !field.has_parent_column() {
                 return Ok(());
             }
 
-            let field: &'a FieldDefinition = unsafe { &*(field as *const FieldDefinition) };
             let col_name = prefixed_name(prefix, &field.name);
 
             let is_localized =

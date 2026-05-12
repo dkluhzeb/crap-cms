@@ -7,7 +7,12 @@ use crate::{db::DbConnection, hooks::lifecycle::TxContext};
 
 /// Get the active transaction connection from Lua app_data.
 /// Returns an error if called outside of `run_hooks_with_conn`.
-pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<*const dyn DbConnection> {
+///
+/// The returned reference is valid for the duration of the current hook call.
+/// `TxContextGuard` (set by the runner) keeps the underlying connection alive
+/// until the hook returns, and the `&Lua` borrow forces callers to release the
+/// reference before the VM can be reused for another call.
+pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<&dyn DbConnection> {
     let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
         RuntimeError(
             "crap.collections CRUD functions are only available inside hooks \
@@ -15,7 +20,12 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> LuaResult<*const dyn DbConnection> {
                 .into(),
         )
     })?;
-    Ok(ctx.as_ptr())
+    let ptr = ctx.as_ptr();
+    // SAFETY: `TxContextGuard` (constructed in `run_hooks_with_conn` and
+    // friends) holds the connection borrow for the full duration of this hook
+    // call. The guard removes the `TxContext` from app_data on drop, which
+    // strictly outlives any `&'a dyn DbConnection` we hand out tied to `&'a Lua`.
+    Ok(unsafe { &*ptr })
 }
 
 #[cfg(test)]
@@ -26,13 +36,10 @@ mod tests {
     #[test]
     fn test_get_tx_conn_without_context() {
         let lua = Lua::new();
-        let result = get_tx_conn(&lua);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("only available inside hooks")
-        );
+        let err = match get_tx_conn(&lua) {
+            Ok(_) => panic!("expected error when called outside hook context"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("only available inside hooks"));
     }
 }

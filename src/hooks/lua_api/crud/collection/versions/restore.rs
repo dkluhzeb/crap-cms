@@ -25,9 +25,7 @@ fn restore_version_inner(
     version_id: String,
     opts: Option<Table>,
 ) -> LuaResult<Value> {
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let user = hook_user(lua);
     let lua_infra = hook_lua_infra(lua);

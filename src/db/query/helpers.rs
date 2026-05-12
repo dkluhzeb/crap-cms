@@ -293,14 +293,14 @@ pub(crate) fn prefixed_name(prefix: &str, name: &str) -> String {
 /// Row/Collapsible (passthrough), and Tabs (per-tab recursion).
 /// The visitor receives `(field, prefix, inherited_localized)` and decides
 /// what to do — including whether to skip non-parent-column fields.
-pub(crate) fn walk_leaf_fields<F>(
-    fields: &[FieldDefinition],
+pub(crate) fn walk_leaf_fields<'a, F>(
+    fields: &'a [FieldDefinition],
     prefix: &str,
     inherited_localized: bool,
     visit: &mut F,
 ) -> Result<()>
 where
-    F: FnMut(&FieldDefinition, &str, bool) -> Result<()>,
+    F: FnMut(&'a FieldDefinition, &str, bool) -> Result<()>,
 {
     for field in fields {
         match field.field_type {

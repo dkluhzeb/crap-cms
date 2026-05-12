@@ -59,9 +59,7 @@ fn update_many_documents(
     data_table: &Table,
     opts: &Option<Table>,
 ) -> mlua::Result<Table> {
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let override_access = get_opt_bool(opts, "overrideAccess", false)?;
     let run_hooks = get_opt_bool(opts, "hooks", true)?;

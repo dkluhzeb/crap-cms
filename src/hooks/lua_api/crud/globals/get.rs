@@ -24,9 +24,7 @@ fn globals_get_inner(
     slug: String,
     opts: Option<Table>,
 ) -> mlua::Result<Table> {
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let locale_str = get_opt_string(&opts, "locale")?;
     let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), lc)

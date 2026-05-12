@@ -39,9 +39,7 @@ fn globals_update_inner(
         opts,
     } = input;
 
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let lua_infra = hook_lua_infra(lua);
     let locale_str = get_opt_string(&opts, "locale")?;

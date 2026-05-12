@@ -13,9 +13,7 @@ use crate::{
 
 /// Core logic for `crap.collections.ref_count`.
 fn ref_count_inner(lua: &Lua, reg: &Registry, collection: String, id: String) -> LuaResult<i64> {
-    // SAFETY: pointer valid for hook call duration — see TxContext pattern
-    let conn_ptr = get_tx_conn(lua)?;
-    let conn = unsafe { &*conn_ptr };
+    let conn = get_tx_conn(lua)?;
 
     let def = resolve_collection(reg, &collection)?;
 
