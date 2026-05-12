@@ -14,6 +14,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`crap-cms update use --force` now actually relinks the `$PATH`
+  binary** to point at the store's `current` symlink, instead of
+  re-printing the misalignment warning. Stale symlinks (e.g. an old
+  shim pointing elsewhere) are replaced silently. Regular files
+  (e.g. a `cargo install` build sitting at `~/.local/bin/crap-cms`)
+  prompt for confirmation before replacement, unless `--yes` is also
+  passed. Distro-managed paths (`/usr/bin`, `/opt`, `/nix/store`, …)
+  refuse to relink even with `--force` — those belong to the system
+  package manager. Fixes the "lying flag" papercut where `--force`'s
+  output was identical to the non-force run.
+
 - **`FormData` type unifies admin form input.** New
   `crate::admin::FormData` (`src/admin/handlers/forms/form_data.rs`)
   carries the raw `HashMap<String, String>` form bag plus the typed

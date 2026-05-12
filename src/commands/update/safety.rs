@@ -40,7 +40,7 @@ pub(super) fn ensure_self_managed(store: &store::Store, force: bool) -> Result<(
     Ok(())
 }
 
-fn looks_distro_managed(path: &Path) -> bool {
+pub(super) fn looks_distro_managed(path: &Path) -> bool {
     let s = path.to_string_lossy();
     s.starts_with("/usr/")
         || s.starts_with("/opt/")
@@ -55,6 +55,16 @@ pub(super) fn confirm(prompt: &str) -> Result<bool> {
     Ok(Confirm::with_theme(&cli::crap_theme())
         .with_prompt(prompt)
         .default(true)
+        .interact()?)
+}
+
+/// Interactive yes/no prompt with a default of "no". Used before
+/// destructive operations (e.g. replacing a regular file on `$PATH`)
+/// where silently accepting the default could clobber the user's work.
+pub(super) fn confirm_destructive(prompt: &str) -> Result<bool> {
+    Ok(Confirm::with_theme(&cli::crap_theme())
+        .with_prompt(prompt)
+        .default(false)
         .interact()?)
 }
 

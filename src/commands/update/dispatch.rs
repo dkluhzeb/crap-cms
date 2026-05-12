@@ -64,7 +64,7 @@ pub fn run<C: CommandFactory>(cmd: Option<UpdateCmd>, yes: bool, force: bool) ->
         }
         Some(UpdateCmd::Use { version }) => {
             refuse_on_windows("use")?;
-            run_use::<C>(&version, force)
+            run_use::<C>(&version, yes, force)
         }
         Some(UpdateCmd::Uninstall { version }) => run_uninstall(&version),
         Some(UpdateCmd::Where) => run_where(),

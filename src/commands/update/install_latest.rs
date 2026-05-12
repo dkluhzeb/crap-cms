@@ -32,6 +32,6 @@ pub(super) fn run_update_latest<C: CommandFactory>(yes: bool, force: bool) -> Re
     }
 
     run_install(&latest, false, force)?;
-    run_use::<C>(&latest, force)?;
+    run_use::<C>(&latest, yes, force)?;
     Ok(())
 }
