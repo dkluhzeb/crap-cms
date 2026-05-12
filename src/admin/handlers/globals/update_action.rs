@@ -5,7 +5,7 @@ use axum::{
     extract::{Form, Path, State},
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::task;
 use tracing::error;
 
@@ -16,7 +16,7 @@ use crate::{
             BasePageContext, GlobalContext, PageMeta, PageType, page::globals::GlobalFormErrorPage,
         },
         handlers::{
-            forms::{extract_join_data_from_form, transform_select_has_many},
+            forms::FormData,
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 enrich_field_contexts, forbidden, get_user_doc, htmx_redirect, page_with_toast,
@@ -26,8 +26,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        AuthUser, Document, DocumentFields, GlobalDefinition, ReqContext, SharedCache,
-        SharedEventTransport, ValidationError,
+        AuthUser, Document, GlobalDefinition, ReqContext, SharedCache, SharedEventTransport,
+        ValidationError,
     },
     db::{DbPool, LocaleContext, LocaleMode},
     hooks::HookRunner,
@@ -42,8 +42,7 @@ struct UpdateParams {
     cache: Option<SharedCache>,
     slug: String,
     def: GlobalDefinition,
-    form_data: HashMap<String, String>,
-    join_data: DocumentFields,
+    form: FormData,
     locale_ctx: Option<LocaleContext>,
     locale: Option<String>,
     locale_config: LocaleConfig,
@@ -54,7 +53,9 @@ struct UpdateParams {
 }
 
 /// Execute the global update (or unpublish) inside a blocking task.
-fn execute_update(params: UpdateParams) -> Result<(Document, ReqContext), ServiceError> {
+fn update_global_document_blocking(
+    params: UpdateParams,
+) -> Result<(Document, ReqContext), ServiceError> {
     let ctx = ServiceContext::global(&params.slug, &params.def)
         .pool(&params.pool)
         .runner(&params.runner)
@@ -71,18 +72,12 @@ fn execute_update(params: UpdateParams) -> Result<(Document, ReqContext), Servic
     } else {
         service::update_global_document(
             &ctx,
-            service::WriteInput::builder({
-                let mut __m = service::values_from_strings(params.form_data);
-                for (k, v) in params.join_data.iter() {
-                    __m.insert(k.clone(), v.clone());
-                }
-                __m
-            })
-            .locale_ctx(params.locale_ctx.as_ref())
-            .locale(params.locale)
-            .draft(params.draft)
-            .ui_locale(params.ui_locale)
-            .build(),
+            service::WriteInput::builder(params.form)
+                .locale_ctx(params.locale_ctx.as_ref())
+                .locale(params.locale)
+                .draft(params.draft)
+                .ui_locale(params.ui_locale)
+                .build(),
         )
     }
 }
@@ -91,8 +86,7 @@ fn execute_update(params: UpdateParams) -> Result<(Document, ReqContext), Servic
 fn render_validation_error(
     state: &AdminState,
     def: &GlobalDefinition,
-    form_data: &HashMap<String, String>,
-    join_data: &DocumentFields,
+    form: &FormData,
     ve: &ValidationError,
     auth_user: &Option<Extension<AuthUser>>,
 ) -> Response {
@@ -104,13 +98,9 @@ fn render_validation_error(
     let error_map = translate_validation_errors(ve, &state.translations, locale);
     let toast_msg = state.translations.get(locale, "validation.error_summary");
 
-    let mut fields = build_field_contexts(&def.fields, form_data, &error_map, false, false);
+    let mut fields = build_field_contexts(&def.fields, form.raw(), &error_map, false, false);
 
-    let doc_fields: DocumentFields = form_data
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-        .chain(join_data.iter().map(|(k, v)| (k.clone(), v.clone())))
-        .collect();
+    let doc_fields = form.to_doc_fields();
 
     enrich_field_contexts(
         &mut fields,
@@ -153,28 +143,27 @@ pub async fn update_action(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
-    Form(mut form_data): Form<HashMap<String, String>>,
+    Form(form_data): Form<HashMap<String, String>>,
 ) -> Response {
     let def = match state.registry.get_global(&slug) {
         Some(d) => d.clone(),
         None => return redirect_response("/admin"),
     };
 
-    let action = form_data.remove("_action").unwrap_or_default();
-    let form_locale = form_data.remove("_locale");
-    let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
-            .unwrap_or(None);
-
     // Field write access is now checked inside service::update_global_in_conn.
 
-    transform_select_has_many(&mut form_data, &def.fields);
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
+    let mut form = FormData::from_raw(form_data, &def.fields);
+    let action = form.take_action();
+    let locale_ctx =
+        LocaleContext::from_locale_string(form.take_locale().as_deref(), &state.config.locale)
+            .unwrap_or(None);
 
     let locale = locale_ctx.as_ref().and_then(|ctx| match &ctx.mode {
         LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
+
+    let form_for_error = form.clone();
 
     let params = UpdateParams {
         pool: state.pool.clone(),
@@ -183,8 +172,7 @@ pub async fn update_action(
         cache: state.cache.clone(),
         slug: slug.clone(),
         def: def.clone(),
-        form_data: form_data.clone(),
-        join_data: join_data.clone(),
+        form,
         locale_ctx,
         locale,
         locale_config: state.config.locale.clone(),
@@ -194,7 +182,7 @@ pub async fn update_action(
         action,
     };
 
-    let result = task::spawn_blocking(move || execute_update(params)).await;
+    let result = task::spawn_blocking(move || update_global_document_blocking(params)).await;
 
     match result {
         Ok(Ok(_)) => htmx_redirect(&paths::global(&slug)),
@@ -203,7 +191,7 @@ pub async fn update_action(
                 forbidden(&state, "You don't have permission to update this global")
             }
             ServiceError::Validation(ref ve) => {
-                render_validation_error(&state, &def, &form_data, &join_data, ve, &auth_user)
+                render_validation_error(&state, &def, &form_for_error, ve, &auth_user)
             }
             other => {
                 error!("Global update error: {}", other);

@@ -86,8 +86,7 @@ pub struct RunValidationParams<'a> {
     pub table_name: &'a str,
     pub operation: &'a str,
     pub exclude_id: Option<&'a str>,
-    pub form_data: &'a HashMap<String, String>,
-    pub join_data: &'a DocumentFields,
+    pub data: &'a DocumentFields,
     pub is_draft: bool,
     pub soft_delete: bool,
     pub locale_ctx: Option<&'a LocaleContext>,
@@ -113,10 +112,7 @@ pub fn run_validation(p: &RunValidationParams) -> anyhow::Result<()> {
 
     let wh = service::RunnerWriteHooks::new(p.runner).with_conn(&tx);
 
-    let mut data = service::values_from_strings(p.form_data.clone());
-    data.extend(p.join_data.as_map().clone());
-
-    let input = service::WriteInput::builder(data)
+    let input = service::WriteInput::builder(p.data.clone())
         .locale_ctx(p.locale_ctx)
         .locale(locale)
         .draft(p.is_draft)

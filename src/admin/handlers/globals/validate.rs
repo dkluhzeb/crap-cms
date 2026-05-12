@@ -14,7 +14,7 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            forms::{extract_join_data_from_form, transform_select_has_many},
+            forms::FormData,
             shared::{check_access_or_forbid, get_user_doc},
             validate::{
                 RunValidationParams, ValidateRequest, handle_validation_result, run_validation,
@@ -22,7 +22,7 @@ use crate::{
             },
         },
     },
-    core::auth::AuthUser,
+    core::{DocumentFields, auth::AuthUser},
     db::{AccessResult, LocaleContext, query::helpers::global_table},
 };
 
@@ -45,13 +45,12 @@ pub async fn validate_global(
         _ => {}
     }
 
-    let mut form_data = values_to_string_map(&payload.data);
+    let form_data = values_to_string_map(&payload.data);
 
     // Field write access stripping is now handled inside service::validate_document
     // via WriteHooks::field_write_denied.
 
-    transform_select_has_many(&mut form_data, &def.fields);
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
+    let data: DocumentFields = FormData::from_raw(form_data, &def.fields).into();
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
@@ -75,8 +74,7 @@ pub async fn validate_global(
             table_name: &gtable,
             operation: "update",
             exclude_id: Some("default"),
-            form_data: &form_data,
-            join_data: &join_data,
+            data: &data,
             is_draft,
             soft_delete: false,
             locale_ctx: locale_ctx.as_ref(),

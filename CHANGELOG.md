@@ -14,6 +14,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`FormData` type unifies admin form input.** New
+  `crate::admin::FormData` (`src/admin/handlers/forms/form_data.rs`)
+  carries the raw `HashMap<String, String>` form bag plus the typed
+  join data (arrays, blocks, has-many relationships) extracted from
+  it. Construction (`FormData::from_raw`) runs
+  `transform_select_has_many` and `extract_join_data_from_form`
+  internally — these were called in a fixed order at every site
+  before; the type now encodes that invariant. Accessors:
+  `raw()` / `raw_mut()` (for in-place upload-metadata injection),
+  `join()`, `take(key)` / `get(key)` (generic meta-key extraction),
+  `take_action()` / `take_locale()` (universal admin meta keys).
+  `From<FormData> for DocumentFields` produces the merged typed
+  payload for `service::WriteInput::builder`. Replaces the duplicated
+  `let mut data = values_from_strings(form_data); data.extend(join_data);`
+  dance that lived in `service::upload`, `admin::handlers::validate`,
+  and three admin write handlers, plus a parallel error-render
+  iterator chain in `globals::update_action::render_validation_error`.
+  The `_blocking` input structs, validation params, and form-error
+  renderers all take a single `FormData` instead of separate
+  `form_data + join_data` pairs.
+- **Spawn-blocking body names harmonized.** Every admin
+  `task::spawn_blocking` body now follows the
+  `<verb>_<noun>_blocking` convention (CLAUDE.md). Renamed
+  `globals::update_action::execute_update` →
+  `update_global_document_blocking`,
+  `globals::edit_form::read_global_document` →
+  `read_global_document_blocking`,
+  `collections::item::edit_form::read_document` →
+  `read_document_blocking`.
+- **`unsafe` surface reduced.** `hooks::lua_api::crud::get_tx_conn`
+  now returns `LuaResult<&dyn DbConnection>` instead of a raw fat
+  pointer; the dereference and its safety argument move into the
+  helper, eliminating 22 `unsafe { &*conn_ptr }` blocks across the
+  Lua CRUD modules. `db::migrate::helpers::column_specs` no longer
+  needs a lifetime-laundering transmute — `db::query::helpers::
+  walk_leaf_fields` is now `for<'a>` over its callback's
+  `&'a FieldDefinition` parameter, so the closure receives the right
+  lifetime without a pointer round-trip. `commands::helpers::
+  send_signal` is now the single `libc::kill` wrapper used by
+  `commands/serve/process.rs`, `commands/work.rs::stop`, and
+  `commands::helpers::is_process_running`.
+
 - **Runtime `crap.<x>.define` error message harmonized.** The
   previous "for a NEW collection" / "Re-defining an already-registered
   collection is allowed" branching collapses to a single message:

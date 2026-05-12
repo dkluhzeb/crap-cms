@@ -14,7 +14,7 @@ use crate::{
     admin::{
         AdminState,
         handlers::{
-            forms::{extract_join_data_from_form, transform_select_has_many},
+            forms::FormData,
             shared::{
                 forbidden, get_user_doc, htmx_redirect, paths, redirect_response, toast_only_error,
             },
@@ -22,8 +22,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        AuthUser, CollectionDefinition, Document, DocumentFields, ReqContext, SharedCache,
-        SharedEventTransport, SharedInvalidationTransport,
+        AuthUser, CollectionDefinition, Document, ReqContext, SharedCache, SharedEventTransport,
+        SharedInvalidationTransport,
         upload::{UploadedFile, delete_upload_files, enqueue_conversions},
     },
     db::{DbPool, LocaleContext, LocaleMode},
@@ -57,8 +57,7 @@ fn handle_update_success(state: &AdminState, slug: &str, id: &str, upload: Optio
 
 /// Prepared update input.
 struct UpdateInput {
-    form_data: HashMap<String, String>,
-    join_data: DocumentFields,
+    form: FormData,
     password: Option<String>,
     locked_value: Option<Option<String>>,
     locale_ctx: Option<LocaleContext>,
@@ -107,19 +106,13 @@ fn update_document_blocking(
         service::update_document(
             &ctx,
             &args.id,
-            service::WriteInput::builder({
-                let mut __m = service::values_from_strings(args.input.form_data);
-                for (k, v) in args.input.join_data.iter() {
-                    __m.insert(k.clone(), v.clone());
-                }
-                __m
-            })
-            .password(args.input.password.as_deref())
-            .locale_ctx(args.input.locale_ctx.as_ref())
-            .locale(args.locale)
-            .draft(args.input.draft)
-            .ui_locale(args.ui_locale)
-            .build(),
+            service::WriteInput::builder(args.input.form)
+                .password(args.input.password.as_deref())
+                .locale_ctx(args.input.locale_ctx.as_ref())
+                .locale(args.locale)
+                .draft(args.input.draft)
+                .ui_locale(args.ui_locale)
+                .build(),
         )
     };
 
@@ -186,7 +179,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     state: &AdminState,
     slug: &str,
     id: &str,
-    mut form_data: HashMap<String, String>,
+    form_data: HashMap<String, String>,
     file: Option<UploadedFile>,
     auth_user: &Option<Extension<AuthUser>>,
 ) -> Response {
@@ -194,11 +187,12 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         return redirect_response(paths::COLLECTIONS_ROOT).into_response();
     };
 
-    let action = form_data.remove("_action").unwrap_or_default();
+    let mut form = FormData::from_raw(form_data, &def.fields);
+
+    let action = form.take_action();
     let draft = action == "save_draft";
-    let form_locale = form_data.remove("_locale");
     let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
+        LocaleContext::from_locale_string(form.take_locale().as_deref(), &state.config.locale)
             .unwrap_or(None);
 
     let mut upload_result = None;
@@ -215,7 +209,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
                 locale_ctx: locale_ctx.as_ref(),
                 auth_user,
             },
-            &mut form_data,
+            form.raw_mut(),
             f,
         )
         .await
@@ -228,13 +222,13 @@ pub(in crate::admin::handlers::collections) async fn do_update(
     // Field write access is now checked inside service::update_document_in_conn.
 
     let password = if def.is_auth_collection() {
-        form_data.remove("password")
+        form.take("password")
     } else {
         None
     };
 
     let locked_value = if def.is_auth_collection() {
-        Some(form_data.remove("_locked"))
+        Some(form.take("_locked"))
     } else {
         None
     };
@@ -246,10 +240,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         return toast_only_error(&e.to_string()).into_response();
     }
 
-    transform_select_has_many(&mut form_data, &def.fields);
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
-    let form_data_clone = form_data.clone();
-    let join_data_clone = join_data.clone();
+    let form_for_error = form.clone();
 
     let result = spawn_update(
         state,
@@ -258,8 +249,7 @@ pub(in crate::admin::handlers::collections) async fn do_update(
         &def,
         auth_user,
         UpdateInput {
-            form_data,
-            join_data,
+            form,
             password,
             locked_value,
             locale_ctx,
@@ -279,16 +269,10 @@ pub(in crate::admin::handlers::collections) async fn do_update(
             ServiceError::AccessDenied(_) => {
                 forbidden(state, "You don't have permission to update this item").into_response()
             }
-            ServiceError::Validation(ref ve) => render_form_validation_errors(
-                state,
-                &def,
-                Some(id),
-                &form_data_clone,
-                &join_data_clone,
-                ve,
-                auth_user,
-            )
-            .into_response(),
+            ServiceError::Validation(ref ve) => {
+                render_form_validation_errors(state, &def, Some(id), &form_for_error, ve, auth_user)
+                    .into_response()
+            }
             other => {
                 error!("Update error: {}", other);
                 redirect_response(&paths::collection_item(slug, id))

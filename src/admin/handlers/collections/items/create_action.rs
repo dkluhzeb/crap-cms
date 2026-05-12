@@ -16,17 +16,14 @@ use crate::{
                 UploadParams, UploadResult, process_collection_upload,
                 render_form_validation_errors,
             },
-            forms::{extract_join_data_from_form, parse_form, transform_select_has_many},
+            forms::{FormData, parse_form},
             shared::{
                 forbidden, get_user_doc, htmx_inline_created, htmx_redirect_with_created, paths,
                 redirect_response, toast_only_error,
             },
         },
     },
-    core::{
-        AuthUser, CollectionDefinition, Document, DocumentFields, SharedCache,
-        SharedEventTransport, upload,
-    },
+    core::{AuthUser, CollectionDefinition, Document, SharedCache, SharedEventTransport, upload},
     db::{DbPool, LocaleContext, LocaleMode},
     hooks::HookRunner,
     service::{self, EmailContext, ServiceError},
@@ -80,8 +77,7 @@ fn extract_and_validate_password(
 
 /// Prepared form data for creating a document.
 struct CreateInput {
-    form_data: HashMap<String, String>,
-    join_data: DocumentFields,
+    form: FormData,
     password: Option<String>,
     locale_ctx: Option<LocaleContext>,
     draft: bool,
@@ -118,19 +114,13 @@ fn create_document_blocking(
 
     service::create_document(
         &ctx,
-        service::WriteInput::builder({
-            let mut __m = service::values_from_strings(args.input.form_data);
-            for (k, v) in args.input.join_data.iter() {
-                __m.insert(k.clone(), v.clone());
-            }
-            __m
-        })
-        .password(args.input.password.as_deref())
-        .locale_ctx(args.input.locale_ctx.as_ref())
-        .locale(args.locale)
-        .draft(args.input.draft)
-        .ui_locale(args.ui_locale)
-        .build(),
+        service::WriteInput::builder(args.input.form)
+            .password(args.input.password.as_deref())
+            .locale_ctx(args.input.locale_ctx.as_ref())
+            .locale(args.locale)
+            .draft(args.input.draft)
+            .ui_locale(args.ui_locale)
+            .build(),
     )
 }
 
@@ -189,13 +179,15 @@ pub async fn create_action(
 
     // Collection-level access check is handled inside service::create_document_in_conn.
 
-    let (mut form_data, file) = match parse_form(request, &state, &def).await {
+    let (form_data, file) = match parse_form(request, &state, &def).await {
         Ok(result) => result,
         Err(e) => {
             error!("{}", e);
             return redirect_response(&paths::collection_create(&slug));
         }
     };
+
+    let mut form = FormData::from_raw(form_data, &def.fields);
 
     // Process upload if file present
     let mut upload_result = None;
@@ -212,7 +204,7 @@ pub async fn create_action(
                 locale_ctx: None,
                 auth_user: &auth_user,
             },
-            &mut form_data,
+            form.raw_mut(),
             f,
         )
         .await
@@ -224,24 +216,17 @@ pub async fn create_action(
 
     // Field write access is now checked inside service::create_document_in_conn.
 
-    let password = match extract_and_validate_password(&state, &def, &mut form_data) {
+    let password = match extract_and_validate_password(&state, &def, form.raw_mut()) {
         Ok(pw) => pw,
         Err(resp) => return *resp,
     };
 
-    transform_select_has_many(&mut form_data, &def.fields);
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
-
-    let action = form_data.remove("_action").unwrap_or_default();
-    let draft = action == "save_draft";
-
-    let form_locale = form_data.remove("_locale");
+    let draft = form.take_action() == "save_draft";
     let locale_ctx =
-        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale)
+        LocaleContext::from_locale_string(form.take_locale().as_deref(), &state.config.locale)
             .unwrap_or(None);
 
-    let form_data_clone = form_data.clone();
-    let join_data_clone = join_data.clone();
+    let form_for_error = form.clone();
 
     let result = spawn_create(
         &state,
@@ -249,8 +234,7 @@ pub async fn create_action(
         &def,
         &auth_user,
         CreateInput {
-            form_data,
-            join_data,
+            form,
             password,
             locale_ctx,
             draft,
@@ -279,15 +263,9 @@ pub async fn create_action(
                 &state,
                 "You don't have permission to create items in this collection",
             ),
-            ServiceError::Validation(ref ve) => render_form_validation_errors(
-                &state,
-                &def,
-                None,
-                &form_data_clone,
-                &join_data_clone,
-                ve,
-                &auth_user,
-            ),
+            ServiceError::Validation(ref ve) => {
+                render_form_validation_errors(&state, &def, None, &form_for_error, ve, &auth_user)
+            }
             other => {
                 error!("Create error: {}", other);
                 redirect_response(&paths::collection_create(&slug))

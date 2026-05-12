@@ -40,11 +40,10 @@ pub async fn validate_create(
         _ => {}
     }
 
-    let (form_data, join_data) =
-        match prepare_form_for_validation(&state, &def, &auth_user, &payload, "create") {
-            Ok(v) => v,
-            Err(resp) => return *resp,
-        };
+    let data = match prepare_form_for_validation(&state, &def, &auth_user, &payload, "create") {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
@@ -66,8 +65,7 @@ pub async fn validate_create(
             table_name: &slug_owned,
             operation: "create",
             exclude_id: None,
-            form_data: &form_data,
-            join_data: &join_data,
+            data: &data,
             is_draft,
             soft_delete: def_owned.soft_delete,
             locale_ctx: locale_ctx.as_ref(),

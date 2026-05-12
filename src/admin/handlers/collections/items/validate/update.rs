@@ -40,11 +40,10 @@ pub async fn validate_update(
         _ => {}
     }
 
-    let (form_data, join_data) =
-        match prepare_form_for_validation(&state, &def, &auth_user, &payload, "update") {
-            Ok(v) => v,
-            Err(resp) => return *resp,
-        };
+    let data = match prepare_form_for_validation(&state, &def, &auth_user, &payload, "update") {
+        Ok(v) => v,
+        Err(resp) => return *resp,
+    };
 
     let is_draft = payload.draft && def.has_drafts();
     let locale_ctx =
@@ -67,8 +66,7 @@ pub async fn validate_update(
             table_name: &slug_owned,
             operation: "update",
             exclude_id: Some(&id_owned),
-            form_data: &form_data,
-            join_data: &join_data,
+            data: &data,
             is_draft,
             soft_delete: def_owned.soft_delete,
             locale_ctx: locale_ctx.as_ref(),

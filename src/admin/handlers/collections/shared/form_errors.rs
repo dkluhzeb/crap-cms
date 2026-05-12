@@ -12,12 +12,16 @@ use crate::{
             BasePageContext, CollectionContext, DocumentRef, PageMeta, PageType,
             page::collections::CollectionFormErrorPage,
         },
-        handlers::shared::{
-            EnrichOptions, apply_display_conditions, build_field_contexts, enrich_field_contexts,
-            page_with_toast, split_sidebar_fields, translate_validation_errors,
+        handlers::{
+            forms::FormData,
+            shared::{
+                EnrichOptions, apply_display_conditions, build_field_contexts,
+                enrich_field_contexts, page_with_toast, split_sidebar_fields,
+                translate_validation_errors,
+            },
         },
     },
-    core::{AuthUser, CollectionDefinition, DocumentFields, FieldDefinition, ValidationError},
+    core::{AuthUser, CollectionDefinition, FieldDefinition, ValidationError},
 };
 
 /// Collect hidden upload field values from form data for re-rendering after validation errors.
@@ -42,8 +46,7 @@ pub(in crate::admin::handlers::collections) fn collect_upload_hidden_fields(
 pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
     pub state: &'a AdminState,
     pub def: &'a CollectionDefinition,
-    pub form_data: &'a HashMap<String, String>,
-    pub join_data: &'a DocumentFields,
+    pub form: &'a FormData,
     pub error_map: &'a HashMap<String, String>,
     pub doc_id: Option<&'a str>,
     pub auth_user: &'a Option<Extension<AuthUser>>,
@@ -55,7 +58,7 @@ pub(in crate::admin::handlers::collections) struct FormErrorParams<'a> {
 pub(in crate::admin::handlers::collections) fn render_form_with_error(
     p: &FormErrorParams,
 ) -> Response {
-    let mut fields = build_field_contexts(&p.def.fields, p.form_data, p.error_map, true, false);
+    let mut fields = build_field_contexts(&p.def.fields, p.form.raw(), p.error_map, true, false);
 
     let enrich_opts = EnrichOptions::builder(p.error_map)
         .filter_hidden(true)
@@ -64,14 +67,15 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
     enrich_field_contexts(
         &mut fields,
         &p.def.fields,
-        p.join_data,
+        p.form.join(),
         p.state,
         &enrich_opts.build(),
     );
 
     let form_json = if p.doc_id.is_some() {
         json!(
-            p.form_data
+            p.form
+                .raw()
                 .iter()
                 .map(|(k, v)| (k.clone(), Value::String(v.clone())))
                 .collect::<Map<String, Value>>()
@@ -105,7 +109,7 @@ pub(in crate::admin::handlers::collections) fn render_form_with_error(
     );
 
     let upload_hidden_fields = (editing && p.def.is_upload_collection()).then(|| {
-        let value = collect_upload_hidden_fields(&p.def.fields, p.form_data);
+        let value = collect_upload_hidden_fields(&p.def.fields, p.form.raw());
         match value {
             Value::Array(arr) => arr,
             _ => Vec::new(),
@@ -134,11 +138,12 @@ pub(in crate::admin::handlers::collections) fn render_upload_error(
     auth_user: &Option<Extension<AuthUser>>,
     err_msg: &str,
 ) -> Response {
+    let form = FormData::raw_only(form_data.clone());
+
     render_form_with_error(&FormErrorParams {
         state,
         def,
-        form_data,
-        join_data: &DocumentFields::new(),
+        form: &form,
         error_map: &HashMap::new(),
         doc_id: None,
         auth_user,
@@ -155,11 +160,12 @@ pub(in crate::admin::handlers::collections) fn render_edit_upload_error(
     auth_user: &Option<Extension<AuthUser>>,
     err_msg: &str,
 ) -> Response {
+    let form = FormData::raw_only(form_data.clone());
+
     render_form_with_error(&FormErrorParams {
         state,
         def,
-        form_data,
-        join_data: &DocumentFields::new(),
+        form: &form,
         error_map: &HashMap::new(),
         doc_id: Some(id),
         auth_user,
@@ -172,8 +178,7 @@ pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
     state: &AdminState,
     def: &CollectionDefinition,
     doc_id: Option<&str>,
-    form_data: &HashMap<String, String>,
-    join_data: &DocumentFields,
+    form: &FormData,
     ve: &ValidationError,
     auth_user: &Option<Extension<AuthUser>>,
 ) -> Response {
@@ -188,8 +193,7 @@ pub(in crate::admin::handlers::collections) fn render_form_validation_errors(
     render_form_with_error(&FormErrorParams {
         state,
         def,
-        form_data,
-        join_data,
+        form,
         error_map: &error_map,
         doc_id,
         auth_user,

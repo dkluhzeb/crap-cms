@@ -42,7 +42,7 @@ struct ReadParams {
 }
 
 /// Fetch the global document via the shared service layer read lifecycle.
-fn read_global_document(params: ReadParams) -> Result<Document, ServiceError> {
+fn read_global_document_blocking(params: ReadParams) -> Result<Document, ServiceError> {
     let conn = params.pool.get().map_err(ServiceError::Internal)?;
 
     let hooks = RunnerReadHooks::new(&params.runner, &conn);
@@ -133,7 +133,8 @@ pub async fn edit_form(
         user_ui_locale: auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone()),
     };
 
-    let read_result = task::spawn_blocking(move || read_global_document(read_params)).await;
+    let read_result =
+        task::spawn_blocking(move || read_global_document_blocking(read_params)).await;
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,

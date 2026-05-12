@@ -10,8 +10,8 @@ pub(crate) mod dashboard;
 pub(crate) mod events;
 pub(crate) mod field_context;
 /// Shared form parsing helpers (multipart, array fields, select transforms).
-/// Stays `pub` because `parse_multipart_form` and `extract_join_data_from_form`
-/// are re-used by `api::upload` and `service::upload` respectively.
+/// Stays `pub` because `parse_multipart_form` and `FormData` are re-used by
+/// `api::upload` and `service::upload` respectively.
 pub mod forms;
 /// Global document handlers (view/edit).
 pub(crate) mod globals;
@@ -28,4 +28,4 @@ pub(crate) mod validate;
 // depend on `admin::handlers::Foo` rather than the deeper
 // `admin::handlers::forms::Foo`. Stays `pub(crate)` because both consumers
 // live in this crate; a future workspace split would promote to `pub`.
-pub(crate) use forms::{extract_join_data_from_form, parse_multipart_form};
+pub(crate) use forms::{FormData, parse_multipart_form};

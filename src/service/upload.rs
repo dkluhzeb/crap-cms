@@ -4,14 +4,13 @@
 //! commit guard -> clean up old files -> enqueue conversions. Surfaces only handle
 //! multipart parsing, auth, and response formatting.
 
-use crate::service::values_from_strings;
 use std::collections::HashMap;
 
 use anyhow::anyhow;
 use tracing::warn;
 
 use crate::{
-    admin::extract_join_data_from_form,
+    admin::FormData,
     config::LocaleConfig,
     core::{
         Document, FieldError, ReqContext, SharedStorage, ValidationError,
@@ -79,16 +78,12 @@ pub fn create_upload(
     } else {
         None
     };
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
 
-    let mut data = values_from_strings(form_data);
-    data.extend(join_data);
-
     let (doc, req_context) = create_document(
         ctx,
-        WriteInput::builder(data)
+        WriteInput::builder(FormData::from_raw(form_data, &def.fields))
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
@@ -178,17 +173,13 @@ pub fn update_upload(
     } else {
         None
     };
-    let join_data = extract_join_data_from_form(&form_data, &def.fields);
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
-
-    let mut data = values_from_strings(form_data);
-    data.extend(join_data);
 
     let (doc, req_context) = update_document(
         ctx,
         id,
-        WriteInput::builder(data)
+        WriteInput::builder(FormData::from_raw(form_data, &def.fields))
             .password(password.as_deref())
             .draft(draft)
             .ui_locale(ui_locale)
