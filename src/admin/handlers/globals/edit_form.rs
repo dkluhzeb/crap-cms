@@ -184,7 +184,7 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::link("dashboard", paths::DASHBOARD),
         Breadcrumb::current(def.display_name()),
     ];
 

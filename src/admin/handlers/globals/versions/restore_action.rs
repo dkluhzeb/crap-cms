@@ -53,7 +53,7 @@ pub async fn restore_version(
     auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
     let Some(def) = state.registry.get_global(&slug).cloned() else {
-        return redirect_response("/admin");
+        return redirect_response(paths::DASHBOARD);
     };
 
     if !def.has_versions() {

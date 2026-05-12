@@ -12,6 +12,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use crate::{
+    admin::handlers::shared::paths::custom_page,
     cli,
     scaffold::{
         guards::refuse_file_overwrite, paths, render, to_title_case, validate_template_slug,
@@ -60,7 +61,7 @@ pub fn make_page(opts: &MakePageOptions) -> Result<()> {
         .with_context(|| format!("Failed to write {}", file_path.display()))?;
 
     cli::success(&format!("Created {}", file_path.display()));
-    cli::kv("Route", &format!("/admin/p/{}", opts.slug));
+    cli::kv("Route", &custom_page(opts.slug));
     print_register_hint(opts, &label);
 
     Ok(())

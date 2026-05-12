@@ -147,7 +147,7 @@ pub async fn update_action(
 ) -> Response {
     let def = match state.registry.get_global(&slug) {
         Some(d) => d.clone(),
-        None => return redirect_response("/admin"),
+        None => return redirect_response(paths::DASHBOARD),
     };
 
     // Field write access is now checked inside service::update_global_in_conn.

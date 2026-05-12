@@ -4,6 +4,9 @@
 //! handlers. Helps with grep-ability and prevents subtle path drift between
 //! call sites that reference the same route.
 
+/// `/admin` — dashboard root.
+pub const DASHBOARD: &str = "/admin";
+
 /// `/admin/login` — login page.
 pub const LOGIN: &str = "/admin/login";
 
@@ -79,6 +82,11 @@ pub fn mfa_with_collection(slug: &str) -> String {
     format!("/admin/mfa?collection={slug}")
 }
 
+/// `/admin/p/{slug}` — custom admin page route.
+pub fn custom_page(slug: &str) -> String {
+    format!("/admin/p/{slug}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +135,13 @@ mod tests {
     }
 
     #[test]
+    fn custom_page_path() {
+        assert_eq!(custom_page("system_info"), "/admin/p/system_info");
+    }
+
+    #[test]
     fn login_constants_and_success() {
+        assert_eq!(DASHBOARD, "/admin");
         assert_eq!(LOGIN, "/admin/login");
         assert_eq!(COLLECTIONS_ROOT, "/admin/collections");
         assert_eq!(

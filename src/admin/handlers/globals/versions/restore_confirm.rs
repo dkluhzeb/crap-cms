@@ -76,7 +76,7 @@ pub async fn restore_confirm(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::link("dashboard", paths::DASHBOARD),
         Breadcrumb::link(def.display_name(), paths::global(&slug)),
         Breadcrumb::current("restore_version"),
     ];

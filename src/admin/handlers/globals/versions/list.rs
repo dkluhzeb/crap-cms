@@ -79,7 +79,7 @@ pub async fn list_versions_page(
     let next_url = paths::global_versions_page(&slug, (pg.page + 1) as u64);
 
     let breadcrumbs = vec![
-        Breadcrumb::link("dashboard", "/admin"),
+        Breadcrumb::link("dashboard", paths::DASHBOARD),
         Breadcrumb::link(def.display_name(), paths::global(&slug)),
         Breadcrumb::current("version_history"),
     ];
